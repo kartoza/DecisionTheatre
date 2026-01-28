@@ -3,10 +3,13 @@ import { Box, Flex, useDisclosure } from '@chakra-ui/react';
 import MapView from './components/MapView';
 import ControlPanel from './components/ControlPanel';
 import Header from './components/Header';
+import SetupGuide from './components/SetupGuide';
+import { useServerInfo } from './hooks/useApi';
 import type { Scenario, ComparisonState } from './types';
 
 function App() {
   const { isOpen, onToggle } = useDisclosure({ defaultIsOpen: false });
+  const { info } = useServerInfo();
 
   const [comparison, setComparison] = useState<ComparisonState>({
     leftScenario: 'past',
@@ -25,6 +28,11 @@ function App() {
   const handleAttributeChange = useCallback((attribute: string) => {
     setComparison((prev) => ({ ...prev, attribute }));
   }, []);
+
+  // Show setup guide when tiles aren't loaded
+  if (info && !info.tiles_loaded) {
+    return <SetupGuide info={info} />;
+  }
 
   return (
     <Flex direction="column" h="100vh" overflow="hidden">
