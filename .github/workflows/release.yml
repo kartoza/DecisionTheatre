@@ -9,8 +9,7 @@ permissions:
 
 jobs:
   # ==========================================
-  # Build platform-specific binaries natively
-  # Each runner has its own C toolchain for CGO
+  # Build platform-specific binaries
   # ==========================================
   build:
     strategy:
@@ -41,61 +40,90 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Nix handles the full build: frontend (npm in sandbox) + Go + CGO
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-        if: matrix.goos != 'windows'
-
-      - name: Build with nix (unix)
-        if: matrix.goos != 'windows'
-        run: |
-          nix build
-          mkdir -p dist
-          cp result/bin/decision-theatre dist/decision-theatre
-          cd dist
-          tar -czf decision-theatre-${{ matrix.suffix }}.tar.gz decision-theatre
-          sha256sum *.tar.gz > checksums-${{ matrix.suffix }}.txt
-
-      # Windows: nix is not well-supported, use direct Go build
-      - name: Setup Go (windows)
-        if: matrix.goos == 'windows'
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      - name: Setup Node (windows)
-        if: matrix.goos == 'windows'
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend (windows)
-        if: matrix.goos == 'windows'
+      # --- Build frontend (all platforms) ---
+      - name: Build frontend
         run: |
           cd frontend
           npm ci
           npm run build
-          cd ..
+
+      - name: Copy frontend to embed dir (unix)
+        if: runner.os != 'Windows'
+        run: |
+          rm -rf internal/server/static
+          mkdir -p internal/server/static
+          cp -r frontend/dist/* internal/server/static/
+
+      - name: Copy frontend to embed dir (windows)
+        if: runner.os == 'Windows'
+        run: |
           Remove-Item -Recurse -Force internal\server\static -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force internal\server\static
           Copy-Item -Recurse frontend\dist\* internal\server\static\
 
+      # --- Install platform CGO dependencies ---
+      - name: Install CGO deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Install CGO deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install openblas
+
+      # --- Build binary ---
+      - name: Build binary (unix)
+        if: runner.os != 'Windows'
+        env:
+          CGO_ENABLED: 1
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
+            -o dist/decision-theatre .
+
       - name: Build binary (windows)
-        if: matrix.goos == 'windows'
+        if: runner.os == 'Windows'
         env:
           CGO_ENABLED: 1
         run: |
           mkdir dist
           go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o dist/decision-theatre.exe .
+
+      # --- Package ---
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
           cd dist
-          tar -czf decision-theatre-${{ matrix.suffix }}.tar.gz decision-theatre.exe
+          tar -czf decision-theatre-${{ matrix.suffix }}.tar.gz decision-theatre
           sha256sum *.tar.gz > checksums-${{ matrix.suffix }}.txt
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd dist
+          Compress-Archive -Path decision-theatre.exe -DestinationPath decision-theatre-${{ matrix.suffix }}.zip
+          $hash = (Get-FileHash decision-theatre-${{ matrix.suffix }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  decision-theatre-${{ matrix.suffix }}.zip" | Out-File -Encoding utf8 checksums-${{ matrix.suffix }}.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.suffix }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -128,3 +156,30 @@ jobs:
         with:
           files: release/*
           generate_release_notes: true
+          body: |
+            ## Installation
+
+            Download the archive for your platform, extract it, and run:
+
+            **Linux/macOS:**
+            ```bash
+            tar xzf decision-theatre-*.tar.gz
+            ./decision-theatre --data-dir ./data --resources-dir ./resources
+            ```
+
+            **Windows:**
+            Extract the zip, then run:
+            ```
+            decision-theatre.exe --data-dir ./data --resources-dir ./resources
+            ```
+
+            ### Headless mode (no GUI window)
+            ```bash
+            ./decision-theatre --headless
+            ```
+            Then open http://localhost:8080 in your browser.
+
+            ### Requirements
+            - **Linux:** WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu)
+            - **macOS:** No extra dependencies
+            - **Windows:** Edge WebView2 runtime (included in Windows 10+)

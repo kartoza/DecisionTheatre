@@ -8,31 +8,163 @@ on:
 
 jobs:
   # ==========================================
-  # Tests: run on every push/PR via nix
+  # Secrets & security scanning
   # ==========================================
-  test:
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog secrets scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+      - name: Gitleaks secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================
+  # Check for large or unwanted files
+  # ==========================================
+  file-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Check for large files (>5MB)
+        run: |
+          large_files=$(find . -type f -size +5M \
+            -not -path './.git/*' \
+            -not -path './node_modules/*' \
+            -not -path './.go/*' 2>/dev/null || true)
+          if [ -n "$large_files" ]; then
+            echo "::error::Large files found that should be gitignored:"
+            echo "$large_files"
+            exit 1
+          fi
 
-      - uses: cachix/cachix-action@v15
-        with:
-          name: decision-theatre
-          skipPush: true
-
-      - name: Run all checks (Go tests + frontend tests)
-        run: nix flake check
+      - name: Check for common unwanted files
+        run: |
+          unwanted=""
+          for pattern in "*.env" "*.pem" "*.key" "credentials*.json" "*.p12" "*.pfx"; do
+            found=$(find . -name "$pattern" -not -path './.git/*' 2>/dev/null || true)
+            if [ -n "$found" ]; then
+              unwanted="$unwanted\n$found"
+            fi
+          done
+          if [ -n "$unwanted" ]; then
+            echo "::error::Potentially sensitive files found:"
+            echo -e "$unwanted"
+            exit 1
+          fi
 
   # ==========================================
-  # Build: verify the nix build succeeds
+  # Go lint
   # ==========================================
-  build:
+  lint-go:
     runs-on: ubuntu-latest
-    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Create stub static dir for embed
+        run: mkdir -p internal/server/static && touch internal/server/static/.gitkeep
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout 5m
+
+  # ==========================================
+  # Frontend lint & typecheck
+  # ==========================================
+  lint-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: TypeScript typecheck
+        run: cd frontend && npx tsc --noEmit
+
+  # ==========================================
+  # Go tests
+  # ==========================================
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Create stub static dir for embed
+        run: mkdir -p internal/server/static && touch internal/server/static/.gitkeep
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.out ./...
+        env:
+          CGO_ENABLED: 1
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  # ==========================================
+  # Frontend tests
+  # ==========================================
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: Run tests
+        run: cd frontend && npm test
+
+  # ==========================================
+  # Nix build verification
+  # ==========================================
+  nix-build:
+    runs-on: ubuntu-latest
+    needs: [test-go, test-frontend, lint-go, lint-frontend]
     steps:
       - uses: actions/checkout@v4
 
@@ -47,19 +179,17 @@ jobs:
         run: ./result/bin/decision-theatre --version
 
   # ==========================================
-  # Lint
+  # Security audit (Trivy)
   # ==========================================
-  lint:
+  security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v27
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
-
-      - name: Go lint
-        run: nix develop --command golangci-lint run --timeout 5m
-
-      - name: Nix format check
-        run: nix develop --command nixpkgs-fmt --check flake.nix
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
