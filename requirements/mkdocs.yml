@@ -1,0 +1,70 @@
+site_name: Decision Theatre - Requirements
+site_description: System requirements documentation for the Decision Theatre application
+site_author: Kartoza
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: blue
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: blue
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Requirements:
+    - Overview: requirements/overview.md
+    - REQ-001 Embedded Web Server: requirements/REQ-001-embedded-web-server.md
+    - REQ-002 React Frontend: requirements/REQ-002-react-frontend.md
+    - REQ-003 Chakra UI Framework: requirements/REQ-003-chakra-ui.md
+    - REQ-004 MapLibre Map Display: requirements/REQ-004-maplibre-map.md
+    - REQ-005 Map Swiper Comparison: requirements/REQ-005-map-swiper.md
+    - REQ-006 MBTiles Tile Serving: requirements/REQ-006-mbtiles-serving.md
+    - REQ-007 Catchment Vector Data: requirements/REQ-007-catchment-data.md
+    - REQ-008 GeoParquet Data Loading: requirements/REQ-008-geoparquet-loading.md
+    - REQ-009 Scenario Selection Panel: requirements/REQ-009-scenario-panel.md
+    - REQ-010 Factor Selection: requirements/REQ-010-factor-selection.md
+    - REQ-011 Dynamic Map Update: requirements/REQ-011-dynamic-map-update.md
+    - REQ-012 Embedded LLM: requirements/REQ-012-embedded-llm.md
+    - REQ-013 Embedded Neural Network: requirements/REQ-013-embedded-nn.md
+    - REQ-014 Offline Operation: requirements/REQ-014-offline-operation.md
+    - REQ-015 Responsive Design: requirements/REQ-015-responsive-design.md
+    - REQ-016 Cross-Platform Builds: requirements/REQ-016-cross-platform-builds.md
+    - REQ-017 Test Automation: requirements/REQ-017-test-automation.md
+    - REQ-018 Beautiful UI: requirements/REQ-018-beautiful-ui.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search
+  - minify:
+      minify_html: true

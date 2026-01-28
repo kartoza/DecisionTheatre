@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd )",
+      "Bash(internal/server )",
+      "Bash(internal/api )",
+      "Bash(internal/tiles )",
+      "Bash(internal/geodata )",
+      "Bash(internal/llm )",
+      "Bash(internal/nn )",
+      "Bash(internal/config )",
+      "Bash(internal/models )",
+      "Bash(frontend/src/components )",
+      "Bash(frontend/src/hooks )",
+      "Bash(frontend/src/styles )",
+      "Bash(frontend/src/types )",
+      "Bash(frontend/public )",
+      "Bash(resources )",
+      "Bash(data )",
+      "Bash(vendor/github.com/go-skynet/go-llama.cpp )",
+      "Bash(requirements/docs/requirements )",
+      "Bash(requirements/docs/assets )",
+      "Bash(packaging/debian )",
+      "Bash(packaging/rpm )",
+      "Bash(packaging/snap )",
+      "Bash(packaging/flatpak)",
+      "Bash(go mod init:*)",
+      "Bash(nix develop /home/timlinux/dev/go/DecisionTheatre --command bash -c \"npm install --package-lock-only\")",
+      "Bash(/home/timlinux/dev/go/DecisionTheatre/bin/decision-theatre:*)",
+      "Bash(timeout 3 ./bin/decision-theatre:*)",
+      "Bash(nix develop:*)",
+      "Bash(nix run:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs:*)",
+      "WebSearch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,51 @@
+# Build artifacts
+bin/
+release/
+build-dir/
+coverage.out
+*.exe
+
+# Go
+.go/
+vendor/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+internal/server/static/
+
+# Data files (user-provided)
+data/*.mbtiles
+data/*.parquet
+data/*.geoparquet
+data/*.json
+
+# Large resource files
+*.mbtiles
+*.gpkg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+PROMPT.log
+PROMPTS.log
+
+# Models
+*.gguf
+*.gob
+
+# MkDocs
+requirements/site/
+
+# Nix
+result
+.direnv/

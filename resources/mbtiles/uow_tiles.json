@@ -1,0 +1,263 @@
+{
+  "version": 8,
+  "name": "UoW Tiles",
+  "metadata": {"maputnik:renderer": "mbgljs"},
+  "center": [2.2, 30.76],
+  "zoom": 2,
+  "sources": {
+    "UoW Tiles": {
+      "type": "vector",
+      "url": "http://localhost:8080/data/tiles.json"
+    }
+  },
+  "sprite": "",
+  "glyphs": "https://api.maptiler.com/fonts/{fontstack}/{range}.pbf?key=cc4PpmmWZP73LjU1nsw3",
+  "layers": [
+    {
+      "id": "Country Boundaries",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ne_african_countries",
+      "maxzoom": 10,
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "fill-opacity": 0.2,
+        "fill-color": "rgba(32, 111, 22, 1)",
+        "fill-outline-color": "rgba(32, 111, 22, 1)"
+      }
+    },
+    {
+      "id": "Ecoregions Water",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Water"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(91, 152, 218, 1)"}
+    },
+    {
+      "id": "Ecoregions Thicket",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Thicket"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(193, 175, 53, 1)"}
+    },
+    {
+      "id": "Ecoregions SH_Savannas_Bushland",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "SH_Savannas_Bushland"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(185, 172, 52, 1)"}
+    },
+    {
+      "id": "Ecoregions SH_MosaicGrasslands",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "SH_MosaicGrasslands"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(177, 169, 51, 1)"}
+    },
+    {
+      "id": "Ecoregions SH_HumidSavannaWoodlands",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "SH_HumidSavannaWoodlands"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(169, 165, 49, 1)"}
+    },
+    {
+      "id": "Ecoregions SH_Desert_SemiDesert",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "SH_Desert_SemiDesert"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(162, 162, 48, 1)"}
+    },
+    {
+      "id": "Ecoregions NH_Savannas_Bushland",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "NH_Savannas_Bushland"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(154, 159, 47, 1)"}
+    },
+    {
+      "id": "Ecoregions NH_MosaicGrasslands",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "NH_MosaicGrasslands"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(146, 155, 45, 1)"}
+    },
+    {
+      "id": "Ecoregions NH_HumidSavannaWoodlands",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "NH_HumidSavannaWoodlands"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(138, 152, 44, 1)"}
+    },
+    {
+      "id": "Ecoregions NH_Desert_SemiDesert",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "NH_Desert_SemiDesert"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(131, 149, 43, 1)"}
+    },
+    {
+      "id": "Ecoregions Halophytic vegetation",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Halophytic vegetation"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(117, 148, 43, 1)"}
+    },
+    {
+      "id": "Ecoregions Grasslands",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Grasslands"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(103, 148, 44, 1)"}
+    },
+    {
+      "id": "Ecoregions Fynbos",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Fynbos"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(89, 148, 45, 1)"}
+    },
+    {
+      "id": "Ecoregions Forest",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "Forest"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(75, 148, 46, 1)"}
+    },
+    {
+      "id": "Ecoregions AltimontaneVeg",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ecoregions",
+      "maxzoom": 8,
+      "filter": ["all", ["==", "ecorgns", "AltimontaneVeg"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(62, 148, 47, 1)"}
+    },
+    {
+      "id": "Country Outlines",
+      "type": "line",
+      "source": "UoW Tiles",
+      "source-layer": "ne_african_countries",
+      "maxzoom": 10,
+      "layout": {"visibility": "visible"},
+      "paint": {"line-color": "rgba(32, 111, 22, 1)"}
+    },
+    {
+      "id": "Rivers",
+      "type": "line",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_rivers",
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "line-color": "rgba(91, 152, 218, 1)",
+        "line-width": {"stops": [[6, 1.5], [10, 3]]}
+      }
+    },
+    {
+      "id": "Large Waterbodies",
+      "type": "fill",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_lakes",
+      "filter": ["all"],
+      "layout": {"visibility": "visible"},
+      "paint": {"fill-color": "rgba(91, 152, 218, 1)"}
+    },
+    {
+      "id": "Catchments Outlines",
+      "type": "line",
+      "source": "UoW Tiles",
+      "source-layer": "catchments_lev12",
+      "layout": {"visibility": "visible"},
+      "paint": {"line-color": "rgba(173, 110, 0, 1)", "line-width": 2}
+    },
+    {
+      "id": "Populated Place Admin-0 capital",
+      "type": "circle",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_populated_places",
+      "filter": ["all", ["==", "FEATURECLA", "Admin-0 capital"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"circle-radius": 10, "circle-color": "rgba(251, 0, 0, 1)"}
+    },
+    {
+      "id": "Populated Place Admin-0 capital alt",
+      "type": "circle",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_populated_places",
+      "filter": ["all", ["==", "FEATURECLA", "Admin-0 capital alt"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"circle-radius": 8, "circle-color": "rgba(166, 0, 0, 1)"}
+    },
+    {
+      "id": "Populated Place Admin-1 capital",
+      "type": "circle",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_populated_places",
+      "filter": ["all", ["==", "FEATURECLA", "Admin-1 capital"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"circle-radius": 7, "circle-color": "rgba(233, 161, 0, 1)"}
+    },
+    {
+      "id": "Populated Place Admin-1 region capital",
+      "type": "circle",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_populated_places",
+      "filter": ["all", ["==", "FEATURECLA", "Admin-1 region capital"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"circle-radius": 6, "circle-color": "rgba(166, 0, 206, 1)"}
+    },
+    {
+      "id": "Populated Place",
+      "type": "circle",
+      "source": "UoW Tiles",
+      "source-layer": "ne_10m_populated_places",
+      "filter": ["all", ["==", "FEATURECLA", "Populated place"]],
+      "layout": {"visibility": "visible"},
+      "paint": {"circle-color": "rgba(0, 0, 0, 1)"}
+    }
+  ],
+  "id": "903to775d"
+}

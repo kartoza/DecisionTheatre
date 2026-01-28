@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # Build platform-specific binaries natively
+  # Each runner has its own C toolchain for CGO
+  # ==========================================
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nix handles the full build: frontend (npm in sandbox) + Go + CGO
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+        if: matrix.goos != 'windows'
+
+      - name: Build with nix (unix)
+        if: matrix.goos != 'windows'
+        run: |
+          nix build
+          mkdir -p dist
+          cp result/bin/decision-theatre dist/decision-theatre
+          cd dist
+          tar -czf decision-theatre-${{ matrix.suffix }}.tar.gz decision-theatre
+          sha256sum *.tar.gz > checksums-${{ matrix.suffix }}.txt
+
+      # Windows: nix is not well-supported, use direct Go build
+      - name: Setup Go (windows)
+        if: matrix.goos == 'windows'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup Node (windows)
+        if: matrix.goos == 'windows'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build frontend (windows)
+        if: matrix.goos == 'windows'
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          cd ..
+          Remove-Item -Recurse -Force internal\server\static -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force internal\server\static
+          Copy-Item -Recurse frontend\dist\* internal\server\static\
+
+      - name: Build binary (windows)
+        if: matrix.goos == 'windows'
+        env:
+          CGO_ENABLED: 1
+        run: |
+          mkdir dist
+          go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o dist/decision-theatre.exe .
+          cd dist
+          tar -czf decision-theatre-${{ matrix.suffix }}.tar.gz decision-theatre.exe
+          sha256sum *.tar.gz > checksums-${{ matrix.suffix }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.suffix }}
+          path: dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ matrix.suffix }}
+          path: dist/checksums-*.txt
+
+  # ==========================================
+  # Publish GitHub release with all artifacts
+  # ==========================================
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: checksums-*
+          merge-multiple: true
+          path: checksums
+
+      - name: Merge checksums
+        run: cat checksums/checksums-*.txt | sort > release/checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
