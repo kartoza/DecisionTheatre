@@ -1,0 +1,31 @@
+/* Match Decision Theatre UI brand colours */
+/* Primary: brand blue #2bb0ed, Accent: orange #ff9800 */
+
+:root {
+  --md-primary-fg-color: #1992d4;
+  --md-primary-fg-color--light: #40c3f7;
+  --md-primary-fg-color--dark: #0b69a3;
+  --md-accent-fg-color: #ff9800;
+  --md-accent-fg-color--transparent: rgba(255, 152, 0, 0.1);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #1a202c;
+  --md-default-fg-color: rgba(255, 255, 255, 0.87);
+  --md-primary-fg-color: #2bb0ed;
+  --md-primary-fg-color--light: #5ed0fa;
+  --md-primary-fg-color--dark: #127fbf;
+  --md-accent-fg-color: #ffa726;
+  --md-code-bg-color: #171923;
+}
+
+/* Header gradient matching the app title */
+.md-header {
+  background: linear-gradient(135deg, var(--md-primary-fg-color--dark), var(--md-primary-fg-color));
+}
+
+/* Tab indicator accent */
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: var(--md-accent-fg-color) !important;
+}

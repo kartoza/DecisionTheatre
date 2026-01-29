@@ -1,0 +1,99 @@
+site_name: Decision Theatre
+site_description: Offline catchment data exploration with embedded AI
+site_author: Kartoza
+site_url: https://kartoza.github.io/DecisionTheatre/
+repo_url: https://github.com/kartoza/DecisionTheatre
+repo_name: kartoza/DecisionTheatre
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - assets/css/custom.css
+
+nav:
+  - Home: index.md
+  - About:
+      - Overview: about/overview.md
+      - Funders and Partners: about/funders-and-partners.md
+      - License: about/license.md
+      - Contact: about/contact.md
+  - User Manual:
+      - Getting Started: user-manual/index.md
+      - Installation: user-manual/installation.md
+      - Data Setup: user-manual/data-setup.md
+      - Using the Map: user-manual/using-the-map.md
+      - Scenario Comparison: user-manual/scenario-comparison.md
+      - AI Chat: user-manual/ai-chat.md
+  - User Guide:
+      - Tutorials: user-guide/index.md
+      - First Run: user-guide/first-run.md
+      - Comparing Scenarios: user-guide/comparing-scenarios.md
+      - Reference Guide: user-guide/reference.md
+  - Developer Guide:
+      - Architecture Overview: developer-guide/architecture.md
+      - Software Components: developer-guide/components.md
+      - Development Environment: developer-guide/dev-environment.md
+      - Coding Standards: developer-guide/coding-standards.md
+      - Testing: developer-guide/testing.md
+      - Data Preparation: developer-guide/data-preparation.md
+      - Preparing a Release: developer-guide/releasing.md
+      - API Guide: developer-guide/api.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - minify:
+      minify_html: true

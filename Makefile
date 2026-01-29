@@ -113,9 +113,15 @@ clean:
 # ============================
 
 docs:
-	cd requirements && mkdocs build
+	mkdocs build
 
 docs-serve:
+	mkdocs serve
+
+docs-requirements:
+	cd requirements && mkdocs build
+
+docs-requirements-serve:
 	cd requirements && mkdocs serve
 
 # ============================
