@@ -1,5 +1,5 @@
 {
-  description = "Decision Theatre - Offline catchment data exploration with embedded AI";
+  description = "Decision Theatre - Offline catchment data exploration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -106,16 +106,16 @@
 
           # After first build: nix will report the correct hash.
           # Set to empty string to get it, then pin.
-          vendorHash = "sha256-C/dEL6GJn9so3luR3C00l3BKITV/M1qiseflW7iPaKs=";
+          vendorHash = "sha256-uAQfSc4kPukpDQPP7Kr7Txy4jz6J64oPh0eGVtBuEaE=";
 
           nativeBuildInputs = with pkgs; [
             gcc
             pkg-config
             wrapGAppsHook3
+            makeWrapper
           ];
 
           buildInputs = with pkgs; [
-            openblas
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             webkitgtk_4_1
             gtk3
@@ -155,18 +155,18 @@
             cat > $out/share/applications/decision-theatre.desktop << 'DESKTOP'
             [Desktop Entry]
             Name=Decision Theatre
-            Comment=Offline catchment data exploration with embedded AI
+            Comment=Offline catchment data exploration
             Exec=decision-theatre
             Icon=map
             Terminal=false
             Type=Application
             Categories=Science;Geography;Education;
-            Keywords=catchment;africa;scenario;map;ai;
+            Keywords=catchment;africa;scenario;map;
             DESKTOP
           '';
 
           meta = with pkgs.lib; {
-            description = "Offline catchment data exploration with embedded AI";
+            description = "Offline catchment data exploration";
             homepage = "https://github.com/kartoza/decision-theatre";
             license = licenses.gpl3;
             maintainers = [ ];
@@ -190,7 +190,7 @@
           go-tests = pkgs.stdenvNoCC.mkDerivation {
             name = "decision-theatre-go-tests";
             src = ./.;
-            nativeBuildInputs = with pkgs; [ go gcc pkg-config openblas ];
+            nativeBuildInputs = with pkgs; [ go gcc pkg-config ];
             buildPhase = ''
               export HOME=$TMPDIR
               export GOPATH=$TMPDIR/go
@@ -245,15 +245,10 @@
             # Node.js (for frontend dev iteration only)
             nodejs_22
 
-            # CGO + llama.cpp build tools
+            # CGO build tools
             gnumake
             gcc
-            clang
-            cmake
             pkg-config
-
-            # llama.cpp / linear algebra
-            openblas
 
             # CLI utilities
             ripgrep
@@ -307,10 +302,7 @@
             export GOMODCACHE="$PWD/.go/pkg/mod"
             export PATH="$GOPATH/bin:$PATH"
 
-            # CGO flags for openblas (llama.cpp dependency)
             export CGO_ENABLED=1
-            export CGO_CFLAGS="-I${pkgs.openblas}/include"
-            export CGO_LDFLAGS="-L${pkgs.openblas}/lib -lopenblas"
 
             alias ll='eza -la'
             alias la='eza -a'

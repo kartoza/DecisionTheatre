@@ -101,8 +101,6 @@ function SetupGuide({ info }: SetupGuideProps) {
                 label="Scenario data (GeoParquet)"
                 ready={info.geo_loaded}
               />
-              <StatusRow label="Embedded LLM" ready={info.llm_available} optional />
-              <StatusRow label="Neural network" ready={info.nn_available} optional />
             </VStack>
           </Box>
 

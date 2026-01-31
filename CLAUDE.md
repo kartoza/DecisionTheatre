@@ -1,0 +1,1 @@
+- when running the app I always want to run the standalone desktop app version

@@ -15,8 +15,6 @@ Returns the current server status and available features.
   "version": "0.1.0",
   "tiles_loaded": true,
   "geo_loaded": true,
-  "llm_available": false,
-  "nn_available": false,
   "scenarios": ["past", "present", "future"],
   "attributes": ["rainfall", "temperature", "land_cover"]
 }
@@ -27,8 +25,6 @@ Returns the current server status and available features.
 | `version` | string | Application version |
 | `tiles_loaded` | boolean | Whether MBTiles data was found and opened |
 | `geo_loaded` | boolean | Whether GeoParquet scenario data is available |
-| `llm_available` | boolean | Whether an LLM model is loaded |
-| `nn_available` | boolean | Whether a neural network model is loaded |
 | `scenarios` | string[] | List of available scenario names |
 | `attributes` | string[] | List of available catchment attributes |
 
@@ -87,30 +83,6 @@ Returns the MBTiles metadata as JSON.
 ### `GET /styles/uow_tiles.json`
 
 Returns the MapBox GL Style JSON used to render the vector tiles.
-
-## LLM Chat
-
-### `POST /api/chat`
-
-Sends a message to the embedded LLM (when available).
-
-**Request:**
-
-```json
-{
-  "message": "What factors affect catchment health?"
-}
-```
-
-**Response:**
-
-```json
-{
-  "response": "Several factors influence catchment health..."
-}
-```
-
-Returns `503 Service Unavailable` if no LLM model is loaded.
 
 ## Static Assets
 

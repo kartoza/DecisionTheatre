@@ -89,7 +89,6 @@ fi
 echo "==> Writing manifest..."
 PARQUET_LIST=$(cd "$PACK_DIR/data" 2>/dev/null && ls *.parquet 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
 MBTILES_LIST=$(cd "$PACK_DIR/resources/mbtiles" 2>/dev/null && ls *.mbtiles 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-
 cat > "$PACK_DIR/manifest.json" <<EOF
 {
   "format": "decision-theatre-datapack",

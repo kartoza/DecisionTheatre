@@ -16,13 +16,14 @@ graph TB
         SRV --> TILES[MBTiles tile server]
         SRV --> STATIC[Embedded SPA]
         API --> GEO[GeoParquet loader]
-        API --> LLM[LLM engine]
-        API --> NN[Neural network]
     end
 
     subgraph Frontend SPA
-        APP[App.tsx] --> MAP[MapView]
-        APP --> CP[ControlPanel]
+        APP[App.tsx] --> CA[ContentArea]
+        CA --> VP[ViewPane ×4]
+        VP --> MAP[MapView]
+        VP --> CHT[ChartView]
+        APP --> CP[ControlPanel per-pane]
         APP --> HDR[Header]
         APP --> SG[SetupGuide]
         MAP --> ML[MapLibre GL JS]
@@ -41,7 +42,7 @@ graph TB
 3. The server serves the embedded React SPA for all non-API/tile routes
 4. MapLibre GL JS requests vector tiles from `/tiles/{z}/{x}/{y}.pbf`
 5. The React app calls REST endpoints under `/api/` for scenario data and server info
-6. All data is read from local files (MBTiles, GeoParquet, GGUF, GOB)
+6. All data is read from local files (MBTiles, GeoParquet)
 
 ## Package Layout
 
@@ -55,14 +56,8 @@ graph TB
 │   │   └── config.go          # Configuration struct
 │   ├── geodata/
 │   │   └── geoparquet.go      # GeoParquet file loading
-│   ├── llm/
-│   │   ├── embedded.go        # llama.cpp integration
-│   │   └── stub.go            # No-op stub when LLM unavailable
 │   ├── models/
 │   │   └── models.go          # Shared data models
-│   ├── nn/
-│   │   ├── model.go           # Gorgonia neural network
-│   │   └── stub.go            # No-op stub when NN unavailable
 │   ├── server/
 │   │   └── server.go          # HTTP server setup, routing, embed
 │   └── tiles/

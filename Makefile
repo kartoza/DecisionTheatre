@@ -21,13 +21,11 @@ COVERAGE_FILE := coverage.out
 FRONTEND_DIR := frontend
 STATIC_DIR := internal/server/static
 DOCS_SITE_DIR := internal/server/docs_site
-VENDOR_LLAMA := vendor/github.com/go-skynet/go-llama.cpp
-
 GO := go
 GOFMT := gofmt
 GOLINT := golangci-lint
 
-.PHONY: all build build-backend build-frontend build-llama clean
+.PHONY: all build build-backend build-frontend clean
 .PHONY: dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all
 .PHONY: fmt lint check deps
@@ -60,11 +58,6 @@ build-frontend:
 # Build MkDocs site into embed dir
 build-docs:
 	mkdocs build -d $(DOCS_SITE_DIR)
-
-# Build llama.cpp binding library (once after clone)
-build-llama:
-	@echo "Building llama.cpp binding library..."
-	cd $(VENDOR_LLAMA) && make libbinding.a
 
 # ============================
 # Development
@@ -217,7 +210,6 @@ help:
 	@echo "  build           Frontend + backend (dev)"
 	@echo "  build-backend   Backend only"
 	@echo "  build-frontend  Frontend only"
-	@echo "  build-llama     llama.cpp binding (once)"
 	@echo "  clean           Remove artifacts"
 	@echo ""
 	@echo "Dev:"

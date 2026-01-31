@@ -13,7 +13,6 @@ type Config struct {
 	Port         int
 	DataDir      string
 	ResourcesDir string
-	ModelPath    string
 	Version      string
 }
 

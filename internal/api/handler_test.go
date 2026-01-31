@@ -16,7 +16,7 @@ func newTestHandler() *Handler {
 		DataDir: "/tmp/test",
 		Version: "test",
 	}
-	return NewHandler(nil, nil, nil, nil, cfg)
+	return NewHandler(nil, nil, cfg)
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -99,43 +99,6 @@ func TestListColumnsEmpty(t *testing.T) {
 	handler.RegisterRoutes(r)
 
 	req := httptest.NewRequest("GET", "/columns", nil)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-}
-
-func TestLLMStatusUnavailable(t *testing.T) {
-	handler := newTestHandler()
-	r := mux.NewRouter()
-	handler.RegisterRoutes(r)
-
-	req := httptest.NewRequest("GET", "/llm/status", nil)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-
-	var response map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&response)
-
-	if response["available"] != false {
-		t.Error("Expected LLM to be unavailable")
-	}
-}
-
-func TestNNStatusUnavailable(t *testing.T) {
-	handler := newTestHandler()
-	r := mux.NewRouter()
-	handler.RegisterRoutes(r)
-
-	req := httptest.NewRequest("GET", "/nn/status", nil)
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)

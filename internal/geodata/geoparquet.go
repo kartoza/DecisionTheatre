@@ -1,11 +1,15 @@
 package geodata
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -49,8 +53,8 @@ func NewGeoParquetStore(dataDir string) (*GeoParquetStore, error) {
 
 	// Try to load each scenario file
 	scenarioFiles := map[Scenario][]string{
-		ScenarioPast:    {"past.parquet", "past.geoparquet"},
-		ScenarioPresent: {"present.parquet", "present.geoparquet"},
+		ScenarioPast:    {"past.parquet", "past.geoparquet", "LDD_ref.parquet", "LDD_ref.geoparquet"},
+		ScenarioPresent: {"present.parquet", "present.geoparquet", "LDD_current.parquet", "LDD_current.geoparquet"},
 		ScenarioFuture:  {"future.parquet", "future.geoparquet", "ideal_future.parquet", "ideal_future.geoparquet"},
 	}
 
@@ -117,12 +121,94 @@ func (store *GeoParquetStore) loadFromJSON(scenario Scenario, path string) error
 	return nil
 }
 
-// loadFromParquet loads scenario data from a parquet file using parquet-go
+// loadFromParquet loads scenario data from a parquet file.
+// Falls back to reading a companion CSV file with the same base name.
 func (store *GeoParquetStore) loadFromParquet(scenario Scenario, path string) error {
-	// Parquet reading implementation
-	// This uses xitongsys/parquet-go to read the geoparquet files
-	log.Printf("Parquet loading for %s: %s (will be available when data files are provided)", scenario, path)
-	return fmt.Errorf("parquet file %s exists but parquet reader not yet configured - provide pre-processed JSON or actual parquet files", path)
+	// Try CSV fallback (same base name with .csv extension)
+	csvPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".csv"
+	if _, err := os.Stat(csvPath); err == nil {
+		log.Printf("Loading %s scenario from CSV fallback: %s", scenario, csvPath)
+		return store.loadFromCSV(scenario, csvPath)
+	}
+
+	return fmt.Errorf("parquet file %s exists but no parquet reader or CSV fallback available", path)
+}
+
+// loadFromCSV loads scenario data from a CSV file.
+// First column is the catchment ID, remaining columns are numeric attributes.
+func (store *GeoParquetStore) loadFromCSV(scenario Scenario, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open CSV: %w", err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+
+	// Read header
+	header, err := reader.Read()
+	if err != nil {
+		return fmt.Errorf("failed to read CSV header: %w", err)
+	}
+
+	if len(header) < 2 {
+		return fmt.Errorf("CSV must have at least 2 columns (id + attributes)")
+	}
+
+	// First column is the catchment ID, rest are attribute columns
+	columns := make([]string, len(header)-1)
+	for i := 1; i < len(header); i++ {
+		columns[i-1] = strings.Trim(header[i], "\" ")
+	}
+
+	var catchments []CatchmentData
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("CSV read error: %w", err)
+		}
+
+		if len(record) < 2 {
+			continue
+		}
+
+		catchmentID := strings.Trim(record[0], "\" ")
+		attrs := make(map[string]float64, len(columns))
+		for i, col := range columns {
+			if i+1 < len(record) {
+				val, err := strconv.ParseFloat(strings.TrimSpace(record[i+1]), 64)
+				if err == nil {
+					attrs[col] = val
+				}
+			}
+		}
+
+		catchments = append(catchments, CatchmentData{
+			CatchmentID: catchmentID,
+			Attributes:  attrs,
+		})
+	}
+
+	scenarioData := &ScenarioData{
+		Scenario:   scenario,
+		Columns:    columns,
+		Catchments: catchments,
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	store.scenarios[scenario] = scenarioData
+
+	if len(columns) > 0 {
+		store.columns = columns
+	}
+
+	log.Printf("Loaded %s scenario: %d catchments, %d columns from CSV", scenario, len(catchments), len(columns))
+	return nil
 }
 
 // GetScenarioData returns data for a specific scenario and attribute
@@ -199,6 +285,69 @@ func (store *GeoParquetStore) GetComparisonData(left, right Scenario, attribute 
 	}
 
 	return result, nil
+}
+
+// AttributeStats holds summary statistics for an attribute in a scenario
+type AttributeStats struct {
+	Scenario   string  `json:"scenario"`
+	Attribute  string  `json:"attribute"`
+	Count      int     `json:"count"`
+	Min        float64 `json:"min"`
+	Max        float64 `json:"max"`
+	Mean       float64 `json:"mean"`
+	StdDev     float64 `json:"std_dev"`
+}
+
+// GetAttributeStats returns summary statistics for an attribute across a scenario
+func (store *GeoParquetStore) GetAttributeStats(scenario Scenario, attribute string) (*AttributeStats, error) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	data, ok := store.scenarios[scenario]
+	if !ok {
+		return nil, fmt.Errorf("scenario %s not loaded", scenario)
+	}
+
+	var vals []float64
+	for _, c := range data.Catchments {
+		if v, ok := c.Attributes[attribute]; ok {
+			vals = append(vals, v)
+		}
+	}
+
+	if len(vals) == 0 {
+		return nil, fmt.Errorf("no data for attribute %s in scenario %s", attribute, scenario)
+	}
+
+	minV, maxV := vals[0], vals[0]
+	sum := 0.0
+	for _, v := range vals {
+		sum += v
+		if v < minV {
+			minV = v
+		}
+		if v > maxV {
+			maxV = v
+		}
+	}
+	mean := sum / float64(len(vals))
+
+	var sumSq float64
+	for _, v := range vals {
+		d := v - mean
+		sumSq += d * d
+	}
+	stddev := math.Sqrt(sumSq / float64(len(vals)))
+
+	return &AttributeStats{
+		Scenario:  string(scenario),
+		Attribute: attribute,
+		Count:     len(vals),
+		Min:       minV,
+		Max:       maxV,
+		Mean:      mean,
+		StdDev:    stddev,
+	}, nil
 }
 
 // Close releases resources

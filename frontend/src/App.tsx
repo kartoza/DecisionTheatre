@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Box, Flex, useDisclosure } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
@@ -6,37 +6,71 @@ import Header from './components/Header';
 import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
 import { useServerInfo } from './hooks/useApi';
-import type { Scenario, ComparisonState } from './types';
-
-type LayoutMode = 'single' | 'quad';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState } from './types';
+import {
+  loadPaneStates,
+  savePaneStates,
+  loadLayoutMode,
+  saveLayoutMode,
+  loadFocusedPane,
+  saveFocusedPane,
+} from './types';
 
 function App() {
-  const { isOpen, onToggle } = useDisclosure({ defaultIsOpen: false });
   const { isOpen: isDocsOpen, onToggle: onToggleDocs, onClose: onCloseDocs } = useDisclosure({ defaultIsOpen: false });
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('single');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
+  const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
+  const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
+  const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
+    // Auto-open filter panel for the focused pane when starting in single mode
+    const mode = loadLayoutMode();
+    return mode === 'single' ? loadFocusedPane() : null;
+  });
   const { info } = useServerInfo();
 
-  const handleToggleQuad = useCallback(() => {
-    setLayoutMode((prev) => (prev === 'single' ? 'quad' : 'single'));
+  // Persist state changes
+  useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
+  useEffect(() => { saveLayoutMode(layoutMode); }, [layoutMode]);
+  useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
+
+  // Switch to single pane (focus a specific pane) and show its filter panel
+  const handleFocusPane = useCallback((paneIndex: number) => {
+    setFocusedPane(paneIndex);
+    setLayoutMode('single');
+    setIndicatorPaneIndex(paneIndex);
   }, []);
 
-  const [comparison, setComparison] = useState<ComparisonState>({
-    leftScenario: 'past',
-    rightScenario: 'present',
-    attribute: '',
-  });
+  // Switch to quad mode and hide filter panel
+  const handleGoQuad = useCallback(() => {
+    setLayoutMode('quad');
+    setIndicatorPaneIndex(null);
+  }, []);
+
+  // Update a specific pane's comparison state
+  const handlePaneStateChange = useCallback((paneIndex: number, partial: Partial<ComparisonState>) => {
+    setPaneStates((prev) => {
+      const next = [...prev] as PaneStates;
+      next[paneIndex] = { ...next[paneIndex], ...partial };
+      return next;
+    });
+  }, []);
 
   const handleLeftChange = useCallback((scenario: Scenario) => {
-    setComparison((prev) => ({ ...prev, leftScenario: scenario }));
-  }, []);
+    if (indicatorPaneIndex !== null)
+      handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
+  }, [indicatorPaneIndex, handlePaneStateChange]);
 
   const handleRightChange = useCallback((scenario: Scenario) => {
-    setComparison((prev) => ({ ...prev, rightScenario: scenario }));
-  }, []);
+    if (indicatorPaneIndex !== null)
+      handlePaneStateChange(indicatorPaneIndex, { rightScenario: scenario });
+  }, [indicatorPaneIndex, handlePaneStateChange]);
 
   const handleAttributeChange = useCallback((attribute: string) => {
-    setComparison((prev) => ({ ...prev, attribute }));
-  }, []);
+    if (indicatorPaneIndex !== null)
+      handlePaneStateChange(indicatorPaneIndex, { attribute });
+  }, [indicatorPaneIndex, handlePaneStateChange]);
+
+  const isIndicatorOpen = indicatorPaneIndex !== null;
 
   // Show setup guide when tiles aren't loaded
   if (info && !info.tiles_loaded) {
@@ -46,12 +80,8 @@ function App() {
   return (
     <Flex direction="column" h="100vh" overflow="hidden">
       <Header
-        onTogglePanel={onToggle}
-        isPanelOpen={isOpen}
         onToggleDocs={onToggleDocs}
         isDocsOpen={isDocsOpen}
-        onToggleQuad={handleToggleQuad}
-        isQuadMode={layoutMode === 'quad'}
       />
 
       <Flex flex={1} overflow="hidden" position="relative">
@@ -59,19 +89,26 @@ function App() {
         <Box
           flex={1}
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-          mr={isOpen ? { base: 0, md: '400px', lg: '440px' } : 0}
+          mr={isIndicatorOpen ? { base: 0, md: '400px', lg: '440px' } : 0}
           position="relative"
         >
-          <ContentArea mode={layoutMode} comparison={comparison} />
+          <ContentArea
+            mode={layoutMode}
+            paneStates={paneStates}
+            focusedPane={focusedPane}
+            onFocusPane={handleFocusPane}
+            onGoQuad={handleGoQuad}
+          />
         </Box>
 
-        {/* Slide-out control panel */}
+        {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
-          isOpen={isOpen}
-          comparison={comparison}
+          isOpen={isIndicatorOpen}
+          comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
           onAttributeChange={handleAttributeChange}
+          paneIndex={indicatorPaneIndex}
         />
       </Flex>
 

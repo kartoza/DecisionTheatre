@@ -8,8 +8,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
-	"github.com/kartoza/decision-theatre/internal/llm"
-	"github.com/kartoza/decision-theatre/internal/nn"
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
 
@@ -17,8 +15,6 @@ import (
 type Handler struct {
 	tileStore *tiles.MBTilesStore
 	geoStore  *geodata.GeoParquetStore
-	llmEngine *llm.EmbeddedLLM
-	nnModel   *nn.CatchmentModel
 	cfg       config.Config
 }
 
@@ -26,15 +22,11 @@ type Handler struct {
 func NewHandler(
 	tileStore *tiles.MBTilesStore,
 	geoStore *geodata.GeoParquetStore,
-	llmEngine *llm.EmbeddedLLM,
-	nnModel *nn.CatchmentModel,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
 		tileStore: tileStore,
 		geoStore:  geoStore,
-		llmEngine: llmEngine,
-		nnModel:   nnModel,
 		cfg:       cfg,
 	}
 }
@@ -54,14 +46,6 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
-
-	// LLM endpoints
-	r.HandleFunc("/llm/status", h.handleLLMStatus).Methods("GET")
-	r.HandleFunc("/llm/query", h.handleLLMQuery).Methods("POST")
-
-	// Neural network endpoints
-	r.HandleFunc("/nn/predict", h.handleNNPredict).Methods("POST")
-	r.HandleFunc("/nn/status", h.handleNNStatus).Methods("GET")
 }
 
 // respondJSON sends a JSON response
@@ -86,11 +70,9 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleInfo returns server information
 func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]interface{}{
-		"version":       h.cfg.Version,
-		"tiles_loaded":  h.tileStore != nil,
-		"geo_loaded":    h.geoStore != nil,
-		"llm_available": h.llmEngine != nil && h.llmEngine.IsLoaded(),
-		"nn_available":  h.nnModel != nil,
+		"version":      h.cfg.Version,
+		"tiles_loaded": h.tileStore != nil,
+		"geo_loaded":   h.geoStore != nil,
 	}
 	respondJSON(w, http.StatusOK, info)
 }
@@ -181,84 +163,4 @@ func (h *Handler) handleComparisonData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, data)
-}
-
-// handleLLMStatus returns LLM status
-func (h *Handler) handleLLMStatus(w http.ResponseWriter, r *http.Request) {
-	if h.llmEngine == nil {
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"available": false,
-			"message":   "No LLM model loaded. Start with --model flag to enable.",
-		})
-		return
-	}
-
-	respondJSON(w, http.StatusOK, h.llmEngine.GetModelInfo())
-}
-
-// handleLLMQuery processes an LLM query
-func (h *Handler) handleLLMQuery(w http.ResponseWriter, r *http.Request) {
-	if h.llmEngine == nil {
-		respondError(w, http.StatusServiceUnavailable, "LLM not available")
-		return
-	}
-
-	var req struct {
-		Query   string `json:"query"`
-		Context string `json:"context,omitempty"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	response, err := h.llmEngine.Generate(req.Query, req.Context)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]string{"response": response})
-}
-
-// handleNNPredict processes a neural network prediction
-func (h *Handler) handleNNPredict(w http.ResponseWriter, r *http.Request) {
-	if h.nnModel == nil {
-		respondError(w, http.StatusServiceUnavailable, "Neural network not available")
-		return
-	}
-
-	var req struct {
-		Inputs []float64 `json:"inputs"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	predictions, err := h.nnModel.Predict(req.Inputs)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]interface{}{"predictions": predictions})
-}
-
-// handleNNStatus returns neural network status
-func (h *Handler) handleNNStatus(w http.ResponseWriter, r *http.Request) {
-	if h.nnModel == nil {
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"available": false,
-		})
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"available": true,
-		"trained":   h.nnModel.IsTrained(),
-		"config":    h.nnModel.GetConfig(),
-	})
 }

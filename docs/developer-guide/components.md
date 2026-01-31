@@ -8,10 +8,6 @@
 | [gorilla/mux](https://github.com/gorilla/mux) | HTTP router | BSD-3-Clause |
 | [go-sqlite3](https://github.com/mattn/go-sqlite3) | SQLite driver for MBTiles | MIT |
 | [webview_go](https://github.com/webview/webview_go) | Native desktop window (WebView) | MIT |
-| [go-llama.cpp](https://github.com/go-skynet/go-llama.cpp) | LLM inference (llama.cpp binding) | MIT |
-| [Gorgonia](https://github.com/gorgonia/gorgonia) | Neural network framework | Apache-2.0 |
-| [Gorgonia Tensor](https://github.com/gorgonia/tensor) | N-dimensional arrays | Apache-2.0 |
-| [OpenBLAS](https://www.openblas.net/) | Linear algebra (CGO) | BSD-3-Clause |
 
 ## Frontend (TypeScript/React)
 
@@ -49,5 +45,4 @@
 |--------|---------|---------------|
 | MBTiles | Vector tile storage | [MBTiles Spec](https://github.com/mapbox/mbtiles-spec) |
 | GeoParquet | Scenario attribute data | [GeoParquet Spec](https://geoparquet.org/) |
-| GGUF | LLM model weights | [GGUF Format](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md) |
 | MapBox GL Style | Map styling | [Style Spec](https://docs.mapbox.com/style-spec/) |

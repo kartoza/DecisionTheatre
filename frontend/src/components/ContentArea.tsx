@@ -1,23 +1,15 @@
-import { useMemo } from 'react';
 import { Box } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
-import type { ComparisonState } from '../types';
-
-type LayoutMode = 'single' | 'quad';
+import type { LayoutMode, PaneStates } from '../types';
 
 interface ContentAreaProps {
   mode: LayoutMode;
-  comparison: ComparisonState;
+  paneStates: PaneStates;
+  focusedPane: number;
+  onFocusPane: (index: number) => void;
+  onGoQuad: () => void;
 }
-
-// Default comparisons for the 4 quad panes
-const QUAD_COMPARISONS: ComparisonState[] = [
-  { leftScenario: 'past', rightScenario: 'present', attribute: '' },
-  { leftScenario: 'present', rightScenario: 'future', attribute: '' },
-  { leftScenario: 'past', rightScenario: 'future', attribute: '' },
-  { leftScenario: 'past', rightScenario: 'present', attribute: '' },
-];
 
 const paneVariants = {
   hidden: { opacity: 0, scale: 0.92 },
@@ -41,14 +33,18 @@ const paneVariants = {
   }),
 };
 
-function ContentArea({ mode, comparison }: ContentAreaProps) {
+function ContentArea({
+  mode,
+  paneStates,
+  focusedPane,
+  onFocusPane,
+  onGoQuad,
+}: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
-  // In quad mode, first pane uses the shared comparison, rest use defaults
-  const comparisons = useMemo(() => {
-    if (!isQuad) return [comparison];
-    return [comparison, QUAD_COMPARISONS[1], QUAD_COMPARISONS[2], QUAD_COMPARISONS[3]];
-  }, [isQuad, comparison]);
+  // In single mode, show only the focused pane
+  // In quad mode, show all 4
+  const visibleIndices = isQuad ? [0, 1, 2, 3] : [focusedPane];
 
   return (
     <Box
@@ -64,33 +60,59 @@ function ContentArea({ mode, comparison }: ContentAreaProps) {
         transition: 'grid-template-columns 0.6s cubic-bezier(0.16, 1, 0.3, 1), grid-template-rows 0.6s cubic-bezier(0.16, 1, 0.3, 1), gap 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
-      {/* Pane 0 is always rendered */}
-      <Box
-        position="relative"
-        overflow="hidden"
-        gridColumn={isQuad ? 'auto' : '1 / -1'}
-        gridRow={isQuad ? 'auto' : '1 / -1'}
-      >
-        <ViewPane comparison={comparisons[0]} compact={isQuad} />
-      </Box>
-
-      {/* Panes 1-3 only in quad mode */}
-      <AnimatePresence>
-        {isQuad &&
-          [1, 2, 3].map((i) => (
-            <motion.div
-              key={`pane-${i}`}
-              custom={i}
-              variants={paneVariants}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-              style={{ position: 'relative', overflow: 'hidden' }}
-            >
-              <ViewPane comparison={comparisons[i]} compact />
-            </motion.div>
-          ))}
-      </AnimatePresence>
+      {isQuad ? (
+        <>
+          {/* Pane 0 always rendered without AnimatePresence in quad */}
+          <Box position="relative" overflow="hidden">
+            <ViewPane
+              comparison={paneStates[0]}
+              compact
+              paneIndex={0}
+              layoutMode={mode}
+              onFocusPane={onFocusPane}
+              onGoQuad={onGoQuad}
+            />
+          </Box>
+          <AnimatePresence>
+            {[1, 2, 3].map((i) => (
+              <motion.div
+                key={`pane-${i}`}
+                custom={i}
+                variants={paneVariants}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                style={{ position: 'relative', overflow: 'hidden' }}
+              >
+                <ViewPane
+                  comparison={paneStates[i]}
+                  compact
+                  paneIndex={i}
+                  layoutMode={mode}
+                  onFocusPane={onFocusPane}
+                  onGoQuad={onGoQuad}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </>
+      ) : (
+        <Box
+          position="relative"
+          overflow="hidden"
+          gridColumn="1 / -1"
+          gridRow="1 / -1"
+        >
+          <ViewPane
+            comparison={paneStates[visibleIndices[0]]}
+            compact={false}
+            paneIndex={visibleIndices[0]}
+            layoutMode={mode}
+            onFocusPane={onFocusPane}
+            onGoQuad={onGoQuad}
+          />
+        </Box>
+      )}
     </Box>
   );
 }

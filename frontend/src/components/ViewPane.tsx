@@ -1,20 +1,28 @@
 import { useState, useCallback } from 'react';
-import { Box, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
-import { FiBarChart2, FiMap } from 'react-icons/fi';
+import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
+import { FiBarChart2, FiMap, FiMaximize, FiGrid } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
-import type { ComparisonState } from '../types';
+import type { ComparisonState, LayoutMode } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ViewPaneProps {
   comparison: ComparisonState;
-  /** Label shown in quad mode */
-  label?: string;
-  /** Whether this pane is in a multi-pane layout */
   compact?: boolean;
+  paneIndex: number;
+  layoutMode: LayoutMode;
+  onFocusPane: (index: number) => void;
+  onGoQuad: () => void;
 }
 
-function ViewPane({ comparison, label, compact = false }: ViewPaneProps) {
+function ViewPane({
+  comparison,
+  compact = false,
+  paneIndex,
+  layoutMode,
+  onFocusPane,
+  onGoQuad,
+}: ViewPaneProps) {
   const [isChartView, setIsChartView] = useState(false);
   const borderColor = useColorModeValue('gray.600', 'gray.600');
 
@@ -24,7 +32,10 @@ function ViewPane({ comparison, label, compact = false }: ViewPaneProps) {
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
-  const paneLabel = label || `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
+  const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
+
+  const isQuad = layoutMode === 'quad';
+  const btnSize = compact ? 'xs' : 'sm';
 
   return (
     <Box
@@ -74,22 +85,63 @@ function ViewPane({ comparison, label, compact = false }: ViewPaneProps) {
         </Box>
       )}
 
-      {/* Map/Chart toggle button */}
-      <Box position="absolute" bottom={compact ? 2 : 3} right={compact ? 2 : 3} zIndex={5}>
-        <Tooltip label={isChartView ? 'Show map' : 'Show chart'} placement="left">
+      {/* Per-pane toolbar */}
+      <HStack
+        position="absolute"
+        bottom={compact ? 2 : 3}
+        right={compact ? 2 : 3}
+        zIndex={5}
+        spacing={1}
+        bg="blackAlpha.600"
+        borderRadius="lg"
+        px={1.5}
+        py={1}
+        backdropFilter="blur(8px)"
+        transition="opacity 0.3s ease"
+      >
+        {/* Map / Chart toggle */}
+        <Tooltip label={isChartView ? 'Show map' : 'Show chart'} placement="top">
           <IconButton
             aria-label="Toggle map/chart"
             icon={isChartView ? <FiMap /> : <FiBarChart2 />}
             onClick={handleToggle}
-            variant="solid"
-            bg="blackAlpha.600"
+            variant="ghost"
             color="white"
-            _hover={{ bg: 'blackAlpha.800' }}
-            size={compact ? 'xs' : 'sm'}
+            _hover={{ bg: 'whiteAlpha.300' }}
+            size={btnSize}
             borderRadius="md"
           />
         </Tooltip>
-      </Box>
+
+        {/* Layout toggle — context-dependent */}
+        {isQuad ? (
+          <Tooltip label="Focus this pane" placement="top">
+            <IconButton
+              aria-label="Focus pane"
+              icon={<FiMaximize />}
+              onClick={() => onFocusPane(paneIndex)}
+              variant="ghost"
+              color="white"
+              _hover={{ bg: 'whiteAlpha.300' }}
+              size={btnSize}
+              borderRadius="md"
+            />
+          </Tooltip>
+        ) : (
+          <Tooltip label="Quad view" placement="top">
+            <IconButton
+              aria-label="Switch to quad view"
+              icon={<FiGrid />}
+              onClick={onGoQuad}
+              variant="ghost"
+              color="white"
+              _hover={{ bg: 'whiteAlpha.300' }}
+              size={btnSize}
+              borderRadius="md"
+            />
+          </Tooltip>
+        )}
+      </HStack>
     </Box>
   );
 }

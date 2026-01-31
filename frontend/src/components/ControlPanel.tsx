@@ -14,6 +14,7 @@ import {
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo } from 'react-icons/fi';
 import { useColumns } from '../hooks/useApi';
+import { PRISM_CSS_GRADIENT } from './MapView';
 import type { Scenario, ComparisonState } from '../types';
 import { SCENARIOS } from '../types';
 
@@ -23,6 +24,7 @@ interface ControlPanelProps {
   onLeftChange: (scenario: Scenario) => void;
   onRightChange: (scenario: Scenario) => void;
   onAttributeChange: (attribute: string) => void;
+  paneIndex: number | null;
 }
 
 function ScenarioSelector({
@@ -94,6 +96,7 @@ function ControlPanel({
   onLeftChange,
   onRightChange,
   onAttributeChange,
+  paneIndex,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
@@ -135,11 +138,18 @@ function ControlPanel({
         <VStack spacing={6} p={6} align="stretch">
           {/* Title */}
           <Box>
-            <Heading size="sm" mb={1}>
-              Scenario Comparison
-            </Heading>
+            <HStack mb={1}>
+              <Heading size="sm">
+                Indicator
+              </Heading>
+              {paneIndex !== null && (
+                <Badge colorScheme="purple" variant="subtle" fontSize="xs" borderRadius="full">
+                  Pane {paneIndex + 1}
+                </Badge>
+              )}
+            </HStack>
             <Text fontSize="sm" color="gray.500">
-              Select two scenarios and an attribute to compare across the map.
+              Choose a factor to colour the catchments on this map.
             </Text>
           </Box>
 
@@ -223,7 +233,7 @@ function ControlPanel({
               <Box
                 h="12px"
                 borderRadius="full"
-                bgGradient="linear(to-r, #2166ac, #67a9cf, #f7f7f7, #ef8a62, #b2182b)"
+                bg={PRISM_CSS_GRADIENT}
               />
               <HStack justify="space-between" mt={1}>
                 <Text fontSize="xs" color="gray.500">

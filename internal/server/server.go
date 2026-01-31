@@ -17,8 +17,6 @@ import (
 	"github.com/kartoza/decision-theatre/internal/api"
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
-	"github.com/kartoza/decision-theatre/internal/llm"
-	"github.com/kartoza/decision-theatre/internal/nn"
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
 
@@ -35,8 +33,6 @@ type Server struct {
 	router     *mux.Router
 	tileStore  *tiles.MBTilesStore
 	geoStore   *geodata.GeoParquetStore
-	llmEngine  *llm.EmbeddedLLM
-	nnModel    *nn.CatchmentModel
 }
 
 // New creates a new Server with all components initialized
@@ -63,27 +59,6 @@ func New(cfg config.Config) (*Server, error) {
 		s.geoStore = geoStore
 	}
 
-	// Initialize embedded LLM (if model path provided)
-	if cfg.ModelPath != "" {
-		llmCfg := llm.DefaultEmbeddedLLMConfig()
-		llmCfg.ModelPath = cfg.ModelPath
-		llmEngine, err := llm.NewEmbeddedLLM(llmCfg)
-		if err != nil {
-			log.Printf("Warning: Embedded LLM not available: %v", err)
-		} else {
-			if err := llmEngine.LoadModel(cfg.ModelPath); err != nil {
-				log.Printf("Warning: Failed to load LLM model: %v", err)
-			} else {
-				s.llmEngine = llmEngine
-				log.Printf("Embedded LLM loaded: %s", cfg.ModelPath)
-			}
-		}
-	}
-
-	// Initialize neural network model
-	nnModel := nn.NewCatchmentModel(nn.DefaultCatchmentModelConfig())
-	s.nnModel = nnModel
-
 	// Set up routes
 	s.setupRoutes()
 
@@ -94,7 +69,7 @@ func New(cfg config.Config) (*Server, error) {
 func (s *Server) setupRoutes() {
 	// API routes
 	apiRouter := s.router.PathPrefix("/api").Subrouter()
-	apiHandler := api.NewHandler(s.tileStore, s.geoStore, s.llmEngine, s.nnModel, s.cfg)
+	apiHandler := api.NewHandler(s.tileStore, s.geoStore, s.cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
 	// Data pack management routes
@@ -180,9 +155,6 @@ func (s *Server) Stop() error {
 	}
 	if s.geoStore != nil {
 		s.geoStore.Close()
-	}
-	if s.llmEngine != nil {
-		s.llmEngine.Close()
 	}
 
 	return s.httpServer.Shutdown(ctx)

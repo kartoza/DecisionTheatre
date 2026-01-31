@@ -23,7 +23,6 @@ func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
 	dataDir := flag.String("data-dir", "", "Directory containing data files (mbtiles, geoparquet)")
 	resourcesDir := flag.String("resources-dir", "", "Directory containing resource files (mbtiles, styles)")
-	modelPath := flag.String("model", "", "Path to GGUF model file for embedded LLM")
 	headless := flag.Bool("headless", false, "Run in headless mode (no GUI window)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
@@ -73,7 +72,6 @@ func main() {
 		Port:         *port,
 		DataDir:      resolvedDataDir,
 		ResourcesDir: resolvedResourcesDir,
-		ModelPath:    *modelPath,
 		Version:      version,
 	}
 
