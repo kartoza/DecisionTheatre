@@ -36,9 +36,8 @@ internal/
   api/       # HTTP handlers (thin layer, delegates to domain packages)
   config/    # Configuration structs
   geodata/   # GeoParquet loading and processing
-  llm/       # LLM integration (with stub for builds without model)
   models/    # Shared data models
-  nn/        # Neural network inference (with stub)
+  projects/  # Project CRUD operations
   server/    # HTTP server setup, static file serving
   tiles/     # MBTiles reading
 ```

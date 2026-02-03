@@ -1,5 +1,5 @@
-site_name: Decision Theatre
-site_description: Offline catchment data exploration with embedded AI
+site_name: Landscape Decision Theatre
+site_description: Exploring the possibilities of sustainable land use practices
 site_author: Kartoza
 site_url: https://kartoza.github.io/DecisionTheatre/
 repo_url: https://github.com/kartoza/DecisionTheatre
@@ -52,9 +52,9 @@ nav:
       - Getting Started: user-manual/index.md
       - Installation: user-manual/installation.md
       - Data Setup: user-manual/data-setup.md
+      - Projects: user-manual/projects.md
       - Using the Map: user-manual/using-the-map.md
       - Scenario Comparison: user-manual/scenario-comparison.md
-      - AI Chat: user-manual/ai-chat.md
   - User Guide:
       - Tutorials: user-guide/index.md
       - First Run: user-guide/first-run.md

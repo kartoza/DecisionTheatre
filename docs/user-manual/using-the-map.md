@@ -1,6 +1,6 @@
 # Using the Map
 
-The map interface is the primary way to explore catchment data in Decision Theatre.
+The map interface is the primary way to explore catchment data in Landscape Decision Theatre.
 
 ## Map Controls
 
@@ -38,27 +38,16 @@ Each map pane has a floating toolbar in the bottom-right corner with two buttons
 - **Single view** -- one map pane fills the entire content area. The indicator (control) panel automatically opens on the right, letting you choose scenarios and attributes for the focused pane. Use the grid button on the toolbar to switch back to quad view.
 - **Quad view** -- four map panes in a 2×2 grid, each with independent scenarios and indicator settings. Click the maximise button on any pane to focus it and open the indicator panel. The quad layout, focused pane, and per-pane indicator selections are all remembered between sessions.
 
-## Chat Panel
-
-The header bar includes a chat icon (speech bubble) that opens a slide-out chat panel on the right side of the screen. Use the chat panel to ask questions about catchment data, scenarios, and attributes using natural language.
-
-When an LLM model is loaded, the chat enriches prompts with data context for intelligent answers. When no LLM is available, a built-in data query engine responds to common queries:
-
-- **"list columns"** or **"what attributes"** -- shows available data attributes
-- **"list scenarios"** -- shows loaded scenarios
-- **"summary"** or **"overview"** -- gives a data summary
-- Ask about a specific attribute name (e.g. "tell me about NPP_gm2") to get per-scenario statistics (count, min, max, mean, std dev)
-
-Usage:
-
-- Click the chat icon in the header to open or close the panel
-- Type a question and press Enter or click the send button
-- Previous messages are preserved while the panel stays open
-
 ## Header Status Indicators
 
 The header bar shows the status of application components:
 
 - **Tiles** -- green when map tile data is loaded
-- **LLM** -- green when an AI language model is available
-- **NN** -- green when a neural network model is loaded
+
+## Navigation
+
+The header also provides navigation controls:
+
+- **Home** icon -- return to the Landing Page
+- **Projects** icon -- go directly to the Projects page
+- **Documentation** icon -- open the embedded documentation panel

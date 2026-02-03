@@ -1,6 +1,6 @@
 # Installation
 
-Decision Theatre is available as platform-native installers and portable binaries.
+Landscape Decision Theatre is available as platform-native installers and portable binaries.
 
 ## Platform Installers
 
@@ -107,7 +107,6 @@ nix run github:kartoza/DecisionTheatre
 | `--port` | `8080` | HTTP server port |
 | `--data-dir` | *(auto)* | Directory containing GeoParquet scenario files |
 | `--resources-dir` | *(auto)* | Directory containing MBTiles and style files |
-| `--model` | *(none)* | Path to a GGUF model file for the embedded LLM |
 | `--headless` | `false` | Run without a desktop window |
 | `--version` | | Print version and exit |
 

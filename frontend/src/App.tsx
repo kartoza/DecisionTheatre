@@ -5,8 +5,12 @@ import ControlPanel from './components/ControlPanel';
 import Header from './components/Header';
 import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
+import LandingPage from './components/LandingPage';
+import AboutPage from './components/AboutPage';
+import ProjectsPage from './components/ProjectsPage';
+import CreateProjectPage from './components/CreateProjectPage';
 import { useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Project } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -14,6 +18,10 @@ import {
   saveLayoutMode,
   loadFocusedPane,
   saveFocusedPane,
+  loadCurrentPage,
+  saveCurrentPage,
+  loadCurrentProject,
+  saveCurrentProject,
 } from './types';
 
 function App() {
@@ -26,12 +34,55 @@ function App() {
     const mode = loadLayoutMode();
     return mode === 'single' ? loadFocusedPane() : null;
   });
+  const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(loadCurrentProject);
+  const [cloneFromProject, setCloneFromProject] = useState<Project | null>(null);
   const { info } = useServerInfo();
 
   // Persist state changes
   useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
   useEffect(() => { saveLayoutMode(layoutMode); }, [layoutMode]);
   useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
+  useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
+  useEffect(() => { saveCurrentProject(currentProjectId); }, [currentProjectId]);
+
+  // Navigate to a page
+  const handleNavigate = useCallback((page: AppPage) => {
+    setCurrentPage(page);
+    if (page !== 'create') {
+      setCloneFromProject(null);
+    }
+  }, []);
+
+  // Open a project and go to map view
+  const handleOpenProject = useCallback(async (project: Project) => {
+    setCurrentProjectId(project.id);
+    // Load project state
+    if (project.paneStates) {
+      setPaneStates(project.paneStates);
+    }
+    if (project.layoutMode) {
+      setLayoutMode(project.layoutMode);
+    }
+    if (typeof project.focusedPane === 'number') {
+      setFocusedPane(project.focusedPane);
+      if (project.layoutMode === 'single') {
+        setIndicatorPaneIndex(project.focusedPane);
+      }
+    }
+    setCurrentPage('map');
+  }, []);
+
+  // Clone a project
+  const handleCloneProject = useCallback((project: Project) => {
+    setCloneFromProject(project);
+    setCurrentPage('create');
+  }, []);
+
+  // Handle project created
+  const handleProjectCreated = useCallback((project: Project) => {
+    handleOpenProject(project);
+  }, [handleOpenProject]);
 
   // Switch to single pane (focus a specific pane) and show its filter panel
   const handleFocusPane = useCallback((paneIndex: number) => {
@@ -72,16 +123,96 @@ function App() {
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
-  // Show setup guide when tiles aren't loaded
-  if (info && !info.tiles_loaded) {
+  // Show setup guide when tiles aren't loaded (only on map page)
+  if (currentPage === 'map' && info && !info.tiles_loaded) {
     return <SetupGuide info={info} />;
   }
 
+  // Render landing/about/projects/create pages
+  if (currentPage === 'landing') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="hidden">
+          <LandingPage onNavigate={handleNavigate} />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
+  if (currentPage === 'about') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="auto">
+          <AboutPage onNavigate={handleNavigate} />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
+  if (currentPage === 'projects') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="auto">
+          <ProjectsPage
+            onNavigate={handleNavigate}
+            onOpenProject={handleOpenProject}
+            onCloneProject={handleCloneProject}
+          />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
+  if (currentPage === 'create') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="auto">
+          <CreateProjectPage
+            onNavigate={handleNavigate}
+            onProjectCreated={handleProjectCreated}
+            cloneFrom={cloneFromProject}
+          />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
+  // Map view (default)
   return (
     <Flex direction="column" h="100vh" overflow="hidden">
       <Header
         onToggleDocs={onToggleDocs}
         isDocsOpen={isDocsOpen}
+        onNavigate={handleNavigate}
+        currentPage={currentPage}
       />
 
       <Flex flex={1} overflow="hidden" position="relative">

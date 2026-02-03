@@ -4,10 +4,10 @@
 Usage:
     python3 scripts/csv2parquet.py [--data-dir DIR] [--output-dir DIR]
 
-Converts LDD_current.csv, LDD_ref.csv, LDD_column_Metadata.csv, and
-herb_traits_ready.csv into compressed Parquet files. The catchID column
-(present in LDD files) is preserved as the join key for the mbtiles
-catchment map.
+Converts current.csv, reference.csv, column_metadata.csv
+into compressed Parquet files. The catchID column
+(present in current and reference files) is preserved as the join key for the
+mbtiles catchment map.
 
 Requires: pyarrow (available in nix develop)
 """
@@ -26,26 +26,24 @@ except ImportError:
 
 # Files to convert and their specific read options
 CSV_FILES = {
-    "LDD_current.csv": {
-        "description": "Current scenario catchment data",
-        "output": "LDD_current.parquet",
+    "current.csv": {
+        "description": "Current scenario catchment landscape data",
+        "output": "current.parquet",
     },
-    "LDD_ref.csv": {
-        "description": "Reference scenario catchment data",
-        "output": "LDD_ref.parquet",
+    "reference.csv": {
+        "description": "Reference scenario catchment landscape data",
+        "output": "reference.parquet",
     },
-    "LDD_column_Metadata.csv": {
-        "description": "Column metadata for LDD datasets",
-        "output": "LDD_column_Metadata.parquet",
-    },
-    "herb_traits_ready.csv": {
-        "description": "Herbivore trait data",
-        "output": "herb_traits_ready.parquet",
+    "column_metadata.csv": {
+        "description": "Column metadata for landscape datasets",
+        "output": "column_Metadata.parquet",
     },
 }
 
 
-def convert_csv_to_parquet(csv_path: Path, parquet_path: Path, description: str) -> None:
+def convert_csv_to_parquet(
+    csv_path: Path, parquet_path: Path, description: str
+) -> None:
     """Convert a single CSV file to Parquet with snappy compression."""
     print(f"  Converting {csv_path.name} -> {parquet_path.name} ({description})")
 

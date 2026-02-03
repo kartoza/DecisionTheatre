@@ -21,33 +21,82 @@ If you are using Nix:
 nix run
 ```
 
-### 2. Verify the setup guide
+### 2. Landing Page
 
-If the MBTiles file is not found, the application displays a **Setup Guide** page with:
+When the application starts, you'll see the **Landing Page** with:
 
-- A status table showing which components are ready or missing
-- Step-by-step instructions for obtaining and converting the data
+- **Landscape Decision Theatre** title with a beautiful background landscape image
+- **Strapline**: "Exploring the possibilities of sustainable land use practices"
+- **About** button: Learn more about the project, funders, and open source nature
+- **Projects** button: Access the project management interface
 
-Follow the on-screen instructions to prepare the required files.
+### 3. About Page
 
-### 3. View the map
+Click the **About** button to view:
 
-Once data is loaded, the main interface appears:
+- Project overview and mission statement
+- Feature highlights (spatial analysis, collaborative decision making, scenario modeling)
+- Funders and partners information
+- Academic citations and references
+- Open source information with links to the GitHub repository
+
+Use the **Back to Home** button to return to the landing page.
+
+### 4. Create Your First Project
+
+1. Click **Projects** from the landing page
+2. Click **Create New Project**
+3. Fill in the project details:
+   - **Thumbnail**: Drag and drop an image or click to upload (optional)
+   - **Title**: Give your project a descriptive name (required)
+   - **Description**: Add notes about your project (optional)
+4. Click **Create Project**
+
+The application will create your project and navigate to the map view.
+
+### 5. View the map
+
+Once in the map view, you'll see:
 
 - A full-screen vector map of Africa showing catchment boundaries, rivers, lakes, and country borders
-- A header bar with the application title and status indicators
-- A settings (gear) icon to open the control panel
+- A header bar with navigation buttons (Home, Projects) and status indicators
+- A slide-out control panel for configuring scenario comparisons
 
-### 4. Check status indicators
+### 6. Check status indicators
 
 In the header, verify:
 
 - **Tiles**: green (map data loaded)
-- **LLM**: green if you provided a `--model` path, gray otherwise
-- **NN**: green if a neural network model is available, gray otherwise
 
-### 5. Open the control panel
+### 7. Open the control panel
 
-Click the gear icon in the header. The control panel slides out from the right edge, and the map area adjusts to accommodate it.
+Click any pane to focus it and open the control panel. The panel slides out from the right edge, showing:
+
+- Scenario selectors (Reference, Current, Future)
+- Attribute selector for choropleth visualization
+- Color scale legend
 
 You are now ready to explore the data. See [Comparing Scenarios](comparing-scenarios.md) for the next steps.
+
+## Managing Projects
+
+### Opening an Existing Project
+
+1. Click the **Projects** button (folder icon) in the header or navigate to Projects from the landing page
+2. Click on any project card to open it
+3. Your map state (scenarios, attributes, layout) will be restored
+
+### Cloning a Project
+
+1. In the Projects page, hover over a project card
+2. Click the **Clone** button (copy icon)
+3. Modify the title and description as needed
+4. Click **Create Project** to create a copy
+
+### Deleting a Project
+
+1. In the Projects page, hover over a project card
+2. Click the **Delete** button (trash icon)
+3. Confirm the deletion
+
+Note: Project deletion is permanent and cannot be undone.

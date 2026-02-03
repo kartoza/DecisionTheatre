@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+// scenarioFileBase maps each scenario to the base filename the store expects.
+var scenarioFileBase = map[Scenario]string{
+	ScenarioReference: "reference",
+	ScenarioCurrent:   "current",
+	ScenarioFuture:    "current", // future loads from the same file as current
+}
+
 func createTestScenarioJSON(t *testing.T, dir string, scenario Scenario) {
 	t.Helper()
 
@@ -49,21 +56,27 @@ func createTestScenarioJSON(t *testing.T, dir string, scenario Scenario) {
 		t.Fatalf("Failed to marshal test data: %v", err)
 	}
 
-	filename := string(scenario) + ".json"
-	if err := os.WriteFile(filepath.Join(dir, filename), jsonData, 0644); err != nil {
-		t.Fatalf("Failed to write test JSON: %v", err)
+	base := scenarioFileBase[scenario]
+	jsonPath := filepath.Join(dir, base+".json")
+	// Only write if file doesn't already exist (current is shared by current+future)
+	if _, err := os.Stat(jsonPath); err != nil {
+		if err := os.WriteFile(jsonPath, jsonData, 0644); err != nil {
+			t.Fatalf("Failed to write test JSON: %v", err)
+		}
 	}
 
 	// Also create a dummy parquet file so the store finds it
-	parquetPath := filepath.Join(dir, string(scenario)+".parquet")
-	os.WriteFile(parquetPath, []byte{}, 0644)
+	parquetPath := filepath.Join(dir, base+".parquet")
+	if _, err := os.Stat(parquetPath); err != nil {
+		os.WriteFile(parquetPath, []byte{}, 0644)
+	}
 }
 
 func TestNewGeoParquetStore(t *testing.T) {
 	dir := t.TempDir()
 
-	createTestScenarioJSON(t, dir, ScenarioPast)
-	createTestScenarioJSON(t, dir, ScenarioPresent)
+	createTestScenarioJSON(t, dir, ScenarioReference)
+	createTestScenarioJSON(t, dir, ScenarioCurrent)
 	createTestScenarioJSON(t, dir, ScenarioFuture)
 
 	store, err := NewGeoParquetStore(dir)
@@ -80,7 +93,7 @@ func TestNewGeoParquetStore(t *testing.T) {
 
 func TestGetColumns(t *testing.T) {
 	dir := t.TempDir()
-	createTestScenarioJSON(t, dir, ScenarioPast)
+	createTestScenarioJSON(t, dir, ScenarioReference)
 
 	store, err := NewGeoParquetStore(dir)
 	if err != nil {
@@ -96,7 +109,7 @@ func TestGetColumns(t *testing.T) {
 
 func TestGetScenarioData(t *testing.T) {
 	dir := t.TempDir()
-	createTestScenarioJSON(t, dir, ScenarioPast)
+	createTestScenarioJSON(t, dir, ScenarioReference)
 
 	store, err := NewGeoParquetStore(dir)
 	if err != nil {
@@ -104,7 +117,7 @@ func TestGetScenarioData(t *testing.T) {
 	}
 	defer store.Close()
 
-	data, err := store.GetScenarioData(ScenarioPast, "soil_moisture")
+	data, err := store.GetScenarioData(ScenarioReference, "soil_moisture")
 	if err != nil {
 		t.Fatalf("GetScenarioData failed: %v", err)
 	}
@@ -120,7 +133,7 @@ func TestGetScenarioData(t *testing.T) {
 
 func TestGetScenarioDataMissingAttribute(t *testing.T) {
 	dir := t.TempDir()
-	createTestScenarioJSON(t, dir, ScenarioPast)
+	createTestScenarioJSON(t, dir, ScenarioReference)
 
 	store, err := NewGeoParquetStore(dir)
 	if err != nil {
@@ -128,7 +141,7 @@ func TestGetScenarioDataMissingAttribute(t *testing.T) {
 	}
 	defer store.Close()
 
-	data, err := store.GetScenarioData(ScenarioPast, "nonexistent")
+	data, err := store.GetScenarioData(ScenarioReference, "nonexistent")
 	if err != nil {
 		t.Fatalf("GetScenarioData failed: %v", err)
 	}
@@ -140,7 +153,7 @@ func TestGetScenarioDataMissingAttribute(t *testing.T) {
 
 func TestGetScenarioDataMissingScenario(t *testing.T) {
 	dir := t.TempDir()
-	createTestScenarioJSON(t, dir, ScenarioPast)
+	createTestScenarioJSON(t, dir, ScenarioReference)
 
 	store, err := NewGeoParquetStore(dir)
 	if err != nil {
@@ -156,8 +169,8 @@ func TestGetScenarioDataMissingScenario(t *testing.T) {
 
 func TestGetComparisonData(t *testing.T) {
 	dir := t.TempDir()
-	createTestScenarioJSON(t, dir, ScenarioPast)
-	createTestScenarioJSON(t, dir, ScenarioPresent)
+	createTestScenarioJSON(t, dir, ScenarioReference)
+	createTestScenarioJSON(t, dir, ScenarioCurrent)
 
 	store, err := NewGeoParquetStore(dir)
 	if err != nil {
@@ -165,7 +178,7 @@ func TestGetComparisonData(t *testing.T) {
 	}
 	defer store.Close()
 
-	data, err := store.GetComparisonData(ScenarioPast, ScenarioPresent, "rainfall")
+	data, err := store.GetComparisonData(ScenarioReference, ScenarioCurrent, "rainfall")
 	if err != nil {
 		t.Fatalf("GetComparisonData failed: %v", err)
 	}

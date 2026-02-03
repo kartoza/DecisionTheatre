@@ -4,7 +4,7 @@ import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 
 // Kartoza color scheme: orange, blue, gray
 const SERIES_COLORS = ['#e65100', '#2bb0ed', '#6b7280'];
-const SERIES_LABELS = ['Past', 'Present', 'Ideal Future'];
+const SERIES_LABELS = ['Reference', 'Current', 'Ideal Future'];
 
 // Generated sample data: 3 series, 10 points each
 const SAMPLE_DATA: number[][] = [

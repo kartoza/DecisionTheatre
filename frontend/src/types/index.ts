@@ -1,4 +1,4 @@
-export type Scenario = 'past' | 'present' | 'future';
+export type Scenario = 'reference' | 'current' | 'future';
 
 export interface ScenarioInfo {
   id: Scenario;
@@ -41,10 +41,10 @@ const STORAGE_LAYOUT_KEY = 'dt-layout-mode';
 const STORAGE_FOCUSED_KEY = 'dt-focused-pane';
 
 export const DEFAULT_PANE_STATES: PaneStates = [
-  { leftScenario: 'past', rightScenario: 'present', attribute: '' },
-  { leftScenario: 'present', rightScenario: 'future', attribute: '' },
-  { leftScenario: 'past', rightScenario: 'future', attribute: '' },
-  { leftScenario: 'past', rightScenario: 'present', attribute: '' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: '' },
+  { leftScenario: 'current', rightScenario: 'future', attribute: '' },
+  { leftScenario: 'reference', rightScenario: 'future', attribute: '' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: '' },
 ];
 
 export function loadPaneStates(): PaneStates {
@@ -91,14 +91,14 @@ export function saveFocusedPane(index: number): void {
 
 export const SCENARIOS: ScenarioInfo[] = [
   {
-    id: 'past',
+    id: 'reference',
     label: 'Reference',
     description: 'Historical baseline conditions',
     color: '#e65100',
   },
   {
-    id: 'present',
-    label: 'Present',
+    id: 'current',
+    label: 'Current',
     description: 'Current observed conditions',
     color: '#2bb0ed',
   },
@@ -109,3 +109,54 @@ export const SCENARIOS: ScenarioInfo[] = [
     color: '#4caf50',
   },
 ];
+
+// ============================================================================
+// Project Management Types
+// ============================================================================
+
+export interface Project {
+  id: string;
+  title: string;
+  description: string;
+  thumbnail: string | null;
+  createdAt: string;
+  updatedAt: string;
+  paneStates: PaneStates;
+  layoutMode: LayoutMode;
+  focusedPane: number;
+}
+
+export type AppPage = 'landing' | 'about' | 'projects' | 'create' | 'map';
+
+const STORAGE_CURRENT_PROJECT_KEY = 'dt-current-project';
+const STORAGE_CURRENT_PAGE_KEY = 'dt-current-page';
+
+export function loadCurrentProject(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_CURRENT_PROJECT_KEY);
+  } catch { return null; }
+}
+
+export function saveCurrentProject(projectId: string | null): void {
+  try {
+    if (projectId) {
+      localStorage.setItem(STORAGE_CURRENT_PROJECT_KEY, projectId);
+    } else {
+      localStorage.removeItem(STORAGE_CURRENT_PROJECT_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+export function loadCurrentPage(): AppPage {
+  try {
+    const raw = localStorage.getItem(STORAGE_CURRENT_PAGE_KEY);
+    if (raw === 'landing' || raw === 'about' || raw === 'projects' || raw === 'create' || raw === 'map') {
+      return raw;
+    }
+  } catch { /* default */ }
+  return 'landing';
+}
+
+export function saveCurrentPage(page: AppPage): void {
+  try { localStorage.setItem(STORAGE_CURRENT_PAGE_KEY, page); } catch { /* ignore */ }
+}

@@ -18,9 +18,9 @@ import (
 type Scenario string
 
 const (
-	ScenarioPast   Scenario = "past"
-	ScenarioPresent Scenario = "present"
-	ScenarioFuture Scenario = "future"
+	ScenarioReference Scenario = "reference"
+	ScenarioCurrent   Scenario = "current"
+	ScenarioFuture    Scenario = "future"
 )
 
 // CatchmentData represents the data for a single catchment
@@ -31,9 +31,9 @@ type CatchmentData struct {
 
 // ScenarioData holds all catchment data for a single scenario
 type ScenarioData struct {
-	Scenario   Scenario         `json:"scenario"`
-	Columns    []string         `json:"columns"`
-	Catchments []CatchmentData  `json:"catchments"`
+	Scenario   Scenario        `json:"scenario"`
+	Columns    []string        `json:"columns"`
+	Catchments []CatchmentData `json:"catchments"`
 }
 
 // GeoParquetStore manages the three scenario datasets
@@ -53,9 +53,10 @@ func NewGeoParquetStore(dataDir string) (*GeoParquetStore, error) {
 
 	// Try to load each scenario file
 	scenarioFiles := map[Scenario][]string{
-		ScenarioPast:    {"past.parquet", "past.geoparquet", "LDD_ref.parquet", "LDD_ref.geoparquet"},
-		ScenarioPresent: {"present.parquet", "present.geoparquet", "LDD_current.parquet", "LDD_current.geoparquet"},
-		ScenarioFuture:  {"future.parquet", "future.geoparquet", "ideal_future.parquet", "ideal_future.geoparquet"},
+		ScenarioReference: {"reference.parquet"},
+		ScenarioCurrent:   {"current.parquet"},
+		// Future starts off based on current data
+		ScenarioFuture: {"current.parquet"},
 	}
 
 	loaded := 0
@@ -289,13 +290,13 @@ func (store *GeoParquetStore) GetComparisonData(left, right Scenario, attribute 
 
 // AttributeStats holds summary statistics for an attribute in a scenario
 type AttributeStats struct {
-	Scenario   string  `json:"scenario"`
-	Attribute  string  `json:"attribute"`
-	Count      int     `json:"count"`
-	Min        float64 `json:"min"`
-	Max        float64 `json:"max"`
-	Mean       float64 `json:"mean"`
-	StdDev     float64 `json:"std_dev"`
+	Scenario  string  `json:"scenario"`
+	Attribute string  `json:"attribute"`
+	Count     int     `json:"count"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	Mean      float64 `json:"mean"`
+	StdDev    float64 `json:"std_dev"`
 }
 
 // GetAttributeStats returns summary statistics for an attribute across a scenario

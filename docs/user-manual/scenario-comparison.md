@@ -1,6 +1,6 @@
 # Scenario Comparison
 
-Decision Theatre allows you to compare catchment attributes across three temporal scenarios: **past**, **present**, and **future**.
+Landscape Decision Theatre allows you to compare catchment attributes across three temporal scenarios: **reference**, **current**, and **future**.
 
 ## Opening the Indicator Panel
 
@@ -21,7 +21,7 @@ Choose a factor from the attribute dropdown. The map will colour catchments acco
 
 Each of the four quad panes maintains its own scenario and attribute selections independently. This allows you to view different factors or scenario combinations simultaneously across the four panes.
 
-All selections are persisted to local storage and restored when you reopen the application.
+All selections are persisted to local storage and restored when you reopen the application. When working within a project, these selections are saved to the project file.
 
 ## Interpreting the Display
 

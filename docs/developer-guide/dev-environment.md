@@ -26,8 +26,7 @@ This drops you into a shell with all tools available:
 - **Go 1.24** + gopls, golangci-lint, delve, gotests
 - **Node.js 22** + npm
 - **air** (Go hot-reload)
-- **GCC, Clang, CMake** (for CGO / llama.cpp)
-- **OpenBLAS** (linear algebra)
+- **GCC** (for CGO)
 - **GDAL, tippecanoe, sqlite3** (data conversion)
 - **MkDocs** with Material theme (documentation)
 - **ripgrep, fd, bat, fzf, jq, yq** (CLI utilities)
@@ -152,9 +151,7 @@ The dev shell sets:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `CGO_ENABLED` | `1` | Required for go-sqlite3, go-llama.cpp |
-| `CGO_CFLAGS` | `-I<openblas>/include` | OpenBLAS headers |
-| `CGO_LDFLAGS` | `-L<openblas>/lib -lopenblas` | OpenBLAS linking |
+| `CGO_ENABLED` | `1` | Required for go-sqlite3 |
 | `GOPATH` | `$PWD/.go` | Keep Go cache in-project |
 | `GOCACHE` | `$PWD/.go/cache` | Go build cache |
 | `EDITOR` | `nvim` | Default editor |
@@ -166,7 +163,6 @@ If you cannot use Nix, install manually:
 - Go 1.24+
 - Node.js 22+
 - GCC with CGO support
-- OpenBLAS development headers
 - WebKit2GTK 4.1 development headers (Linux)
 - pkg-config
 - [air](https://github.com/air-verse/air) (`go install github.com/air-verse/air@latest`)

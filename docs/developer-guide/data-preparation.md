@@ -59,7 +59,7 @@ All are available in the Nix dev shell (`nix develop`).
 
 ### Map Style
 
-The MapBox GL Style JSON at `resources/mbtiles/uow_tiles.json` defines how each layer is rendered (colours, line widths, label placement). Edit this file to change the map's visual appearance.
+The MapBox GL Style JSON at `resources/mbtiles/style.json` defines how each layer is rendered (colours, line widths, label placement). Edit this file to change the map's visual appearance.
 
 ## Scenario Data (CSV to Parquet)
 
@@ -67,10 +67,9 @@ Raw scenario data is delivered as CSV files:
 
 | File | Description |
 |------|-------------|
-| `data/LDD_current.csv` | Current scenario — per-catchment metrics |
-| `data/LDD_ref.csv` | Reference scenario — per-catchment metrics |
-| `data/LDD_column_Metadata.csv` | Column definitions and variable types |
-| `data/herb_traits_ready.csv` | Herbivore trait data |
+| `data/current.csv` | Current scenario — per-catchment metrics |
+| `data/reference.csv` | Reference scenario — per-catchment metrics  |
+| `data/metadata.csv` | Describes each column in the current and reference data|
 
 All CSVs share a `catchID` column that cross-references catchment polygons in the MBTiles map.
 
@@ -97,14 +96,13 @@ This automatically converts any CSVs to Parquet first, then assembles:
 ```
 decision-theatre-data-v{VERSION}/
   data/
-    LDD_current.parquet
-    LDD_ref.parquet
-    LDD_column_Metadata.parquet
-    herb_traits_ready.parquet
+    current.parquet
+    reference.parquet
+    metadata.parquet
   resources/
     mbtiles/
       catchments.mbtiles
-      uow_tiles.json
+      style.json
   manifest.json
 ```
 
@@ -113,15 +111,3 @@ The resulting zip can be extracted on another host and used with `--data-dir` an
 ### GeoParquet (future)
 
 Place GeoParquet files in the `data/` directory for spatial scenario data with embedded geometry. The server reads these at startup and exposes attribute names via the API.
-
-## LLM Model (GGUF)
-
-Download a GGUF-format model compatible with llama.cpp and pass it with `--model`:
-
-```bash
-./decision-theatre --model ./models/your-model.gguf
-```
-
-## Neural Network Model (GOB)
-
-A trained Gorgonia model serialised with Go's `encoding/gob` can be placed in the data directory. The filename convention and loading logic are defined in `internal/nn/model.go`.

@@ -1,6 +1,6 @@
 # API Guide
 
-Decision Theatre exposes a REST API on the same port as the web UI. All endpoints are prefixed with `/api/` or serve tiles.
+Landscape Decision Theatre exposes a REST API on the same port as the web UI. All endpoints are prefixed with `/api/` or serve tiles.
 
 ## Server Information
 
@@ -15,7 +15,7 @@ Returns the current server status and available features.
   "version": "0.1.0",
   "tiles_loaded": true,
   "geo_loaded": true,
-  "scenarios": ["past", "present", "future"],
+  "scenarios": ["reference", "current", "future"],
   "attributes": ["rainfall", "temperature", "land_cover"]
 }
 ```
@@ -28,20 +28,111 @@ Returns the current server status and available features.
 | `scenarios` | string[] | List of available scenario names |
 | `attributes` | string[] | List of available catchment attributes |
 
-## Scenario Data
+## Projects
 
-### `GET /api/scenarios/{scenario}/{attribute}`
+### `GET /api/projects`
 
-Returns GeoJSON FeatureCollection with catchment geometries coloured by the specified attribute.
+Returns a list of all projects, sorted by creation date (newest first).
+
+**Response:**
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Catchment Analysis Q1",
+    "description": "Analysis of rainfall patterns",
+    "thumbnail": "/images/projects/550e8400-e29b-41d4-a716-446655440000.jpg",
+    "createdAt": "2026-02-03T10:15:30Z",
+    "updatedAt": "2026-02-03T14:22:15Z"
+  }
+]
+```
+
+### `GET /api/projects/{id}`
+
+Returns a single project by ID.
 
 **Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `scenario` | path | Scenario name (e.g., `past`, `present`, `future`) |
-| `attribute` | path | Attribute name to colour by |
+| `id` | path | Project UUID |
 
-**Response:** GeoJSON FeatureCollection
+**Response:** Project object (see above)
+
+### `POST /api/projects`
+
+Creates a new project.
+
+**Request Body:**
+
+```json
+{
+  "title": "My New Project",
+  "description": "Optional description",
+  "thumbnail": "data:image/jpeg;base64,/9j/4AAQ..."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Project title |
+| `description` | string | No | Project description |
+| `thumbnail` | string | No | Base64-encoded image data URI |
+
+**Response:** Created project object with generated ID
+
+### `PUT /api/projects/{id}`
+
+Updates an existing project.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | path | Project UUID |
+
+**Request Body:** Same as POST
+
+**Response:** Updated project object
+
+### `DELETE /api/projects/{id}`
+
+Deletes a project and its associated thumbnail image.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | path | Project UUID |
+
+**Response:** `204 No Content` on success
+
+## Scenario Data
+
+### `GET /api/scenarios/{scenario}/{attribute}`
+
+Returns attribute values for all catchments in a scenario.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scenario` | path | Scenario name (`reference`, `current`, `future`) |
+| `attribute` | path | Attribute name to retrieve |
+
+**Response:**
+
+```json
+{
+  "1234567890": 45.2,
+  "1234567891": 62.8,
+  "1234567892": 31.5
+}
+```
+
+Returns a map of catchment IDs (HYBAS_ID) to attribute values.
 
 ## Vector Tiles
 
@@ -83,6 +174,18 @@ Returns the MBTiles metadata as JSON.
 ### `GET /styles/uow_tiles.json`
 
 Returns the MapBox GL Style JSON used to render the vector tiles.
+
+## Images
+
+### `GET /images/{path}`
+
+Serves uploaded images (project thumbnails).
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | path | Image file path relative to `data/images/` |
 
 ## Static Assets
 

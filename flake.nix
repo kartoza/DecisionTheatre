@@ -104,9 +104,8 @@
               );
           };
 
-          # After first build: nix will report the correct hash.
-          # Set to empty string to get it, then pin.
-          vendorHash = "sha256-uAQfSc4kPukpDQPP7Kr7Txy4jz6J64oPh0eGVtBuEaE=";
+          # Using vendored dependencies from ./vendor directory
+          vendorHash = null;
 
           nativeBuildInputs = with pkgs; [
             gcc

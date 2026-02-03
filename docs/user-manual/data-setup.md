@@ -1,6 +1,6 @@
 # Data Setup
 
-Decision Theatre separates the application (binary + docs) from the data. Data is distributed as a **data pack** — a single `.zip` file containing map tiles, styles, and optional scenario data.
+Landscape Decision Theatre separates the application (binary + docs) from the data. Data is distributed as a **data pack** — a single `.zip` file containing map tiles, styles, and optional scenario data.
 
 ## Installing a Data Pack
 
@@ -122,12 +122,3 @@ data/
 
 Each file should contain catchment geometries with attribute columns representing the factors available for comparison.
 
-## Optional: LLM Model (GGUF)
-
-To enable the AI chat feature, pass a GGUF model path at startup:
-
-```bash
-./decision-theatre --model ./models/your-model.gguf
-```
-
-LLM models are not included in data packs due to their size.

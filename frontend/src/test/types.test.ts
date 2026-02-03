@@ -7,10 +7,10 @@ describe('Types', () => {
     expect(SCENARIOS).toHaveLength(3);
   });
 
-  it('has past, present, and future scenarios', () => {
+  it('has reference, current, and future scenarios', () => {
     const ids = SCENARIOS.map((s) => s.id);
-    expect(ids).toContain('past');
-    expect(ids).toContain('present');
+    expect(ids).toContain('reference');
+    expect(ids).toContain('current');
     expect(ids).toContain('future');
   });
 
@@ -26,17 +26,17 @@ describe('Types', () => {
 
   it('ComparisonState can be created', () => {
     const state: ComparisonState = {
-      leftScenario: 'past',
+      leftScenario: 'reference',
       rightScenario: 'future',
       attribute: 'soil_moisture',
     };
-    expect(state.leftScenario).toBe('past');
+    expect(state.leftScenario).toBe('reference');
     expect(state.rightScenario).toBe('future');
     expect(state.attribute).toBe('soil_moisture');
   });
 
   it('Scenario type only allows valid values', () => {
-    const validScenarios: Scenario[] = ['past', 'present', 'future'];
+    const validScenarios: Scenario[] = ['reference', 'current', 'future'];
     expect(validScenarios).toHaveLength(3);
   });
 });
