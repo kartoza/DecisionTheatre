@@ -103,7 +103,8 @@
                 (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName) ||
                 (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName) ||
                 (type == "regular" && pkgs.lib.hasSuffix ".parquet" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".geoparquet" baseName)
+                (type == "regular" && pkgs.lib.hasSuffix ".geoparquet" baseName) ||
+                (type == "regular" && pkgs.lib.hasSuffix ".arrow" baseName)
               );
           };
 

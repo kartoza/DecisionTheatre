@@ -1,8 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Flex, Text, Icon, VStack, Button } from '@chakra-ui/react';
-import { FiSliders, FiMap, FiInfo } from 'react-icons/fi';
+import { FiSliders, FiMap, FiInfo, FiBox } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { tableFromIPC, Table } from 'apache-arrow';
+import { MapboxOverlay } from '@deck.gl/mapbox';
+import { GeoArrowSolidPolygonLayer } from '@geoarrow/deck.gl-layers';
 import type { ComparisonState, Scenario, IdentifyResult } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
@@ -31,123 +34,132 @@ const PRISM_STOPS: [number, string][] = [
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
 
-const FILL_LAYER_ID = 'catchments-fill';
-const SOURCE_LAYER = 'catchments_lev12';
-// The property in the vector tiles that identifies each catchment.
-const CATCHMENT_ID_PROP = 'HYBAS_ID';
-
-/** Interpolate a colour from the PRISM gradient for a normalised [0,1] value */
-function interpolateColor(t: number): string {
-  const clamped = Math.max(0, Math.min(1, t));
-  for (let i = 0; i < PRISM_STOPS.length - 1; i++) {
-    const [t0, c0] = PRISM_STOPS[i];
-    const [t1, c1] = PRISM_STOPS[i + 1];
-    if (clamped >= t0 && clamped <= t1) {
-      const f = (clamped - t0) / (t1 - t0);
-      return lerpHex(c0, c1, f);
-    }
-  }
-  return PRISM_STOPS[PRISM_STOPS.length - 1][1];
-}
-
-function lerpHex(a: string, b: string, t: number): string {
-  const [r1, g1, b1] = hexToRgb(a);
-  const [r2, g2, b2] = hexToRgb(b);
-  const r = Math.round(r1 + (r2 - r1) * t);
-  const g = Math.round(g1 + (g2 - g1) * t);
-  const bl = Math.round(b1 + (b2 - b1) * t);
-  return `rgb(${r},${g},${bl})`;
-}
-
-function hexToRgb(hex: string): [number, number, number] {
+// Convert hex colour to [R, G, B, A] array
+function hexToRgba(hex: string): [number, number, number, number] {
   const h = hex.replace('#', '');
   return [
     parseInt(h.substring(0, 2), 16),
     parseInt(h.substring(2, 4), 16),
     parseInt(h.substring(4, 6), 16),
+    220, // slightly transparent
   ];
 }
 
-/**
- * Build a MapLibre match expression that maps catchment IDs to colours.
- * data: Record<string, number> from /api/scenario/{scenario}/{attribute}
- */
-function buildColorMatchExpr(
-  data: Record<string, number>,
-): maplibregl.ExpressionSpecification {
-  const values = Object.values(data);
-  if (values.length === 0) {
-    return 'rgba(0,0,0,0)' as unknown as maplibregl.ExpressionSpecification;
+// Pre-compute RGBA stop array for interpolation
+const RGBA_STOPS = PRISM_STOPS.map(([t, hex]) => ({ t, rgba: hexToRgba(hex) }));
+
+/** Linearly interpolate through the PRISM gradient for a normalised 0-1 value. */
+function prismColor(normalised: number): [number, number, number, number] {
+  const t = Math.max(0, Math.min(1, normalised));
+  for (let i = 1; i < RGBA_STOPS.length; i++) {
+    if (t <= RGBA_STOPS[i].t) {
+      const prev = RGBA_STOPS[i - 1];
+      const next = RGBA_STOPS[i];
+      const f = (t - prev.t) / (next.t - prev.t);
+      return [
+        Math.round(prev.rgba[0] + f * (next.rgba[0] - prev.rgba[0])),
+        Math.round(prev.rgba[1] + f * (next.rgba[1] - prev.rgba[1])),
+        Math.round(prev.rgba[2] + f * (next.rgba[2] - prev.rgba[2])),
+        Math.round(prev.rgba[3] + f * (next.rgba[3] - prev.rgba[3])),
+      ];
+    }
   }
+  return RGBA_STOPS[RGBA_STOPS.length - 1].rgba;
+}
+
+// The property in the vector tiles that identifies each catchment.
+const CATCHMENT_ID_PROP = 'HYBAS_ID';
+
+// Minimum zoom level at which catchment choropleth layers are displayed.
+// Roughly corresponds to 1:500,000 map scale.
+const MIN_CATCHMENT_ZOOM = 8;
+
+// Maximum extrusion height in metres for 3D mode
+const MAX_EXTRUSION_HEIGHT = 50000;
+
+/** Cache loaded Arrow tables so we only fetch each scenario file once. */
+const arrowCache = new Map<string, Table>();
+
+async function loadArrowTable(scenario: Scenario): Promise<Table> {
+  const cached = arrowCache.get(scenario);
+  if (cached) return cached;
+
+  const resp = await fetch(`/data/${scenario}.arrow`);
+  if (!resp.ok) throw new Error(`Failed to load ${scenario}.arrow: ${resp.status}`);
+  const buf = await resp.arrayBuffer();
+  const table = tableFromIPC(buf);
+  arrowCache.set(scenario, table);
+  return table;
+}
+
+/**
+ * Build a GeoArrowSolidPolygonLayer that colours catchments by a given attribute.
+ * When extruded is true, catchments are raised by their normalised attribute value.
+ */
+function buildGeoArrowLayer(
+  id: string,
+  table: Table,
+  attribute: string,
+  globalMin: number,
+  globalRange: number,
+  extruded: boolean,
+): GeoArrowSolidPolygonLayer {
+  const geomCol = table.getChild('geometry');
+
+  return new GeoArrowSolidPolygonLayer({
+    id,
+    data: table,
+    getPolygon: geomCol!,
+    getFillColor: ({ index, data }) => {
+      const batch = data.data;
+      const col = batch.getChild(attribute);
+      if (!col) return [0, 0, 0, 0];
+      const val = col.get(index) as number | null;
+      if (val == null || !Number.isFinite(val)) return [0, 0, 0, 0];
+      const normalised = globalRange > 0 ? (val - globalMin) / globalRange : 0;
+      return prismColor(normalised);
+    },
+    extruded,
+    getElevation: extruded
+      ? ({ index, data }) => {
+          const batch = data.data;
+          const col = batch.getChild(attribute);
+          if (!col) return 0;
+          const val = col.get(index) as number | null;
+          if (val == null || !Number.isFinite(val)) return 0;
+          const normalised = globalRange > 0 ? (val - globalMin) / globalRange : 0;
+          return normalised * MAX_EXTRUSION_HEIGHT;
+        }
+      : undefined,
+    pickable: false,
+    _validate: false,
+  });
+}
+
+/**
+ * Compute global min/max for an attribute across both scenario tables.
+ * Using a shared range ensures both maps are colour-comparable.
+ */
+function computeGlobalMinMax(
+  tables: Table[],
+  attribute: string,
+): { min: number; max: number } {
   let min = Infinity;
   let max = -Infinity;
-  for (const v of values) {
-    if (v < min) min = v;
-    if (v > max) max = v;
-  }
-  const range = max - min || 1;
 
-  // Build: ['match', ['get', 'HYBAS_ID'], id1, color1, id2, color2, ..., fallback]
-  // HYBAS_ID is numeric in the vector tiles, so we match on numbers
-  const expr: unknown[] = ['match', ['get', CATCHMENT_ID_PROP]];
-  for (const [id, val] of Object.entries(data)) {
-    const numId = Number(id);
-    if (!Number.isFinite(numId)) continue;
-    const normalised = (val - min) / range;
-    expr.push(numId, interpolateColor(normalised));
-  }
-  expr.push('rgba(0,0,0,0)'); // fallback: transparent for unmatched
-  return expr as maplibregl.ExpressionSpecification;
-}
-
-/** Ensure a catchments-fill layer exists on the map */
-function ensureFillLayer(map: maplibregl.Map) {
-  if (map.getLayer(FILL_LAYER_ID)) return;
-  // Add fill layer before the outlines layer so outlines draw on top
-  const beforeLayer = map.getLayer('Catchments Outlines') ? 'Catchments Outlines' : undefined;
-  map.addLayer(
-    {
-      id: FILL_LAYER_ID,
-      type: 'fill',
-      source: 'UoW Tiles',
-      'source-layer': SOURCE_LAYER,
-      paint: {
-        'fill-color': 'rgba(0,0,0,0)',
-        'fill-opacity': 0,
-      },
-    },
-    beforeLayer,
-  );
-}
-
-/** Apply scenario colouring to a single map */
-async function applyScenarioColor(
-  map: maplibregl.Map,
-  scenario: Scenario,
-  attribute: string,
-) {
-  if (!attribute) {
-    // No attribute selected — hide the fill
-    try {
-      map.setPaintProperty(FILL_LAYER_ID, 'fill-opacity', 0);
-    } catch { /* layer may not exist yet */ }
-    return;
+  for (const table of tables) {
+    const col = table.getChild(attribute);
+    if (!col) continue;
+    for (let i = 0; i < col.length; i++) {
+      const v = col.get(i) as number | null;
+      if (v != null && Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
   }
 
-  // Fetch scenario data
-  const resp = await fetch(`/api/scenario/${scenario}/${attribute}`);
-  if (!resp.ok) return;
-  const data: Record<string, number> = await resp.json();
-
-  // Build colour expression and apply
-  const colorExpr = buildColorMatchExpr(data);
-  try {
-    ensureFillLayer(map);
-    map.setPaintProperty(FILL_LAYER_ID, 'fill-color-transition', { duration: 800, delay: 0 });
-    map.setPaintProperty(FILL_LAYER_ID, 'fill-color', colorExpr);
-    map.setPaintProperty(FILL_LAYER_ID, 'fill-opacity-transition', { duration: 600, delay: 0 });
-    map.setPaintProperty(FILL_LAYER_ID, 'fill-opacity', 0.85);
-  } catch { /* layer may not exist yet */ }
+  return { min, max };
 }
 
 function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify }: MapViewProps) {
@@ -159,8 +171,17 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
 
+  // deck.gl overlay refs
+  const leftOverlayRef = useRef<MapboxOverlay | null>(null);
+  const rightOverlayRef = useRef<MapboxOverlay | null>(null);
+
   // Identify mode state
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
+
+  // 3D mode state
+  const [is3DMode, setIs3DMode] = useState(false);
+  const is3DModeRef = useRef(is3DMode);
+  is3DModeRef.current = is3DMode;
 
   // Store latest comparison in a ref so async callbacks see current values
   const comparisonRef = useRef(comparison);
@@ -172,13 +193,51 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const onIdentifyRef = useRef(onIdentify);
   onIdentifyRef.current = onIdentify;
 
-  const applyColors = useCallback(() => {
+  /** Load Arrow tables for both scenarios and create deck.gl layers.
+   *  Layers are only shown when zoomed in past MIN_CATCHMENT_ZOOM.
+   *  In 3D mode, catchments are extruded by their attribute value. */
+  const applyColors = useCallback(async () => {
     const c = comparisonRef.current;
-    if (leftMapRef.current && mapsReady.current.left) {
-      applyScenarioColor(leftMapRef.current, c.leftScenario, c.attribute);
+    if (!c.attribute) {
+      // No attribute selected — remove overlays
+      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [] });
+      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [] });
+      return;
     }
-    if (rightMapRef.current && mapsReady.current.right) {
-      applyScenarioColor(rightMapRef.current, c.rightScenario, c.attribute);
+
+    // Check zoom — hide catchment layers when zoomed out beyond 1:500k
+    const currentZoom = leftMapRef.current?.getZoom() ?? 0;
+    if (currentZoom < MIN_CATCHMENT_ZOOM) {
+      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [] });
+      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [] });
+      return;
+    }
+
+    const extruded = is3DModeRef.current;
+
+    try {
+      // Load both tables in parallel
+      const [leftTable, rightTable] = await Promise.all([
+        loadArrowTable(c.leftScenario),
+        loadArrowTable(c.rightScenario),
+      ]);
+
+      // Compute shared min/max so both sides use the same colour scale
+      const { min, max } = computeGlobalMinMax([leftTable, rightTable], c.attribute);
+      const range = max - min;
+
+      // Build layers
+      const leftLayer = buildGeoArrowLayer(
+        'choropleth-left', leftTable, c.attribute, min, range, extruded,
+      );
+      const rightLayer = buildGeoArrowLayer(
+        'choropleth-right', rightTable, c.attribute, min, range, extruded,
+      );
+
+      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [leftLayer] });
+      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [rightLayer] });
+    } catch (err) {
+      console.error('Failed to apply GeoArrow choropleth:', err);
     }
   }, []);
 
@@ -186,6 +245,29 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const toggleIdentifyMode = useCallback(() => {
     setIsIdentifyMode(prev => !prev);
   }, []);
+
+  // Toggle 3D mode - smoothly ease pitch between 0 and 60 degrees
+  // and rebuild layers with/without extrusion
+  const toggle3DMode = useCallback(() => {
+    setIs3DMode(prev => {
+      const newMode = !prev;
+      const targetPitch = newMode ? 60 : 0;
+
+      if (leftMapRef.current) {
+        leftMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
+      }
+      if (rightMapRef.current) {
+        rightMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
+      }
+
+      // Update the ref immediately so applyColors reads the new value
+      is3DModeRef.current = newMode;
+      // Rebuild layers with extrusion toggled
+      applyColors();
+
+      return newMode;
+    });
+  }, [applyColors]);
 
   // Update cursor when identify mode changes
   useEffect(() => {
@@ -202,9 +284,9 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const handleIdentifyClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
     if (!isIdentifyModeRef.current || !onIdentifyRef.current) return;
 
-    // Query the catchments-fill layer for features at the click point
+    // Query the catchments outline layer for features at the click point
     const features = map.queryRenderedFeatures(e.point, {
-      layers: [FILL_LAYER_ID],
+      layers: ['Catchments Outlines'],
     });
 
     if (features.length === 0) return;
@@ -404,14 +486,38 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
     leftMap.on('click', (e) => handleIdentifyClick(leftMap, e));
     rightMap.on('click', (e) => handleIdentifyClick(rightMap, e));
 
-    // When maps are loaded, add the fill layer and apply initial colours
+    // Re-evaluate catchment layer visibility when zoom changes
+    leftMap.on('zoomend', () => applyColors());
+
+    // Create deck.gl overlays (non-interleaved so they don't block MapLibre events)
+    const leftOverlay = new MapboxOverlay({
+      interleaved: false,
+      layers: [],
+    });
+    const rightOverlay = new MapboxOverlay({
+      interleaved: false,
+      layers: [],
+    });
+
+    // When maps are loaded, add deck.gl overlays and apply colours
     leftMap.on('load', () => {
-      ensureFillLayer(leftMap);
+      leftMap.addControl(leftOverlay as unknown as maplibregl.IControl);
+      leftOverlayRef.current = leftOverlay;
+
+      // Make deck.gl canvas non-blocking for pointer events
+      const deckCanvas = leftContainer.querySelector('.deck-canvas') as HTMLCanvasElement | null;
+      if (deckCanvas) deckCanvas.style.pointerEvents = 'none';
+
       mapsReady.current.left = true;
       applyColors();
     });
     rightMap.on('load', () => {
-      ensureFillLayer(rightMap);
+      rightMap.addControl(rightOverlay as unknown as maplibregl.IControl);
+      rightOverlayRef.current = rightOverlay;
+
+      const deckCanvas = rightContainer.querySelector('.deck-canvas') as HTMLCanvasElement | null;
+      if (deckCanvas) deckCanvas.style.pointerEvents = 'none';
+
       mapsReady.current.right = true;
       applyColors();
     });
@@ -452,6 +558,8 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
 
     return () => {
       mapsReady.current = { left: false, right: false };
+      leftOverlayRef.current = null;
+      rightOverlayRef.current = null;
       unregisterMap(syncId);
       slider.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
@@ -487,7 +595,7 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
       indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
     }
 
-    // Apply scenario-specific colours
+    // Apply scenario-specific colours via deck.gl
     applyColors();
   }, [comparison, applyColors]);
 
@@ -621,6 +729,24 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
           zIndex={10}
           spacing={1}
         >
+          {/* 3D toggle button */}
+          <Tooltip label={is3DMode ? "Switch to 2D" : "Switch to 3D"} placement="right">
+            <IconButton
+              aria-label="Toggle 3D view"
+              icon={<FiBox />}
+              size="sm"
+              colorScheme={is3DMode ? "blue" : "gray"}
+              variant="solid"
+              bg={is3DMode ? "blue.500" : "white"}
+              color={is3DMode ? "white" : "gray.700"}
+              onClick={toggle3DMode}
+              boxShadow="md"
+              _hover={{
+                bg: is3DMode ? "blue.600" : "gray.100"
+              }}
+            />
+          </Tooltip>
+
           {/* Identify button */}
           <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
             <IconButton

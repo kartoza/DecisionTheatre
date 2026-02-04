@@ -101,8 +101,8 @@ func (s *Server) setupRoutes() {
 	s.router.PathPrefix("/data/images/").Handler(
 		http.StripPrefix("/data/images/", http.FileServer(http.Dir(imagesDir))))
 
-	// Serve GeoArrow files from data directory
-	s.router.HandleFunc("/data/{scenario}.geoarrow", s.handleGeoArrowFile).Methods("GET")
+	// Serve GeoArrow (Arrow IPC) files from data directory
+	s.router.HandleFunc("/data/{scenario}.arrow", s.handleGeoArrowFile).Methods("GET")
 
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
@@ -215,7 +215,7 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(style)
 }
 
-// handleGeoArrowFile serves GeoArrow/GeoParquet files for choropleth rendering
+// handleGeoArrowFile serves Arrow IPC files with native GeoArrow geometry for choropleth rendering
 func (s *Server) handleGeoArrowFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	scenario := vars["scenario"]
@@ -226,14 +226,13 @@ func (s *Server) handleGeoArrowFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(s.cfg.DataDir, scenario+".geoarrow")
+	filePath := filepath.Join(s.cfg.DataDir, scenario+".arrow")
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		http.Error(w, "GeoArrow file not found", http.StatusNotFound)
+		http.Error(w, "Arrow file not found", http.StatusNotFound)
 		return
 	}
 
-	// Set appropriate headers for Parquet/GeoArrow
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", "application/vnd.apache.arrow.file")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
