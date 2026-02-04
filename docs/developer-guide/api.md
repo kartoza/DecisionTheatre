@@ -134,6 +134,37 @@ Returns attribute values for all catchments in a scenario.
 
 Returns a map of catchment IDs (HYBAS_ID) to attribute values.
 
+### `GET /api/catchment/{id}`
+
+Returns all attribute values for a specific catchment across all loaded scenarios.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | path | Catchment HYBAS_ID |
+
+**Response:**
+
+```json
+{
+  "reference": {
+    "herbs_tot_kgkm2": 45.2,
+    "trees_tot_kgkm2": 120.5
+  },
+  "current": {
+    "herbs_tot_kgkm2": 38.1,
+    "trees_tot_kgkm2": 95.3
+  },
+  "future": {
+    "herbs_tot_kgkm2": 42.0,
+    "trees_tot_kgkm2": 110.8
+  }
+}
+```
+
+Returns a map of scenario names to attribute maps. Each scenario contains all available attributes and their values for that catchment. Returns `404` if the catchment ID is not found.
+
 ## Vector Tiles
 
 ### `GET /tiles/{z}/{x}/{y}.pbf`

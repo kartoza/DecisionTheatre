@@ -126,6 +126,12 @@ export interface Project {
   focusedPane: number;
 }
 
+// Identify result: scenario -> attribute -> value
+export type IdentifyResult = {
+  catchmentID: string;
+  data: Record<string, Record<string, number>>;
+} | null;
+
 export type AppPage = 'landing' | 'about' | 'projects' | 'create' | 'map';
 
 const STORAGE_CURRENT_PROJECT_KEY = 'dt-current-project';

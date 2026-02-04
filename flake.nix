@@ -24,6 +24,9 @@
         # Python environment for data tooling (CSV -> Parquet conversion)
         dataToolsEnv = pkgs.python3.withPackages (ps: with ps; [
           pyarrow
+          pandas
+          geopandas
+          shapely
         ]);
 
         # =====================================================
@@ -64,7 +67,7 @@
           # correct hash. Set to empty string to get it:
           #   nix build .#frontend 2>&1 | grep 'got:'
           # Then paste the sha256 here.
-          npmDepsHash = "sha256-ke3NJYwS/7BTxwFXLCVElDVXJY0hcGrjWIgQ905YJxk=";
+          npmDepsHash = "sha256-KOpFc8PcZAukBLHBc3jinP/f+uRfQPlAYKbbTxPrAUA=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''

@@ -13,15 +13,24 @@
   },
   "dependencies": {
     "@chakra-ui/react": "^2.8.2",
+    "@deck.gl/core": "^9.2.6",
+    "@deck.gl/layers": "^9.2.6",
+    "@deck.gl/mapbox": "^9.2.6",
     "@emotion/react": "^11.13.5",
     "@emotion/styled": "^11.13.5",
+    "@geoarrow/deck.gl-layers": "^0.3.1",
+    "apache-arrow": "^21.1.0",
+    "deck.gl": "^9.2.6",
     "framer-motion": "^11.15.0",
     "maplibre-gl": "^4.7.1",
+    "parquet-wasm": "^0.7.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-icons": "^5.4.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
@@ -30,11 +39,9 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.16",
+    "jsdom": "^25.0.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^2.1.8",
-    "@testing-library/react": "^16.1.0",
-    "@testing-library/jest-dom": "^6.6.3",
-    "jsdom": "^25.0.1"
+    "vitest": "^2.1.8"
   }
 }

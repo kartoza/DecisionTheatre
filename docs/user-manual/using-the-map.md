@@ -24,6 +24,13 @@ The map displays several vector layers at different zoom levels:
 
 The map supports a side-by-side comparison mode using a vertical swipe divider. The left side shows one scenario and the right side shows another. Drag the divider to reveal more of either side.
 
+## Map Tools
+
+When an indicator is selected, a vertical tool bar appears on the left side of the map with the following buttons:
+
+- **Identify** (i icon) -- toggles identify mode. When active, the cursor changes to a crosshair. Click any catchment to see all its attribute values across all scenarios in a table in the side panel. The currently selected indicator is highlighted in the table. Click the button again to disable identify mode.
+- **3D View** (cube icon) -- toggles 3D extrusion mode. When active, catchment polygons are extruded based on their attribute values, providing a visual height-based comparison. The map pitch tilts to 60 degrees for a perspective view.
+
 ## Per-Pane Toolbar
 
 Each map pane has a floating toolbar in the bottom-right corner with two buttons:

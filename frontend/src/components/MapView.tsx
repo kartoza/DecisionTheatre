@@ -1,13 +1,17 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { Box } from '@chakra-ui/react';
+import { useEffect, useRef, useCallback, useState } from 'react';
+import { Box, IconButton, Tooltip, Flex, Text, Icon, VStack, Button } from '@chakra-ui/react';
+import { FiSliders, FiMap, FiInfo } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
 
 interface MapViewProps {
   comparison: ComparisonState;
+  paneIndex: number;
+  onOpenSettings: () => void;
+  onIdentify?: (result: IdentifyResult) => void;
 }
 
 // Prism colour gradient for data visualization
@@ -23,13 +27,13 @@ const PRISM_STOPS: [number, string][] = [
   [1, '#e8003f'],       // red
 ];
 
+// CSS gradient for legend
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
 
 const FILL_LAYER_ID = 'catchments-fill';
 const SOURCE_LAYER = 'catchments_lev12';
 // The property in the vector tiles that identifies each catchment.
-// Tippecanoe preserves the original GeoPackage column name.
 const CATCHMENT_ID_PROP = 'HYBAS_ID';
 
 /** Interpolate a colour from the PRISM gradient for a normalised [0,1] value */
@@ -146,7 +150,7 @@ async function applyScenarioColor(
   } catch { /* layer may not exist yet */ }
 }
 
-function MapView({ comparison }: MapViewProps) {
+function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   const rightMapRef = useRef<maplibregl.Map | null>(null);
@@ -155,9 +159,18 @@ function MapView({ comparison }: MapViewProps) {
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
 
+  // Identify mode state
+  const [isIdentifyMode, setIsIdentifyMode] = useState(false);
+
   // Store latest comparison in a ref so async callbacks see current values
   const comparisonRef = useRef(comparison);
   comparisonRef.current = comparison;
+
+  // Store identify mode and callback in refs for event handlers
+  const isIdentifyModeRef = useRef(isIdentifyMode);
+  isIdentifyModeRef.current = isIdentifyMode;
+  const onIdentifyRef = useRef(onIdentify);
+  onIdentifyRef.current = onIdentify;
 
   const applyColors = useCallback(() => {
     const c = comparisonRef.current;
@@ -167,6 +180,50 @@ function MapView({ comparison }: MapViewProps) {
     if (rightMapRef.current && mapsReady.current.right) {
       applyScenarioColor(rightMapRef.current, c.rightScenario, c.attribute);
     }
+  }, []);
+
+  // Toggle identify mode
+  const toggleIdentifyMode = useCallback(() => {
+    setIsIdentifyMode(prev => !prev);
+  }, []);
+
+  // Update cursor when identify mode changes
+  useEffect(() => {
+    const cursor = isIdentifyMode ? 'crosshair' : '';
+    if (leftMapRef.current) {
+      leftMapRef.current.getCanvas().style.cursor = cursor;
+    }
+    if (rightMapRef.current) {
+      rightMapRef.current.getCanvas().style.cursor = cursor;
+    }
+  }, [isIdentifyMode]);
+
+  // Handle identify click via MapLibre queryRenderedFeatures
+  const handleIdentifyClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
+    if (!isIdentifyModeRef.current || !onIdentifyRef.current) return;
+
+    // Query the catchments-fill layer for features at the click point
+    const features = map.queryRenderedFeatures(e.point, {
+      layers: [FILL_LAYER_ID],
+    });
+
+    if (features.length === 0) return;
+
+    const feature = features[0];
+    const catchId = feature.properties?.[CATCHMENT_ID_PROP];
+    if (catchId == null) return;
+
+    const catchIdStr = String(catchId);
+
+    // Fetch full attributes from API
+    fetch(`/api/catchment/${catchIdStr}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && onIdentifyRef.current) {
+          onIdentifyRef.current({ catchmentID: catchIdStr, data });
+        }
+      })
+      .catch((err) => console.error('Identify error:', err));
   }, []);
 
   // Initialize the two maps and the compare slider
@@ -185,7 +242,6 @@ function MapView({ comparison }: MapViewProps) {
     rightContainer.id = 'map-right';
 
     // Create the clip container for the right map
-    // pointer-events:auto so the clip region itself receives events for the right map
     const clipContainer = document.createElement('div');
     clipContainer.style.cssText = 'position:absolute;top:0;right:0;width:50%;height:100%;overflow:hidden;z-index:1;';
     clipContainer.id = 'map-clip';
@@ -278,7 +334,31 @@ function MapView({ comparison }: MapViewProps) {
     `;
     container.appendChild(rightLabel);
 
-    // Load style from server
+    // Indicator label (centered over split line)
+    const indicatorLabel = document.createElement('div');
+    indicatorLabel.id = 'indicator-label';
+    indicatorLabel.style.cssText = `
+      position:absolute;
+      top:12px;
+      left:50%;
+      transform:translateX(-50%);
+      z-index:15;
+      background:rgba(0,0,0,0.85);
+      color:white;
+      padding:8px 20px;
+      border-radius:20px;
+      font-size:14px;
+      font-weight:600;
+      letter-spacing:0.5px;
+      backdrop-filter:blur(8px);
+      white-space:nowrap;
+      max-width:60%;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    `;
+    container.appendChild(indicatorLabel);
+
+    // Load style from server (mbtiles base layers)
     const styleUrl = window.location.origin + '/data/style.json';
 
     // Create left map
@@ -319,6 +399,10 @@ function MapView({ comparison }: MapViewProps) {
 
     leftMap.on('move', () => syncMaps(leftMap, rightMap));
     rightMap.on('move', () => syncMaps(rightMap, leftMap));
+
+    // Identify click handlers
+    leftMap.on('click', (e) => handleIdentifyClick(leftMap, e));
+    rightMap.on('click', (e) => handleIdentifyClick(rightMap, e));
 
     // When maps are loaded, add the fill layer and apply initial colours
     leftMap.on('load', () => {
@@ -375,7 +459,7 @@ function MapView({ comparison }: MapViewProps) {
       leftMap.remove();
       rightMap.remove();
     };
-  }, [applyColors]);
+  }, [applyColors, handleIdentifyClick]);
 
   // Update labels and colours when comparison changes
   useEffect(() => {
@@ -384,6 +468,7 @@ function MapView({ comparison }: MapViewProps) {
 
     const leftLabel = container.querySelector('#left-label') as HTMLElement;
     const rightLabel = container.querySelector('#right-label') as HTMLElement;
+    const indicatorLabel = container.querySelector('#indicator-label') as HTMLElement;
 
     if (leftLabel) {
       const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
@@ -397,9 +482,17 @@ function MapView({ comparison }: MapViewProps) {
       rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
     }
 
+    if (indicatorLabel) {
+      indicatorLabel.textContent = comparison.attribute || '';
+      indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
+    }
+
     // Apply scenario-specific colours
     applyColors();
   }, [comparison, applyColors]);
+
+  // Check if panel is unconfigured (no indicator selected)
+  const isUnconfigured = !comparison.attribute;
 
   return (
     <Box
@@ -410,7 +503,144 @@ function MapView({ comparison }: MapViewProps) {
       right={0}
       bottom={0}
       overflow="hidden"
-    />
+    >
+      {/* Unconfigured Panel Overlay */}
+      {isUnconfigured && (
+        <Flex
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          zIndex={20}
+          bg="linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.88) 50%, rgba(15, 23, 42, 0.92) 100%)"
+          backdropFilter="blur(8px)"
+          align="center"
+          justify="center"
+          flexDirection="column"
+          pointerEvents="none"
+        >
+          <VStack spacing={6} maxW="400px" textAlign="center" px={8} pointerEvents="auto">
+            {/* Decorative icon */}
+            <Flex
+              w="80px"
+              h="80px"
+              borderRadius="full"
+              bg="linear-gradient(135deg, #3182ce 0%, #63b3ed 100%)"
+              align="center"
+              justify="center"
+              boxShadow="0 8px 32px rgba(49, 130, 206, 0.4)"
+            >
+              <Icon as={FiMap} boxSize={10} color="white" />
+            </Flex>
+
+            {/* Title */}
+            <Text
+              fontSize="2xl"
+              fontWeight="bold"
+              color="white"
+              lineHeight="shorter"
+            >
+              Configure Your View
+            </Text>
+
+            {/* Description */}
+            <Text
+              fontSize="md"
+              color="gray.300"
+              lineHeight="tall"
+            >
+              Select an indicator from the sidebar to visualize catchment data
+              and compare scenarios across Africa's river basins.
+            </Text>
+
+            {/* Call to action button */}
+            <Button
+              leftIcon={<FiSliders />}
+              colorScheme="blue"
+              size="lg"
+              onClick={onOpenSettings}
+              _hover={{ transform: 'translateY(-2px)', boxShadow: 'lg' }}
+              transition="all 0.2s"
+            >
+              Open Settings
+            </Button>
+
+            {/* Subtle animated dots */}
+            <Flex gap={2} mt={2}>
+              <Box
+                w={2}
+                h={2}
+                borderRadius="full"
+                bg="blue.400"
+                animation="pulse 2s infinite"
+                sx={{
+                  '@keyframes pulse': {
+                    '0%, 100%': { opacity: 0.4 },
+                    '50%': { opacity: 1 },
+                  },
+                }}
+              />
+              <Box
+                w={2}
+                h={2}
+                borderRadius="full"
+                bg="blue.400"
+                animation="pulse 2s infinite 0.3s"
+                sx={{
+                  '@keyframes pulse': {
+                    '0%, 100%': { opacity: 0.4 },
+                    '50%': { opacity: 1 },
+                  },
+                }}
+              />
+              <Box
+                w={2}
+                h={2}
+                borderRadius="full"
+                bg="blue.400"
+                animation="pulse 2s infinite 0.6s"
+                sx={{
+                  '@keyframes pulse': {
+                    '0%, 100%': { opacity: 0.4 },
+                    '50%': { opacity: 1 },
+                  },
+                }}
+              />
+            </Flex>
+          </VStack>
+        </Flex>
+      )}
+
+      {/* Tool buttons - only show when configured */}
+      {!isUnconfigured && (
+        <VStack
+          position="absolute"
+          bottom="120px"
+          left="10px"
+          zIndex={10}
+          spacing={1}
+        >
+          {/* Identify button */}
+          <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
+            <IconButton
+              aria-label="Toggle identify mode"
+              icon={<FiInfo />}
+              size="sm"
+              colorScheme={isIdentifyMode ? "blue" : "gray"}
+              variant="solid"
+              bg={isIdentifyMode ? "blue.500" : "white"}
+              color={isIdentifyMode ? "white" : "gray.700"}
+              onClick={toggleIdentifyMode}
+              boxShadow="md"
+              _hover={{
+                bg: isIdentifyMode ? "blue.600" : "gray.100"
+              }}
+            />
+          </Tooltip>
+        </VStack>
+      )}
+    </Box>
   );
 }
 

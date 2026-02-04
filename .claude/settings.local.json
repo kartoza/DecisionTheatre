@@ -34,7 +34,22 @@
       "Bash(pkill:*)",
       "Bash(lsof:*)",
       "Bash(xargs:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(chmod:*)",
+      "Bash(npx tsc:*)",
+      "Bash(tree:*)",
+      "Bash(go vet:*)",
+      "Bash(mkdocs build -d internal/server/docs_site)",
+      "Bash(CGO_ENABLED=1 go build:*)",
+      "Bash(git add:*)",
+      "Bash(nix build:*)",
+      "Bash(python3:*)",
+      "Bash(go env:*)",
+      "Bash(echo:*)",
+      "Bash(git push:*)",
+      "Bash(/home/timlinux/dev/go/DecisionTheatre/PROMPT.log)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []

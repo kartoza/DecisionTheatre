@@ -10,7 +10,7 @@ import AboutPage from './components/AboutPage';
 import ProjectsPage from './components/ProjectsPage';
 import CreateProjectPage from './components/CreateProjectPage';
 import { useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Project } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Project, IdentifyResult } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -37,6 +37,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(loadCurrentProject);
   const [cloneFromProject, setCloneFromProject] = useState<Project | null>(null);
+  const [identifyResult, setIdentifyResult] = useState<IdentifyResult>(null);
   const { info } = useServerInfo();
 
   // Persist state changes
@@ -120,6 +121,14 @@ function App() {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { attribute });
   }, [indicatorPaneIndex, handlePaneStateChange]);
+
+  const handleIdentify = useCallback((result: IdentifyResult) => {
+    setIdentifyResult(result);
+    // Open the side panel if not already open
+    if (indicatorPaneIndex === null) {
+      setIndicatorPaneIndex(focusedPane);
+    }
+  }, [indicatorPaneIndex, focusedPane]);
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
@@ -229,6 +238,7 @@ function App() {
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
+            onIdentify={handleIdentify}
           />
         </Box>
 
@@ -240,6 +250,8 @@ function App() {
           onRightChange={handleRightChange}
           onAttributeChange={handleAttributeChange}
           paneIndex={indicatorPaneIndex}
+          identifyResult={identifyResult}
+          onClearIdentify={() => setIdentifyResult(null)}
         />
       </Flex>
 

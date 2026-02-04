@@ -11,11 +11,17 @@ import {
   IconButton,
   HStack,
   Tooltip,
+  Table,
+  Thead,
+  Tbody,
+  Tr,
+  Th,
+  Td,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX } from 'react-icons/fi';
 import { useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT } from './MapView';
-import type { Scenario, ComparisonState } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ControlPanelProps {
@@ -25,6 +31,8 @@ interface ControlPanelProps {
   onRightChange: (scenario: Scenario) => void;
   onAttributeChange: (attribute: string) => void;
   paneIndex: number | null;
+  identifyResult?: IdentifyResult;
+  onClearIdentify?: () => void;
 }
 
 function ScenarioSelector({
@@ -97,10 +105,14 @@ function ControlPanel({
   onRightChange,
   onAttributeChange,
   paneIndex,
+  identifyResult,
+  onClearIdentify,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
+  const cardBg = useColorModeValue('white', 'gray.750');
+  const tableHeaderBg = useColorModeValue('gray.100', 'gray.700');
 
   return (
     <Slide
@@ -244,6 +256,93 @@ function ControlPanel({
                 </Text>
               </HStack>
             </Box>
+          )}
+
+          {/* Identify Results */}
+          {identifyResult && (
+            <>
+              <Divider />
+              <Box>
+                <HStack justify="space-between" mb={3}>
+                  <HStack>
+                    <Badge colorScheme="blue" variant="subtle" fontSize="xs" borderRadius="full">
+                      IDENTIFY
+                    </Badge>
+                    <Text fontSize="sm" fontWeight="600" color="gray.400">
+                      Catchment {identifyResult.catchmentID}
+                    </Text>
+                  </HStack>
+                  {onClearIdentify && (
+                    <IconButton
+                      aria-label="Clear identify"
+                      icon={<FiX />}
+                      size="xs"
+                      variant="ghost"
+                      onClick={onClearIdentify}
+                    />
+                  )}
+                </HStack>
+
+                <Box
+                  borderRadius="lg"
+                  border="1px"
+                  borderColor={borderColor}
+                  bg={cardBg}
+                  overflow="hidden"
+                  maxH="400px"
+                  overflowY="auto"
+                >
+                  <Table size="sm" variant="striped">
+                    <Thead position="sticky" top={0} bg={tableHeaderBg} zIndex={1}>
+                      <Tr>
+                        <Th fontSize="xs" py={2}>Attribute</Th>
+                        {Object.keys(identifyResult.data).map((scenario) => (
+                          <Th key={scenario} fontSize="xs" py={2} isNumeric>
+                            {SCENARIOS.find((s) => s.id === scenario)?.label || scenario}
+                          </Th>
+                        ))}
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {(() => {
+                        // Collect all attribute names across scenarios
+                        const allAttrs = new Set<string>();
+                        for (const scenarioData of Object.values(identifyResult.data)) {
+                          for (const attr of Object.keys(scenarioData)) {
+                            allAttrs.add(attr);
+                          }
+                        }
+                        const scenarios = Object.keys(identifyResult.data);
+                        return Array.from(allAttrs).sort().map((attr) => (
+                          <Tr key={attr}>
+                            <Td
+                              fontSize="xs"
+                              fontWeight={attr === comparison.attribute ? '700' : '400'}
+                              color={attr === comparison.attribute ? 'blue.400' : undefined}
+                              py={1.5}
+                              maxW="160px"
+                              overflow="hidden"
+                              textOverflow="ellipsis"
+                              whiteSpace="nowrap"
+                              title={attr}
+                            >
+                              {attr}
+                            </Td>
+                            {scenarios.map((scenario) => (
+                              <Td key={scenario} fontSize="xs" isNumeric py={1.5}>
+                                {identifyResult.data[scenario][attr] != null
+                                  ? identifyResult.data[scenario][attr].toFixed(2)
+                                  : '-'}
+                              </Td>
+                            ))}
+                          </Tr>
+                        ));
+                      })()}
+                    </Tbody>
+                  </Table>
+                </Box>
+              </Box>
+            </>
           )}
 
           {/* Info footer */}

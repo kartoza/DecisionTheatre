@@ -101,6 +101,9 @@ func (s *Server) setupRoutes() {
 	s.router.PathPrefix("/data/images/").Handler(
 		http.StripPrefix("/data/images/", http.FileServer(http.Dir(imagesDir))))
 
+	// Serve GeoArrow files from data directory
+	s.router.HandleFunc("/data/{scenario}.geoarrow", s.handleGeoArrowFile).Methods("GET")
+
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
 	if err != nil {
@@ -177,7 +180,7 @@ func (s *Server) Stop() error {
 
 // handleStyleJSON serves the MapBox style JSON from resources, rewriting the source URL
 func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
-	stylePath := filepath.Join(s.cfg.ResourcesDir, "mbtiles", "uow_tiles.json")
+	stylePath := filepath.Join(s.cfg.ResourcesDir, "mbtiles", "style.json")
 	data, err := os.ReadFile(stylePath)
 	if err != nil {
 		http.Error(w, "Style not found", http.StatusNotFound)
@@ -210,6 +213,31 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	json.NewEncoder(w).Encode(style)
+}
+
+// handleGeoArrowFile serves GeoArrow/GeoParquet files for choropleth rendering
+func (s *Server) handleGeoArrowFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	scenario := vars["scenario"]
+
+	// Validate scenario name to prevent path traversal
+	if scenario != "current" && scenario != "reference" {
+		http.Error(w, "Invalid scenario", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join(s.cfg.DataDir, scenario+".geoarrow")
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "GeoArrow file not found", http.StatusNotFound)
+		return
+	}
+
+	// Set appropriate headers for Parquet/GeoArrow
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	http.ServeFile(w, r, filePath)
 }
 
 // handleTileJSON serves TileJSON metadata for the catchments tileset

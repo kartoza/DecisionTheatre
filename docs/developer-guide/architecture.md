@@ -51,7 +51,18 @@ graph TB
 5. Project data is loaded/saved via REST endpoints under `/api/projects/`
 6. MapLibre GL JS requests vector tiles from `/tiles/{z}/{x}/{y}.pbf`
 7. The React app calls REST endpoints under `/api/` for scenario data and server info
-8. All data is read from local files (MBTiles, GeoParquet, project JSON files)
+8. GeoArrow files are loaded for choropleth rendering via `/data/*.geoarrow`
+9. All data is read from local files (MBTiles, GeoParquet, GeoArrow, project JSON files)
+
+## Map Rendering Architecture
+
+The map uses a layered rendering approach:
+
+- **Base layers** (MapLibre GL JS): Ecoregions, countries, rivers, lakes, catchment outlines - served from MBTiles
+- **Choropleth layer** (deck.gl): Dynamic polygon fills from GeoArrow data with indicator-based coloring
+- **3D extrusion** (optional): Catchments can be extruded based on indicator values
+
+See [GeoArrow Rendering](geoarrow-rendering.md) for detailed documentation on the choropleth rendering architecture.
 
 ## Package Layout
 

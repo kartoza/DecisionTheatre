@@ -50,6 +50,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
+	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
 
 	// Project management
 	r.HandleFunc("/projects", h.handleListProjects).Methods("GET")
@@ -170,6 +171,23 @@ func (h *Handler) handleComparisonData(w http.ResponseWriter, r *http.Request) {
 	data, err := h.geoStore.GetComparisonData(left, right, attribute)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, data)
+}
+
+// handleCatchmentIdentify returns all attributes for a catchment across scenarios
+func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request) {
+	if h.geoStore == nil {
+		respondError(w, http.StatusNotFound, "no geo data loaded")
+		return
+	}
+
+	catchmentID := mux.Vars(r)["id"]
+	data := h.geoStore.GetCatchmentAttributes(catchmentID)
+	if len(data) == 0 {
+		respondError(w, http.StatusNotFound, "catchment not found")
 		return
 	}
 

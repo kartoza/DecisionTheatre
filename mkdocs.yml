@@ -62,6 +62,7 @@ nav:
       - Reference Guide: user-guide/reference.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
+      - GeoArrow Rendering: developer-guide/geoarrow-rendering.md
       - Software Components: developer-guide/components.md
       - Development Environment: developer-guide/dev-environment.md
       - Coding Standards: developer-guide/coding-standards.md

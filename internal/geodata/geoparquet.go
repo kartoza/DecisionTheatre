@@ -135,6 +135,17 @@ func (store *GeoParquetStore) loadFromParquet(scenario Scenario, path string) er
 	return fmt.Errorf("parquet file %s exists but no parquet reader or CSV fallback available", path)
 }
 
+// normalizeCatchmentID converts a catchment ID that may be in scientific
+// notation (e.g. "1.121e+09") into a plain integer string (e.g. "1121000000").
+func normalizeCatchmentID(id string) string {
+	if strings.ContainsAny(id, "eE") {
+		if f, err := strconv.ParseFloat(id, 64); err == nil {
+			return strconv.FormatInt(int64(f), 10)
+		}
+	}
+	return id
+}
+
 // loadFromCSV loads scenario data from a CSV file.
 // First column is the catchment ID, remaining columns are numeric attributes.
 func (store *GeoParquetStore) loadFromCSV(scenario Scenario, path string) error {
@@ -176,7 +187,7 @@ func (store *GeoParquetStore) loadFromCSV(scenario Scenario, path string) error 
 			continue
 		}
 
-		catchmentID := strings.Trim(record[0], "\" ")
+		catchmentID := normalizeCatchmentID(strings.Trim(record[0], "\" "))
 		attrs := make(map[string]float64, len(columns))
 		for i, col := range columns {
 			if i+1 < len(record) {
@@ -286,6 +297,23 @@ func (store *GeoParquetStore) GetComparisonData(left, right Scenario, attribute 
 	}
 
 	return result, nil
+}
+
+// GetCatchmentAttributes returns all attributes for a specific catchment across scenarios
+func (store *GeoParquetStore) GetCatchmentAttributes(catchmentID string) map[string]map[string]float64 {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	result := make(map[string]map[string]float64)
+	for scenario, data := range store.scenarios {
+		for _, c := range data.Catchments {
+			if c.CatchmentID == catchmentID {
+				result[string(scenario)] = c.Attributes
+				break
+			}
+		}
+	}
+	return result
 }
 
 // AttributeStats holds summary statistics for an attribute in a scenario
