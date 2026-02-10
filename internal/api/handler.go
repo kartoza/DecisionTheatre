@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/config"
@@ -16,6 +17,7 @@ import (
 type Handler struct {
 	tileStore    *tiles.MBTilesStore
 	geoStore     *geodata.GeoParquetStore
+	gpkgStore    *geodata.GpkgStore
 	projectStore *projects.Store
 	cfg          config.Config
 }
@@ -24,12 +26,14 @@ type Handler struct {
 func NewHandler(
 	tileStore *tiles.MBTilesStore,
 	geoStore *geodata.GeoParquetStore,
+	gpkgStore *geodata.GpkgStore,
 	projectStore *projects.Store,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
 		tileStore:    tileStore,
 		geoStore:     geoStore,
+		gpkgStore:    gpkgStore,
 		projectStore: projectStore,
 		cfg:          cfg,
 	}
@@ -51,6 +55,9 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
+
+	// Choropleth endpoint - returns GeoJSON filtered by bbox
+	r.HandleFunc("/choropleth", h.handleChoropleth).Methods("GET")
 
 	// Project management
 	r.HandleFunc("/projects", h.handleListProjects).Methods("GET")
@@ -125,11 +132,17 @@ func (h *Handler) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 
 // handleListColumns returns available attribute columns
 func (h *Handler) handleListColumns(w http.ResponseWriter, r *http.Request) {
-	if h.geoStore == nil {
-		respondJSON(w, http.StatusOK, []string{})
+	// Prefer gpkgStore as it's now the primary source
+	if h.gpkgStore != nil {
+		respondJSON(w, http.StatusOK, h.gpkgStore.GetColumns())
 		return
 	}
-	respondJSON(w, http.StatusOK, h.geoStore.GetColumns())
+	// Fallback to geoStore for backward compatibility
+	if h.geoStore != nil {
+		respondJSON(w, http.StatusOK, h.geoStore.GetColumns())
+		return
+	}
+	respondJSON(w, http.StatusOK, []string{})
 }
 
 // handleScenarioData returns data for a scenario and attribute
@@ -286,4 +299,59 @@ func (h *Handler) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// handleChoropleth returns GeoJSON catchments filtered by bbox with attribute values
+// Query params: scenario, attribute, minx, miny, maxx, maxy
+func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	q := r.URL.Query()
+
+	scenario := q.Get("scenario")
+	if scenario == "" {
+		scenario = "current"
+	}
+
+	attribute := q.Get("attribute")
+	if attribute == "" {
+		respondError(w, http.StatusBadRequest, "attribute parameter is required")
+		return
+	}
+
+	// Parse bbox parameters
+	minx, err := strconv.ParseFloat(q.Get("minx"), 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid minx parameter")
+		return
+	}
+	miny, err := strconv.ParseFloat(q.Get("miny"), 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid miny parameter")
+		return
+	}
+	maxx, err := strconv.ParseFloat(q.Get("maxx"), 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid maxx parameter")
+		return
+	}
+	maxy, err := strconv.ParseFloat(q.Get("maxy"), 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid maxy parameter")
+		return
+	}
+
+	// Query catchments
+	fc, err := h.gpkgStore.QueryCatchments(scenario, attribute, minx, miny, maxx, maxy)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/geo+json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	json.NewEncoder(w).Encode(fc)
 }

@@ -67,9 +67,18 @@ func main() {
 		resolvedResourcesDir = "./resources"
 	}
 
+	// Find an available port (try up to 10 ports starting from the requested one)
+	availablePort, err := findAvailablePort(*port, 10)
+	if err != nil {
+		log.Fatalf("Failed to find available port: %v", err)
+	}
+	if availablePort != *port {
+		log.Printf("Port %d in use, using port %d instead", *port, availablePort)
+	}
+
 	// Build configuration
 	cfg := config.Config{
-		Port:         *port,
+		Port:         availablePort,
 		DataDir:      resolvedDataDir,
 		ResourcesDir: resolvedResourcesDir,
 		Version:      version,
@@ -157,4 +166,19 @@ func waitForServer(url string, timeout time.Duration) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	log.Printf("Warning: server may not be ready at %s", url)
+}
+
+// findAvailablePort finds an available port, starting from the given port.
+// If the port is in use, it tries subsequent ports up to maxAttempts times.
+func findAvailablePort(startPort int, maxAttempts int) (int, error) {
+	for i := 0; i < maxAttempts; i++ {
+		port := startPort + i
+		addr := fmt.Sprintf(":%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			listener.Close()
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no available port found after %d attempts starting from %d", maxAttempts, startPort)
 }

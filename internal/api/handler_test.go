@@ -16,7 +16,7 @@ func newTestHandler() *Handler {
 		DataDir: "/tmp/test",
 		Version: "test",
 	}
-	return NewHandler(nil, nil, nil, cfg)
+	return NewHandler(nil, nil, nil, nil, cfg)
 }
 
 func TestHealthEndpoint(t *testing.T) {

@@ -3,9 +3,6 @@ import { Box, IconButton, Tooltip, Flex, Text, Icon, VStack, Button } from '@cha
 import { FiSliders, FiMap, FiInfo, FiBox } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { tableFromIPC, Table } from 'apache-arrow';
-import { MapboxOverlay } from '@deck.gl/mapbox';
-import { GeoArrowSolidPolygonLayer } from '@geoarrow/deck.gl-layers';
 import type { ComparisonState, Scenario, IdentifyResult } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
@@ -34,130 +31,129 @@ const PRISM_STOPS: [number, string][] = [
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
 
-// Convert hex colour to [R, G, B, A] array
-function hexToRgba(hex: string): [number, number, number, number] {
-  const h = hex.replace('#', '');
-  return [
-    parseInt(h.substring(0, 2), 16),
-    parseInt(h.substring(2, 4), 16),
-    parseInt(h.substring(4, 6), 16),
-    220, // slightly transparent
-  ];
-}
-
-// Pre-compute RGBA stop array for interpolation
-const RGBA_STOPS = PRISM_STOPS.map(([t, hex]) => ({ t, rgba: hexToRgba(hex) }));
-
-/** Linearly interpolate through the PRISM gradient for a normalised 0-1 value. */
-function prismColor(normalised: number): [number, number, number, number] {
-  const t = Math.max(0, Math.min(1, normalised));
-  for (let i = 1; i < RGBA_STOPS.length; i++) {
-    if (t <= RGBA_STOPS[i].t) {
-      const prev = RGBA_STOPS[i - 1];
-      const next = RGBA_STOPS[i];
-      const f = (t - prev.t) / (next.t - prev.t);
-      return [
-        Math.round(prev.rgba[0] + f * (next.rgba[0] - prev.rgba[0])),
-        Math.round(prev.rgba[1] + f * (next.rgba[1] - prev.rgba[1])),
-        Math.round(prev.rgba[2] + f * (next.rgba[2] - prev.rgba[2])),
-        Math.round(prev.rgba[3] + f * (next.rgba[3] - prev.rgba[3])),
-      ];
-    }
-  }
-  return RGBA_STOPS[RGBA_STOPS.length - 1].rgba;
-}
-
 // The property in the vector tiles that identifies each catchment.
 const CATCHMENT_ID_PROP = 'HYBAS_ID';
 
 // Minimum zoom level at which catchment choropleth layers are displayed.
-// Roughly corresponds to 1:500,000 map scale.
-const MIN_CATCHMENT_ZOOM = 8;
+// Set to 7 to ensure reasonable performance - lower zooms fetch too many features.
+const MIN_CATCHMENT_ZOOM = 7;
 
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-/** Cache loaded Arrow tables so we only fetch each scenario file once. */
-const arrowCache = new Map<string, Table>();
+// Debounce delay for fetching choropleth data on map move (ms)
+const FETCH_DEBOUNCE_MS = 300;
 
-async function loadArrowTable(scenario: Scenario): Promise<Table> {
-  const cached = arrowCache.get(scenario);
-  if (cached) return cached;
-
-  const resp = await fetch(`/data/${scenario}.arrow`);
-  if (!resp.ok) throw new Error(`Failed to load ${scenario}.arrow: ${resp.status}`);
-  const buf = await resp.arrayBuffer();
-  const table = tableFromIPC(buf);
-  arrowCache.set(scenario, table);
-  return table;
+interface ChoroplethData {
+  type: string;
+  features: Array<{
+    type: string;
+    id: number;
+    geometry: object;
+    properties: {
+      HYBAS_ID: number;
+      [key: string]: number;
+    };
+  }>;
 }
 
 /**
- * Build a GeoArrowSolidPolygonLayer that colours catchments by a given attribute.
- * When extruded is true, catchments are raised by their normalised attribute value.
+ * Fetch choropleth GeoJSON data for the current viewport.
  */
-function buildGeoArrowLayer(
-  id: string,
-  table: Table,
+async function fetchChoroplethData(
+  scenario: Scenario,
   attribute: string,
-  globalMin: number,
-  globalRange: number,
-  extruded: boolean,
-): GeoArrowSolidPolygonLayer {
-  const geomCol = table.getChild('geometry');
+  bounds: maplibregl.LngLatBounds
+): Promise<ChoroplethData | null> {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
 
-  return new GeoArrowSolidPolygonLayer({
-    id,
-    data: table,
-    getPolygon: geomCol!,
-    getFillColor: ({ index, data }) => {
-      const batch = data.data;
-      const col = batch.getChild(attribute);
-      if (!col) return [0, 0, 0, 0];
-      const val = col.get(index) as number | null;
-      if (val == null || !Number.isFinite(val)) return [0, 0, 0, 0];
-      const normalised = globalRange > 0 ? (val - globalMin) / globalRange : 0;
-      return prismColor(normalised);
-    },
-    extruded,
-    getElevation: extruded
-      ? ({ index, data }) => {
-          const batch = data.data;
-          const col = batch.getChild(attribute);
-          if (!col) return 0;
-          const val = col.get(index) as number | null;
-          if (val == null || !Number.isFinite(val)) return 0;
-          const normalised = globalRange > 0 ? (val - globalMin) / globalRange : 0;
-          return normalised * MAX_EXTRUSION_HEIGHT;
-        }
-      : undefined,
-    pickable: false,
-    _validate: false,
+  const params = new URLSearchParams({
+    scenario,
+    attribute,
+    minx: sw.lng.toString(),
+    miny: sw.lat.toString(),
+    maxx: ne.lng.toString(),
+    maxy: ne.lat.toString(),
   });
+
+  try {
+    const resp = await fetch(`/api/choropleth?${params}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (err) {
+    console.error('Failed to fetch choropleth data:', err);
+    return null;
+  }
 }
 
 /**
- * Compute global min/max for an attribute across both scenario tables.
- * Using a shared range ensures both maps are colour-comparable.
+ * Build a MapLibre expression for fill-color based on attribute value and global min/max.
  */
-function computeGlobalMinMax(
-  tables: Table[],
+function buildFillColorExpression(
   attribute: string,
+  min: number,
+  max: number
+): maplibregl.ExpressionSpecification | string {
+  const range = max - min;
+  if (range === 0) {
+    // Single value - use middle color
+    return PRISM_STOPS[Math.floor(PRISM_STOPS.length / 2)][1];
+  }
+
+  // Build interpolate expression: normalize value to 0-1 then map to colors
+  return [
+    'interpolate',
+    ['linear'],
+    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
+  ] as maplibregl.ExpressionSpecification;
+}
+
+/**
+ * Build a MapLibre expression for fill-extrusion-height based on attribute value.
+ */
+function buildExtrusionExpression(
+  attribute: string,
+  min: number,
+  max: number
+): maplibregl.ExpressionSpecification | number {
+  const range = max - min;
+  if (range === 0) {
+    return MAX_EXTRUSION_HEIGHT / 2;
+  }
+
+  return [
+    '*',
+    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    MAX_EXTRUSION_HEIGHT,
+  ] as maplibregl.ExpressionSpecification;
+}
+
+/**
+ * Compute min/max values for an attribute from GeoJSON features.
+ */
+function computeMinMax(
+  leftData: ChoroplethData | null,
+  rightData: ChoroplethData | null,
+  attribute: string
 ): { min: number; max: number } {
   let min = Infinity;
   let max = -Infinity;
 
-  for (const table of tables) {
-    const col = table.getChild(attribute);
-    if (!col) continue;
-    for (let i = 0; i < col.length; i++) {
-      const v = col.get(i) as number | null;
-      if (v != null && Number.isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
+  const datasets = [leftData, rightData].filter(Boolean) as ChoroplethData[];
+  for (const data of datasets) {
+    for (const feature of data.features) {
+      const val = feature.properties[attribute];
+      if (val != null && Number.isFinite(val)) {
+        if (val < min) min = val;
+        if (val > max) max = val;
       }
     }
   }
+
+  if (!Number.isFinite(min)) min = 0;
+  if (!Number.isFinite(max)) max = 1;
 
   return { min, max };
 }
@@ -170,10 +166,6 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const sliderRef = useRef<HTMLDivElement | null>(null);
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
-
-  // deck.gl overlay refs
-  const leftOverlayRef = useRef<MapboxOverlay | null>(null);
-  const rightOverlayRef = useRef<MapboxOverlay | null>(null);
 
   // Identify mode state
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
@@ -193,53 +185,142 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
   const onIdentifyRef = useRef(onIdentify);
   onIdentifyRef.current = onIdentify;
 
-  /** Load Arrow tables for both scenarios and create deck.gl layers.
-   *  Layers are only shown when zoomed in past MIN_CATCHMENT_ZOOM.
-   *  In 3D mode, catchments are extruded by their attribute value. */
+  // Debounce timer for choropleth fetching
+  const fetchTimerRef = useRef<number | null>(null);
+
+  /** Fetch and apply choropleth data to both maps based on current viewport.
+   *  Only shown when zoomed in past MIN_CATCHMENT_ZOOM. */
   const applyColors = useCallback(async () => {
     const c = comparisonRef.current;
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!leftMap || !rightMap) return;
+    if (!mapsReady.current.left || !mapsReady.current.right) return;
+
+    // Clear existing choropleth layers if no attribute selected
     if (!c.attribute) {
-      // No attribute selected — remove overlays
-      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [] });
-      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [] });
+      removeChoroplethLayers(leftMap, 'left');
+      removeChoroplethLayers(rightMap, 'right');
       return;
     }
 
-    // Check zoom — hide catchment layers when zoomed out beyond 1:500k
-    const currentZoom = leftMapRef.current?.getZoom() ?? 0;
+    // Check zoom — hide catchment layers when zoomed out
+    const currentZoom = leftMap.getZoom();
     if (currentZoom < MIN_CATCHMENT_ZOOM) {
-      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [] });
-      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [] });
+      removeChoroplethLayers(leftMap, 'left');
+      removeChoroplethLayers(rightMap, 'right');
       return;
     }
 
     const extruded = is3DModeRef.current;
+    const bounds = leftMap.getBounds();
 
     try {
-      // Load both tables in parallel
-      const [leftTable, rightTable] = await Promise.all([
-        loadArrowTable(c.leftScenario),
-        loadArrowTable(c.rightScenario),
+      // Fetch data for both scenarios in parallel
+      const [leftData, rightData] = await Promise.all([
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds),
       ]);
 
-      // Compute shared min/max so both sides use the same colour scale
-      const { min, max } = computeGlobalMinMax([leftTable, rightTable], c.attribute);
-      const range = max - min;
+      // Compute shared min/max for consistent coloring
+      const { min, max } = computeMinMax(leftData, rightData, c.attribute);
 
-      // Build layers
-      const leftLayer = buildGeoArrowLayer(
-        'choropleth-left', leftTable, c.attribute, min, range, extruded,
-      );
-      const rightLayer = buildGeoArrowLayer(
-        'choropleth-right', rightTable, c.attribute, min, range, extruded,
-      );
+      // Apply to left map
+      if (leftData && leftData.features.length > 0) {
+        applyChoroplethLayer(leftMap, 'left', leftData, c.attribute, min, max, extruded);
+      }
 
-      if (leftOverlayRef.current) leftOverlayRef.current.setProps({ layers: [leftLayer] });
-      if (rightOverlayRef.current) rightOverlayRef.current.setProps({ layers: [rightLayer] });
+      // Apply to right map
+      if (rightData && rightData.features.length > 0) {
+        applyChoroplethLayer(rightMap, 'right', rightData, c.attribute, min, max, extruded);
+      }
     } catch (err) {
-      console.error('Failed to apply GeoArrow choropleth:', err);
+      console.error('Failed to apply choropleth:', err);
     }
   }, []);
+
+  /**
+   * Remove choropleth layers from a map.
+   */
+  function removeChoroplethLayers(map: maplibregl.Map, side: string) {
+    const layerId = `choropleth-${side}`;
+    const sourceId = `choropleth-source-${side}`;
+
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId);
+    }
+    if (map.getLayer(`${layerId}-3d`)) {
+      map.removeLayer(`${layerId}-3d`);
+    }
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId);
+    }
+  }
+
+  /**
+   * Apply choropleth layer to a map with GeoJSON data.
+   */
+  function applyChoroplethLayer(
+    map: maplibregl.Map,
+    side: string,
+    data: ChoroplethData,
+    attribute: string,
+    min: number,
+    max: number,
+    extruded: boolean
+  ) {
+    const layerId = `choropleth-${side}`;
+    const layer3dId = `${layerId}-3d`;
+    const sourceId = `choropleth-source-${side}`;
+
+    // Remove existing layers and source
+    removeChoroplethLayers(map, side);
+
+    // Add the GeoJSON source
+    map.addSource(sourceId, {
+      type: 'geojson',
+      data: data as unknown as GeoJSON.FeatureCollection,
+    });
+
+    if (extruded) {
+      // 3D fill-extrusion layer
+      map.addLayer({
+        id: layer3dId,
+        type: 'fill-extrusion',
+        source: sourceId,
+        paint: {
+          'fill-extrusion-color': buildFillColorExpression(attribute, min, max),
+          'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
+          'fill-extrusion-base': 0,
+          'fill-extrusion-opacity': 0.8,
+        },
+      });
+    } else {
+      // 2D fill layer
+      map.addLayer({
+        id: layerId,
+        type: 'fill',
+        source: sourceId,
+        paint: {
+          'fill-color': buildFillColorExpression(attribute, min, max),
+          'fill-opacity': 0.75,
+        },
+      });
+    }
+  }
+
+  /**
+   * Debounced version of applyColors for map move events.
+   */
+  const debouncedApplyColors = useCallback(() => {
+    if (fetchTimerRef.current) {
+      clearTimeout(fetchTimerRef.current);
+    }
+    fetchTimerRef.current = window.setTimeout(() => {
+      applyColors();
+    }, FETCH_DEBOUNCE_MS);
+  }, [applyColors]);
 
   // Toggle identify mode
   const toggleIdentifyMode = useCallback(() => {
@@ -450,6 +531,9 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
       center: [20, 0],
       zoom: 3,
       attributionControl: false,
+      scrollZoom: true,
+      dragPan: true,
+      doubleClickZoom: true,
     });
     leftMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
 
@@ -460,6 +544,9 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
       center: [20, 0],
       zoom: 3,
       attributionControl: false,
+      scrollZoom: true,
+      dragPan: true,
+      doubleClickZoom: true,
     });
 
     // Initial sizing of right map container
@@ -486,40 +573,18 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
     leftMap.on('click', (e) => handleIdentifyClick(leftMap, e));
     rightMap.on('click', (e) => handleIdentifyClick(rightMap, e));
 
-    // Re-evaluate catchment layer visibility when zoom changes
-    leftMap.on('zoomend', () => applyColors());
+    // Fetch new choropleth data when map moves (debounced)
+    leftMap.on('moveend', () => debouncedApplyColors());
+    leftMap.on('zoomend', () => debouncedApplyColors());
 
-    // Create deck.gl overlays (non-interleaved so they don't block MapLibre events)
-    const leftOverlay = new MapboxOverlay({
-      interleaved: false,
-      layers: [],
-    });
-    const rightOverlay = new MapboxOverlay({
-      interleaved: false,
-      layers: [],
-    });
-
-    // When maps are loaded, add deck.gl overlays and apply colours
+    // When maps are loaded, mark ready and apply initial colours
     leftMap.on('load', () => {
-      leftMap.addControl(leftOverlay as unknown as maplibregl.IControl);
-      leftOverlayRef.current = leftOverlay;
-
-      // Make deck.gl canvas non-blocking for pointer events
-      const deckCanvas = leftContainer.querySelector('.deck-canvas') as HTMLCanvasElement | null;
-      if (deckCanvas) deckCanvas.style.pointerEvents = 'none';
-
       mapsReady.current.left = true;
-      applyColors();
+      if (mapsReady.current.right) applyColors();
     });
     rightMap.on('load', () => {
-      rightMap.addControl(rightOverlay as unknown as maplibregl.IControl);
-      rightOverlayRef.current = rightOverlay;
-
-      const deckCanvas = rightContainer.querySelector('.deck-canvas') as HTMLCanvasElement | null;
-      if (deckCanvas) deckCanvas.style.pointerEvents = 'none';
-
       mapsReady.current.right = true;
-      applyColors();
+      if (mapsReady.current.left) applyColors();
     });
 
     leftMapRef.current = leftMap;
@@ -558,8 +623,9 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
 
     return () => {
       mapsReady.current = { left: false, right: false };
-      leftOverlayRef.current = null;
-      rightOverlayRef.current = null;
+      if (fetchTimerRef.current) {
+        clearTimeout(fetchTimerRef.current);
+      }
       unregisterMap(syncId);
       slider.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
@@ -567,7 +633,7 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
       leftMap.remove();
       rightMap.remove();
     };
-  }, [applyColors, handleIdentifyClick]);
+  }, [applyColors, debouncedApplyColors, handleIdentifyClick]);
 
   // Update labels and colours when comparison changes
   useEffect(() => {
@@ -595,7 +661,7 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
       indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
     }
 
-    // Apply scenario-specific colours via deck.gl
+    // Apply scenario-specific colours
     applyColors();
   }, [comparison, applyColors]);
 

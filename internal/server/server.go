@@ -34,6 +34,7 @@ type Server struct {
 	router       *mux.Router
 	tileStore    *tiles.MBTilesStore
 	geoStore     *geodata.GeoParquetStore
+	gpkgStore    *geodata.GpkgStore
 	projectStore *projects.Store
 }
 
@@ -61,6 +62,14 @@ func New(cfg config.Config) (*Server, error) {
 		s.geoStore = geoStore
 	}
 
+	// Initialize Geopackage store for choropleth queries
+	gpkgStore, err := geodata.NewGpkgStore(cfg.DataDir)
+	if err != nil {
+		log.Printf("Warning: Geopackage store not available: %v", err)
+	} else {
+		s.gpkgStore = gpkgStore
+	}
+
 	// Initialize projects store
 	projectStore, err := projects.NewStore(cfg.DataDir)
 	if err != nil {
@@ -79,7 +88,7 @@ func New(cfg config.Config) (*Server, error) {
 func (s *Server) setupRoutes() {
 	// API routes
 	apiRouter := s.router.PathPrefix("/api").Subrouter()
-	apiHandler := api.NewHandler(s.tileStore, s.geoStore, s.projectStore, s.cfg)
+	apiHandler := api.NewHandler(s.tileStore, s.geoStore, s.gpkgStore, s.projectStore, s.cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
 	// Data pack management routes
@@ -173,6 +182,9 @@ func (s *Server) Stop() error {
 	}
 	if s.geoStore != nil {
 		s.geoStore.Close()
+	}
+	if s.gpkgStore != nil {
+		s.gpkgStore.Close()
 	}
 
 	return s.httpServer.Shutdown(ctx)
