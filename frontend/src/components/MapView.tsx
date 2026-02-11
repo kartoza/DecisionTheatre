@@ -62,6 +62,9 @@ interface ChoroplethData {
       [key: string]: number;
     };
   }>;
+  // Domain min/max values for consistent color scaling across scenarios
+  domain_min: number;
+  domain_max: number;
 }
 
 /**
@@ -137,34 +140,6 @@ function buildExtrusionExpression(
   ] as maplibregl.ExpressionSpecification;
 }
 
-/**
- * Compute min/max values for an attribute from GeoJSON features.
- */
-function computeMinMax(
-  leftData: ChoroplethData | null,
-  rightData: ChoroplethData | null,
-  attribute: string
-): { min: number; max: number } {
-  let min = Infinity;
-  let max = -Infinity;
-
-  const datasets = [leftData, rightData].filter(Boolean) as ChoroplethData[];
-  for (const data of datasets) {
-    for (const feature of data.features) {
-      const val = feature.properties[attribute];
-      if (val != null && Number.isFinite(val)) {
-        if (val < min) min = val;
-        if (val > max) max = val;
-      }
-    }
-  }
-
-  if (!Number.isFinite(min)) min = 0;
-  if (!Number.isFinite(max)) max = 1;
-
-  return { min, max };
-}
-
 function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify, onMapExtentChange }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
@@ -234,8 +209,17 @@ function MapView({ comparison, paneIndex: _paneIndex, onOpenSettings, onIdentify
         fetchChoroplethData(c.rightScenario, c.attribute, bounds),
       ]);
 
-      // Compute shared min/max for consistent coloring
-      const { min, max } = computeMinMax(leftData, rightData, c.attribute);
+      // Use domain min/max from API response for consistent color scaling across scenarios
+      // Both responses should have the same domain values since they're computed across all scenarios
+      let min = 0;
+      let max = 1;
+      if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
+        min = leftData.domain_min;
+        max = leftData.domain_max;
+      } else if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
+        min = rightData.domain_min;
+        max = rightData.domain_max;
+      }
 
       // Apply to left map - verify the map is ready
       if (leftData && leftData.features.length > 0) {

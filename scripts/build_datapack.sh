@@ -37,12 +37,12 @@ cp "$DATA_DIR/catchments.gpkg" "$OUTPUT"
 # Import CSV files as tables using ogr2ogr
 echo "Importing current.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
-    -nln "scenario_current" \
+    -nln "scenario_current_raw" \
     "$DATA_DIR/current.csv"
 
 echo "Importing reference.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
-    -nln "scenario_reference" \
+    -nln "scenario_reference_raw" \
     "$DATA_DIR/reference.csv"
 
 # Import metadata if it exists
@@ -57,6 +57,74 @@ elif [ -f "$DATA_DIR/metadata.csv" ]; then
         -nln "metadata" \
         "$DATA_DIR/metadata.csv"
 fi
+
+# Convert all data columns to REAL type and NA strings to NULL
+# This ensures proper numeric handling for min/max and color scaling
+echo "Converting columns to REAL type (NA -> NULL)..."
+python3 - "$OUTPUT" <<'TYPEPY'
+import sqlite3
+import sys
+
+gpkg_path = sys.argv[1]
+conn = sqlite3.connect(gpkg_path)
+cur = conn.cursor()
+
+def convert_table_types(raw_table, target_table):
+    """Convert a raw imported table to proper types: ID columns stay text, all others become REAL."""
+    cur.execute(f"PRAGMA table_info({raw_table})")
+    columns = [(row[1], row[2]) for row in cur.fetchall()]  # (name, type)
+
+    # ID columns that should remain as-is
+    id_columns = {'fid', 'ogc_fid', 'catchID', 'catchment_id', 'sp_current.catchID',
+                  'sp_reference$catchID', 'sp_reference.catchID'}
+
+    # Build column definitions and select expressions
+    col_defs = []
+    select_parts = []
+
+    for col_name, col_type in columns:
+        if col_name in id_columns:
+            # Keep ID columns as their original type
+            col_defs.append(f'"{col_name}" {col_type}')
+            select_parts.append(f'"{col_name}"')
+        else:
+            # Convert data columns to REAL, with NA -> NULL
+            col_defs.append(f'"{col_name}" REAL')
+            # CASE expression: if value is 'NA' or empty, return NULL, else cast to REAL
+            select_parts.append(f'CASE WHEN "{col_name}" = \'NA\' OR "{col_name}" = \'\' THEN NULL ELSE CAST("{col_name}" AS REAL) END as "{col_name}"')
+
+    # Create new table with proper types
+    cur.execute(f"DROP TABLE IF EXISTS {target_table}")
+    cur.execute(f"CREATE TABLE {target_table} ({', '.join(col_defs)})")
+
+    # Copy data with type conversion
+    cur.execute(f"INSERT INTO {target_table} SELECT {', '.join(select_parts)} FROM {raw_table}")
+
+    # Drop raw table and clean up gpkg_contents reference
+    cur.execute(f"DROP TABLE {raw_table}")
+    cur.execute(f"DELETE FROM gpkg_contents WHERE table_name = '{raw_table}'")
+    cur.execute(f"DELETE FROM gpkg_geometry_columns WHERE table_name = '{raw_table}'")
+
+    conn.commit()
+
+    # Count non-null values in first data column to verify
+    first_data_col = None
+    for col_name, _ in columns:
+        if col_name not in id_columns:
+            first_data_col = col_name
+            break
+
+    if first_data_col:
+        cur.execute(f'SELECT COUNT(*) FROM {target_table} WHERE "{first_data_col}" IS NOT NULL')
+        count = cur.fetchone()[0]
+        print(f"  {target_table}: Converted {len(columns)} columns, {count} rows with non-null data")
+
+convert_table_types("scenario_current_raw", "scenario_current")
+convert_table_types("scenario_reference_raw", "scenario_reference")
+
+conn.close()
+print("  Done converting column types")
+TYPEPY
 
 # Normalize column names to ensure both tables have identical structure
 # The input CSVs may have different naming conventions (dots vs dashes/spaces)
@@ -376,6 +444,73 @@ print(f"Done converting {len(rows)} geometries.")
 
 conn.close()
 PYEOF
+
+# Create domain_minima and domain_maxima tables
+# These store the min/max values across both scenarios for consistent color scaling
+# Use a single SQL query that computes all min/max in ONE pass through the data
+echo "Computing domain minima and maxima tables..."
+
+# Get column names (excluding ID columns)
+COLUMNS=$(sqlite3 "$OUTPUT" "PRAGMA table_info(scenario_current)" | \
+    awk -F'|' '{print $2}' | \
+    grep -v -E '^(fid|catchment_id|catchment_id_int|ogc_fid)$')
+
+NUM_COLS=$(echo "$COLUMNS" | wc -l)
+echo "  Computing min/max for $NUM_COLS attribute columns in a single pass..."
+
+# Build a single SQL query that computes min/max for ALL columns at once
+# This does ONE table scan instead of 924 separate queries
+MIN_EXPRS=""
+MAX_EXPRS=""
+COL_DEFS=""
+
+for col in $COLUMNS; do
+    if [ -n "$MIN_EXPRS" ]; then
+        MIN_EXPRS="$MIN_EXPRS, "
+        MAX_EXPRS="$MAX_EXPRS, "
+        COL_DEFS="$COL_DEFS, "
+    fi
+    MIN_EXPRS="${MIN_EXPRS}MIN(CAST(\"$col\" AS REAL)) as \"$col\""
+    MAX_EXPRS="${MAX_EXPRS}MAX(CAST(\"$col\" AS REAL)) as \"$col\""
+    COL_DEFS="${COL_DEFS}\"$col\" REAL"
+done
+
+# Build MIN/MAX expressions (columns are already REAL type with NULL for NA values)
+MIN_SELECT=$(echo "$COLUMNS" | while read col; do
+    echo "MIN(\"$col\") as \"$col\""
+done | paste -sd',')
+
+MAX_SELECT=$(echo "$COLUMNS" | while read col; do
+    echo "MAX(\"$col\") as \"$col\""
+done | paste -sd',')
+
+# Create tables and compute in single queries
+sqlite3 "$OUTPUT" <<SQLDOMAIN
+DROP TABLE IF EXISTS domain_minima;
+DROP TABLE IF EXISTS domain_maxima;
+CREATE TABLE domain_minima ($COL_DEFS);
+CREATE TABLE domain_maxima ($COL_DEFS);
+
+-- Compute minima across both tables in one query (columns are REAL, NA already NULL)
+INSERT INTO domain_minima
+SELECT $MIN_SELECT
+FROM (
+    SELECT * FROM scenario_current
+    UNION ALL
+    SELECT * FROM scenario_reference
+);
+
+-- Compute maxima across both tables in one query (columns are REAL, NA already NULL)
+INSERT INTO domain_maxima
+SELECT $MAX_SELECT
+FROM (
+    SELECT * FROM scenario_current
+    UNION ALL
+    SELECT * FROM scenario_reference
+);
+SQLDOMAIN
+
+echo "  Created domain_minima and domain_maxima tables with $NUM_COLS columns"
 
 # Check the result
 echo ""

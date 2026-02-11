@@ -301,6 +301,14 @@ func (h *Handler) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// ChoroplethResponse wraps a FeatureCollection with domain range for consistent color scaling
+type ChoroplethResponse struct {
+	Type       string                   `json:"type"`
+	Features   []geodata.GeoJSONFeature `json:"features"`
+	DomainMin  float64                  `json:"domain_min"`
+	DomainMax  float64                  `json:"domain_max"`
+}
+
 // handleChoropleth returns GeoJSON catchments filtered by bbox with attribute values
 // Query params: scenario, attribute, minx, miny, maxx, maxy
 func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +359,23 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/geo+json")
+	// Get domain range for consistent color scaling across scenarios
+	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
+	if err != nil {
+		// If domain tables don't exist, fall back to no domain range
+		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
+		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
+	}
+
+	// Build response with domain range
+	response := ChoroplethResponse{
+		Type:       "FeatureCollection",
+		Features:   fc.Features,
+		DomainMin:  domainRange.Min,
+		DomainMax:  domainRange.Max,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	json.NewEncoder(w).Encode(fc)
+	json.NewEncoder(w).Encode(response)
 }

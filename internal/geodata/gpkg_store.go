@@ -395,6 +395,36 @@ func readFloat64(b []byte, bigEndian bool) float64 {
 	return *(*float64)(unsafe.Pointer(&bits))
 }
 
+// DomainRange represents min/max values for an attribute across all scenarios
+type DomainRange struct {
+	Min float64 `json:"min"`
+	Max float64 `json:"max"`
+}
+
+// GetDomainRange returns the min and max values for an attribute across all scenarios
+func (s *GpkgStore) GetDomainRange(attribute string) (*DomainRange, error) {
+	var minVal, maxVal sql.NullFloat64
+
+	// Query domain_minima table
+	query := fmt.Sprintf(`SELECT "%s" FROM domain_minima LIMIT 1`, attribute)
+	err := s.db.QueryRow(query).Scan(&minVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get domain minimum for %s: %w", attribute, err)
+	}
+
+	// Query domain_maxima table
+	query = fmt.Sprintf(`SELECT "%s" FROM domain_maxima LIMIT 1`, attribute)
+	err = s.db.QueryRow(query).Scan(&maxVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get domain maximum for %s: %w", attribute, err)
+	}
+
+	return &DomainRange{
+		Min: minVal.Float64,
+		Max: maxVal.Float64,
+	}, nil
+}
+
 // Close releases resources
 func (s *GpkgStore) Close() {
 	if s.db != nil {
