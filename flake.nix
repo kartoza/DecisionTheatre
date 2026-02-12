@@ -67,7 +67,7 @@
           # correct hash. Set to empty string to get it:
           #   nix build .#frontend 2>&1 | grep 'got:'
           # Then paste the sha256 here.
-          npmDepsHash = "sha256-KOpFc8PcZAukBLHBc3jinP/f+uRfQPlAYKbbTxPrAUA=";
+          npmDepsHash = "sha256-p+cI7t1qtWgRouRktG7Q7r3SyJ/81wI14IisrRGeYbw=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''

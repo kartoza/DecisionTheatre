@@ -9,8 +9,9 @@ import LandingPage from './components/LandingPage';
 import AboutPage from './components/AboutPage';
 import ProjectsPage from './components/ProjectsPage';
 import CreateProjectPage from './components/CreateProjectPage';
+import SiteCreationPage from './components/SiteCreationPage';
 import { useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Project, IdentifyResult, MapExtent, MapStatistics } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Project, Site, IdentifyResult, MapExtent, MapStatistics } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -41,6 +42,8 @@ function App() {
   const [mapExtent, setMapExtent] = useState<MapExtent | null>(null);
   const [isExploreMode, setIsExploreMode] = useState(false);
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
+  // Track current site for use in project creation (will be used when we link site to project)
+  const [, setCurrentSite] = useState<Site | null>(null);
   const { info } = useServerInfo();
 
   // Persist state changes
@@ -101,6 +104,13 @@ function App() {
     handleOpenProject(project);
   }, [handleOpenProject]);
 
+  // Handle site created - go to project creation with the site
+  const handleSiteCreated = useCallback((site: Site) => {
+    setCurrentSite(site);
+    // After creating a site, go to create project page
+    setCurrentPage('create');
+  }, []);
+
   // Switch to single pane (focus a specific pane) and show its filter panel
   const handleFocusPane = useCallback((paneIndex: number) => {
     setFocusedPane(paneIndex);
@@ -156,24 +166,10 @@ function App() {
     setMapStatistics(stats);
   }, []);
 
-  // Navigate to create project page from explore mode with current state
-  const handleNavigateToCreate = useCallback(() => {
-    // Create a pseudo-project with current explore state
-    const exploreProject: Project = {
-      id: '',
-      title: 'New Exploration',
-      description: '',
-      thumbnail: null,
-      paneStates,
-      layoutMode,
-      focusedPane,
-      mapExtent: mapExtent || undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setCloneFromProject(exploreProject);
-    setCurrentPage('create');
-  }, [paneStates, layoutMode, focusedPane, mapExtent]);
+  // Navigate to create site page from explore mode (which flows into project creation)
+  const handleNavigateToCreateSite = useCallback(() => {
+    setCurrentPage('create-site');
+  }, []);
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
@@ -259,6 +255,27 @@ function App() {
     );
   }
 
+  if (currentPage === 'create-site') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="hidden">
+          <SiteCreationPage
+            onNavigate={handleNavigate}
+            onSiteCreated={handleSiteCreated}
+            initialExtent={mapExtent || undefined}
+          />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
   // Map view (default)
   return (
     <Flex direction="column" h="100vh" overflow="hidden">
@@ -300,7 +317,7 @@ function App() {
           identifyResult={identifyResult}
           onClearIdentify={() => setIdentifyResult(null)}
           isExploreMode={isExploreMode}
-          onNavigateToCreate={handleNavigateToCreate}
+          onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
         />
       </Flex>

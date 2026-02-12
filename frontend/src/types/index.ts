@@ -138,7 +138,7 @@ export type IdentifyResult = {
   data: Record<string, Record<string, number>>;
 } | null;
 
-export type AppPage = 'landing' | 'about' | 'projects' | 'create' | 'map' | 'explore';
+export type AppPage = 'landing' | 'about' | 'projects' | 'create' | 'create-site' | 'map' | 'explore';
 
 // Statistics for the visible zone (viewport)
 export interface ZoneStats {
@@ -183,7 +183,7 @@ export function saveCurrentProject(projectId: string | null): void {
 export function loadCurrentPage(): AppPage {
   try {
     const raw = localStorage.getItem(STORAGE_CURRENT_PAGE_KEY);
-    if (raw === 'landing' || raw === 'about' || raw === 'projects' || raw === 'create' || raw === 'map' || raw === 'explore') {
+    if (raw === 'landing' || raw === 'about' || raw === 'projects' || raw === 'create' || raw === 'create-site' || raw === 'map' || raw === 'explore') {
       return raw;
     }
   } catch { /* default */ }
@@ -192,4 +192,51 @@ export function loadCurrentPage(): AppPage {
 
 export function saveCurrentPage(page: AppPage): void {
   try { localStorage.setItem(STORAGE_CURRENT_PAGE_KEY, page); } catch { /* ignore */ }
+}
+
+// ============================================================================
+// Site Management Types
+// ============================================================================
+
+export type SiteCreationMethod = 'shapefile' | 'geojson' | 'drawn' | 'catchments';
+
+export interface BoundingBox {
+  minX: number;  // West
+  minY: number;  // South
+  maxX: number;  // East
+  maxY: number;  // North
+}
+
+export interface Site {
+  id: string;
+  name: string;
+  description: string;
+  thumbnail: string | null;
+  geometry: GeoJSON.Geometry | null;
+  boundingBox: BoundingBox | null;
+  area: number;  // Area in square kilometers
+  creationMethod: SiteCreationMethod;
+  catchmentIds: string[];  // If created from catchments
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSiteRequest {
+  name: string;
+  description?: string;
+  thumbnail?: string | null;
+  geometry: GeoJSON.Geometry;
+  creationMethod: SiteCreationMethod;
+  catchmentIds?: string[];
+}
+
+// ============================================================================
+// Shapefile/GeoJSON Upload Types
+// ============================================================================
+
+export interface UploadedGeometry {
+  type: 'FeatureCollection' | 'Feature' | 'Geometry';
+  geometry: GeoJSON.Geometry;
+  boundingBox: BoundingBox;
+  featureCount: number;
 }

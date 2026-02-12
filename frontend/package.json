@@ -19,14 +19,19 @@
     "@emotion/react": "^11.13.5",
     "@emotion/styled": "^11.13.5",
     "@geoarrow/deck.gl-layers": "^0.3.1",
+    "@turf/turf": "^7.3.4",
+    "@types/geojson": "^7946.0.16",
+    "@types/matter-js": "^0.20.2",
     "apache-arrow": "^21.1.0",
     "deck.gl": "^9.2.6",
     "framer-motion": "^11.15.0",
     "maplibre-gl": "^4.7.1",
+    "matter-js": "^0.20.0",
     "parquet-wasm": "^0.7.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-icons": "^5.4.0"
+    "react-icons": "^5.4.0",
+    "shpjs": "^6.2.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

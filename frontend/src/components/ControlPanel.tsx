@@ -19,7 +19,7 @@ import {
   Td,
   Button,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiFolderPlus } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
 import { useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, IdentifyResult, MapStatistics } from '../types';
@@ -35,7 +35,7 @@ interface ControlPanelProps {
   identifyResult?: IdentifyResult;
   onClearIdentify?: () => void;
   isExploreMode?: boolean;
-  onNavigateToCreate?: () => void;
+  onNavigateToCreateSite?: () => void;
   mapStatistics?: MapStatistics;
 }
 
@@ -145,7 +145,7 @@ function ControlPanel({
   identifyResult,
   onClearIdentify,
   isExploreMode,
-  onNavigateToCreate,
+  onNavigateToCreateSite,
   mapStatistics,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
@@ -391,27 +391,29 @@ function ControlPanel({
             </>
           )}
 
-          {/* Create Project button - shown in explore mode */}
-          {isExploreMode && onNavigateToCreate && (
+          {/* Create Project button - shown in explore mode, starts site creation flow */}
+          {isExploreMode && onNavigateToCreateSite && (
             <>
               <Divider />
               <Box>
                 <Button
-                  colorScheme="brand"
                   size="lg"
                   width="100%"
-                  leftIcon={<FiFolderPlus />}
-                  onClick={onNavigateToCreate}
+                  leftIcon={<FiMapPin />}
+                  onClick={onNavigateToCreateSite}
+                  bgGradient="linear(to-r, cyan.400, purple.500)"
+                  color="white"
                   _hover={{
                     transform: 'translateY(-2px)',
-                    boxShadow: '0 10px 30px -10px rgba(43, 176, 237, 0.5)',
+                    boxShadow: '0 10px 30px -10px rgba(0, 255, 255, 0.5)',
+                    bgGradient: 'linear(to-r, cyan.300, purple.400)',
                   }}
                   transition="all 0.2s"
                 >
                   Create Project
                 </Button>
                 <Text fontSize="xs" color="gray.500" mt={2} textAlign="center">
-                  Save current view and settings as a new project
+                  Define a site boundary and save as a project
                 </Text>
               </Box>
             </>

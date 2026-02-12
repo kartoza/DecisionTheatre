@@ -10,6 +10,7 @@ import (
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/projects"
+	"github.com/kartoza/decision-theatre/internal/sites"
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
 
@@ -19,6 +20,7 @@ type Handler struct {
 	geoStore     *geodata.GeoParquetStore
 	gpkgStore    *geodata.GpkgStore
 	projectStore *projects.Store
+	siteStore    *sites.Store
 	cfg          config.Config
 }
 
@@ -28,6 +30,7 @@ func NewHandler(
 	geoStore *geodata.GeoParquetStore,
 	gpkgStore *geodata.GpkgStore,
 	projectStore *projects.Store,
+	siteStore *sites.Store,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
@@ -35,6 +38,7 @@ func NewHandler(
 		geoStore:     geoStore,
 		gpkgStore:    gpkgStore,
 		projectStore: projectStore,
+		siteStore:    siteStore,
 		cfg:          cfg,
 	}
 }
@@ -65,6 +69,16 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/projects/{id}", h.handleGetProject).Methods("GET")
 	r.HandleFunc("/projects/{id}", h.handleUpdateProject).Methods("PUT", "PATCH")
 	r.HandleFunc("/projects/{id}", h.handleDeleteProject).Methods("DELETE")
+
+	// Site management
+	r.HandleFunc("/sites", h.handleListSites).Methods("GET")
+	r.HandleFunc("/sites", h.handleCreateSite).Methods("POST")
+	r.HandleFunc("/sites/{id}", h.handleGetSite).Methods("GET")
+	r.HandleFunc("/sites/{id}", h.handleUpdateSite).Methods("PUT", "PATCH")
+	r.HandleFunc("/sites/{id}", h.handleDeleteSite).Methods("DELETE")
+
+	// Catchment selection for site creation
+	r.HandleFunc("/sites/dissolve-catchments", h.handleDissolveCatchments).Methods("POST")
 }
 
 // respondJSON sends a JSON response
@@ -378,4 +392,211 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	json.NewEncoder(w).Encode(response)
+}
+
+// ============================================================================
+// Site Management Handlers
+// ============================================================================
+
+// handleListSites returns all sites
+func (h *Handler) handleListSites(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondJSON(w, http.StatusOK, []*sites.Site{})
+		return
+	}
+
+	siteList, err := h.siteStore.List()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, siteList)
+}
+
+// handleGetSite returns a single site by ID
+func (h *Handler) handleGetSite(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusNotFound, "site store not initialized")
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	site, err := h.siteStore.Get(id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, site)
+}
+
+// handleCreateSite creates a new site
+func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+
+	var site sites.Site
+	if err := json.NewDecoder(r.Body).Decode(&site); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	created, err := h.siteStore.Create(&site)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, created)
+}
+
+// handleUpdateSite updates an existing site
+func (h *Handler) handleUpdateSite(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	var updates sites.Site
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := h.siteStore.Update(id, &updates)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// handleDeleteSite deletes a site
+func (h *Handler) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if err := h.siteStore.Delete(id); err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// DissolveCatchmentsRequest represents a request to dissolve catchments into a site boundary
+type DissolveCatchmentsRequest struct {
+	CatchmentIDs []string `json:"catchmentIds"`
+}
+
+// DissolveCatchmentsResponse returns the dissolved boundary geometry
+type DissolveCatchmentsResponse struct {
+	Geometry    json.RawMessage       `json:"geometry"`
+	BoundingBox *sites.BoundingBox    `json:"boundingBox"`
+	Area        float64               `json:"area"`
+}
+
+// handleDissolveCatchments creates a dissolved boundary from selected catchments
+func (h *Handler) handleDissolveCatchments(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	var req DissolveCatchmentsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.CatchmentIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "no catchment IDs provided")
+		return
+	}
+
+	// Get dissolved geometry from gpkg store
+	geometry, area, err := h.gpkgStore.DissolveCatchments(req.CatchmentIDs)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Compute bounding box
+	var bbox *sites.BoundingBox
+	if len(geometry) > 0 {
+		var geom map[string]interface{}
+		if err := json.Unmarshal(geometry, &geom); err == nil {
+			bbox = &sites.BoundingBox{MinX: 180, MinY: 90, MaxX: -180, MaxY: -90}
+			extractBBoxFromGeom(geom, bbox)
+		}
+	}
+
+	response := DissolveCatchmentsResponse{
+		Geometry:    geometry,
+		BoundingBox: bbox,
+		Area:        area,
+	}
+
+	respondJSON(w, http.StatusOK, response)
+}
+
+// extractBBoxFromGeom recursively extracts coordinates to compute bounding box
+func extractBBoxFromGeom(geom map[string]interface{}, bbox *sites.BoundingBox) {
+	geomType, _ := geom["type"].(string)
+
+	switch geomType {
+	case "Polygon", "MultiLineString":
+		coords, ok := geom["coordinates"].([]interface{})
+		if ok {
+			for _, ring := range coords {
+				r, ok := ring.([]interface{})
+				if ok {
+					for _, c := range r {
+						pt, ok := c.([]interface{})
+						if ok && len(pt) >= 2 {
+							x, _ := pt[0].(float64)
+							y, _ := pt[1].(float64)
+							if x < bbox.MinX { bbox.MinX = x }
+							if x > bbox.MaxX { bbox.MaxX = x }
+							if y < bbox.MinY { bbox.MinY = y }
+							if y > bbox.MaxY { bbox.MaxY = y }
+						}
+					}
+				}
+			}
+		}
+	case "MultiPolygon":
+		coords, ok := geom["coordinates"].([]interface{})
+		if ok {
+			for _, polygon := range coords {
+				p, ok := polygon.([]interface{})
+				if ok {
+					for _, ring := range p {
+						r, ok := ring.([]interface{})
+						if ok {
+							for _, c := range r {
+								pt, ok := c.([]interface{})
+								if ok && len(pt) >= 2 {
+									x, _ := pt[0].(float64)
+									y, _ := pt[1].(float64)
+									if x < bbox.MinX { bbox.MinX = x }
+									if x > bbox.MaxX { bbox.MaxX = x }
+									if y < bbox.MinY { bbox.MinY = y }
+									if y > bbox.MaxY { bbox.MaxY = y }
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
