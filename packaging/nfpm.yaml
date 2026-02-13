@@ -19,13 +19,6 @@ contents:
   - src: packaging/decision-theatre.desktop
     dst: /usr/share/applications/decision-theatre.desktop
 
-depends:
-  - libwebkit2gtk-4.1-0
-
-rpm:
-  depends:
-    - webkit2gtk4.1
-
 overrides:
   rpm:
     depends:

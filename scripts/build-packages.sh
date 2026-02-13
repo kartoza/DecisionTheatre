@@ -4,16 +4,20 @@ set -euo pipefail
 # Build release packages for Decision Theatre.
 #
 # Usage:
-#   ./scripts/build-packages.sh [--platform linux|windows|darwin|all] [--arch amd64|arm64] [--version VERSION]
+#   ./scripts/build-packages.sh [--platform linux|windows|darwin|flatpak|snap|all] [--arch amd64|arm64] [--version VERSION]
 #
 # Produces dist/ artefacts:
 #   Linux:   .tar.gz, .deb, .rpm  (native build, requires nfpm for deb/rpm)
+#   Flatpak: .flatpak             (requires flatpak-builder)
+#   Snap:    .snap                (requires snapcraft)
 #   Windows: .zip with .exe       (cross-compile via mingw-w64, or native on Windows)
 #   macOS:   .tar.gz (or .dmg if on macOS with hdiutil)
 #
 # Prerequisites (available in nix develop):
 #   - go, gcc, pkg-config          (always)
 #   - nfpm                         (linux deb/rpm)
+#   - flatpak-builder              (flatpak)
+#   - snapcraft                    (snap)
 #   - x86_64-w64-mingw32-gcc / CXX (windows cross-compile from linux)
 #   - zip                          (windows .zip)
 
@@ -43,6 +47,49 @@ LDFLAGS="-s -w -X main.version=${VERSION}"
 mkdir -p "$DIST_DIR"
 
 # -------------------------------------------------------
+# Helper: setup webkit2gtk pkg-config compatibility
+# webview_go hardcodes webkit2gtk-4.0 but nixpkgs ships 4.1
+# -------------------------------------------------------
+setup_webkit_compat() {
+    if [ -n "${WEBKIT_COMPAT_SETUP:-}" ]; then
+        return 0
+    fi
+
+    # Check if we need the compatibility shim (nix environment)
+    if pkg-config --exists webkit2gtk-4.0 2>/dev/null; then
+        return 0
+    fi
+
+    if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+        echo "WARNING: Neither webkit2gtk-4.0 nor webkit2gtk-4.1 found" >&2
+        return 0
+    fi
+
+    echo "==> Setting up webkit2gtk-4.0 compatibility shim..."
+    local compat_dir="$DIST_DIR/.webkit-compat"
+    mkdir -p "$compat_dir/pkgconfig" "$compat_dir/lib"
+
+    # Get the webkit2gtk-4.1 pc file location
+    local pc_file=$(pkg-config --variable=pcfiledir webkit2gtk-4.1)/webkit2gtk-4.1.pc
+    if [ -f "$pc_file" ]; then
+        sed 's/webkit2gtk-4.1/webkit2gtk-4.0/g; s/Name: webkit2gtk-4.1/Name: webkit2gtk-4.0/' \
+            "$pc_file" > "$compat_dir/pkgconfig/webkit2gtk-4.0.pc"
+        sed -i "s|-lwebkit2gtk-4.1|-lwebkit2gtk-4.0|g" "$compat_dir/pkgconfig/webkit2gtk-4.0.pc"
+    fi
+
+    # Find and symlink the library
+    local lib_path=$(pkg-config --variable=libdir webkit2gtk-4.1)
+    if [ -f "$lib_path/libwebkit2gtk-4.1.so" ]; then
+        ln -sf "$lib_path/libwebkit2gtk-4.1.so" "$compat_dir/lib/libwebkit2gtk-4.0.so"
+    fi
+
+    export PKG_CONFIG_PATH="$compat_dir/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export CGO_LDFLAGS="-L$compat_dir/lib ${CGO_LDFLAGS:-}"
+    export LD_LIBRARY_PATH="$compat_dir/lib:${LD_LIBRARY_PATH:-}"
+    export WEBKIT_COMPAT_SETUP=1
+}
+
+# -------------------------------------------------------
 # Helper: build the frontend + docs into embed dirs
 # -------------------------------------------------------
 ensure_frontend() {
@@ -63,6 +110,7 @@ build_linux() {
     local arch="${1:-$ARCH}"
     echo "==> Building linux/${arch}..."
     ensure_frontend
+    setup_webkit_compat
 
     CGO_ENABLED=1 GOOS=linux GOARCH="$arch" \
         go build -ldflags "$LDFLAGS" -o "$DIST_DIR/${BINARY_NAME}" "$PROJECT_ROOT"
@@ -163,11 +211,99 @@ build_darwin() {
 }
 
 # -------------------------------------------------------
+# Flatpak build
+# -------------------------------------------------------
+build_flatpak() {
+    local arch="${1:-$ARCH}"
+    echo "==> Building Flatpak..."
+    ensure_frontend
+    setup_webkit_compat
+
+    if ! command -v flatpak-builder &>/dev/null; then
+        echo "WARNING: flatpak-builder not found. Install with: sudo apt install flatpak-builder" >&2
+        echo "  On Fedora: sudo dnf install flatpak-builder" >&2
+        return 1
+    fi
+
+    # First build the Linux binary
+    CGO_ENABLED=1 GOOS=linux GOARCH="$arch" \
+        go build -ldflags "$LDFLAGS" -o "$DIST_DIR/${BINARY_NAME}" "$PROJECT_ROOT"
+
+    # Prepare flatpak build directory
+    local flatpak_build="$DIST_DIR/flatpak-build"
+    local flatpak_repo="$DIST_DIR/flatpak-repo"
+    rm -rf "$flatpak_build" "$flatpak_repo"
+    mkdir -p "$flatpak_build"
+
+    # Copy binary and desktop file to flatpak source location
+    cp "$DIST_DIR/${BINARY_NAME}" "$PROJECT_ROOT/packaging/flatpak/"
+    cp "$PROJECT_ROOT/packaging/decision-theatre.desktop" "$PROJECT_ROOT/packaging/flatpak/"
+
+    # Build the flatpak
+    flatpak-builder --force-clean --repo="$flatpak_repo" \
+        "$flatpak_build" "$PROJECT_ROOT/packaging/flatpak/org.kartoza.DecisionTheatre.yml"
+
+    # Create the single-file bundle
+    local flatpak_name="${BINARY_NAME}-v${VERSION}-${arch}.flatpak"
+    flatpak build-bundle "$flatpak_repo" "$DIST_DIR/$flatpak_name" org.kartoza.DecisionTheatre
+    echo "  -> $DIST_DIR/$flatpak_name"
+
+    # Cleanup
+    rm -f "$PROJECT_ROOT/packaging/flatpak/${BINARY_NAME}"
+    rm -f "$PROJECT_ROOT/packaging/flatpak/decision-theatre.desktop"
+    rm -rf "$flatpak_build" "$flatpak_repo"
+    rm -f "$DIST_DIR/${BINARY_NAME}"
+}
+
+# -------------------------------------------------------
+# Snap build
+# -------------------------------------------------------
+build_snap() {
+    local arch="${1:-$ARCH}"
+    echo "==> Building Snap..."
+    ensure_frontend
+    setup_webkit_compat
+
+    if ! command -v snapcraft &>/dev/null; then
+        echo "WARNING: snapcraft not found. Install with: sudo snap install snapcraft --classic" >&2
+        return 1
+    fi
+
+    # First build the Linux binary
+    CGO_ENABLED=1 GOOS=linux GOARCH="$arch" \
+        go build -ldflags "$LDFLAGS" -o "$DIST_DIR/${BINARY_NAME}" "$PROJECT_ROOT"
+
+    # Copy binary to snap source location
+    cp "$DIST_DIR/${BINARY_NAME}" "$PROJECT_ROOT/packaging/snap/"
+
+    # Update version in snapcraft.yaml
+    local snapcraft_file="$PROJECT_ROOT/packaging/snap/snapcraft.yaml"
+    sed -i "s/^version:.*/version: '${VERSION}'/" "$snapcraft_file"
+
+    # Build the snap
+    (cd "$PROJECT_ROOT/packaging/snap" && snapcraft --destructive-mode)
+
+    # Move the snap to dist
+    local snap_file=$(ls "$PROJECT_ROOT/packaging/snap/"*.snap 2>/dev/null | head -1)
+    if [ -n "$snap_file" ]; then
+        mv "$snap_file" "$DIST_DIR/"
+        echo "  -> $DIST_DIR/$(basename "$snap_file")"
+    fi
+
+    # Cleanup
+    rm -f "$PROJECT_ROOT/packaging/snap/${BINARY_NAME}"
+    rm -f "$DIST_DIR/${BINARY_NAME}"
+
+    # Restore version line
+    sed -i "s/^version:.*/version: git/" "$snapcraft_file"
+}
+
+# -------------------------------------------------------
 # Checksums
 # -------------------------------------------------------
 generate_checksums() {
     echo "==> Generating checksums..."
-    (cd "$DIST_DIR" && sha256sum *.tar.gz *.zip *.deb *.rpm *.msi *.dmg 2>/dev/null > "checksums-v${VERSION}.sha256" || true)
+    (cd "$DIST_DIR" && sha256sum *.tar.gz *.zip *.deb *.rpm *.msi *.dmg *.flatpak *.snap 2>/dev/null > "checksums-v${VERSION}.sha256" || true)
     echo "  -> $DIST_DIR/checksums-v${VERSION}.sha256"
 }
 
@@ -178,18 +314,22 @@ case "$PLATFORM" in
     linux)   build_linux "$ARCH" ;;
     windows) build_windows "$ARCH" ;;
     darwin)  build_darwin "$ARCH" ;;
+    flatpak) build_flatpak "$ARCH" ;;
+    snap)    build_snap "$ARCH" ;;
     all)
         build_linux "$ARCH"
         build_windows "$ARCH" || true
         build_darwin "$ARCH" || true
+        build_flatpak "$ARCH" || true
+        build_snap "$ARCH" || true
         generate_checksums
         ;;
     *)
-        echo "Unknown platform: $PLATFORM (use linux, windows, darwin, or all)" >&2
+        echo "Unknown platform: $PLATFORM (use linux, windows, darwin, flatpak, snap, or all)" >&2
         exit 1
         ;;
 esac
 
 echo ""
 echo "Packages in $DIST_DIR:"
-ls -lh "$DIST_DIR/"*v${VERSION}* 2>/dev/null || echo "  (none)"
+ls -lh "$DIST_DIR/"*v${VERSION}* 2>/dev/null || ls -lh "$DIST_DIR/"*.{tar.gz,zip,deb,rpm,flatpak,snap,dmg,msi} 2>/dev/null || echo "  (none)"

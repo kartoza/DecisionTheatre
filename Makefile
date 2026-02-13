@@ -30,9 +30,10 @@ GOLINT := golangci-lint
 .PHONY: test test-frontend test-all
 .PHONY: fmt lint check deps
 .PHONY: docs docs-serve
-.PHONY: packages packages-linux packages-windows packages-darwin
+.PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
 .PHONY: csv2parquet geopackage datapack list-datapack
 .PHONY: design-export design-import design-preview
+.PHONY: release
 .PHONY: help info
 
 all: test build
@@ -153,6 +154,25 @@ packages-windows: build-frontend build-docs
 packages-darwin: build-frontend build-docs
 	./scripts/build-packages.sh --platform darwin --version $(VERSION)
 
+packages-flatpak: build-frontend build-docs
+	./scripts/build-packages.sh --platform flatpak --version $(VERSION)
+
+packages-snap: build-frontend build-docs
+	./scripts/build-packages.sh --platform snap --version $(VERSION)
+
+# Full release: create git tag and build all packages
+release: build-frontend build-docs
+	@echo "Building release v$(VERSION)..."
+	./scripts/build-packages.sh --platform all --version $(VERSION)
+	@echo ""
+	@echo "Release artifacts in dist/:"
+	@ls -lh dist/ 2>/dev/null || echo "  (none)"
+	@echo ""
+	@echo "To create a GitHub release:"
+	@echo "  git tag -a v$(VERSION) -m 'Release v$(VERSION)'"
+	@echo "  git push origin v$(VERSION)"
+	@echo "  gh release create v$(VERSION) dist/* --title 'v$(VERSION)' --notes 'Release v$(VERSION)'"
+
 # ============================
 # Data conversion & packing
 # ============================
@@ -268,6 +288,9 @@ help:
 	@echo "  packages-linux    Linux .tar.gz, .deb, .rpm"
 	@echo "  packages-windows  Windows .zip (needs mingw-w64)"
 	@echo "  packages-darwin   macOS .tar.gz / .dmg (macOS only)"
+	@echo "  packages-flatpak  Flatpak .flatpak (needs flatpak-builder)"
+	@echo "  packages-snap     Snap .snap (needs snapcraft)"
+	@echo "  release           Build all packages and show release instructions"
 	@echo ""
 	@echo "Data Preparation:"
 	@echo "  geopackage        Build datapack.gpkg from CSVs + catchments"
