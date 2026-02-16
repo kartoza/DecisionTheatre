@@ -25,10 +25,10 @@ The application remembers the data pack location across restarts.
 
 ### Via Command-Line Flags
 
-You can also point directly at extracted data directories:
+You can also point directly at an extracted data directory:
 
 ```bash
-./decision-theatre --data-dir /path/to/data --resources-dir /path/to/resources
+./decision-theatre --data-dir /path/to/data
 ```
 
 ## Data Pack Format
@@ -38,12 +38,11 @@ A data pack is a `.zip` archive with this structure:
 ```
 decision-theatre-data-v1.0.0.zip
 ├── manifest.json
-├── data/
-│   └── *.geoparquet          # scenario data (optional)
-└── resources/
-    └── mbtiles/
-        ├── catchments.mbtiles # vector tile data (required)
-        └── uow_tiles.json    # MapBox style (required)
+└── data/
+    ├── mbtiles/
+    │   ├── catchments.mbtiles # vector tile data (required)
+    │   └── style.json         # MapBox style (required)
+    └── *.geoparquet           # scenario data (optional)
 ```
 
 ### manifest.json
@@ -73,7 +72,7 @@ Or directly:
 
 This:
 
-1. Validates `data/` and `resources/` directories
+1. Validates `data/` directory
 2. Generates a `manifest.json`
 3. Creates `dist/decision-theatre-data-v{VERSION}.zip`
 4. Generates a SHA256 checksum
@@ -87,7 +86,7 @@ The source data must be prepared first:
 
 ```bash
 nix develop
-cd resources/mbtiles
+cd data/mbtiles
 ./gpkg_to_mbtiles.sh UoW_layers.gpkg catchments.mbtiles
 ```
 

@@ -45,9 +45,9 @@ func New(cfg config.Config) (*Server, error) {
 		router: mux.NewRouter(),
 	}
 
-	// Initialize MBTiles store (scan data dir and resources/mbtiles)
-	resourcesMBTilesDir := filepath.Join(cfg.ResourcesDir, "mbtiles")
-	tileStore, err := tiles.NewMBTilesStore(cfg.DataDir, resourcesMBTilesDir)
+	// Initialize MBTiles store (scan data dir and data/mbtiles)
+	dataMBTilesDir := filepath.Join(cfg.DataDir, "mbtiles")
+	tileStore, err := tiles.NewMBTilesStore(cfg.DataDir, dataMBTilesDir)
 	if err != nil {
 		log.Printf("Warning: MBTiles store not available: %v", err)
 	} else {
@@ -192,7 +192,7 @@ func (s *Server) Stop() error {
 
 // handleStyleJSON serves the MapBox style JSON from resources, rewriting the source URL
 func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
-	stylePath := filepath.Join(s.cfg.ResourcesDir, "mbtiles", "style.json")
+	stylePath := filepath.Join(s.cfg.DataDir, "mbtiles", "style.json")
 	data, err := os.ReadFile(stylePath)
 	if err != nil {
 		http.Error(w, "Style not found", http.StatusNotFound)

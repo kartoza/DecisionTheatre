@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a data pack zip from local data/ and resources/ directories.
+# Build a data pack zip from local data/ directory.
 # Usage: ./scripts/package-data.sh [version]
 #
 # The data pack bundles:
 #   - Parquet files (converted from CSVs via csv2parquet.py)
-#   - MBTiles catchment map tiles
+#   - MBTiles catchment map tiles (from data/mbtiles/)
 #   - Tile style JSON
 #
 # The resulting zip can be installed into Decision Theatre via the UI
-# or by extracting it and pointing --data-dir / --resources-dir at it.
+# or by extracting it and pointing --data-dir at it.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -45,13 +45,13 @@ fi
 # -------------------------------------------------------
 # Step 2: Validate required resources
 # -------------------------------------------------------
-if [ ! -d "$PROJECT_ROOT/resources/mbtiles" ]; then
-    echo "ERROR: resources/mbtiles directory not found" >&2
+if [ ! -d "$PROJECT_ROOT/data/mbtiles" ]; then
+    echo "ERROR: data/mbtiles directory not found" >&2
     exit 1
 fi
 
-if [ ! -f "$PROJECT_ROOT/resources/mbtiles/catchments.mbtiles" ]; then
-    echo "ERROR: resources/mbtiles/catchments.mbtiles not found" >&2
+if [ ! -f "$PROJECT_ROOT/data/mbtiles/catchments.mbtiles" ]; then
+    echo "ERROR: data/mbtiles/catchments.mbtiles not found" >&2
     exit 1
 fi
 
@@ -59,7 +59,7 @@ fi
 # Step 3: Assemble pack
 # -------------------------------------------------------
 PACK_DIR="$WORK_DIR/$PACK_NAME"
-mkdir -p "$PACK_DIR/data" "$PACK_DIR/resources/mbtiles"
+mkdir -p "$PACK_DIR/data/mbtiles"
 
 # Copy Parquet files
 PARQUET_FILES=("$PROJECT_ROOT/data/"*.parquet)
@@ -75,11 +75,16 @@ fi
 
 # Copy mbtiles and style JSON (exclude build scripts and source gpkg)
 echo "==> Bundling MBTiles and styles..."
-cp "$PROJECT_ROOT/resources/mbtiles/catchments.mbtiles" "$PACK_DIR/resources/mbtiles/"
-echo "    catchments.mbtiles ($(du -h "$PACK_DIR/resources/mbtiles/catchments.mbtiles" | cut -f1))"
+cp "$PROJECT_ROOT/data/mbtiles/catchments.mbtiles" "$PACK_DIR/data/mbtiles/"
+echo "    catchments.mbtiles ($(du -h "$PACK_DIR/data/mbtiles/catchments.mbtiles" | cut -f1))"
 
-if [ -f "$PROJECT_ROOT/resources/mbtiles/uow_tiles.json" ]; then
-    cp "$PROJECT_ROOT/resources/mbtiles/uow_tiles.json" "$PACK_DIR/resources/mbtiles/"
+if [ -f "$PROJECT_ROOT/data/mbtiles/style.json" ]; then
+    cp "$PROJECT_ROOT/data/mbtiles/style.json" "$PACK_DIR/data/mbtiles/"
+    echo "    style.json"
+fi
+
+if [ -f "$PROJECT_ROOT/data/mbtiles/uow_tiles.json" ]; then
+    cp "$PROJECT_ROOT/data/mbtiles/uow_tiles.json" "$PACK_DIR/data/mbtiles/"
     echo "    uow_tiles.json"
 fi
 
@@ -88,7 +93,7 @@ fi
 # -------------------------------------------------------
 echo "==> Writing manifest..."
 PARQUET_LIST=$(cd "$PACK_DIR/data" 2>/dev/null && ls *.parquet 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-MBTILES_LIST=$(cd "$PACK_DIR/resources/mbtiles" 2>/dev/null && ls *.mbtiles 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+MBTILES_LIST=$(cd "$PACK_DIR/data/mbtiles" 2>/dev/null && ls *.mbtiles 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
 cat > "$PACK_DIR/manifest.json" <<EOF
 {
   "format": "decision-theatre-datapack",

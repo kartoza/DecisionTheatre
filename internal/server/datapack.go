@@ -152,8 +152,8 @@ func (s *Server) reloadDataStores(packDir string) {
 	}
 
 	// Reinitialize
-	resourcesMBTilesDir := filepath.Join(resourcesDir, "mbtiles")
-	tileStore, err := tiles.NewMBTilesStore(dataDir, resourcesMBTilesDir)
+	dataMBTilesDir := filepath.Join(dataDir, "mbtiles")
+	tileStore, err := tiles.NewMBTilesStore(dataDir, dataMBTilesDir)
 	if err != nil {
 		log.Printf("Warning: MBTiles store not available after reload: %v", err)
 	} else {

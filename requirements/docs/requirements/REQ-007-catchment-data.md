@@ -37,5 +37,5 @@ Africa Map with Catchments:
 
 ### Key Files
 
-- `data/catchments.mbtiles` - Catchment vector tile data (user-provided)
+- `data/mbtiles/catchments.mbtiles` - Catchment vector tile data (user-provided)
 - `frontend/src/components/MapView.tsx` - Catchment layer styling

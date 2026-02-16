@@ -5,14 +5,14 @@ This tutorial walks through launching Decision Theatre for the first time.
 ## Prerequisites
 
 - The `decision-theatre` binary (see [Installation](../user-manual/installation.md))
-- `catchments.mbtiles` in the `resources/mbtiles/` directory (see [Data Setup](../user-manual/data-setup.md))
+- `catchments.mbtiles` in the `data/mbtiles/` directory (see [Data Setup](../user-manual/data-setup.md))
 
 ## Steps
 
 ### 1. Launch the application
 
 ```bash
-./decision-theatre --resources-dir ./resources --data-dir ./data
+./decision-theatre --data-dir ./data
 ```
 
 If you are using Nix:

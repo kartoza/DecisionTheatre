@@ -19,10 +19,10 @@ The map data originates from a GeoPackage file (`UoW_layers.gpkg`) containing:
 
 ### Conversion Pipeline
 
-The script `resources/mbtiles/gpkg_to_mbtiles.sh` automates the full conversion:
+The script `data/mbtiles/gpkg_to_mbtiles.sh` automates the full conversion:
 
 ```bash
-cd resources/mbtiles
+cd data/mbtiles
 ./gpkg_to_mbtiles.sh UoW_layers.gpkg catchments.mbtiles
 ```
 
@@ -59,7 +59,7 @@ All are available in the Nix dev shell (`nix develop`).
 
 ### Map Style
 
-The MapBox GL Style JSON at `resources/mbtiles/style.json` defines how each layer is rendered (colours, line widths, label placement). Edit this file to change the map's visual appearance.
+The MapBox GL Style JSON at `data/mbtiles/style.json` defines how each layer is rendered (colours, line widths, label placement). Edit this file to change the map's visual appearance.
 
 ## Scenario Data (GeoPackage Datapack)
 

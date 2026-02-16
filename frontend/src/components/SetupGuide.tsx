@@ -170,7 +170,7 @@ function SetupGuide({ info }: SetupGuideProps) {
 nix develop
 
 # Convert GeoPackage to MBTiles
-cd resources/mbtiles
+cd data/mbtiles
 ./gpkg_to_mbtiles.sh UoW_layers.gpkg catchments.mbtiles
 
 # Then restart the application
@@ -192,11 +192,10 @@ nix run`}</Code>
               color="gray.400"
             >{`Data Pack (.zip):
   manifest.json             <- pack metadata
-  resources/
+  data/
     mbtiles/
       catchments.mbtiles    <- vector tile data (required)
-      uow_tiles.json        <- MapBox style (included)
-  data/
+      style.json            <- MapBox style (required)
     *.geoparquet            <- scenario data (optional)`}</Code>
           </Box>
 
