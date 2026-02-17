@@ -57,7 +57,7 @@ Download the latest release for your platform from [Releases](https://github.com
 </p>
 
 <p align="center">
-  <a href="https://www.uwaterloo.ca/"><img src="https://upload.wikimedia.org/wikipedia/en/thumb/6/6e/University_of_Waterloo_seal.svg/150px-University_of_Waterloo_seal.svg.png" alt="University of Waterloo" height="80"></a>
+  <a href="https://www.wits.ac.za/"><img src="https://upload.wikimedia.org/wikipedia/en/c/c7/Logo_for_the_University_of_the_Witwatersrand%2C_Johannesburg_%28new_logo_as_of_2015%29.jpg" alt="University of the Witwatersrand" height="80"></a>
 </p>
 
 <p align="center">
@@ -69,5 +69,5 @@ Download the latest release for your platform from [Releases](https://github.com
 </p>
 
 <p align="center">
-  <sub>Built with care by <a href="https://kartoza.com">Kartoza</a> for the <a href="https://www.uwaterloo.ca/">University of Waterloo</a></sub>
+  <sub>Built with care by <a href="https://kartoza.com">Kartoza</a> for the <a href="https://www.wits.ac.za/">University of the Witwatersrand</a></sub>
 </p>
