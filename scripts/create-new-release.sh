@@ -45,6 +45,27 @@ fi
 DIST_DIR="$PROJECT_ROOT/dist"
 BINARY_NAME="decision-theatre"
 
+# Detect host OS
+UNAME_OUT="$(uname -s 2>/dev/null || echo "")"
+IS_WINDOWS=false
+
+case "$UNAME_OUT" in
+    MINGW*|MSYS*|CYGWIN*)
+        IS_WINDOWS=true
+        ;;
+esac
+
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+    IS_WINDOWS=true
+fi
+
+if [ "$IS_WINDOWS" = true ]; then
+    echo "Detected Windows host. Running Windows installer build..."
+    bash "$PROJECT_ROOT/scripts/build-windows-installer.sh"
+    echo "Windows installer build finished"
+    exit 0
+fi
+
 echo "========================================"
 echo "Building Decision Theatre v$VERSION"
 echo "========================================"
