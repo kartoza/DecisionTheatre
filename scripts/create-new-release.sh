@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Release script for Decision Theatre
-# Builds reproducible packages using Nix and creates release artifacts
+# Builds native Linux packages and creates release artifacts
 #
 # Usage:
 #   ./scripts/release.sh [--version VERSION] [--push]
@@ -28,9 +28,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Get version from flake.nix if not specified
+# Get version from git tags or VERSION file
 if [ -z "$VERSION" ]; then
-    VERSION=$(grep 'version = "' "$PROJECT_ROOT/flake.nix" | head -1 | sed 's/.*version = "\([^"]*\)".*/\1/')
+    if [ -f "$PROJECT_ROOT/VERSION" ]; then
+        VERSION=$(cat "$PROJECT_ROOT/VERSION")
+    else
+        VERSION=$(git -C "$PROJECT_ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.1")
+    fi
 fi
 
 if [ -z "$VERSION" ]; then
@@ -49,16 +53,26 @@ echo ""
 mkdir -p "$DIST_DIR"
 
 # -------------------------------------------------------
-# Build with Nix (reproducible, handles webkit compat)
+# Build with native Go
 # -------------------------------------------------------
-echo "==> Building with Nix..."
-nix build "$PROJECT_ROOT#decision-theatre" -o "$DIST_DIR/nix-result"
+echo "==> Building with Go..."
 
-if [ ! -f "$DIST_DIR/nix-result/bin/$BINARY_NAME" ]; then
-    echo "ERROR: Nix build failed - binary not found" >&2
+if ! command -v go &>/dev/null; then
+    echo "ERROR: Go is not installed" >&2
     exit 1
 fi
 
+GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
+    -o "$DIST_DIR/$BINARY_NAME" \
+    -ldflags="-X 'main.Version=$VERSION' -X 'main.BuildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')'" \
+    "$PROJECT_ROOT/main.go"
+
+if [ ! -f "$DIST_DIR/$BINARY_NAME" ]; then
+    echo "ERROR: Go build failed - binary not found" >&2
+    exit 1
+fi
+
+chmod +x "$DIST_DIR/$BINARY_NAME"
 echo "  -> Build successful"
 echo ""
 
@@ -69,37 +83,18 @@ echo "==> Creating tar.gz archive..."
 TARBALL="${BINARY_NAME}-linux-amd64-v${VERSION}.tar.gz"
 
 # Clean up any old files with same name
-rm -f "$DIST_DIR/$BINARY_NAME" "$DIST_DIR/$TARBALL"
-
-# Copy the wrapped binary (the actual executable, not the wrapper script)
-# Nix uses wrapGAppsHook which creates a wrapper script and .decision-theatre-wrapped
-if [ -f "$DIST_DIR/nix-result/bin/.${BINARY_NAME}-wrapped" ]; then
-    cp -L "$DIST_DIR/nix-result/bin/.${BINARY_NAME}-wrapped" "$DIST_DIR/$BINARY_NAME"
-else
-    cp -L "$DIST_DIR/nix-result/bin/$BINARY_NAME" "$DIST_DIR/"
-fi
+rm -f "$DIST_DIR/$TARBALL"
 
 tar -czf "$DIST_DIR/$TARBALL" -C "$DIST_DIR" "$BINARY_NAME"
 TARBALL_SIZE=$(du -h "$DIST_DIR/$TARBALL" | cut -f1)
 echo "  -> $DIST_DIR/$TARBALL ($TARBALL_SIZE)"
 
 # -------------------------------------------------------
-# Build .deb and .rpm with nfpm
+# Build .deb installer
 # -------------------------------------------------------
-if command -v nfpm &>/dev/null; then
-    echo "==> Building .deb and .rpm packages..."
-
-    # Export version for nfpm
-    export VERSION
-    export GOARCH="amd64"
-
-    (cd "$PROJECT_ROOT" && nfpm package -f packaging/nfpm.yaml --packager deb --target "$DIST_DIR/")
-    (cd "$PROJECT_ROOT" && nfpm package -f packaging/nfpm.yaml --packager rpm --target "$DIST_DIR/")
-
-    echo "  -> .deb and .rpm created"
-else
-    echo "  (nfpm not found - skipping .deb/.rpm)"
-fi
+echo "==> Building Debian installer..."
+bash "$PROJECT_ROOT/scripts/build-debian-installer.sh"
+echo "  -> Debian installer build finished"
 
 # -------------------------------------------------------
 # Generate checksums
@@ -108,7 +103,9 @@ echo "==> Generating checksums..."
 (cd "$DIST_DIR" && sha256sum *.tar.gz *.deb *.rpm 2>/dev/null > "checksums-v${VERSION}.sha256" || true)
 echo "  -> $DIST_DIR/checksums-v${VERSION}.sha256"
 
-# Cleanup
+# -------------------------------------------------------
+# Cleanup temporary binary from dist
+# -------------------------------------------------------
 rm -f "$DIST_DIR/$BINARY_NAME"
 
 echo ""
