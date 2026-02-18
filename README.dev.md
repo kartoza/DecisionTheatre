@@ -77,7 +77,36 @@ nix run       # Reproducible build + run
 make test-all
 ```
 
-## 7. Serve the Documentation
+## 7. Create a Release Build
+
+Use the release script from the project root:
+
+```bash
+./scripts/create-new-release.sh
+```
+
+Optional flags:
+
+```bash
+./scripts/create-new-release.sh --version 0.1.0
+./scripts/create-new-release.sh --version 0.1.0 --push
+```
+
+- `--version` sets the release version explicitly.
+- `--push` also tags the repo and creates a GitHub release (requires `gh` CLI and push access).
+
+By default, the script determines the version from `VERSION` (if present) or the latest git tag.
+
+Artifacts are written to `dist/`, including:
+
+- `decision-theatre-linux-amd64-v{VERSION}.tar.gz`
+- `decision-theatre-v{VERSION}.deb`
+- `decision-theatre-v{VERSION}.rpm`
+- `checksums-v{VERSION}.sha256`
+
+On Windows hosts, it automatically runs `scripts/build-windows-installer.sh`.
+
+## 8. Serve the Documentation
 
 ```bash
 make docs-serve
@@ -85,7 +114,7 @@ make docs-serve
 
 Then open http://127.0.0.1:8000 in your browser.
 
-## 8. Prepare Application Data
+## 9. Prepare Application Data
 
 The application requires two data files: map tiles (MBTiles) and scenario data (GeoPackage).
 
