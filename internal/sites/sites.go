@@ -45,11 +45,11 @@ type Site struct {
 	FocusedPane int          `json:"focusedPane,omitempty"`
 
 	// Site boundary (geometry)
-	Geometry       json.RawMessage    `json:"geometry,omitempty"`  // GeoJSON geometry
-	BoundingBox    *BoundingBox       `json:"boundingBox"`         // Pre-computed bbox for quick lookups
-	Area           float64            `json:"area"`                // Area in square kilometers
-	CreationMethod SiteCreationMethod `json:"creationMethod"`      // How the boundary was created
-	CatchmentIDs   []string           `json:"catchmentIds"`        // If created from catchments, store their IDs
+	Geometry       json.RawMessage    `json:"geometry,omitempty"` // GeoJSON geometry
+	BoundingBox    *BoundingBox       `json:"boundingBox"`        // Pre-computed bbox for quick lookups
+	Area           float64            `json:"area"`               // Area in square kilometers
+	CreationMethod SiteCreationMethod `json:"creationMethod"`     // How the boundary was created
+	CatchmentIDs   []string           `json:"catchmentIds"`       // If created from catchments, store their IDs
 
 	// Site indicators (aggregated from catchments)
 	Indicators *SiteIndicators `json:"indicators,omitempty"` // Aggregated indicator values
@@ -73,10 +73,10 @@ type SiteIndicators struct {
 	// Ideal values (starts as copy of current, user-editable)
 	Ideal map[string]float64 `json:"ideal"`
 	// Metadata about the extraction
-	ExtractedAt     string   `json:"extractedAt"`     // When indicators were extracted
-	CatchmentCount  int      `json:"catchmentCount"`  // Number of catchments used
-	TotalAreaKm2    float64  `json:"totalAreaKm2"`    // Total area in km²
-	CatchmentIDs    []string `json:"catchmentIds"`    // IDs of catchments used
+	ExtractedAt    string   `json:"extractedAt"`    // When indicators were extracted
+	CatchmentCount int      `json:"catchmentCount"` // Number of catchments used
+	TotalAreaKm2   float64  `json:"totalAreaKm2"`   // Total area in km²
+	CatchmentIDs   []string `json:"catchmentIds"`   // IDs of catchments used
 }
 
 // Store handles site persistence

@@ -7,9 +7,11 @@ import {
   VStack,
   useColorModeValue,
 } from '@chakra-ui/react';
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { FiInfo, FiCompass } from 'react-icons/fi';
 import type { AppPage } from '../types';
+import { getAppRuntime } from '../types/runtime';
 
 const MotionBox = motion(Box);
 const MotionVStack = motion(VStack);
@@ -27,6 +29,15 @@ function LandingPage({ onNavigate }: LandingPageProps) {
     'rgba(255,255,255,0.1)',
     'rgba(0,0,0,0.3)'
   );
+
+  useEffect(() => {
+    const runtime = getAppRuntime();
+    if (runtime === 'webview') {
+      // window.alert('Running in Go WebView');
+      // return;
+    }
+    // window.alert('Running in a normal browser');
+  }, []);
 
   return (
     <Box

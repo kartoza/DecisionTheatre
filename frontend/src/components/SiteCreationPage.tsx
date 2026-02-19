@@ -35,6 +35,8 @@ import {
 import type { AppPage, Site, SiteCreationMethod, BoundingBox } from '../types';
 import SiteCreationMap from './SiteCreationMap';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
+import { getAppRuntime } from '../types/runtime';
+import { createSite, updateSite } from '../hooks/useApi';
 
 const MotionBox = motion(Box);
 const MotionFlex = motion(Flex);
@@ -259,6 +261,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
       const siteData: Record<string, unknown> = {
         title: siteTitle.trim(),
         description: siteDescription.trim(),
+        appRuntime: getAppRuntime(),
       };
 
       if (thumbnail !== editSite?.thumbnail) siteData.thumbnail = thumbnail;
@@ -268,17 +271,10 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
         siteData.catchmentIds = selectedCatchmentIds;
       }
 
-      const url = isEditMode ? `/api/sites/${editSite.id}` : '/api/sites';
-      const method = isEditMode ? 'PUT' : 'POST';
-      const response = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(siteData),
-      });
+      const site = isEditMode
+        ? await updateSite(editSite.id, siteData as Partial<Site>)
+        : await createSite(siteData as Partial<Site>);
 
-      if (!response.ok) throw new Error(isEditMode ? 'Failed to update' : 'Failed to create');
-
-      const site = await response.json();
       toast({
         title: isEditMode ? 'Site updated!' : 'Site created!',
         status: 'success',

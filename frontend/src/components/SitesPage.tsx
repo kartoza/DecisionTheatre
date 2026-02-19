@@ -27,6 +27,7 @@ import {
   FiTrash2,
 } from 'react-icons/fi';
 import type { AppPage, Site } from '../types';
+import { listSites, deleteSite } from '../hooks/useApi';
 
 const MotionBox = motion(Box);
 
@@ -52,11 +53,8 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
 
   const fetchSites = useCallback(async () => {
     try {
-      const response = await fetch('/api/sites');
-      if (response.ok) {
-        const data = await response.json();
-        setSites(data || []);
-      }
+      const data = await listSites();
+      setSites(data || []);
     } catch (error) {
       console.error('Failed to fetch sites:', error);
     } finally {
@@ -73,17 +71,13 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
     if (!confirm(`Are you sure you want to delete "${site.title}"?`)) return;
 
     try {
-      const response = await fetch(`/api/sites/${site.id}`, {
-        method: 'DELETE',
+      await deleteSite(site.id);
+      setSites((prev) => prev.filter((s) => s.id !== site.id));
+      toast({
+        title: 'Site deleted',
+        status: 'success',
+        duration: 3000,
       });
-      if (response.ok) {
-        setSites((prev) => prev.filter((s) => s.id !== site.id));
-        toast({
-          title: 'Site deleted',
-          status: 'success',
-          duration: 3000,
-        });
-      }
     } catch (error) {
       toast({
         title: 'Failed to delete site',

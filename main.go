@@ -128,6 +128,7 @@ func main() {
 
 		w.SetTitle("Decision Theatre")
 		w.SetSize(1280, 800, webview.HintNone)
+		w.Init(`window.__DECISION_THEATRE_WEBVIEW__ = true;`)
 		w.Navigate(serverURL)
 
 		// When the webview window closes, shut down the server

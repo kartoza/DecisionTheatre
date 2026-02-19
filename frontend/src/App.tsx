@@ -10,7 +10,7 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
-import { useServerInfo } from './hooks/useApi';
+import { patchSite, useServerInfo } from './hooks/useApi';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics } from './types';
 import {
   loadPaneStates,
@@ -71,14 +71,10 @@ function App() {
     // Debounce the save by 1 second to avoid spamming the API
     siteAutoSaveTimerRef.current = window.setTimeout(() => {
       // Save current state to the site via API
-      fetch(`/api/sites/${currentSiteId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      patchSite(currentSiteId, {
           paneStates,
           layoutMode,
           focusedPane,
-        }),
       }).catch((err) => {
         console.error('Failed to auto-save site state:', err);
       });
@@ -233,16 +229,8 @@ function App() {
     if (!currentSiteId) return;
 
     try {
-      const response = await fetch(`/api/sites/${currentSiteId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geometry: newGeometry }),
-      });
-
-      if (response.ok) {
-        const updatedSite = await response.json();
-        setCurrentSite(updatedSite);
-      }
+      const updatedSite = await patchSite(currentSiteId, { geometry: newGeometry });
+      setCurrentSite(updatedSite);
     } catch (err) {
       console.error('Failed to update site boundary:', err);
     }
