@@ -67,7 +67,10 @@ tar xzf decision-theatre-*.tar.gz
 
 === "Windows"
 
-    Edge WebView2 runtime is required. It is included with Windows 10 and later.
+    Edge WebView2 runtime is required.
+
+    - The `.msi` installer now includes Microsoft's WebView2 bootstrapper and installs the runtime automatically if it is missing.
+    - If you use the portable `.zip`, install WebView2 Runtime manually from Microsoft if the app window does not open.
 
 ## First Launch
 

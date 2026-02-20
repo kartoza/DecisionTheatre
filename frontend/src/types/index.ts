@@ -212,6 +212,7 @@ export interface Site {
   title: string;
   description: string;
   thumbnail: string | null;
+  appRuntime?: 'browser' | 'webview';
   createdAt: string;
   updatedAt: string;
 

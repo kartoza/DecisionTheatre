@@ -104,6 +104,49 @@ ensure_frontend() {
 }
 
 # -------------------------------------------------------
+# Helper: fetch Microsoft Edge WebView2 bootstrapper
+# -------------------------------------------------------
+ensure_webview2_bootstrapper() {
+    local target="$DIST_DIR/MicrosoftEdgeWebView2Setup.exe"
+    local url="${WEBVIEW2_BOOTSTRAPPER_URL:-https://go.microsoft.com/fwlink/p/?LinkId=2124703}"
+
+    if [ -f "$target" ]; then
+        return 0
+    fi
+
+    echo "==> Downloading Microsoft Edge WebView2 bootstrapper..."
+    if command -v curl &>/dev/null; then
+        curl -fL "$url" -o "$target"
+    elif command -v wget &>/dev/null; then
+        wget -O "$target" "$url"
+    else
+        echo "ERROR: curl or wget is required to download WebView2 bootstrapper" >&2
+        return 1
+    fi
+}
+
+# -------------------------------------------------------
+# Helper: fix WebView2 header case mismatch on Linux hosts
+# webview_go includes "EventToken.h" but mingw ships "eventtoken.h"
+# -------------------------------------------------------
+setup_windows_webview2_headers() {
+    local compat_dir="$DIST_DIR/.windows-webview2-compat/include"
+    local src_header="/usr/share/mingw-w64/include/eventtoken.h"
+    local compat_header="$compat_dir/EventToken.h"
+
+    if [ ! -f "$src_header" ]; then
+        echo "ERROR: missing mingw header: $src_header" >&2
+        echo "Install mingw-w64 headers (e.g. gcc-mingw-w64-x86-64)." >&2
+        return 1
+    fi
+
+    mkdir -p "$compat_dir"
+    cp "$src_header" "$compat_header"
+
+    export CGO_CXXFLAGS="-I$compat_dir ${CGO_CXXFLAGS:-}"
+}
+
+# -------------------------------------------------------
 # Linux native build
 # -------------------------------------------------------
 build_linux() {
@@ -158,6 +201,8 @@ build_windows() {
         return 1
     fi
 
+    setup_windows_webview2_headers
+
     CGO_ENABLED=1 CC="$cc" CXX="$cxx" GOOS=windows GOARCH="$arch" \
         go build -ldflags "$LDFLAGS" -o "$DIST_DIR/${BINARY_NAME}.exe" "$PROJECT_ROOT"
 
@@ -166,8 +211,9 @@ build_windows() {
     (cd "$DIST_DIR" && zip -j "$zipname" "${BINARY_NAME}.exe")
     echo "  -> $DIST_DIR/$zipname"
 
-    # Build .msi via WiX Toolset (if wix CLI available)
-    if command -v wix &>/dev/null; then
+    # Build .msi via WiX Toolset (Windows hosts only)
+    if command -v wix &>/dev/null && [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN|Windows_NT) ]]; then
+        ensure_webview2_bootstrapper
         echo "==> Building Windows .msi installer via WiX..."
         local msiname="${BINARY_NAME}-windows-${arch}-v${VERSION}.msi"
         wix build \
@@ -176,7 +222,7 @@ build_windows() {
             "$PROJECT_ROOT/packaging/windows/product.wxs"
         echo "  -> $DIST_DIR/$msiname"
     else
-        echo "  (wix CLI not found — skipping .msi; install WiX Toolset v4+ or build on Windows)"
+        echo "  (skipping .msi on this host; build on Windows with WiX Toolset v4+ for MSI output)"
     fi
 
     rm -f "$DIST_DIR/${BINARY_NAME}.exe"

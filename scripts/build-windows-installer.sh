@@ -42,6 +42,42 @@ require_cmd() {
     fi
 }
 
+ensure_webview2_bootstrapper() {
+    local target="$DIST_DIR/MicrosoftEdgeWebView2Setup.exe"
+    local url="${WEBVIEW2_BOOTSTRAPPER_URL:-https://go.microsoft.com/fwlink/p/?LinkId=2124703}"
+
+    if [ -f "$target" ]; then
+        return 0
+    fi
+
+    echo "==> Downloading Microsoft Edge WebView2 bootstrapper..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL "$url" -o "$target"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$target" "$url"
+    else
+        echo "Error: curl or wget is required to download WebView2 bootstrapper" >&2
+        exit 1
+    fi
+}
+
+setup_windows_webview2_headers() {
+    local compat_dir="$DIST_DIR/.windows-webview2-compat/include"
+    local src_header="/usr/share/mingw-w64/include/eventtoken.h"
+    local compat_header="$compat_dir/EventToken.h"
+
+    if [ ! -f "$src_header" ]; then
+        echo "Error: missing mingw header: $src_header" >&2
+        echo "Install mingw-w64 headers (e.g. gcc-mingw-w64-x86-64)." >&2
+        exit 1
+    fi
+
+    mkdir -p "$compat_dir"
+    cp "$src_header" "$compat_header"
+
+    export CGO_CXXFLAGS="-I$compat_dir ${CGO_CXXFLAGS:-}"
+}
+
 resolve_windows_arch() {
     local requested="${1:-}"
     if [ -n "$requested" ]; then
@@ -163,6 +199,8 @@ WINDOWS_EXE="$BIN_DIR/decision-theatre.exe"
 MSI_FILE="$DIST_DIR/decision-theatre_${FILE_VERSION}_windows_${DETECTED_ARCH}.msi"
 
 mkdir -p "$DIST_DIR" "$BIN_DIR"
+ensure_webview2_bootstrapper
+setup_windows_webview2_headers
 
 echo "==> Building Windows binary..."
 CGO_ENABLED=1 \
