@@ -2,10 +2,12 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
+import { booleanIntersects } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
+import { getSite } from '../hooks/useApi';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -110,6 +112,97 @@ function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | 
     mean: sum / values.length,
     count: values.length,
   };
+}
+
+function computeDomainRangeFromDatasets(
+  datasets: Array<ChoroplethData | null>,
+  attribute: string
+): DomainRange | null {
+  let min = Infinity;
+  let max = -Infinity;
+  let found = false;
+
+  for (const dataset of datasets) {
+    if (!dataset?.features?.length) continue;
+
+    for (const feature of dataset.features) {
+      const value = feature.properties?.[attribute];
+      if (typeof value !== 'number' || Number.isNaN(value)) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+      found = true;
+    }
+  }
+
+  if (!found) return null;
+  return { min, max };
+}
+
+function filterDatasetByCatchmentIds(data: ChoroplethData | null, catchmentIds: Set<string>): ChoroplethData | null {
+  if (!data) return null;
+  if (catchmentIds.size === 0) return data;
+
+  return {
+    ...data,
+    features: data.features.filter((feature) => {
+      const id = feature.properties?.HYBAS_ID;
+      return id !== undefined && catchmentIds.has(String(id));
+    }),
+  };
+}
+
+function extractBoundaryGeometryFromStyleSource(
+  source: maplibregl.SourceSpecification | undefined,
+): GeoJSON.Geometry | null {
+  if (!source || source.type !== 'geojson') return null;
+
+  const data = source.data;
+  if (!data || typeof data === 'string') return null;
+
+  if (data.type === 'Feature') {
+    return data.geometry ?? null;
+  }
+
+  if (data.type === 'FeatureCollection') {
+    const firstFeature = data.features?.[0];
+    return firstFeature?.geometry ?? null;
+  }
+
+  if (data.type === 'Polygon' || data.type === 'MultiPolygon') {
+    return data as GeoJSON.Geometry;
+  }
+
+  return null;
+}
+
+function inferCatchmentIdsFromBoundary(
+  datasets: Array<ChoroplethData | null>,
+  boundaryGeometry: GeoJSON.Geometry | null,
+): Set<string> {
+  const inferredIds = new Set<string>();
+  if (!boundaryGeometry) return inferredIds;
+
+  for (const dataset of datasets) {
+    if (!dataset?.features?.length) continue;
+
+    for (const feature of dataset.features) {
+      const featureId = feature.properties?.HYBAS_ID;
+      if (featureId === undefined) continue;
+
+      const featureGeometry = feature.geometry as GeoJSON.Geometry | null;
+      if (!featureGeometry) continue;
+
+      try {
+        if (booleanIntersects(featureGeometry, boundaryGeometry)) {
+          inferredIds.add(String(featureId));
+        }
+      } catch {
+        // Ignore invalid geometry pairs
+      }
+    }
+  }
+
+  return inferredIds;
 }
 
 /**
@@ -248,6 +341,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const onStatisticsChangeRef = useRef(onStatisticsChange);
   onStatisticsChangeRef.current = onStatisticsChange;
 
+  // Site-scoped domain range cache (used for color scaling when a site is established)
+  const siteDomainRangeRef = useRef<DomainRange | null>(null);
+  const siteZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
+  const siteCatchmentIdsRef = useRef<Set<string> | null>(null);
+  const boundaryGeometryRef = useRef<GeoJSON.Geometry | null>(siteGeometry ?? null);
+  boundaryGeometryRef.current = siteGeometry ?? null;
+
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
 
@@ -292,11 +392,43 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         fetchChoroplethData(c.rightScenario, c.attribute, bounds),
       ]);
 
-      // Use domain min/max from API response for consistent color scaling across scenarios
-      // Both responses should have the same domain values since they're computed across all scenarios
+      let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
+
+      if (siteId && (!siteCatchmentIds || siteCatchmentIds.size === 0)) {
+        const liveBoundarySource = leftMap.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
+          serialize?: () => maplibregl.SourceSpecification;
+        }) | undefined;
+
+        const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
+
+        const boundaryGeometry =
+          boundaryGeometryRef.current
+          ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
+          ?? extractBoundaryGeometryFromStyleSource(leftMap.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE]);
+        const inferredIds = inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry);
+
+        if (inferredIds.size > 0) {
+          siteCatchmentIds = inferredIds;
+          siteCatchmentIdsRef.current = inferredIds;
+          console.log(`[Site Boundary] Inferred ${inferredIds.size} catchments from drawn geometry`);
+        }
+      }
+
+      console.log('Applying choropleth with site catchment filter:', siteCatchmentIds);
+      const leftFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
+        ? filterDatasetByCatchmentIds(leftData, siteCatchmentIds)
+        : leftData;
+      const rightFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
+        ? filterDatasetByCatchmentIds(rightData, siteCatchmentIds)
+        : rightData;
+
+      // Use site-scoped domain once a site is established; fall back to API global domain.
       let min = 0;
       let max = 1;
-      if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
+      if (siteId && siteDomainRangeRef.current) {
+        min = siteDomainRangeRef.current.min;
+        max = siteDomainRangeRef.current.max;
+      } else if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
         min = leftData.domain_min;
         max = leftData.domain_max;
       } else if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
@@ -304,9 +436,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         max = rightData.domain_max;
       }
 
-      // Compute zone statistics for each scenario and notify via callback
-      const leftStatsComputed = leftData ? computeZoneStats(leftData, c.attribute) : null;
-      const rightStatsComputed = rightData ? computeZoneStats(rightData, c.attribute) : null;
+      // Compute zone statistics. For an established site, use site-specific stats
+      // (based on selected site catchments) instead of viewport-only stats.
+      const leftStatsComputed = (siteId && siteZoneStatsRef.current)
+        ? siteZoneStatsRef.current.left
+        : (leftFiltered ? computeZoneStats(leftFiltered, c.attribute) : null);
+      const rightStatsComputed = (siteId && siteZoneStatsRef.current)
+        ? siteZoneStatsRef.current.right
+        : (rightFiltered ? computeZoneStats(rightFiltered, c.attribute) : null);
 
       if (onStatisticsChangeRef.current) {
         onStatisticsChangeRef.current({
@@ -317,30 +454,113 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       // Apply to left map - verify the map is ready
-      if (leftData && leftData.features.length > 0) {
+      if (leftFiltered && leftFiltered.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftData, c.attribute, min, max, extruded);
+          applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftData, c.attribute, min, max, extruded);
+            applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded);
           });
         }
+      } else {
+        removeChoroplethLayers(leftMap, 'left');
       }
 
       // Apply to right map - verify the map is ready
-      if (rightData && rightData.features.length > 0) {
+      if (rightFiltered && rightFiltered.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightData, c.attribute, min, max, extruded);
+          applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightData, c.attribute, min, max, extruded);
+            applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded);
           });
         }
+      } else {
+        removeChoroplethLayers(rightMap, 'right');
       }
     } catch (err) {
       console.error('Failed to apply choropleth:', err);
     }
   }, []);
+
+  // Compute a site-scoped domain range (min/max) so color scale is based on the site,
+  // not on global dataset extrema, once a site exists.
+  useEffect(() => {
+    let cancelled = false;
+
+    const updateSiteDomainRange = async () => {
+      const c = comparisonRef.current;
+      if (!siteId || !c.attribute) {
+        siteDomainRangeRef.current = null;
+        siteZoneStatsRef.current = null;
+        siteCatchmentIdsRef.current = null;
+        applyColors();
+        return;
+      }
+
+      let bounds = siteBounds;
+      let catchmentIds: string[] = [];
+      try {
+        const site = await getSite(siteId);
+        if (!bounds) {
+          bounds = site?.boundingBox ?? null;
+        }
+        catchmentIds = Array.isArray(site?.catchmentIds)
+          ? site.catchmentIds.map((id: unknown) => String(id))
+          : [];
+      } catch (err) {
+        console.error('Failed to fetch site data for domain scaling:', err);
+      }
+
+      if (!bounds) {
+        siteDomainRangeRef.current = null;
+        siteZoneStatsRef.current = null;
+        applyColors();
+        return;
+      }
+
+      const siteBoundsLL = new maplibregl.LngLatBounds(
+        [bounds.minX, bounds.minY],
+        [bounds.maxX, bounds.maxY],
+      );
+
+      try {
+        const [leftData, rightData] = await Promise.all([
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL),
+        ]);
+
+        if (cancelled) return;
+
+        const catchmentIdSet = new Set(catchmentIds);
+        siteCatchmentIdsRef.current = catchmentIdSet;
+        const leftFiltered = filterDatasetByCatchmentIds(leftData, catchmentIdSet);
+        const rightFiltered = filterDatasetByCatchmentIds(rightData, catchmentIdSet);
+
+        const siteDomainRange = computeDomainRangeFromDatasets([leftFiltered, rightFiltered], c.attribute);
+        const leftSiteStats = leftFiltered ? computeZoneStats(leftFiltered, c.attribute) : null;
+        const rightSiteStats = rightFiltered ? computeZoneStats(rightFiltered, c.attribute) : null;
+
+        siteDomainRangeRef.current = siteDomainRange;
+        siteZoneStatsRef.current = { left: leftSiteStats, right: rightSiteStats };
+        applyColors();
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to compute site domain range:', err);
+          siteDomainRangeRef.current = null;
+          siteZoneStatsRef.current = null;
+          siteCatchmentIdsRef.current = null;
+          applyColors();
+        }
+      }
+    };
+
+    updateSiteDomainRange();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [siteId, siteBounds, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors]);
 
   /**
    * Remove choropleth layers from a map.
@@ -1129,20 +1349,49 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // If no site, remove boundaries
     if (!siteId) {
+      siteCatchmentIdsRef.current = null;
       removeSiteBoundary(leftMap);
       removeSiteBoundary(rightMap);
       return;
     }
 
     // Fetch site data and add boundary
-    fetch(`/api/sites/${siteId}`)
-      .then((res) => res.ok ? res.json() : null)
+    getSite(siteId)
       .then((site) => {
-        if (site?.geometry) {
+        const catchmentIds = Array.isArray(site?.catchmentIds)
+          ? site.catchmentIds.map((id: unknown) => String(id))
+          : [];
+        siteCatchmentIdsRef.current = new Set(catchmentIds);
+
+        const catchmentCount = Array.isArray(site?.catchmentIds) ? site.catchmentIds.length : 0;
+        console.log(`[Site Boundary] Site ${siteId} catchments:`, catchmentCount);
+
+        const zoomToLoadedSiteBounds = () => {
+          const bounds = site?.boundingBox;
+          if (!bounds) return;
+
+          const dx = (bounds.maxX - bounds.minX) * 0.1;
+          const dy = (bounds.maxY - bounds.minY) * 0.1;
+
+          const paddedBounds: [[number, number], [number, number]] = [
+            [bounds.minX - dx, bounds.minY - dy],
+            [bounds.maxX + dx, bounds.maxY + dy],
+          ];
+
+          leftMap.fitBounds(paddedBounds, {
+            padding: 50,
+            duration: 1000,
+            maxZoom: 14,
+          });
+        };
+
+        const geometry = site?.geometry;
+        if (geometry) {
           // Wait for maps to be idle before adding layers
           const addToMaps = () => {
-            addSiteBoundary(leftMap, site.geometry);
-            addSiteBoundary(rightMap, site.geometry);
+            addSiteBoundary(leftMap, geometry);
+            addSiteBoundary(rightMap, geometry);
+            zoomToLoadedSiteBounds();
           };
 
           if (leftMap.loaded() && rightMap.loaded()) {
@@ -1157,12 +1406,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             leftMap.once('idle', checkAndAdd);
             rightMap.once('idle', checkAndAdd);
           }
+        } else {
+          zoomToLoadedSiteBounds();
         }
       })
       .catch((err) => console.error('Failed to fetch site boundary:', err));
 
     // Cleanup on unmount or siteId change
     return () => {
+      siteCatchmentIdsRef.current = null;
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
