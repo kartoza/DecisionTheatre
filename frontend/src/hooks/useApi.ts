@@ -194,6 +194,22 @@ export async function listSites(): Promise<Site[]> {
   return fetchJSON<Site[]>(`${API_BASE}/sites`);
 }
 
+export async function getSite(id: string): Promise<Site | null> {
+  if (isBrowserRuntime()) {
+    const sites = loadLocalSites();
+    return sites.find((site) => site.id === id) || null;
+  }
+
+  const response = await fetch(`${API_BASE}/sites/${id}`);
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to fetch site: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function createSite(
   data: Partial<Site>
 ): Promise<Site> {
