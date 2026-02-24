@@ -543,6 +543,12 @@ func (h *Handler) handleCatchmentGeometry(w http.ResponseWriter, r *http.Request
 // Site Indicators Handlers
 // ============================================================================
 
+// ExtractIndicatorsRequest represents the request body for indicator extraction
+type ExtractIndicatorsRequest struct {
+	Runtime string                 `json:"runtime"`
+	Site    map[string]interface{} `json:"site"`
+}
+
 // handleExtractIndicators extracts and stores indicators for a site from its catchments
 // This performs area-weighted aggregation of all indicator values
 func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request) {
@@ -556,10 +562,43 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 
 	id := mux.Vars(r)["id"]
-	site, err := h.siteStore.Get(id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
-		return
+
+	// Decode request body
+	var req ExtractIndicatorsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Warning: failed to decode request body: %v", err)
+		// Continue with extraction even if body decode fails (for backwards compatibility)
+	}
+
+	var site *sites.Site
+	var err error
+
+	if req.Runtime == "browser" {
+		// Convert map to Site struct - never fetch from store in browser mode
+		if len(req.Site) == 0 {
+			respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
+			return
+		}
+
+		// Marshal and unmarshal to convert map to struct
+		siteJSON, marshalErr := json.Marshal(req.Site)
+		if marshalErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+
+		site = &sites.Site{}
+		if err = json.Unmarshal(siteJSON, site); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+	} else {
+		// Backwards compatibility: if runtime is missing/unknown, use persisted site
+		site, err = h.siteStore.Get(id)
+		if err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 	}
 
 	// Get catchment IDs for this site
@@ -587,6 +626,14 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 
 	// Update site with indicators
 	site.Indicators = indicators
+
+	// For browser runtime, return the site directly without storing
+	if req.Runtime == "browser" {
+		respondJSON(w, http.StatusOK, site)
+		return
+	}
+
+	// For other runtimes, update in store and return
 	updated, err := h.siteStore.Update(id, site)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update site: "+err.Error())
