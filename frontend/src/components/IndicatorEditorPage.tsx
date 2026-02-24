@@ -44,6 +44,7 @@ import {
   FiMinus,
 } from 'react-icons/fi';
 import type { Site, SiteIndicators, AppPage } from '../types';
+import { getAppRuntime } from '../types/runtime';
 
 const MotionTr = motion(Tr);
 
@@ -125,9 +126,43 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
 
   const extractIndicators = useCallback(async () => {
     setIsLoading(true);
+    const runtime = getAppRuntime();
+    var jsonData = {}
+    if (runtime === 'browser') {
+        // Get site data from localStorage
+        let siteData = {};
+        try {
+          const raw = window.localStorage.getItem('dt-sites');
+          if (raw) {
+            const sites = JSON.parse(raw);
+            const currentSite = Array.isArray(sites) ? sites.find(s => s.id === site.id) : null;
+            if (currentSite) {
+              // Exclude thumbnail from the request payload
+              const { thumbnail, ...siteWithoutThumbnail } = currentSite;
+              siteData = siteWithoutThumbnail;
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to read site from localStorage:', error);
+        }
+        jsonData = {
+          "runtime": "browser",
+          "site": siteData
+        }
+    }
+    else if (runtime === 'webview') {
+        jsonData = {
+          "runtime": "webview",
+          "site": {}
+        }
+    }
     try {
       const response = await fetch(`/api/sites/${site.id}/indicators`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(jsonData),
       });
       if (response.ok) {
         const updatedSite = await response.json();
@@ -401,7 +436,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               />
             </Tooltip>
 
-            <Tooltip label="Reset ideal values to ecological reference">
+            <Tooltip label="Reset ideal values to current">
               <IconButton
                 aria-label="Reset"
                 icon={<FiAlertTriangle />}
@@ -460,10 +495,10 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           <Thead position="sticky" top={0} bg={tableBg} zIndex={5}>
             <Tr>
               <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Reference</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Reference</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200">Trend</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ideal</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" w="100px">Edit</Th>
             </Tr>
           </Thead>
