@@ -92,20 +92,20 @@ export function saveFocusedPane(index: number): void {
 export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'reference',
-    label: 'Reference',
-    description: 'Historical baseline conditions',
+    label: 'Ecological Reference',
+    description: `Condition compared to scientifically determined optimal standards`,
     color: '#e65100',
   },
   {
     id: 'current',
-    label: 'Current',
+    label: 'Current State',
     description: 'Current observed conditions',
     color: '#2bb0ed',
   },
   {
     id: 'future',
-    label: 'Ideal Future',
-    description: 'Optimistic future scenario',
+    label: 'Target State',
+    description: 'User-defined target condition they aim to achieve.',
     color: '#4caf50',
   },
 ];

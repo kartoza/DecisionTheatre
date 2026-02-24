@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanIntersects } from '@turf/turf';
+import { booleanIntersects, bbox as turfBbox } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange } from '../types';
 import { SCENARIOS } from '../types';
@@ -63,6 +63,9 @@ const MAX_EXTRUSION_HEIGHT = 50000;
 
 // Debounce delay for fetching choropleth data on map move (ms)
 const FETCH_DEBOUNCE_MS = 300;
+
+// Extra margin around the site boundary used to include nearby catchments
+const BOUNDARY_NEARBY_PADDING_RATIO = 0.15;
 
 interface ChoroplethData {
   type: string;
@@ -203,6 +206,73 @@ function inferCatchmentIdsFromBoundary(
   }
 
   return inferredIds;
+}
+
+function expandBbox(
+  [minX, minY, maxX, maxY]: [number, number, number, number],
+  ratio: number,
+): [number, number, number, number] {
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const padX = Math.max(width * ratio, 0.0001);
+  const padY = Math.max(height * ratio, 0.0001);
+  return [minX - padX, minY - padY, maxX + padX, maxY + padY];
+}
+
+function inferNearbyCatchmentIdsFromBoundary(
+  datasets: Array<ChoroplethData | null>,
+  boundaryGeometry: GeoJSON.Geometry | null,
+  paddingRatio = BOUNDARY_NEARBY_PADDING_RATIO,
+): Set<string> {
+  const nearbyIds = new Set<string>();
+  if (!boundaryGeometry) return nearbyIds;
+
+  let expandedBoundaryBbox: [number, number, number, number];
+  try {
+    const boundaryBbox = turfBbox({
+      type: 'Feature',
+      properties: {},
+      geometry: boundaryGeometry,
+    } as GeoJSON.Feature) as [number, number, number, number];
+    expandedBoundaryBbox = expandBbox(boundaryBbox, paddingRatio);
+  } catch {
+    return nearbyIds;
+  }
+
+  const [expandedMinX, expandedMinY, expandedMaxX, expandedMaxY] = expandedBoundaryBbox;
+
+  for (const dataset of datasets) {
+    if (!dataset?.features?.length) continue;
+
+    for (const feature of dataset.features) {
+      const featureId = feature.properties?.HYBAS_ID;
+      if (featureId === undefined) continue;
+
+      const featureGeometry = feature.geometry as GeoJSON.Geometry | null;
+      if (!featureGeometry) continue;
+
+      try {
+        const [minX, minY, maxX, maxY] = turfBbox({
+          type: 'Feature',
+          properties: {},
+          geometry: featureGeometry,
+        } as GeoJSON.Feature) as [number, number, number, number];
+        const intersectsExpandedBoundary =
+          maxX >= expandedMinX
+          && minX <= expandedMaxX
+          && maxY >= expandedMinY
+          && minY <= expandedMaxY;
+
+        if (intersectsExpandedBoundary) {
+          nearbyIds.add(String(featureId));
+        }
+      } catch {
+        // Ignore invalid feature geometries
+      }
+    }
+  }
+
+  return nearbyIds;
 }
 
 /**
@@ -414,6 +484,28 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
       }
 
+      if (siteId) {
+        const liveBoundarySource = leftMap.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
+          serialize?: () => maplibregl.SourceSpecification;
+        }) | undefined;
+
+        const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
+
+        const boundaryGeometry =
+          boundaryGeometryRef.current
+          ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
+          ?? extractBoundaryGeometryFromStyleSource(leftMap.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE]);
+
+        const nearbyIds = inferNearbyCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry);
+        if (nearbyIds.size > 0) {
+          const mergedIds = new Set<string>(siteCatchmentIds ? Array.from(siteCatchmentIds) : []);
+          for (const id of nearbyIds) mergedIds.add(id);
+          siteCatchmentIds = mergedIds;
+          siteCatchmentIdsRef.current = mergedIds;
+          console.log(`[Site Boundary] Expanded with ${nearbyIds.size} nearby catchments`);
+        }
+      }
+
       console.log('Applying choropleth with site catchment filter:', siteCatchmentIds);
       const leftFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
         ? filterDatasetByCatchmentIds(leftData, siteCatchmentIds)
@@ -500,6 +592,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       let bounds = siteBounds;
       let catchmentIds: string[] = [];
+      let siteGeometryFromApi: GeoJSON.Geometry | null = null;
       try {
         const site = await getSite(siteId);
         if (!bounds) {
@@ -508,6 +601,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         catchmentIds = Array.isArray(site?.catchmentIds)
           ? site.catchmentIds.map((id: unknown) => String(id))
           : [];
+        siteGeometryFromApi = site?.geometry ?? null;
       } catch (err) {
         console.error('Failed to fetch site data for domain scaling:', err);
       }
@@ -533,6 +627,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         if (cancelled) return;
 
         const catchmentIdSet = new Set(catchmentIds);
+        const nearbyCatchmentIds = inferNearbyCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometryRef.current ?? siteGeometryFromApi);
+        for (const id of nearbyCatchmentIds) {
+          catchmentIdSet.add(id);
+        }
         siteCatchmentIdsRef.current = catchmentIdSet;
         const leftFiltered = filterDatasetByCatchmentIds(leftData, catchmentIdSet);
         const rightFiltered = filterDatasetByCatchmentIds(rightData, catchmentIdSet);
@@ -1156,6 +1254,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightMapRef.current = null;
       leftMap.remove();
       rightMap.remove();
+      indicatorLabel.remove();
+      rightLabel.remove();
+      leftLabel.remove();
+      slider.remove();
+      rightClipContainer.remove();
+      leftClipContainer.remove();
     };
   }, [applyColors, debouncedApplyColors, handleIdentifyClick]);
 
