@@ -212,10 +212,10 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 
 // ChoroplethResponse wraps a FeatureCollection with domain range for consistent color scaling
 type ChoroplethResponse struct {
-	Type       string                   `json:"type"`
-	Features   []geodata.GeoJSONFeature `json:"features"`
-	DomainMin  float64                  `json:"domain_min"`
-	DomainMax  float64                  `json:"domain_max"`
+	Type      string                   `json:"type"`
+	Features  []geodata.GeoJSONFeature `json:"features"`
+	DomainMin float64                  `json:"domain_min"`
+	DomainMax float64                  `json:"domain_max"`
 }
 
 // handleChoropleth returns GeoJSON catchments filtered by bbox with attribute values
@@ -278,10 +278,10 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 
 	// Build response with domain range
 	response := ChoroplethResponse{
-		Type:       "FeatureCollection",
-		Features:   fc.Features,
-		DomainMin:  domainRange.Min,
-		DomainMax:  domainRange.Max,
+		Type:      "FeatureCollection",
+		Features:  fc.Features,
+		DomainMin: domainRange.Min,
+		DomainMax: domainRange.Max,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -394,9 +394,9 @@ type DissolveCatchmentsRequest struct {
 
 // DissolveCatchmentsResponse returns the dissolved boundary geometry
 type DissolveCatchmentsResponse struct {
-	Geometry    json.RawMessage       `json:"geometry"`
-	BoundingBox *sites.BoundingBox    `json:"boundingBox"`
-	Area        float64               `json:"area"`
+	Geometry    json.RawMessage    `json:"geometry"`
+	BoundingBox *sites.BoundingBox `json:"boundingBox"`
+	Area        float64            `json:"area"`
 }
 
 // handleDissolveCatchments creates a dissolved boundary from selected catchments
@@ -459,10 +459,18 @@ func extractBBoxFromGeom(geom map[string]interface{}, bbox *sites.BoundingBox) {
 						if ok && len(pt) >= 2 {
 							x, _ := pt[0].(float64)
 							y, _ := pt[1].(float64)
-							if x < bbox.MinX { bbox.MinX = x }
-							if x > bbox.MaxX { bbox.MaxX = x }
-							if y < bbox.MinY { bbox.MinY = y }
-							if y > bbox.MaxY { bbox.MaxY = y }
+							if x < bbox.MinX {
+								bbox.MinX = x
+							}
+							if x > bbox.MaxX {
+								bbox.MaxX = x
+							}
+							if y < bbox.MinY {
+								bbox.MinY = y
+							}
+							if y > bbox.MaxY {
+								bbox.MaxY = y
+							}
 						}
 					}
 				}
@@ -482,10 +490,18 @@ func extractBBoxFromGeom(geom map[string]interface{}, bbox *sites.BoundingBox) {
 								if ok && len(pt) >= 2 {
 									x, _ := pt[0].(float64)
 									y, _ := pt[1].(float64)
-									if x < bbox.MinX { bbox.MinX = x }
-									if x > bbox.MaxX { bbox.MaxX = x }
-									if y < bbox.MinY { bbox.MinY = y }
-									if y > bbox.MaxY { bbox.MaxY = y }
+									if x < bbox.MinX {
+										bbox.MinX = x
+									}
+									if x > bbox.MaxX {
+										bbox.MaxX = x
+									}
+									if y < bbox.MinY {
+										bbox.MinY = y
+									}
+									if y > bbox.MaxY {
+										bbox.MaxY = y
+									}
 								}
 							}
 						}
@@ -636,11 +652,12 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 
 		if refWeight > 0 {
 			indicators.Reference[key] = refSum / refWeight
+			// Initialize ideal values as copy of reference
+			indicators.Ideal[key] = refSum / refWeight
 		}
 		if curWeight > 0 {
 			indicators.Current[key] = curSum / curWeight
-			// Initialize ideal values as copy of current
-			indicators.Ideal[key] = curSum / curWeight
+
 		}
 	}
 
@@ -710,9 +727,9 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Reset ideal to current values
+	// Reset ideal to reference values
 	site.Indicators.Ideal = make(map[string]float64)
-	for key, value := range site.Indicators.Current {
+	for key, value := range site.Indicators.Reference {
 		site.Indicators.Ideal[key] = value
 	}
 

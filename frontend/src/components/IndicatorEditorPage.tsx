@@ -401,7 +401,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               />
             </Tooltip>
 
-            <Tooltip label="Reset ideal values to current">
+            <Tooltip label="Reset ideal values to ecological reference">
               <IconButton
                 aria-label="Reset"
                 icon={<FiAlertTriangle />}
@@ -460,10 +460,10 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           <Thead position="sticky" top={0} bg={tableBg} zIndex={5}>
             <Tr>
               <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Reference</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Reference</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200">Trend</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ideal</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" w="100px">Edit</Th>
             </Tr>
           </Thead>
