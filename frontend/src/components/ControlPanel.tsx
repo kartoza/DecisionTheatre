@@ -37,6 +37,7 @@ interface ControlPanelProps {
   isExploreMode?: boolean;
   onNavigateToCreateSite?: () => void;
   mapStatistics?: MapStatistics;
+  isSwiperEnabled?: boolean;
 }
 
 import type { ZoneStats } from '../types';
@@ -147,6 +148,7 @@ function ControlPanel({
   isExploreMode,
   onNavigateToCreateSite,
   mapStatistics,
+  isSwiperEnabled = true,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
@@ -242,13 +244,15 @@ function ControlPanel({
           />
 
           {/* Scenario 2 (Right) */}
-          <ScenarioSelector
-            label="Scenario 2"
-            value={comparison.rightScenario}
-            onChange={onRightChange}
-            side="right"
-            zoneStats={mapStatistics?.rightStats}
-          />
+          {isSwiperEnabled && (
+            <ScenarioSelector
+              label="Scenario 2"
+              value={comparison.rightScenario}
+              onChange={onRightChange}
+              side="right"
+              zoneStats={mapStatistics?.rightStats}
+            />
+          )}
 
           <Divider />
 

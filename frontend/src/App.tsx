@@ -44,6 +44,7 @@ function App() {
   const [isExploreMode, setIsExploreMode] = useState(() => loadCurrentPage() === 'explore');
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
   const [isBoundaryEditMode, setIsBoundaryEditMode] = useState(false);
+  const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -381,6 +382,8 @@ function App() {
             isBoundaryEditMode={isBoundaryEditMode}
             siteGeometry={currentSite?.geometry}
             onBoundaryUpdate={handleBoundaryUpdate}
+            isSwiperEnabled={isSwiperEnabled}
+            onSwiperEnabledChange={setIsSwiperEnabled}
           />
         </Box>
 
@@ -397,6 +400,7 @@ function App() {
           isExploreMode={isExploreMode}
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
+          isSwiperEnabled={isSwiperEnabled}
         />
       </Flex>
 

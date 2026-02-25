@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
-import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus } from 'react-icons/fi';
+import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import { booleanIntersects, bbox as turfBbox } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -22,6 +22,8 @@ interface MapViewProps {
   isBoundaryEditMode?: boolean;
   siteGeometry?: GeoJSON.Geometry | null;
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
+  isSwiperEnabled?: boolean;
+  onSwiperEnabledChange?: (enabled: boolean) => void;
 }
 
 // Layer IDs for choropleth
@@ -373,14 +375,21 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   const rightMapRef = useRef<maplibregl.Map | null>(null);
+  const leftClipContainerRef = useRef<HTMLDivElement | null>(null);
   const compareContainerRef = useRef<HTMLDivElement | null>(null);
   const sliderRef = useRef<HTMLDivElement | null>(null);
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+
+  // Compare swiper state (split-screen on/off)
+  const [internalSwiperEnabled, setInternalSwiperEnabled] = useState(true);
+  const isSwiperEnabled = isSwiperEnabledProp ?? internalSwiperEnabled;
+  const isSwiperEnabledRef = useRef(isSwiperEnabled);
+  isSwiperEnabledRef.current = isSwiperEnabled;
 
   // Identify mode state
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
@@ -831,6 +840,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     setIsIdentifyMode(prev => !prev);
   }, []);
 
+  // Toggle split-screen swiper on/off
+  const toggleSwiper = useCallback(() => {
+    const next = !isSwiperEnabled;
+    if (isSwiperEnabledProp === undefined) {
+      setInternalSwiperEnabled(next);
+    }
+    onSwiperEnabledChange?.(next);
+  }, [isSwiperEnabled, isSwiperEnabledProp, onSwiperEnabledChange]);
+
   // Zoom to site bounds with 10% padding
   const zoomToSite = useCallback(() => {
     const leftMap = leftMapRef.current;
@@ -1020,6 +1038,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     slider.appendChild(handle);
     container.appendChild(slider);
     sliderRef.current = slider;
+    leftClipContainerRef.current = leftClipContainer;
     compareContainerRef.current = rightClipContainer;
 
     // Scenario labels on each side
@@ -1194,6 +1213,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     let sliderPointerId: number | null = null;
 
     function onSliderPointerDown(e: PointerEvent) {
+      if (!isSwiperEnabledRef.current) return;
       e.preventDefault();
       e.stopPropagation();
       isDragging.current = true;
@@ -1254,6 +1274,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightMapRef.current = null;
       leftMap.remove();
       rightMap.remove();
+      leftClipContainerRef.current = null;
+      compareContainerRef.current = null;
+      sliderRef.current = null;
       indicatorLabel.remove();
       rightLabel.remove();
       leftLabel.remove();
@@ -1262,6 +1285,50 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       leftClipContainer.remove();
     };
   }, [applyColors, debouncedApplyColors, handleIdentifyClick]);
+
+  // Toggle split-screen layout and slider visibility
+  useEffect(() => {
+    const container = mapContainerRef.current;
+    const leftClipContainer = leftClipContainerRef.current;
+    const rightClipContainer = compareContainerRef.current;
+    const slider = sliderRef.current;
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!container || !leftClipContainer || !rightClipContainer || !slider || !leftMap || !rightMap) {
+      return;
+    }
+
+    const leftContainer = container.querySelector('#map-left') as HTMLDivElement | null;
+    const rightContainer = container.querySelector('#map-right') as HTMLDivElement | null;
+    const rightLabel = container.querySelector('#right-label') as HTMLElement | null;
+
+    if (!leftContainer || !rightContainer) return;
+
+    if (isSwiperEnabled) {
+      slider.style.display = 'block';
+      slider.style.left = '50%';
+      leftClipContainer.style.width = '50%';
+      rightClipContainer.style.display = 'block';
+      rightClipContainer.style.width = '50%';
+      if (rightLabel) rightLabel.style.display = 'block';
+    } else {
+      slider.style.display = 'none';
+      leftClipContainer.style.width = '100%';
+      rightClipContainer.style.display = 'none';
+      rightClipContainer.style.width = '0%';
+      if (rightLabel) rightLabel.style.display = 'none';
+    }
+
+    const parentWidth = container.offsetWidth;
+    const rightClipWidth = rightClipContainer.offsetWidth;
+    leftContainer.style.width = `${parentWidth}px`;
+    rightContainer.style.width = `${parentWidth}px`;
+    rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
+
+    leftMap.resize();
+    rightMap.resize();
+  }, [isSwiperEnabled]);
 
   // Update labels and colours when comparison changes
   useEffect(() => {
@@ -1282,6 +1349,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
       rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
+      rightLabel.style.display = isSwiperEnabled ? 'block' : 'none';
     }
 
     if (indicatorLabel) {
@@ -1291,7 +1359,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors]);
+  }, [comparison, applyColors, isSwiperEnabled]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
@@ -2104,6 +2172,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               boxShadow="md"
               _hover={{
                 bg: isIdentifyMode ? "blue.600" : "gray.100"
+              }}
+            />
+          </Tooltip>
+
+          {/* Swiper toggle button */}
+          <Tooltip label={isSwiperEnabled ? "Disable map swiper" : "Enable map swiper"} placement="right">
+            <IconButton
+              aria-label="Toggle map swiper"
+              icon={<FiColumns />}
+              size="sm"
+              colorScheme={isSwiperEnabled ? "blue" : "gray"}
+              variant="solid"
+              bg={isSwiperEnabled ? "blue.500" : "white"}
+              color={isSwiperEnabled ? "white" : "gray.700"}
+              onClick={toggleSwiper}
+              boxShadow="md"
+              _hover={{
+                bg: isSwiperEnabled ? "blue.600" : "gray.100"
               }}
             />
           </Tooltip>

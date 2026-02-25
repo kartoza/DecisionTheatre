@@ -116,12 +116,16 @@ func (s *GpkgStore) GetScenarios() []string {
 	return []string{"current", "reference"}
 }
 
+func resolveScenarioTable(scenario string) string {
+	if scenario == "reference" || scenario == "future" {
+		return "scenario_reference"
+	}
+	return "scenario_current"
+}
+
 // GetScenarioData returns data for a scenario and attribute as a map of catchment ID to value
 func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]float64, error) {
-	tableName := "scenario_current"
-	if scenario == "reference" {
-		tableName = "scenario_reference"
-	}
+	tableName := resolveScenarioTable(scenario)
 
 	if !s.isValidColumn(attribute) {
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
@@ -155,15 +159,8 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
 
-	leftTable := "scenario_current"
-	if left == "reference" {
-		leftTable = "scenario_reference"
-	}
-
-	rightTable := "scenario_current"
-	if right == "reference" {
-		rightTable = "scenario_reference"
-	}
+	leftTable := resolveScenarioTable(left)
+	rightTable := resolveScenarioTable(right)
 
 	query := fmt.Sprintf(`
 		SELECT l.catchment_id, l."%s", r."%s"
@@ -194,10 +191,7 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 // QueryCatchments returns catchments within a bounding box with a specific attribute
 func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	// Validate scenario
-	tableName := "scenario_current"
-	if scenario == "reference" {
-		tableName = "scenario_reference"
-	}
+	tableName := resolveScenarioTable(scenario)
 
 	// Validate attribute against allowed columns to prevent SQL injection
 	if !s.isValidColumn(attribute) {

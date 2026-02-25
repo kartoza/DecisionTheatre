@@ -105,7 +105,7 @@ export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'future',
     label: 'Target State',
-    description: 'User-defined target condition they aim to achieve.',
+    description: 'User-defined target condition with aim to achieve.',
     color: '#4caf50',
   },
 ];

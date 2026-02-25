@@ -23,6 +23,8 @@ interface ViewPaneProps {
   isBoundaryEditMode?: boolean;
   siteGeometry?: GeoJSON.Geometry | null;
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
+  isSwiperEnabled?: boolean;
+  onSwiperEnabledChange?: (enabled: boolean) => void;
 }
 
 function ViewPane({
@@ -42,6 +44,8 @@ function ViewPane({
   isBoundaryEditMode,
   siteGeometry,
   onBoundaryUpdate,
+  isSwiperEnabled,
+  onSwiperEnabledChange,
 }: ViewPaneProps) {
   const [isChartView, setIsChartView] = useState(false);
   const borderColor = useColorModeValue('gray.600', 'gray.600');
@@ -90,6 +94,8 @@ function ViewPane({
           isBoundaryEditMode={isBoundaryEditMode}
           siteGeometry={siteGeometry}
           onBoundaryUpdate={onBoundaryUpdate}
+          isSwiperEnabled={isSwiperEnabled}
+          onSwiperEnabledChange={onSwiperEnabledChange}
         />
       </Box>
 

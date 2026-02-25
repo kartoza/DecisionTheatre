@@ -19,6 +19,8 @@ interface ContentAreaProps {
   isBoundaryEditMode?: boolean;
   siteGeometry?: GeoJSON.Geometry | null;
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
+  isSwiperEnabled?: boolean;
+  onSwiperEnabledChange?: (enabled: boolean) => void;
 }
 
 const paneVariants = {
@@ -59,6 +61,8 @@ function ContentArea({
   isBoundaryEditMode,
   siteGeometry,
   onBoundaryUpdate,
+  isSwiperEnabled,
+  onSwiperEnabledChange,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
@@ -148,6 +152,8 @@ function ContentArea({
             isBoundaryEditMode={isBoundaryEditMode}
             siteGeometry={siteGeometry}
             onBoundaryUpdate={onBoundaryUpdate}
+            isSwiperEnabled={isSwiperEnabled}
+            onSwiperEnabledChange={onSwiperEnabledChange}
           />
         </Box>
       )}
