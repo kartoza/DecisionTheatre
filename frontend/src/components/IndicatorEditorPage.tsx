@@ -561,6 +561,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               onClick={handleSaveChanges}
               isLoading={isSaving}
               isDisabled={!hasChanges}
+              style={{width: "100%"}}
             >
               Save Changes
             </Button>
