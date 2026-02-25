@@ -1,4 +1,5 @@
 import {
+  background,
   Box,
   Button,
   Flex,
@@ -436,7 +437,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               />
             </Tooltip>
 
-            <Tooltip label="Reset ideal values to current">
+            <Tooltip label="Reset target state to ecological reference">
               <IconButton
                 aria-label="Reset"
                 icon={<FiAlertTriangle />}
@@ -492,7 +493,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
       {/* Scrollable Table */}
       <Box h="calc(100% - 140px)" overflow="auto" px={6} py={4}>
         <Table variant="simple" size="sm">
-          <Thead position="sticky" top={0} bg={tableBg} zIndex={5}>
+          <Thead position="sticky" top={0} bg={tableBg} zIndex={5} style={{ background: "#171923", paddingBottom: "10px" }}>
             <Tr>
               <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Reference</Th>
