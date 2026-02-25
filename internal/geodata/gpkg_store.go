@@ -16,10 +16,10 @@ import (
 
 // GpkgStore provides access to the datapack geopackage
 type GpkgStore struct {
-	db       *sql.DB
-	dataDir  string
-	columns  []string
-	mu       sync.RWMutex
+	db      *sql.DB
+	dataDir string
+	columns []string
+	mu      sync.RWMutex
 }
 
 // CatchmentFeature represents a single catchment with geometry and attributes
@@ -681,7 +681,6 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 	return resultJSON, 0, nil
 }
 
-
 // GetCatchmentAttributes returns all attributes for a specific catchment across both scenarios
 // Returns a map: scenario -> attribute -> value
 func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[string]float64 {
@@ -749,10 +748,11 @@ func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[st
 
 // CatchmentIndicators represents indicator values for a single catchment
 type CatchmentIndicators struct {
-	ID        string             `json:"id"`
-	AreaKm2   float64            `json:"areaKm2"`
-	Reference map[string]float64 `json:"reference"`
-	Current   map[string]float64 `json:"current"`
+	ID          string             `json:"id"`
+	AreaKm2     float64            `json:"areaKm2"`
+	Reference   map[string]float64 `json:"reference"`
+	Current     map[string]float64 `json:"current"`
+	AOIFraction float64            `json:"aoiFraction,omitempty"`
 }
 
 // GetCatchmentIndicatorsByIDs returns indicator values for multiple catchments

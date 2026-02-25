@@ -1,5 +1,4 @@
 import {
-  background,
   Box,
   Button,
   Flex,
@@ -166,8 +165,28 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         body: JSON.stringify(jsonData),
       });
       if (response.ok) {
-        const updatedSite = await response.json();
-        setLocalIndicators(updatedSite.indicators);
+        const updatedSite: Site = await response.json();
+        if (runtime === 'browser') {
+          try {
+            const raw = window.localStorage.getItem('dt-sites');
+            if (!raw) {
+              window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
+            } else {
+              const parsed: unknown = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                const storedSites = parsed as Site[];
+                const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
+                  ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
+                  : [...storedSites, updatedSite];
+                window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to persist updated site to localStorage:', error);
+          }
+        }
+        console.log("updatedSite", updatedSite)
+        setLocalIndicators(updatedSite.indicators ?? null);
         onSiteUpdated(updatedSite);
         toast({
           title: 'Indicators extracted',
@@ -195,14 +214,33 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
 
     setIsSaving(true);
     try {
-      const response = await fetch(`/api/sites/${site.id}/indicators`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ideal: localIndicators.ideal }),
-      });
+      const runtime = getAppRuntime();
 
-      if (response.ok) {
-        const updatedSite = await response.json();
+      if (runtime === 'browser') {
+        const updatedSite: Site = {
+          ...site,
+          indicators: localIndicators,
+        };
+
+        try {
+          const raw = window.localStorage.getItem('dt-sites');
+          if (!raw) {
+            window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
+          } else {
+            const parsed: unknown = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const storedSites = parsed as Site[];
+              const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
+                ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
+                : [...storedSites, updatedSite];
+              window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to persist saved indicator changes to localStorage:', error);
+          throw new Error('Failed to save locally');
+        }
+
         onSiteUpdated(updatedSite);
         setHasChanges(false);
         toast({
@@ -211,7 +249,24 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           duration: 2000,
         });
       } else {
-        throw new Error('Failed to save');
+        const response = await fetch(`/api/sites/${site.id}/indicators`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ideal: localIndicators.ideal }),
+        });
+
+        if (response.ok) {
+          const updatedSite = await response.json();
+          onSiteUpdated(updatedSite);
+          setHasChanges(false);
+          toast({
+            title: 'Changes saved',
+            status: 'success',
+            duration: 2000,
+          });
+        } else {
+          throw new Error('Failed to save');
+        }
       }
     } catch (error) {
       toast({
@@ -226,29 +281,80 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   }, [site.id, localIndicators, onSiteUpdated, toast]);
 
   const handleResetIdeal = useCallback(async () => {
-    if (!confirm('Reset all ideal values to current values? This cannot be undone.')) {
+    if (!confirm('Reset all ideal values to ecological reference values? This cannot be undone.')) {
       return;
     }
 
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/sites/${site.id}/indicators/reset`, {
-        method: 'POST',
-      });
+      const runtime = getAppRuntime();
 
-      if (response.ok) {
-        const updatedSite = await response.json();
-        setLocalIndicators(updatedSite.indicators);
+      if (runtime === 'browser') {
+        if (!localIndicators) {
+          throw new Error('No local indicators to reset');
+        }
+
+        const resetIndicators: SiteIndicators = {
+          reference: { ...(localIndicators.reference || {}) },
+          current: { ...(localIndicators.current || {}) },
+          ideal: { ...(localIndicators.reference || {}) },
+          extractedAt: localIndicators.extractedAt,
+          catchmentCount: localIndicators.catchmentCount,
+          totalAreaKm2: localIndicators.totalAreaKm2,
+          catchmentIds: localIndicators.catchmentIds,
+        };
+        const updatedSite: Site = {
+          ...site,
+          indicators: resetIndicators,
+        };
+
+        try {
+          const raw = window.localStorage.getItem('dt-sites');
+          if (!raw) {
+            window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
+          } else {
+            const parsed: unknown = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const storedSites = parsed as Site[];
+              const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
+                ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
+                : [...storedSites, updatedSite];
+              window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to persist reset indicator values to localStorage:', error);
+          throw new Error('Failed to reset locally');
+        }
+
+        setLocalIndicators(resetIndicators);
         onSiteUpdated(updatedSite);
         setHasChanges(false);
         toast({
           title: 'Values reset',
-          description: 'Ideal values have been reset to current values',
+          description: 'Ideal values have been reset to ecological reference values',
           status: 'info',
           duration: 3000,
         });
       } else {
-        throw new Error('Failed to reset');
+        const response = await fetch(`/api/sites/${site.id}/indicators/reset`, {
+          method: 'POST',
+        });
+
+        if (response.ok) {
+          const updatedSite = await response.json();
+          setLocalIndicators(updatedSite.indicators ?? null);
+          onSiteUpdated(updatedSite);
+          setHasChanges(false);
+          toast({
+            title: 'Values reset',
+            description: 'Ideal values have been reset to ecological reference values',
+            status: 'info',
+            duration: 3000,
+          });
+        } else {
+          throw new Error('Failed to reset');
+        }
       }
     } catch (error) {
       toast({
@@ -259,7 +365,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     } finally {
       setIsLoading(false);
     }
-  }, [site.id, onSiteUpdated, toast]);
+  }, [site, localIndicators, onSiteUpdated, toast]);
 
   const handleStartEdit = useCallback((key: string, currentValue: number) => {
     setEditingKey(key);

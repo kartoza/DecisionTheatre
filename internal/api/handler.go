@@ -644,6 +644,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 }
 
 // computeAreaWeightedIndicators calculates area-weighted indicator aggregations
+
 func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *sites.SiteIndicators {
 	indicators := &sites.SiteIndicators{
 		Reference:      make(map[string]float64),
@@ -653,22 +654,35 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		CatchmentCount: len(catchments),
 	}
 
-	// Calculate total area
-	totalArea := 0.0
-	for _, c := range catchments {
-		totalArea += c.AreaKm2
-	}
-	indicators.TotalAreaKm2 = totalArea
+	// Step 1: Calculate valid AOI area for each catchment
+	validAreas := make([]float64, len(catchments))
+	totalValidArea := 0.0
 
-	if totalArea == 0 {
-		// Fallback to simple average if no area data
-		totalArea = float64(len(catchments))
-		for i := range catchments {
-			catchments[i].AreaKm2 = 1.0
+	for i, c := range catchments {
+		// Ensure frac_i exists and is between 0 and 1
+		frac := c.AOIFraction // This should be provided per catchment
+		if frac < 0 {
+			frac = 0
+		} else if frac > 1 {
+			frac = 1
+		}
+
+		validAreas[i] = c.AreaKm2 * frac
+		totalValidArea += validAreas[i]
+	}
+
+	// Step 2: Handle case where no valid area exists
+	if totalValidArea == 0 {
+		// Fallback: treat all catchments equally
+		totalValidArea = float64(len(catchments))
+		for i := range validAreas {
+			validAreas[i] = 1.0
 		}
 	}
 
-	// Collect all attribute keys
+	indicators.TotalAreaKm2 = totalValidArea
+
+	// Step 3: Collect all unique metric keys
 	allKeys := make(map[string]bool)
 	for _, c := range catchments {
 		for k := range c.Reference {
@@ -679,33 +693,26 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
-	// Compute area-weighted values for each attribute
+	// Step 4: Compute AOI-weighted metrics
 	for key := range allKeys {
 		refSum := 0.0
-		refWeight := 0.0
 		curSum := 0.0
-		curWeight := 0.0
 
-		for _, c := range catchments {
+		for i, c := range catchments {
+			weight := validAreas[i] / totalValidArea // AOI proportion
+
 			if val, ok := c.Reference[key]; ok {
-				refSum += val * c.AreaKm2
-				refWeight += c.AreaKm2
+				refSum += val * weight
 			}
 			if val, ok := c.Current[key]; ok {
-				curSum += val * c.AreaKm2
-				curWeight += c.AreaKm2
+				curSum += val * weight
 			}
 		}
 
-		if refWeight > 0 {
-			indicators.Reference[key] = refSum / refWeight
-			// Initialize ideal values as copy of reference
-			indicators.Ideal[key] = refSum / refWeight
-		}
-		if curWeight > 0 {
-			indicators.Current[key] = curSum / curWeight
-
-		}
+		// Store the weighted values
+		indicators.Reference[key] = refSum
+		indicators.Ideal[key] = refSum // Initialize Ideal same as Reference
+		indicators.Current[key] = curSum
 	}
 
 	return indicators
