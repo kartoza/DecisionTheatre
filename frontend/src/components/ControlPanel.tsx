@@ -18,11 +18,12 @@ import {
   Th,
   Td,
   Button,
+  ButtonGroup,
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
-import { useColumns } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ControlPanelProps {
@@ -38,9 +39,38 @@ interface ControlPanelProps {
   onNavigateToCreateSite?: () => void;
   mapStatistics?: MapStatistics;
   isSwiperEnabled?: boolean;
+  colorScaleMode: ColorScaleMode;
+  onColorScaleModeChange: (mode: ColorScaleMode) => void;
 }
 
 import type { ZoneStats } from '../types';
+
+const MIN_LEGEND_OPACITY = 0.15;
+const MAX_LEGEND_OPACITY = 0.9;
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = hex.trim().replace('#', '');
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16);
+    const g = parseInt(normalized[1] + normalized[1], 16);
+    const b = parseInt(normalized[2] + normalized[2], 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  if (normalized.length === 6) {
+    const r = parseInt(normalized.slice(0, 2), 16);
+    const g = parseInt(normalized.slice(2, 4), 16);
+    const b = parseInt(normalized.slice(4, 6), 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  return null;
+}
+
+function buildOpacityGradient(color?: string): string {
+  if (!color) return PRISM_CSS_GRADIENT;
+  const rgb = hexToRgb(color);
+  if (!rgb) return PRISM_CSS_GRADIENT;
+  return `linear-gradient(to right, rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MIN_LEGEND_OPACITY}), rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MAX_LEGEND_OPACITY}))`;
+}
 
 function ScenarioSelector({
   label,
@@ -149,12 +179,20 @@ function ControlPanel({
   onNavigateToCreateSite,
   mapStatistics,
   isSwiperEnabled = true,
+  colorScaleMode,
+  onColorScaleModeChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
+  const { colors: attributeColors } = useAttributeColors();
+  const { details: attributeDetails } = useAttributeDetails();
+  const { canMap } = useAttributeCanMap();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
   const tableHeaderBg = useColorModeValue('gray.100', 'gray.700');
+  const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
+    ? attributeColors[comparison.attribute]
+    : undefined;
 
   return (
     <Slide
@@ -285,24 +323,54 @@ function ControlPanel({
               fontWeight="500"
               _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
             >
-              {columns.map((col) => (
-                <option key={col} value={col}>
-                  {col
+              {(Object.keys(canMap || {}).length > 0
+                ? columns.filter((col) => canMap[col])
+                : columns
+              ).map((col) => {
+                const displayName = attributeDetails[col]
+                  ?? col
                     .replace(/_/g, ' ')
-                    .replace(/\b\w/g, (c) => c.toUpperCase())}
+                    .replace(/\b\w/g, (c) => c.toUpperCase());
+                return (
+                <option key={col} value={col}>
+                  {displayName}
                 </option>
-              ))}
+                );
+              })}
             </Select>
 
             {comparison.attribute && (
               <Text fontSize="xs" color="gray.500" mt={2}>
                 Showing{' '}
                 <Text as="span" fontWeight="600" color="green.400">
-                  {comparison.attribute.replace(/_/g, ' ')}
+                  {attributeDetails[comparison.attribute]
+                    ?? comparison.attribute.replace(/_/g, ' ')}
                 </Text>{' '}
                 values per catchment
               </Text>
             )}
+
+            <HStack mt={4} justify="space-between" align="center">
+              <Text fontSize="xs" fontWeight="600" color="gray.500">
+                Color scale
+              </Text>
+              <ButtonGroup size="xs" isAttached variant="outline">
+                <Button
+                  onClick={() => onColorScaleModeChange('rainbow')}
+                  variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
+                  colorScheme={colorScaleMode === 'rainbow' ? 'purple' : 'gray'}
+                >
+                  Rainbow
+                </Button>
+                <Button
+                  onClick={() => onColorScaleModeChange('metadata')}
+                  variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
+                  colorScheme={colorScaleMode === 'metadata' ? 'teal' : 'gray'}
+                >
+                  Metadata
+                </Button>
+              </ButtonGroup>
+            </HStack>
           </Box>
 
           <Divider />
@@ -316,7 +384,7 @@ function ControlPanel({
               <Box
                 h="12px"
                 borderRadius="full"
-                bg={PRISM_CSS_GRADIENT}
+                bg={buildOpacityGradient(attributeColor)}
               />
               <HStack justify="space-between" mt={1}>
                 <Text fontSize="xs" color="gray.500">
@@ -410,6 +478,7 @@ function ControlPanel({
                           // Get values for both scenarios
                           const leftVal = identifyResult.data[orderedScenarios[0]]?.[attr];
                           const rightVal = identifyResult.data[orderedScenarios[1]]?.[attr];
+                          const displayName = attributeDetails[attr] ?? attr;
 
                           // Calculate bar widths (percentage of cell)
                           const maxVal = Math.max(
@@ -439,9 +508,9 @@ function ControlPanel({
                                 overflow="hidden"
                                 textOverflow="ellipsis"
                                 whiteSpace="nowrap"
-                                title={attr}
+                                title={displayName}
                               >
-                                {attr}
+                                {displayName}
                               </Td>
                               {/* Left scenario cell - bar from left */}
                               <Td

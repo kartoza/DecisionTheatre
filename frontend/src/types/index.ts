@@ -31,6 +31,8 @@ export interface ComparisonState {
   attribute: string;
 }
 
+export type ColorScaleMode = 'rainbow' | 'metadata';
+
 export type LayoutMode = 'single' | 'quad';
 
 /** Per-pane state array (always 4 entries, indexed 0-3) */

@@ -16,6 +16,7 @@ import {
   StatHelpText,
   StatLabel,
   StatNumber,
+  Select,
   Table,
   Tbody,
   Td,
@@ -29,7 +30,7 @@ import {
   VStack,
 } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FiArrowLeft,
   FiRefreshCw,
@@ -42,9 +43,12 @@ import {
   FiTrendingUp,
   FiTrendingDown,
   FiMinus,
+  FiChevronDown,
+  FiChevronRight,
 } from 'react-icons/fi';
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
+import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
 
 const MotionTr = motion(Tr);
 
@@ -94,6 +98,14 @@ function getIndicatorUnit(key: string): string {
   return '';
 }
 
+function formatVariableType(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
 // Calculate trend indicator
 function getTrend(current: number, reference: number): 'up' | 'down' | 'neutral' {
   const threshold = 0.05; // 5% change threshold
@@ -111,7 +123,12 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const [localIndicators, setLocalIndicators] = useState<SiteIndicators | null>(site.indicators || null);
   const [hasChanges, setHasChanges] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
+  const [selectedIndicatorKey, setSelectedIndicatorKey] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const toast = useToast();
+  const { details: attributeDetails } = useAttributeDetails();
+  const { userInputs } = useAttributeUserInputs();
+  const { variableTypes } = useAttributeVariableTypes();
 
   const headerBg = useColorModeValue('gray.900', 'gray.900');
   const tableBg = useColorModeValue('gray.850', 'gray.850');
@@ -401,9 +418,12 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     setEditValue('');
   }, [editingKey, editValue, localIndicators, toast]);
 
-  // Build indicator rows from data
-  const indicatorRows: IndicatorRow[] = useMemo(() => {
-    if (!localIndicators) return [];
+  const availableIndicatorKeys = useMemo(() => {
+    if (!localIndicators) return [] as string[];
+
+    const allowedInputs = Object.keys(userInputs || {}).length > 0
+      ? new Set(Object.entries(userInputs).filter(([, allowed]) => allowed).map(([key]) => key))
+      : null;
 
     const allKeys = new Set<string>();
     Object.keys(localIndicators.reference || {}).forEach(k => allKeys.add(k));
@@ -411,27 +431,70 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     Object.keys(localIndicators.ideal || {}).forEach(k => allKeys.add(k));
 
     return Array.from(allKeys)
-      .filter(key => {
-        if (!searchFilter) return true;
-        const label = getIndicatorLabel(key).toLowerCase();
-        return label.includes(searchFilter.toLowerCase()) || key.toLowerCase().includes(searchFilter.toLowerCase());
+      .filter(key => !allowedInputs || allowedInputs.has(key))
+      .sort();
+  }, [localIndicators, userInputs]);
+
+  const indicatorGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string }[]>();
+    availableIndicatorKeys.forEach(key => {
+      const groupName = variableTypes[key] ? formatVariableType(variableTypes[key]) : 'Other';
+      const entries = groups.get(groupName) ?? [];
+      entries.push({ key, label: attributeDetails[key] ?? getIndicatorLabel(key) });
+      groups.set(groupName, entries);
+    });
+
+    return Array.from(groups.entries())
+      .map(([groupName, entries]) => ({
+        groupName,
+        entries: entries.sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .sort((a, b) => a.groupName.localeCompare(b.groupName));
+  }, [availableIndicatorKeys, attributeDetails, variableTypes]);
+
+  const groupedIndicatorRows = useMemo(() => {
+    if (!localIndicators) return [] as { groupName: string; rows: IndicatorRow[] }[];
+
+    const groups = indicatorGroups
+      .map(group => {
+        const rows = group.entries
+          .filter(entry => {
+            if (selectedIndicatorKey && entry.key !== selectedIndicatorKey) return false;
+            if (!searchFilter) return true;
+            const displayLabel = (attributeDetails[entry.key] ?? getIndicatorLabel(entry.key)).toLowerCase();
+            return displayLabel.includes(searchFilter.toLowerCase())
+              || entry.key.toLowerCase().includes(searchFilter.toLowerCase());
+          })
+          .map(entry => ({
+            key: entry.key,
+            label: attributeDetails[entry.key] ?? getIndicatorLabel(entry.key),
+            reference: localIndicators.reference?.[entry.key] ?? 0,
+            current: localIndicators.current?.[entry.key] ?? 0,
+            ideal: localIndicators.ideal?.[entry.key] ?? localIndicators.current?.[entry.key] ?? 0,
+            unit: getIndicatorUnit(entry.key),
+          }));
+
+        return { groupName: group.groupName, rows };
       })
-      .sort()
-      .map(key => ({
-        key,
-        label: getIndicatorLabel(key),
-        reference: localIndicators.reference?.[key] ?? 0,
-        current: localIndicators.current?.[key] ?? 0,
-        ideal: localIndicators.ideal?.[key] ?? localIndicators.current?.[key] ?? 0,
-        unit: getIndicatorUnit(key),
-      }));
-  }, [localIndicators, searchFilter]);
+      .filter(group => group.rows.length > 0);
+
+    return groups;
+  }, [attributeDetails, indicatorGroups, localIndicators, searchFilter, selectedIndicatorKey]);
+
+  const totalIndicatorRows = useMemo(
+    () => groupedIndicatorRows.reduce((sum, group) => sum + group.rows.length, 0),
+    [groupedIndicatorRows]
+  );
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
     if (!localIndicators) return null;
 
-    const keys = Object.keys(localIndicators.current || {});
+    const allowedInputs = Object.keys(userInputs || {}).length > 0
+      ? new Set(Object.entries(userInputs).filter(([, allowed]) => allowed).map(([key]) => key))
+      : null;
+    const keys = Object.keys(localIndicators.current || {})
+      .filter(key => !allowedInputs || allowedInputs.has(key));
     let improved = 0;
     let degraded = 0;
     let unchanged = 0;
@@ -446,7 +509,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     });
 
     return { total: keys.length, improved, degraded, unchanged };
-  }, [localIndicators]);
+  }, [localIndicators, userInputs]);
 
   if (isLoading && !localIndicators) {
     return (
@@ -533,6 +596,28 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               />
             </FormControl>
 
+            <FormControl maxW="260px">
+              <Select
+                size="sm"
+                value={selectedIndicatorKey}
+                onChange={(e) => setSelectedIndicatorKey(e.target.value)}
+                bg="whiteAlpha.100"
+                border="none"
+                color="gray.100"
+              >
+                <option value="">All indicators</option>
+                {indicatorGroups.map(group => (
+                  <optgroup key={group.groupName} label={group.groupName}>
+                    {group.entries.map(entry => (
+                      <option key={entry.key} value={entry.key}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </Select>
+            </FormControl>
+
             <Tooltip label="Re-extract indicators from catchments">
               <IconButton
                 aria-label="Refresh"
@@ -612,114 +697,150 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           </Thead>
           <Tbody>
             <AnimatePresence>
-              {indicatorRows.map((row, index) => {
-                const trend = getTrend(row.current, row.reference);
-                const isEditing = editingKey === row.key;
-                const idealChanged = row.ideal !== row.current;
-
+              {groupedIndicatorRows.map(group => {
+                const isCollapsed = collapsedGroups[group.groupName] ?? false;
                 return (
-                  <MotionTr
-                    key={row.key}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.01 }}
-                    _hover={{ bg: hoverBg }}
-                  >
-                    <Td borderColor="whiteAlpha.100">
-                      <VStack align="start" spacing={0}>
-                        <Text color="white" fontWeight="medium">{row.label}</Text>
-                        <Text fontSize="xs" color="gray.500">{row.key}</Text>
-                        {row.unit && <Text fontSize="xs" color="cyan.400">{row.unit}</Text>}
-                      </VStack>
-                    </Td>
-                    <Td borderColor="whiteAlpha.100" isNumeric>
-                      <Text color="orange.300" fontFamily="mono">{formatValue(row.reference)}</Text>
-                    </Td>
-                    <Td borderColor="whiteAlpha.100" isNumeric>
-                      <Text color="cyan.300" fontFamily="mono">{formatValue(row.current)}</Text>
-                    </Td>
-                    <Td borderColor="whiteAlpha.100">
-                      <HStack>
-                        {trend === 'up' && <Icon as={FiTrendingUp} color="green.400" />}
-                        {trend === 'down' && <Icon as={FiTrendingDown} color="red.400" />}
-                        {trend === 'neutral' && <Icon as={FiMinus} color="gray.500" />}
-                        <Progress
-                          value={Math.abs(((row.current - row.reference) / (row.reference || 1)) * 100)}
-                          max={100}
-                          size="xs"
-                          w="60px"
-                          colorScheme={trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray'}
-                          bg="whiteAlpha.200"
-                          borderRadius="full"
-                        />
-                      </HStack>
-                    </Td>
-                    <Td borderColor="whiteAlpha.100" isNumeric>
-                      {isEditing ? (
-                        <NumberInput
-                          size="sm"
-                          value={editValue}
-                          onChange={(v) => setEditValue(v)}
-                          min={0}
-                          step={0.01}
-                        >
-                          <NumberInputField
-                            bg="whiteAlpha.200"
-                            border="none"
-                            textAlign="right"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleConfirmEdit();
-                              if (e.key === 'Escape') handleCancelEdit();
-                            }}
-                          />
-                        </NumberInput>
-                      ) : (
-                        <Text
-                          color={idealChanged ? 'green.300' : 'gray.300'}
-                          fontFamily="mono"
-                          fontWeight={idealChanged ? 'bold' : 'normal'}
-                        >
-                          {formatValue(row.ideal)}
-                        </Text>
-                      )}
-                    </Td>
-                    <Td borderColor="whiteAlpha.100">
-                      {isEditing ? (
-                        <HStack spacing={1}>
+                  <Fragment key={group.groupName}>
+                    <Tr>
+                      <Td
+                        colSpan={6}
+                        bg="whiteAlpha.50"
+                        borderColor="whiteAlpha.200"
+                        py={2}
+                      >
+                        <HStack spacing={2} align="center">
                           <IconButton
-                            aria-label="Confirm"
-                            icon={<FiCheck />}
-                            size="xs"
-                            colorScheme="green"
-                            onClick={handleConfirmEdit}
-                          />
-                          <IconButton
-                            aria-label="Cancel"
-                            icon={<FiX />}
+                            aria-label={isCollapsed ? 'Expand group' : 'Collapse group'}
+                            icon={isCollapsed ? <FiChevronRight /> : <FiChevronDown />}
                             size="xs"
                             variant="ghost"
-                            onClick={handleCancelEdit}
+                            onClick={() =>
+                              setCollapsedGroups(prev => ({
+                                ...prev,
+                                [group.groupName]: !isCollapsed,
+                              }))
+                            }
                           />
+                          <Text color="gray.200" fontWeight="bold" fontSize="sm">
+                            {group.groupName}
+                          </Text>
+                          <Text color="gray.500" fontSize="xs">
+                            {group.rows.length}
+                          </Text>
                         </HStack>
-                      ) : (
-                        <IconButton
-                          aria-label="Edit"
-                          icon={<FiEdit2 />}
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => handleStartEdit(row.key, row.ideal)}
-                        />
-                      )}
-                    </Td>
-                  </MotionTr>
+                      </Td>
+                    </Tr>
+                    {!isCollapsed && group.rows.map((row, index) => {
+                    const trend = getTrend(row.current, row.reference);
+                    const isEditing = editingKey === row.key;
+                    const idealChanged = row.ideal !== row.current;
+
+                    return (
+                      <MotionTr
+                        key={row.key}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: index * 0.01 }}
+                        _hover={{ bg: hoverBg }}
+                      >
+                        <Td borderColor="whiteAlpha.100">
+                          <VStack align="start" spacing={0}>
+                            <Text color="white" fontWeight="medium">{row.label}</Text>
+                            <Text fontSize="xs" color="gray.500">{row.key}</Text>
+                            {row.unit && <Text fontSize="xs" color="cyan.400">{row.unit}</Text>}
+                          </VStack>
+                        </Td>
+                        <Td borderColor="whiteAlpha.100" isNumeric>
+                          <Text color="orange.300" fontFamily="mono">{formatValue(row.reference)}</Text>
+                        </Td>
+                        <Td borderColor="whiteAlpha.100" isNumeric>
+                          <Text color="cyan.300" fontFamily="mono">{formatValue(row.current)}</Text>
+                        </Td>
+                        <Td borderColor="whiteAlpha.100">
+                          <HStack>
+                            {trend === 'up' && <Icon as={FiTrendingUp} color="green.400" />}
+                            {trend === 'down' && <Icon as={FiTrendingDown} color="red.400" />}
+                            {trend === 'neutral' && <Icon as={FiMinus} color="gray.500" />}
+                            <Progress
+                              value={Math.abs(((row.current - row.reference) / (row.reference || 1)) * 100)}
+                              max={100}
+                              size="xs"
+                              w="60px"
+                              colorScheme={trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray'}
+                              bg="whiteAlpha.200"
+                              borderRadius="full"
+                            />
+                          </HStack>
+                        </Td>
+                        <Td borderColor="whiteAlpha.100" isNumeric>
+                          {isEditing ? (
+                            <NumberInput
+                              size="sm"
+                              value={editValue}
+                              onChange={(v) => setEditValue(v)}
+                              min={0}
+                              step={0.01}
+                            >
+                              <NumberInputField
+                                bg="whiteAlpha.200"
+                                border="none"
+                                textAlign="right"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleConfirmEdit();
+                                  if (e.key === 'Escape') handleCancelEdit();
+                                }}
+                              />
+                            </NumberInput>
+                          ) : (
+                            <Text
+                              color={idealChanged ? 'green.300' : 'gray.300'}
+                              fontFamily="mono"
+                              fontWeight={idealChanged ? 'bold' : 'normal'}
+                            >
+                              {formatValue(row.ideal)}
+                            </Text>
+                          )}
+                        </Td>
+                        <Td borderColor="whiteAlpha.100">
+                          {isEditing ? (
+                            <HStack spacing={1}>
+                              <IconButton
+                                aria-label="Confirm"
+                                icon={<FiCheck />}
+                                size="xs"
+                                colorScheme="green"
+                                onClick={handleConfirmEdit}
+                              />
+                              <IconButton
+                                aria-label="Cancel"
+                                icon={<FiX />}
+                                size="xs"
+                                variant="ghost"
+                                onClick={handleCancelEdit}
+                              />
+                            </HStack>
+                          ) : (
+                            <IconButton
+                              aria-label="Edit"
+                              icon={<FiEdit2 />}
+                              size="xs"
+                              variant="ghost"
+                              onClick={() => handleStartEdit(row.key, row.ideal)}
+                            />
+                          )}
+                        </Td>
+                      </MotionTr>
+                    );
+                    })}
+                  </Fragment>
                 );
               })}
             </AnimatePresence>
           </Tbody>
         </Table>
 
-        {indicatorRows.length === 0 && searchFilter && (
+          {totalIndicatorRows === 0 && searchFilter && (
           <Flex justify="center" py={10}>
             <Text color="gray.500">No indicators match "{searchFilter}"</Text>
           </Flex>

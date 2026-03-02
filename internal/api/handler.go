@@ -1,10 +1,15 @@
 package api
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -51,6 +56,11 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	// Scenario data
 	r.HandleFunc("/scenarios", h.handleListScenarios).Methods("GET")
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
+	r.HandleFunc("/metadata/colors", h.handleMetadataColors).Methods("GET")
+	r.HandleFunc("/metadata/details", h.handleMetadataDetails).Methods("GET")
+	r.HandleFunc("/metadata/variabletypes", h.handleMetadataVariableTypes).Methods("GET")
+	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
+	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
@@ -79,6 +89,318 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/boundary/difference/{catchmentId}", h.handleBoundaryDifference).Methods("POST")
 }
 
+// handleMetadataColors returns a map of attribute column names to hex colors.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataColors(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata colors unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	colorIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch normalized {
+		case "ColumnName":
+			columnIdx = i
+		case "color":
+			colorIdx = i
+		}
+	}
+
+	if columnIdx == -1 || colorIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	colors := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || colorIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		color := strings.TrimSpace(record[colorIdx])
+		if column == "" || color == "" {
+			continue
+		}
+		colors[column] = color
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			colors[normalized] = color
+		}
+	}
+
+	respondJSON(w, http.StatusOK, colors)
+}
+
+// handleMetadataDetails returns a map of attribute column names to detailed names.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataDetails(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata details unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	detailIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch normalized {
+		case "ColumnName":
+			columnIdx = i
+		case "Detailed name":
+			detailIdx = i
+		}
+	}
+
+	if columnIdx == -1 || detailIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	details := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || detailIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		detail := strings.TrimSpace(record[detailIdx])
+		if column == "" || detail == "" {
+			continue
+		}
+		details[column] = detail
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			details[normalized] = detail
+		}
+	}
+
+	respondJSON(w, http.StatusOK, details)
+}
+
+// handleMetadataVariableTypes returns a map of attribute column names to variable types.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataVariableTypes(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata variable types unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	variableTypeIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "VariableType"):
+			variableTypeIdx = i
+		}
+	}
+
+	if columnIdx == -1 || variableTypeIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	variableTypes := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || variableTypeIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		variableType := strings.TrimSpace(record[variableTypeIdx])
+		if column == "" || variableType == "" {
+			continue
+		}
+		variableTypes[column] = variableType
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			variableTypes[normalized] = variableType
+		}
+	}
+
+	respondJSON(w, http.StatusOK, variableTypes)
+}
+
+// handleMetadataInputs returns a map of attribute column names to user input flags.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataInputs(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata inputs unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	columnIdx := -1
+	inputIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "userInput"):
+			inputIdx = i
+		}
+	}
+
+	if columnIdx == -1 || inputIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	inputs := make(map[string]bool)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || inputIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		flag := strings.TrimSpace(record[inputIdx])
+		if column == "" || flag == "" {
+			continue
+		}
+		allowed := flag == "1" || strings.EqualFold(flag, "true")
+		inputs[column] = allowed
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			inputs[normalized] = allowed
+		}
+	}
+
+	respondJSON(w, http.StatusOK, inputs)
+}
+
+// handleMetadataCanMap returns a map of attribute column names to canMap flags.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataCanMap(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata canMap unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	columnIdx := -1
+	canMapIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "canMap"):
+			canMapIdx = i
+		}
+	}
+
+	if columnIdx == -1 || canMapIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	canMap := make(map[string]bool)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || canMapIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		flag := strings.TrimSpace(record[canMapIdx])
+		if column == "" || flag == "" {
+			continue
+		}
+		allowed := flag == "1" || strings.EqualFold(flag, "true")
+		canMap[column] = allowed
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			canMap[normalized] = allowed
+		}
+	}
+
+	respondJSON(w, http.StatusOK, canMap)
+}
+
 // respondJSON sends a JSON response (delegates to httputil)
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	httputil.RespondJSON(w, status, data)
@@ -87,6 +409,30 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 // respondError sends a JSON error response (delegates to httputil)
 func respondError(w http.ResponseWriter, status int, message string) {
 	httputil.RespondError(w, status, message)
+}
+
+var dotNormalizer = regexp.MustCompile(`\.{2,}`)
+
+func normalizeMetadataColumn(name string) string {
+	if name == "catchID" {
+		return "catchment_id"
+	}
+	if name == "sp_current.catchID" || name == "sp_reference$catchID" || name == "sp_reference.catchID" {
+		return ""
+	}
+
+	result := name
+	result = strings.ReplaceAll(result, " - ", ".")
+	result = strings.ReplaceAll(result, "-", ".")
+	result = strings.ReplaceAll(result, " ", ".")
+	result = strings.ReplaceAll(result, "$", ".")
+	result = strings.ReplaceAll(result, "'s", ".s")
+	result = strings.ReplaceAll(result, "'", ".")
+	result = strings.ReplaceAll(result, "/", ".")
+	result = strings.ReplaceAll(result, "+", ".")
+	result = dotNormalizer.ReplaceAllString(result, ".")
+
+	return result
 }
 
 // handleHealth returns server health status

@@ -11,7 +11,7 @@ import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import { patchSite, useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -45,6 +45,7 @@ function App() {
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
   const [isBoundaryEditMode, setIsBoundaryEditMode] = useState(false);
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
+  const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -384,6 +385,7 @@ function App() {
             onBoundaryUpdate={handleBoundaryUpdate}
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={setIsSwiperEnabled}
+            colorScaleMode={colorScaleMode}
           />
         </Box>
 
@@ -401,6 +403,8 @@ function App() {
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
           isSwiperEnabled={isSwiperEnabled}
+          colorScaleMode={colorScaleMode}
+          onColorScaleModeChange={setColorScaleMode}
         />
       </Flex>
 

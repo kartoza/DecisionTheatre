@@ -3,7 +3,7 @@ import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/
 import { FiBarChart2, FiMap, FiMaximize, FiGrid } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
-import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox } from '../types';
+import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ViewPaneProps {
@@ -25,6 +25,7 @@ interface ViewPaneProps {
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
+  colorScaleMode: ColorScaleMode;
 }
 
 function ViewPane({
@@ -46,6 +47,7 @@ function ViewPane({
   onBoundaryUpdate,
   isSwiperEnabled,
   onSwiperEnabledChange,
+  colorScaleMode,
 }: ViewPaneProps) {
   const [isChartView, setIsChartView] = useState(false);
   const borderColor = useColorModeValue('gray.600', 'gray.600');
@@ -96,6 +98,7 @@ function ViewPane({
           onBoundaryUpdate={onBoundaryUpdate}
           isSwiperEnabled={isSwiperEnabled}
           onSwiperEnabledChange={onSwiperEnabledChange}
+          colorScaleMode={colorScaleMode}
         />
       </Box>
 

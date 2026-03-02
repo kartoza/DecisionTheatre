@@ -80,6 +80,86 @@ export function useColumns() {
   return { columns, loading };
 }
 
+export function useAttributeColors() {
+  const [colors, setColors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/colors`)
+      .then((data) => {
+        setColors(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { colors, loading };
+}
+
+export function useAttributeDetails() {
+  const [details, setDetails] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/details`)
+      .then((data) => {
+        setDetails(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { details, loading };
+}
+
+export function useAttributeVariableTypes() {
+  const [variableTypes, setVariableTypes] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/variabletypes`)
+      .then((data) => {
+        setVariableTypes(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { variableTypes, loading };
+}
+
+export function useAttributeUserInputs() {
+  const [userInputs, setUserInputs] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/inputs`)
+      .then((data) => {
+        setUserInputs(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { userInputs, loading };
+}
+
+export function useAttributeCanMap() {
+  const [canMap, setCanMap] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/canmap`)
+      .then((data) => {
+        setCanMap(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { canMap, loading };
+}
+
 export function useScenarios() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [loading, setLoading] = useState(true);

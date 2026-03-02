@@ -1,7 +1,7 @@
 import { Box } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
-import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode } from '../types';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -21,6 +21,7 @@ interface ContentAreaProps {
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
+  colorScaleMode: ColorScaleMode;
 }
 
 const paneVariants = {
@@ -63,6 +64,7 @@ function ContentArea({
   onBoundaryUpdate,
   isSwiperEnabled,
   onSwiperEnabledChange,
+  colorScaleMode,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
@@ -99,6 +101,7 @@ function ContentArea({
               identifyResult={identifyResult}
               siteId={siteId}
               siteBounds={siteBounds}
+              colorScaleMode={colorScaleMode}
             />
           </Box>
           <AnimatePresence>
@@ -123,6 +126,7 @@ function ContentArea({
                   identifyResult={identifyResult}
                   siteId={siteId}
                   siteBounds={siteBounds}
+                  colorScaleMode={colorScaleMode}
                 />
               </motion.div>
             ))}
@@ -154,6 +158,7 @@ function ContentArea({
             onBoundaryUpdate={onBoundaryUpdate}
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={onSwiperEnabledChange}
+            colorScaleMode={colorScaleMode}
           />
         </Box>
       )}

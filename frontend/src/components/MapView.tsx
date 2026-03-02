@@ -4,10 +4,10 @@ import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns }
 import maplibregl from 'maplibre-gl';
 import { booleanIntersects, bbox as turfBbox } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite } from '../hooks/useApi';
+import { getSite, useAttributeColors } from '../hooks/useApi';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -24,6 +24,7 @@ interface MapViewProps {
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
+  colorScaleMode: ColorScaleMode;
 }
 
 // Layer IDs for choropleth
@@ -62,6 +63,26 @@ const MIN_CATCHMENT_ZOOM = 7;
 
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
+
+const MIN_FILL_OPACITY = 0.15;
+const MAX_FILL_OPACITY = 0.9;
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = hex.trim().replace('#', '');
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16);
+    const g = parseInt(normalized[1] + normalized[1], 16);
+    const b = parseInt(normalized[2] + normalized[2], 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  if (normalized.length === 6) {
+    const r = parseInt(normalized.slice(0, 2), 16);
+    const g = parseInt(normalized.slice(2, 4), 16);
+    const b = parseInt(normalized.slice(4, 6), 16);
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
+  }
+  return null;
+}
 
 // Debounce delay for fetching choropleth data on map move (ms)
 const FETCH_DEBOUNCE_MS = 300;
@@ -325,8 +346,13 @@ async function fetchChoroplethData(
 function buildFillColorExpression(
   attribute: string,
   min: number,
-  max: number
+  max: number,
+  baseColor?: string | null
 ): maplibregl.ExpressionSpecification | string {
+  if (baseColor) {
+    return baseColor;
+  }
+
   const range = max - min;
   if (range === 0) {
     // Single value - use middle color
@@ -339,6 +365,56 @@ function buildFillColorExpression(
     ['linear'],
     ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
     ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
+  ] as maplibregl.ExpressionSpecification;
+}
+
+function buildFillOpacityExpression(
+  attribute: string,
+  min: number,
+  max: number,
+  minOpacity: number,
+  maxOpacity: number
+): maplibregl.ExpressionSpecification | number {
+  const range = max - min;
+  if (range === 0) {
+    return maxOpacity;
+  }
+
+  return [
+    'interpolate',
+    ['linear'],
+    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    0,
+    minOpacity,
+    1,
+    maxOpacity,
+  ] as maplibregl.ExpressionSpecification;
+}
+
+function buildOpacityColorExpression(
+  attribute: string,
+  min: number,
+  max: number,
+  baseColor: string,
+  minOpacity: number,
+  maxOpacity: number
+): maplibregl.ExpressionSpecification | string {
+  const rgb = hexToRgb(baseColor);
+  if (!rgb) return baseColor;
+
+  const range = max - min;
+  if (range === 0) {
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${maxOpacity})`;
+  }
+
+  return [
+    'interpolate',
+    ['linear'],
+    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    0,
+    `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${minOpacity})`,
+    1,
+    `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${maxOpacity})`,
   ] as maplibregl.ExpressionSpecification;
 }
 
@@ -375,7 +451,8 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode }: MapViewProps) {
+  const { colors: attributeColors } = useAttributeColors();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   const rightMapRef = useRef<maplibregl.Map | null>(null);
@@ -405,6 +482,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Store latest comparison in a ref so async callbacks see current values
   const comparisonRef = useRef(comparison);
   comparisonRef.current = comparison;
+
+  const attributeColorsRef = useRef(attributeColors);
+  attributeColorsRef.current = attributeColors;
 
   // Store identify mode and callback in refs for event handlers
   const isIdentifyModeRef = useRef(isIdentifyMode);
@@ -554,13 +634,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         });
       }
 
+      const attributeColor = colorScaleMode === 'metadata'
+        ? attributeColorsRef.current?.[c.attribute]
+        : undefined;
+
       // Apply to left map - verify the map is ready
       if (leftFiltered && leftFiltered.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded);
+          applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded, attributeColor);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded);
+            applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded, attributeColor);
           });
         }
       } else {
@@ -570,10 +654,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Apply to right map - verify the map is ready
       if (rightFiltered && rightFiltered.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded);
+          applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded, attributeColor);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded);
+            applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded, attributeColor);
           });
         }
       } else {
@@ -582,7 +666,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Failed to apply choropleth:', err);
     }
-  }, []);
+  }, [colorScaleMode]);
+
+  const applyColorsRef = useRef(applyColors);
+  useEffect(() => {
+    applyColorsRef.current = applyColors;
+  }, [applyColors]);
 
   // Compute a site-scoped domain range (min/max) so color scale is based on the site,
   // not on global dataset extrema, once a site exists.
@@ -700,7 +789,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     attribute: string,
     min: number,
     max: number,
-    extruded: boolean
+    extruded: boolean,
+    attributeColor?: string | null
   ) {
     const layerId = `choropleth-${side}`;
     const layer3dId = `${layerId}-3d`;
@@ -716,6 +806,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         data: data as unknown as GeoJSON.FeatureCollection,
       });
 
+      const useOpacityScale = Boolean(attributeColor);
+
       if (extruded) {
         // 3D fill-extrusion layer
         map.addLayer({
@@ -723,10 +815,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           type: 'fill-extrusion',
           source: sourceId,
           paint: {
-            'fill-extrusion-color': buildFillColorExpression(attribute, min, max),
+            'fill-extrusion-color': useOpacityScale && attributeColor
+              ? buildOpacityColorExpression(attribute, min, max, attributeColor, MIN_FILL_OPACITY, MAX_FILL_OPACITY)
+              : buildFillColorExpression(attribute, min, max, attributeColor),
             'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
             'fill-extrusion-base': 0,
-            'fill-extrusion-opacity': 0.8,
+            'fill-extrusion-opacity': useOpacityScale ? 1 : 0.8,
           },
         });
       } else {
@@ -736,8 +830,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           type: 'fill',
           source: sourceId,
           paint: {
-            'fill-color': buildFillColorExpression(attribute, min, max),
-            'fill-opacity': 0.75,
+            'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
+            'fill-opacity': useOpacityScale
+              ? buildFillOpacityExpression(attribute, min, max, MIN_FILL_OPACITY, MAX_FILL_OPACITY)
+              : 0.75,
           },
         });
       }
@@ -831,9 +927,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       clearTimeout(fetchTimerRef.current);
     }
     fetchTimerRef.current = window.setTimeout(() => {
-      applyColors();
+      applyColorsRef.current();
     }, FETCH_DEBOUNCE_MS);
-  }, [applyColors]);
+  }, []);
 
   // Toggle identify mode
   const toggleIdentifyMode = useCallback(() => {
@@ -1188,7 +1284,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       updateMapSizes();
       leftMap.resize();
       if (mapsReady.current.right) {
-        applyColors();
+        applyColorsRef.current();
         setAreMapsReady(true);
       }
     });
@@ -1198,7 +1294,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       updateMapSizes();
       rightMap.resize();
       if (mapsReady.current.left) {
-        applyColors();
+        applyColorsRef.current();
         setAreMapsReady(true);
       }
     });
@@ -1284,7 +1380,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightClipContainer.remove();
       leftClipContainer.remove();
     };
-  }, [applyColors, debouncedApplyColors, handleIdentifyClick]);
+  }, [debouncedApplyColors, handleIdentifyClick]);
 
   // Toggle split-screen layout and slider visibility
   useEffect(() => {
@@ -1359,7 +1455,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, attributeColors]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
