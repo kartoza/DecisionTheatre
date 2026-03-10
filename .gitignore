@@ -22,6 +22,8 @@ data/*.mbtiles
 data/*.parquet
 data/*.geoparquet
 data/*.json
+data/images/
+data/sites/
 
 # Large resource files
 *.mbtiles
