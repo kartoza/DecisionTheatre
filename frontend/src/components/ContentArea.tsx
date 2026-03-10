@@ -1,7 +1,7 @@
 import { Box } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
-import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode } from '../types';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -22,6 +22,10 @@ interface ContentAreaProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  // Dial chart props
+  siteIndicators?: SiteIndicators | null;
+  rangeMode?: RangeMode;
+  mapStatistics?: MapStatistics | null;
 }
 
 const paneVariants = {
@@ -65,6 +69,9 @@ function ContentArea({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  siteIndicators,
+  rangeMode,
+  mapStatistics,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
@@ -159,6 +166,9 @@ function ContentArea({
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={onSwiperEnabledChange}
             colorScaleMode={colorScaleMode}
+            siteIndicators={siteIndicators}
+            rangeMode={rangeMode}
+            mapStatistics={mapStatistics}
           />
         </Box>
       )}

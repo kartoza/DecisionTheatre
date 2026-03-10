@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
-import { FiBarChart2, FiMap, FiMaximize, FiGrid } from 'react-icons/fi';
+import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
-import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode } from '../types';
+import DialChart from './DialChart';
+import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ViewPaneProps {
@@ -26,7 +27,21 @@ interface ViewPaneProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  // Dial chart props
+  siteIndicators?: SiteIndicators | null;
+  rangeMode?: RangeMode;
+  mapStatistics?: MapStatistics | null;
 }
+
+// View mode cycle order
+const VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial'];
+
+// Icons and labels for each view mode
+const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string; nextLabel: string }> = {
+  map: { icon: <FiMap />, label: 'Map', nextLabel: 'Show line chart' },
+  chart: { icon: <FiBarChart2 />, label: 'Chart', nextLabel: 'Show dial gauge' },
+  dial: { icon: <FiActivity />, label: 'Dial', nextLabel: 'Show map' },
+};
 
 function ViewPane({
   comparison,
@@ -48,13 +63,88 @@ function ViewPane({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  siteIndicators,
+  rangeMode = 'domain',
+  mapStatistics,
 }: ViewPaneProps) {
-  const [isChartView, setIsChartView] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('map');
   const borderColor = useColorModeValue('gray.600', 'gray.600');
 
-  const handleToggle = useCallback(() => {
-    setIsChartView((prev) => !prev);
+  // Cycle through view modes: map -> chart -> dial -> map
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const currentIndex = VIEW_MODES.indexOf(prev);
+      const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
+      return VIEW_MODES[nextIndex];
+    });
   }, []);
+
+  // Calculate dial chart values based on current attribute and range mode
+  const dialData = useMemo(() => {
+    const attribute = comparison.attribute;
+    if (!attribute) return null;
+
+    let min = 0;
+    let max = 100;
+    let referenceValue: number | undefined;
+    let currentValue: number | undefined;
+    let targetValue: number | undefined;
+
+    // Get values from site indicators if available
+    if (siteIndicators) {
+      referenceValue = siteIndicators.reference?.[attribute];
+      currentValue = siteIndicators.current?.[attribute];
+      targetValue = siteIndicators.ideal?.[attribute];
+    }
+
+    // Determine min/max based on range mode
+    switch (rangeMode) {
+      case 'site':
+        // Use min/max from site indicators
+        if (siteIndicators) {
+          const values = [
+            siteIndicators.reference?.[attribute],
+            siteIndicators.current?.[attribute],
+            siteIndicators.ideal?.[attribute],
+          ].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9; // 10% padding
+            max = Math.max(...values) * 1.1;
+          }
+        }
+        break;
+      case 'extent':
+        // Use min/max from current map extent statistics
+        if (mapStatistics?.leftStats && mapStatistics?.rightStats) {
+          min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
+          max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
+        } else if (mapStatistics?.leftStats) {
+          min = mapStatistics.leftStats.min;
+          max = mapStatistics.leftStats.max;
+        } else if (mapStatistics?.rightStats) {
+          min = mapStatistics.rightStats.min;
+          max = mapStatistics.rightStats.max;
+        }
+        break;
+      case 'domain':
+      default:
+        // Use full domain range
+        if (mapStatistics?.domainRange) {
+          min = mapStatistics.domainRange.min;
+          max = mapStatistics.domainRange.max;
+        }
+        break;
+    }
+
+    // Ensure min < max
+    if (min >= max) {
+      const mid = (min + max) / 2 || 50;
+      min = mid - 10;
+      max = mid + 10;
+    }
+
+    return { min, max, referenceValue, currentValue, targetValue };
+  }, [comparison.attribute, siteIndicators, rangeMode, mapStatistics]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
@@ -79,9 +169,9 @@ function ViewPane({
         left={0}
         right={0}
         bottom={0}
-        opacity={isChartView ? 0 : 1}
+        opacity={viewMode === 'map' ? 1 : 0}
         transition="opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
-        pointerEvents={isChartView ? 'none' : 'auto'}
+        pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
       >
         <MapView
           comparison={comparison}
@@ -102,8 +192,20 @@ function ViewPane({
         />
       </Box>
 
-      {/* Chart layer */}
-      <ChartView visible={isChartView} />
+      {/* Line Chart layer */}
+      <ChartView visible={viewMode === 'chart'} />
+
+      {/* Dial Chart layer */}
+      <DialChart
+        visible={viewMode === 'dial'}
+        referenceValue={dialData?.referenceValue}
+        currentValue={dialData?.currentValue}
+        targetValue={dialData?.targetValue}
+        min={dialData?.min ?? 0}
+        max={dialData?.max ?? 100}
+        attribute={comparison.attribute}
+        rangeMode={rangeMode}
+      />
 
       {/* Pane label (shown in quad mode) */}
       {compact && (
@@ -141,12 +243,12 @@ function ViewPane({
         backdropFilter="blur(8px)"
         transition="opacity 0.3s ease"
       >
-        {/* Map / Chart toggle */}
-        <Tooltip label={isChartView ? 'Show map' : 'Show chart'} placement="top">
+        {/* View mode toggle: map -> chart -> dial -> map */}
+        <Tooltip label={VIEW_MODE_CONFIG[viewMode].nextLabel} placement="top">
           <IconButton
-            aria-label="Toggle map/chart"
-            icon={isChartView ? <FiMap /> : <FiBarChart2 />}
-            onClick={handleToggle}
+            aria-label="Toggle view mode"
+            icon={VIEW_MODE_CONFIG[viewMode].icon}
+            onClick={handleToggleViewMode}
             variant="ghost"
             color="white"
             _hover={{ bg: 'whiteAlpha.300' }}

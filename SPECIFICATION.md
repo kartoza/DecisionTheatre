@@ -126,8 +126,17 @@ interface Site {
   boundingBox?: BoundingBox;
   area?: number; // km²
   creationMethod?: 'shapefile' | 'geojson' | 'drawn' | 'catchments';
-  catchmentIds?: string[]; // if created from catchments
+  catchmentIds?: string[]; // if created from catchments;
+
+  // Site indicators (aggregated from catchments)
+  indicators?: SiteIndicators;
 }
+
+// View mode for each visualization pane
+type ViewMode = 'map' | 'chart' | 'dial';
+
+// Range mode for dial chart min/max values
+type RangeMode = 'domain' | 'extent' | 'site';
 ```
 
 ---
@@ -149,10 +158,44 @@ interface Site {
 - Choropleth layers with attribute values
 - Catchment outlines at high zoom
 
+### Visualization Modes
+
+Each pane supports three visualization modes, cycled via toolbar button:
+
+#### 4.1 Choropleth Map (Default)
+- Geographical display with catchment polygons
+- Color intensity based on attribute values
+- Dual-scenario comparison with slider
+- Zone statistics for visible area
+
+#### 4.2 Line Chart
+- Time-series style visualization
+- Three series: Reference, Current, Target
+- Animated data reveal on view change
+- Staggered dot animations
+
+#### 4.3 Dial Chart (Gauge)
+- Half-circle gauge visualization
+- Shows aggregate values across entire site
+- Three needles:
+  - **Reference** (orange, dashed): Ecological baseline
+  - **Current** (blue, solid primary): Current observed state
+  - **Target** (green, dashed): User-defined target
+- Gradient arc from green (low) to red (high)
+- Animated needle movement with elastic easing
+- Center value display with unit
+
+**Range Mode Options** (for dial chart min/max):
+- **Full (Domain)**: Min/max from entire dataset across all catchments
+- **Extent**: Min/max from currently visible map area
+- **Site**: Min/max from site's aggregated indicator values
+
 ### Control Panel (Slide-out)
 - Scenario 1 selector (left map)
 - Scenario 2 selector (right map)
 - Attribute/factor selector
+- Color scale mode toggle (Rainbow / Metadata)
+- Dial range mode toggle (Full / Extent / Site)
 - Color scale legend
 - Zone statistics
 - Identify results table with horizontal bar visualization

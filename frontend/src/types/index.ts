@@ -35,6 +35,12 @@ export type ColorScaleMode = 'rainbow' | 'metadata';
 
 export type LayoutMode = 'single' | 'quad';
 
+/** View mode for each pane: map choropleth, line chart, or dial gauge */
+export type ViewMode = 'map' | 'chart' | 'dial';
+
+/** Range mode for dial chart min/max values */
+export type RangeMode = 'domain' | 'extent' | 'site';
+
 /** Per-pane state array (always 4 entries, indexed 0-3) */
 export type PaneStates = [ComparisonState, ComparisonState, ComparisonState, ComparisonState];
 
@@ -89,6 +95,20 @@ export function loadFocusedPane(): number {
 
 export function saveFocusedPane(index: number): void {
   try { localStorage.setItem(STORAGE_FOCUSED_KEY, String(index)); } catch { /* ignore */ }
+}
+
+const STORAGE_RANGE_MODE_KEY = 'dt-range-mode';
+
+export function loadRangeMode(): RangeMode {
+  try {
+    const raw = localStorage.getItem(STORAGE_RANGE_MODE_KEY);
+    if (raw === 'domain' || raw === 'extent' || raw === 'site') return raw;
+  } catch { /* default */ }
+  return 'domain';
+}
+
+export function saveRangeMode(mode: RangeMode): void {
+  try { localStorage.setItem(STORAGE_RANGE_MODE_KEY, mode); } catch { /* ignore */ }
 }
 
 export const SCENARIOS: ScenarioInfo[] = [

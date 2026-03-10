@@ -11,7 +11,7 @@ import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import { patchSite, useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -23,6 +23,8 @@ import {
   saveCurrentPage,
   loadCurrentSite,
   saveCurrentSite,
+  loadRangeMode,
+  saveRangeMode,
 } from './types';
 
 function App() {
@@ -46,6 +48,7 @@ function App() {
   const [isBoundaryEditMode, setIsBoundaryEditMode] = useState(false);
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
+  const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -54,6 +57,7 @@ function App() {
   useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
+  useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
 
   // Auto-save site state when user interacts with the map (debounced)
   const siteAutoSaveTimerRef = useRef<number | null>(null);
@@ -386,6 +390,9 @@ function App() {
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
+            siteIndicators={currentSite?.indicators}
+            rangeMode={rangeMode}
+            mapStatistics={mapStatistics}
           />
         </Box>
 
@@ -405,6 +412,8 @@ function App() {
           isSwiperEnabled={isSwiperEnabled}
           colorScaleMode={colorScaleMode}
           onColorScaleModeChange={setColorScaleMode}
+          rangeMode={rangeMode}
+          onRangeModeChange={setRangeMode}
         />
       </Flex>
 

@@ -23,8 +23,15 @@ import {
 import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
 import { useAttributeCanMap, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
+
+// Range mode configuration
+const RANGE_MODE_CONFIG: { id: RangeMode; label: string; description: string }[] = [
+  { id: 'domain', label: 'Full', description: 'Min/max from entire dataset' },
+  { id: 'extent', label: 'Extent', description: 'Min/max from visible map area' },
+  { id: 'site', label: 'Site', description: 'Min/max from site indicators' },
+];
 
 interface ControlPanelProps {
   isOpen: boolean;
@@ -41,6 +48,8 @@ interface ControlPanelProps {
   isSwiperEnabled?: boolean;
   colorScaleMode: ColorScaleMode;
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
+  rangeMode?: RangeMode;
+  onRangeModeChange?: (mode: RangeMode) => void;
 }
 
 import type { ZoneStats } from '../types';
@@ -181,6 +190,8 @@ function ControlPanel({
   isSwiperEnabled = true,
   colorScaleMode,
   onColorScaleModeChange,
+  rangeMode = 'domain',
+  onRangeModeChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
@@ -371,6 +382,33 @@ function ControlPanel({
                 </Button>
               </ButtonGroup>
             </HStack>
+
+            {/* Range mode selector for dial chart */}
+            {onRangeModeChange && (
+              <HStack mt={4} justify="space-between" align="center">
+                <Tooltip label="Controls min/max range for the dial chart gauge">
+                  <HStack spacing={1} cursor="help">
+                    <Text fontSize="xs" fontWeight="600" color="gray.500">
+                      Dial range
+                    </Text>
+                    <FiInfo size={12} color="gray" />
+                  </HStack>
+                </Tooltip>
+                <ButtonGroup size="xs" isAttached variant="outline">
+                  {RANGE_MODE_CONFIG.map((mode) => (
+                    <Tooltip key={mode.id} label={mode.description} placement="top">
+                      <Button
+                        onClick={() => onRangeModeChange(mode.id)}
+                        variant={rangeMode === mode.id ? 'solid' : 'outline'}
+                        colorScheme={rangeMode === mode.id ? 'cyan' : 'gray'}
+                      >
+                        {mode.label}
+                      </Button>
+                    </Tooltip>
+                  ))}
+                </ButtonGroup>
+              </HStack>
+            )}
           </Box>
 
           <Divider />
