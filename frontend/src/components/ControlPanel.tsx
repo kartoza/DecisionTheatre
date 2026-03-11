@@ -20,17 +20,17 @@ import {
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useAttributeCanMap, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
 
-// Range mode configuration
-const RANGE_MODE_CONFIG: { id: RangeMode; label: string; description: string }[] = [
-  { id: 'domain', label: 'Full', description: 'Min/max from entire dataset' },
-  { id: 'extent', label: 'Extent', description: 'Min/max from visible map area' },
-  { id: 'site', label: 'Site', description: 'Min/max from site indicators' },
+// Range mode configuration with icons
+const RANGE_MODE_CONFIG: { id: RangeMode; label: string; description: string; icon: React.ReactNode }[] = [
+  { id: 'domain', label: 'Full', description: 'Use min/max values from the entire dataset across all catchments', icon: <FiGlobe /> },
+  { id: 'extent', label: 'Extent', description: 'Calculate min/max from catchments visible in current map viewport', icon: <FiSquare /> },
+  { id: 'site', label: 'Site', description: 'Use min/max from catchments within the site boundary only', icon: <FiTarget /> },
 ];
 
 interface ControlPanelProps {
@@ -383,31 +383,56 @@ function ControlPanel({
               </ButtonGroup>
             </HStack>
 
-            {/* Range mode selector for dial chart */}
+            {/* Range mode selector for dial chart - beautiful segmented control */}
             {onRangeModeChange && (
-              <HStack mt={4} justify="space-between" align="center">
-                <Tooltip label="Controls min/max range for the dial chart gauge">
-                  <HStack spacing={1} cursor="help">
-                    <Text fontSize="xs" fontWeight="600" color="gray.500">
-                      Dial range
-                    </Text>
-                    <FiInfo size={12} color="gray" />
-                  </HStack>
-                </Tooltip>
-                <ButtonGroup size="xs" isAttached variant="outline">
-                  {RANGE_MODE_CONFIG.map((mode) => (
-                    <Tooltip key={mode.id} label={mode.description} placement="top">
-                      <Button
-                        onClick={() => onRangeModeChange(mode.id)}
-                        variant={rangeMode === mode.id ? 'solid' : 'outline'}
-                        colorScheme={rangeMode === mode.id ? 'cyan' : 'gray'}
-                      >
-                        {mode.label}
-                      </Button>
-                    </Tooltip>
-                  ))}
-                </ButtonGroup>
-              </HStack>
+              <Box mt={5}>
+                <HStack mb={2} spacing={1}>
+                  <Text fontSize="xs" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="wider">
+                    Dial Gauge Range
+                  </Text>
+                  <Tooltip label="Controls which catchments are used to calculate the min/max scale for the dial chart">
+                    <Box cursor="help" color="gray.500">
+                      <FiInfo size={12} />
+                    </Box>
+                  </Tooltip>
+                </HStack>
+                <HStack
+                  spacing={0}
+                  bg="whiteAlpha.50"
+                  borderRadius="xl"
+                  p={1}
+                  border="1px solid"
+                  borderColor="whiteAlpha.100"
+                >
+                  {RANGE_MODE_CONFIG.map((mode) => {
+                    const isActive = rangeMode === mode.id;
+                    return (
+                      <Tooltip key={mode.id} label={mode.description} placement="top" hasArrow>
+                        <Button
+                          flex={1}
+                          size="sm"
+                          onClick={() => onRangeModeChange(mode.id)}
+                          leftIcon={mode.icon as React.ReactElement}
+                          variant="ghost"
+                          bg={isActive ? 'cyan.500' : 'transparent'}
+                          color={isActive ? 'white' : 'gray.400'}
+                          borderRadius="lg"
+                          fontWeight={isActive ? '600' : '500'}
+                          fontSize="xs"
+                          _hover={{
+                            bg: isActive ? 'cyan.400' : 'whiteAlpha.100',
+                            color: isActive ? 'white' : 'gray.200',
+                          }}
+                          transition="all 0.2s"
+                          boxShadow={isActive ? '0 2px 8px rgba(0, 188, 212, 0.4)' : 'none'}
+                        >
+                          {mode.label}
+                        </Button>
+                      </Tooltip>
+                    );
+                  })}
+                </HStack>
+              </Box>
             )}
           </Box>
 
