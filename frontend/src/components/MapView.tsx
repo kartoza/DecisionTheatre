@@ -25,6 +25,9 @@ interface MapViewProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  // Slider position synchronization
+  swiperPosition?: number;
+  onSwiperPositionChange?: (position: number) => void;
 }
 
 // Layer IDs for choropleth
@@ -451,7 +454,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange }: MapViewProps) {
   const { colors: attributeColors } = useAttributeColors();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
@@ -1337,6 +1340,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Trigger resize for both maps
       leftMap.resize();
       rightMap.resize();
+
+      // Notify parent of position change for synchronization
+      if (onSwiperPositionChange) {
+        onSwiperPositionChange(percent);
+      }
     }
 
     function onSliderPointerUp(e: PointerEvent) {
@@ -1425,6 +1433,41 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     leftMap.resize();
     rightMap.resize();
   }, [isSwiperEnabled]);
+
+  // Synchronize slider position when prop changes (from another pane)
+  useEffect(() => {
+    if (swiperPosition === undefined || !isSwiperEnabled) return;
+
+    const container = mapContainerRef.current;
+    const slider = sliderRef.current;
+    const leftClipContainer = leftClipContainerRef.current;
+    const rightClipContainer = compareContainerRef.current;
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!container || !slider || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) return;
+
+    // Don't update if we're currently dragging (to avoid feedback loop)
+    if (isDragging.current) return;
+
+    const leftContainer = container.querySelector('#map-left') as HTMLDivElement | null;
+    const rightContainer = container.querySelector('#map-right') as HTMLDivElement | null;
+    if (!leftContainer || !rightContainer) return;
+
+    slider.style.left = `${swiperPosition}%`;
+    leftClipContainer.style.width = `${swiperPosition}%`;
+    rightClipContainer.style.width = `${100 - swiperPosition}%`;
+
+    // Update map sizes
+    const parentWidth = container.offsetWidth;
+    const rightClipWidth = rightClipContainer.offsetWidth;
+    leftContainer.style.width = `${parentWidth}px`;
+    rightContainer.style.width = `${parentWidth}px`;
+    rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
+
+    leftMap.resize();
+    rightMap.resize();
+  }, [swiperPosition, isSwiperEnabled]);
 
   // Update labels and colours when comparison changes
   useEffect(() => {

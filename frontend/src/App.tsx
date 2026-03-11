@@ -49,6 +49,7 @@ function App() {
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
+  const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -390,6 +391,8 @@ function App() {
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
+            swiperPosition={swiperPosition}
+            onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}
             rangeMode={rangeMode}
             onRangeModeChange={setRangeMode}

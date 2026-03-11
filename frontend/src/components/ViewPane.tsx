@@ -27,6 +27,9 @@ interface ViewPaneProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  // Slider synchronization
+  swiperPosition?: number;
+  onSwiperPositionChange?: (position: number) => void;
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
@@ -64,6 +67,8 @@ function ViewPane({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  swiperPosition,
+  onSwiperPositionChange,
   siteIndicators,
   rangeMode = 'domain',
   onRangeModeChange,
@@ -138,6 +143,20 @@ function ViewPane({
         break;
     }
 
+    // If no siteIndicators, use map statistics for demonstration values
+    if (!siteIndicators && mapStatistics) {
+      const leftMean = mapStatistics.leftStats?.mean;
+      const rightMean = mapStatistics.rightStats?.mean;
+
+      // Use left scenario mean as "reference", right as "current"
+      if (leftMean !== undefined) referenceValue = leftMean;
+      if (rightMean !== undefined) currentValue = rightMean;
+      // Target is midpoint between min and max (aspirational)
+      if (min !== undefined && max !== undefined) {
+        targetValue = min + (max - min) * 0.3; // Lower is typically better
+      }
+    }
+
     // Ensure min < max
     if (min >= max) {
       const mid = (min + max) / 2 || 50;
@@ -191,6 +210,8 @@ function ViewPane({
           isSwiperEnabled={isSwiperEnabled}
           onSwiperEnabledChange={onSwiperEnabledChange}
           colorScaleMode={colorScaleMode}
+          swiperPosition={swiperPosition}
+          onSwiperPositionChange={onSwiperPositionChange}
         />
       </Box>
 

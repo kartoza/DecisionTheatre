@@ -22,6 +22,9 @@ interface ContentAreaProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  // Slider synchronization
+  swiperPosition?: number;
+  onSwiperPositionChange?: (position: number) => void;
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
@@ -70,6 +73,8 @@ function ContentArea({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  swiperPosition,
+  onSwiperPositionChange,
   siteIndicators,
   rangeMode,
   onRangeModeChange,
@@ -111,6 +116,8 @@ function ContentArea({
               siteId={siteId}
               siteBounds={siteBounds}
               colorScaleMode={colorScaleMode}
+              swiperPosition={swiperPosition}
+              onSwiperPositionChange={onSwiperPositionChange}
             />
           </Box>
           <AnimatePresence>
@@ -136,6 +143,8 @@ function ContentArea({
                   siteId={siteId}
                   siteBounds={siteBounds}
                   colorScaleMode={colorScaleMode}
+                  swiperPosition={swiperPosition}
+                  onSwiperPositionChange={onSwiperPositionChange}
                 />
               </motion.div>
             ))}
@@ -168,6 +177,8 @@ function ContentArea({
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={onSwiperEnabledChange}
             colorScaleMode={colorScaleMode}
+            swiperPosition={swiperPosition}
+            onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}
             rangeMode={rangeMode}
             onRangeModeChange={onRangeModeChange}

@@ -457,31 +457,56 @@ function DialChart({
                 </g>
               ))}
 
-              {/* MIN / MAX labels */}
-              <text
-                x={centerX - radius - arcWidth/2 - 50}
-                y={centerY + 10}
-                textAnchor="middle"
-                fill="#a0aec0"
-                fontSize={16}
-                fontFamily="Inter, system-ui, sans-serif"
-                fontWeight="600"
-                opacity={arcProgress}
-              >
-                MIN
-              </text>
-              <text
-                x={centerX + radius + arcWidth/2 + 50}
-                y={centerY + 10}
-                textAnchor="middle"
-                fill="#a0aec0"
-                fontSize={16}
-                fontFamily="Inter, system-ui, sans-serif"
-                fontWeight="600"
-                opacity={arcProgress}
-              >
-                MAX
-              </text>
+              {/* MIN / MAX labels - positioned below the dial, much bigger */}
+              <g opacity={arcProgress}>
+                {/* MIN label and value */}
+                <text
+                  x={centerX - radius * 0.6}
+                  y={centerY + 50}
+                  textAnchor="middle"
+                  fill="#a0aec0"
+                  fontSize={28}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fontWeight="700"
+                >
+                  MIN
+                </text>
+                <text
+                  x={centerX - radius * 0.6}
+                  y={centerY + 85}
+                  textAnchor="middle"
+                  fill="#f7fafc"
+                  fontSize={32}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fontWeight="800"
+                >
+                  {formatValue(min)}
+                </text>
+
+                {/* MAX label and value */}
+                <text
+                  x={centerX + radius * 0.6}
+                  y={centerY + 50}
+                  textAnchor="middle"
+                  fill="#a0aec0"
+                  fontSize={28}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fontWeight="700"
+                >
+                  MAX
+                </text>
+                <text
+                  x={centerX + radius * 0.6}
+                  y={centerY + 85}
+                  textAnchor="middle"
+                  fill="#f7fafc"
+                  fontSize={32}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fontWeight="800"
+                >
+                  {formatValue(max)}
+                </text>
+              </g>
 
               {/* Center hub */}
               <circle cx={centerX} cy={centerY} r={40} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcProgress} />
