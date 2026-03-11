@@ -462,6 +462,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const leftClipContainerRef = useRef<HTMLDivElement | null>(null);
   const compareContainerRef = useRef<HTMLDivElement | null>(null);
   const sliderRef = useRef<HTMLDivElement | null>(null);
+  const sliderHandleRef = useRef<HTMLDivElement | null>(null);
+  const sliderDockedRef = useRef<'left' | 'right' | null>(null);
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
 
@@ -1113,6 +1115,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       box-shadow:0 0 8px rgba(0,0,0,0.4);
       transform:translateX(-50%);
       touch-action:none;
+      transition:background 0.2s ease, box-shadow 0.2s ease, width 0.2s ease;
     `;
 
     // Slider handle
@@ -1131,12 +1134,58 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       align-items:center;
       justify-content:center;
       cursor:ew-resize;
+      transition:border-radius 0.2s ease, left 0.2s ease, transform 0.2s ease;
     `;
-    handle.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4L3 10L7 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4L17 10L13 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    // SVG icons for different states
+    const ARROWS_BOTH = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4L3 10L7 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4L17 10L13 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const ARROW_RIGHT = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4L16 10L10 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const ARROW_LEFT = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4L4 10L10 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    handle.innerHTML = ARROWS_BOTH;
+
+    // Docking threshold (percentage from edge to trigger dock)
+    const DOCK_THRESHOLD = 3;
+
+    // Update slider visuals based on docked state
+    function updateSliderVisuals(docked: 'left' | 'right' | null) {
+      if (docked === sliderDockedRef.current) return;
+      sliderDockedRef.current = docked;
+
+      if (docked === 'left') {
+        // Docked left - half circle on right side
+        slider.style.background = 'transparent';
+        slider.style.boxShadow = 'none';
+        slider.style.width = '6px';
+        handle.style.borderRadius = '0 50% 50% 0';
+        handle.style.left = '100%';
+        handle.style.transform = 'translate(0, -50%)';
+        handle.innerHTML = ARROW_RIGHT;
+      } else if (docked === 'right') {
+        // Docked right - half circle on left side
+        slider.style.background = 'transparent';
+        slider.style.boxShadow = 'none';
+        slider.style.width = '6px';
+        handle.style.borderRadius = '50% 0 0 50%';
+        handle.style.left = '0';
+        handle.style.transform = 'translate(-100%, -50%)';
+        handle.innerHTML = ARROW_LEFT;
+      } else {
+        // Undocked - normal state
+        slider.style.background = 'white';
+        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
+        slider.style.width = '12px';
+        handle.style.borderRadius = '50%';
+        handle.style.left = '50%';
+        handle.style.transform = 'translate(-50%, -50%)';
+        handle.innerHTML = ARROWS_BOTH;
+      }
+    }
 
     slider.appendChild(handle);
     container.appendChild(slider);
     sliderRef.current = slider;
+    sliderHandleRef.current = handle;
     leftClipContainerRef.current = leftClipContainer;
     compareContainerRef.current = rightClipContainer;
 
@@ -1328,10 +1377,35 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       e.preventDefault();
 
       const rect = container.getBoundingClientRect();
-      const x = Math.max(20, Math.min(e.clientX - rect.left, rect.width - 20));
-      const percent = (x / rect.width) * 100;
+      // Allow slider to reach edges (0 to 100%)
+      const rawX = e.clientX - rect.left;
+      const rawPercent = (rawX / rect.width) * 100;
 
+      // Determine if we should dock
+      let percent: number;
+      let newDockedState: 'left' | 'right' | null = null;
+
+      if (rawPercent <= DOCK_THRESHOLD) {
+        // Dock to left edge
+        percent = 0;
+        newDockedState = 'left';
+      } else if (rawPercent >= 100 - DOCK_THRESHOLD) {
+        // Dock to right edge
+        percent = 100;
+        newDockedState = 'right';
+      } else {
+        // Normal undocked state - keep some margin for handle visibility
+        const x = Math.max(20, Math.min(rawX, rect.width - 20));
+        percent = (x / rect.width) * 100;
+        newDockedState = null;
+      }
+
+      // Update slider position
       slider.style.left = `${percent}%`;
+
+      // Update visuals for docked state
+      updateSliderVisuals(newDockedState);
+
       // Update both clip containers
       leftClipContainer.style.width = `${percent}%`;
       rightClipContainer.style.width = `${100 - percent}%`;
@@ -1381,6 +1455,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       leftClipContainerRef.current = null;
       compareContainerRef.current = null;
       sliderRef.current = null;
+      sliderHandleRef.current = null;
+      sliderDockedRef.current = null;
       indicatorLabel.remove();
       rightLabel.remove();
       leftLabel.remove();
@@ -1440,12 +1516,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     const container = mapContainerRef.current;
     const slider = sliderRef.current;
+    const handle = sliderHandleRef.current;
     const leftClipContainer = leftClipContainerRef.current;
     const rightClipContainer = compareContainerRef.current;
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!container || !slider || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) return;
+    if (!container || !slider || !handle || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) return;
 
     // Don't update if we're currently dragging (to avoid feedback loop)
     if (isDragging.current) return;
@@ -1457,6 +1534,49 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     slider.style.left = `${swiperPosition}%`;
     leftClipContainer.style.width = `${swiperPosition}%`;
     rightClipContainer.style.width = `${100 - swiperPosition}%`;
+
+    // Update docked state based on position
+    const DOCK_THRESHOLD = 3;
+    const ARROWS_BOTH = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4L3 10L7 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 4L17 10L13 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const ARROW_RIGHT = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4L16 10L10 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const ARROW_LEFT = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4L4 10L10 16" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    let newDockedState: 'left' | 'right' | null = null;
+    if (swiperPosition <= DOCK_THRESHOLD) {
+      newDockedState = 'left';
+    } else if (swiperPosition >= 100 - DOCK_THRESHOLD) {
+      newDockedState = 'right';
+    }
+
+    if (newDockedState !== sliderDockedRef.current) {
+      sliderDockedRef.current = newDockedState;
+
+      if (newDockedState === 'left') {
+        slider.style.background = 'transparent';
+        slider.style.boxShadow = 'none';
+        slider.style.width = '6px';
+        handle.style.borderRadius = '0 50% 50% 0';
+        handle.style.left = '100%';
+        handle.style.transform = 'translate(0, -50%)';
+        handle.innerHTML = ARROW_RIGHT;
+      } else if (newDockedState === 'right') {
+        slider.style.background = 'transparent';
+        slider.style.boxShadow = 'none';
+        slider.style.width = '6px';
+        handle.style.borderRadius = '50% 0 0 50%';
+        handle.style.left = '0';
+        handle.style.transform = 'translate(-100%, -50%)';
+        handle.innerHTML = ARROW_LEFT;
+      } else {
+        slider.style.background = 'white';
+        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
+        slider.style.width = '12px';
+        handle.style.borderRadius = '50%';
+        handle.style.left = '50%';
+        handle.style.transform = 'translate(-50%, -50%)';
+        handle.innerHTML = ARROWS_BOTH;
+      }
+    }
 
     // Update map sizes
     const parentWidth = container.offsetWidth;
