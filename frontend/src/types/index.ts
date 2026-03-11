@@ -35,8 +35,8 @@ export type ColorScaleMode = 'rainbow' | 'metadata';
 
 export type LayoutMode = 'single' | 'quad';
 
-/** View mode for each pane: map choropleth, line chart, or dial gauge */
-export type ViewMode = 'map' | 'chart' | 'dial';
+/** View mode for each pane: map choropleth, line chart, dial gauge, or aggregate table */
+export type ViewMode = 'map' | 'chart' | 'dial' | 'table';
 
 /** Range mode for dial chart min/max values */
 export type RangeMode = 'domain' | 'extent' | 'site';

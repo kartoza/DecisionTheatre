@@ -1,9 +1,10 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
-import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity } from 'react-icons/fi';
+import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
+import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 
@@ -38,13 +39,14 @@ interface ViewPaneProps {
 }
 
 // View mode cycle order
-const VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial'];
+const VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial', 'table'];
 
 // Icons and labels for each view mode
 const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string; nextLabel: string }> = {
   map: { icon: <FiMap />, label: 'Map', nextLabel: 'Show line chart' },
   chart: { icon: <FiBarChart2 />, label: 'Chart', nextLabel: 'Show dial gauge' },
-  dial: { icon: <FiActivity />, label: 'Dial', nextLabel: 'Show map' },
+  dial: { icon: <FiActivity />, label: 'Dial', nextLabel: 'Show aggregate table' },
+  table: { icon: <FiTable />, label: 'Table', nextLabel: 'Show map' },
 };
 
 function ViewPane({
@@ -229,6 +231,13 @@ function ViewPane({
         attribute={comparison.attribute}
         rangeMode={rangeMode}
         onRangeModeChange={onRangeModeChange}
+      />
+
+      {/* Aggregate Table layer */}
+      <AggregateTable
+        visible={viewMode === 'table'}
+        attribute={comparison.attribute}
+        scenario={comparison.leftScenario}
       />
 
       {/* Pane label (shown in quad mode) */}
