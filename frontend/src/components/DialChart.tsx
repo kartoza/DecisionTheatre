@@ -174,13 +174,23 @@ function DialChart({
   // Calculate dial dimensions - HORIZONTAL half-circle (arc above, flat bottom)
   const { width, height } = size;
   const centerX = width / 2;
-  // Center is at bottom of the arc area, arc curves upward
-  const centerY = height - PADDING.bottom;
-  const radius = Math.min(
-    (width - PADDING.left - PADDING.right) / 2,
-    height - PADDING.top - PADDING.bottom
-  ) * 0.85;
+
+  // Calculate radius based on available space
+  const availableWidth = width - PADDING.left - PADDING.right;
+  const availableHeight = height - PADDING.top - PADDING.bottom;
+  // For a half-circle: height needed = radius (arc) + ~120px (labels below center)
+  const maxRadiusFromWidth = availableWidth / 2;
+  const maxRadiusFromHeight = availableHeight - 120; // Reserve space for labels below
+  const radius = Math.min(maxRadiusFromWidth, maxRadiusFromHeight) * 0.75;
   const arcWidth = Math.max(40, radius * 0.15);
+
+  // Center the dial vertically within the container
+  // The dial visual occupies: radius above center + ~100px below center
+  const spaceAbove = radius + arcWidth / 2 + 60; // arc + ticks + tick labels
+  const spaceBelow = 100; // MIN/MAX labels + legend
+  const totalDialHeight = spaceAbove + spaceBelow;
+  const verticalOffset = (availableHeight - totalDialHeight) / 2;
+  const centerY = PADDING.top + spaceAbove + verticalOffset;
 
   // Generate tick marks around the arc
   const tickCount = 11;
@@ -569,7 +579,7 @@ function DialChart({
               )}
 
               {/* Legend */}
-              <g transform={`translate(${centerX - 220}, ${height - 50})`} opacity={needleProgress}>
+              <g transform={`translate(${centerX - 220}, ${centerY + 95})`} opacity={needleProgress}>
                 {/* Reference */}
                 <g>
                   <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.reference} strokeWidth={4} strokeDasharray="8,6" />
