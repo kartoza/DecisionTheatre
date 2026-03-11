@@ -152,7 +152,7 @@ type RangeMode = 'domain' | 'extent' | 'site';
 
 ### Map View
 - Dual synchronized maps (left/right comparison)
-- Draggable slider for A/B comparison
+- Draggable slider for A/B comparison (starts at left edge, drag right to reveal left scenario)
 - 3D mode with pitch controls
 - Identify mode for feature inspection
 - Choropleth layers with attribute values
@@ -185,17 +185,18 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - Animated needle movement with elastic easing
 - Center value display with unit
 
-**Range Mode Options** (for dial chart min/max):
+**Range Mode Options** (toggle inside dial chart):
 - **Full (Domain)**: Min/max from entire dataset across all catchments
 - **Extent**: Min/max from currently visible map area
 - **Site**: Min/max from site's aggregated indicator values
+- Range mode toggle positioned in top-right of chart
+- Re-animates when range, factor, or scenario changes
 
 ### Control Panel (Slide-out)
 - Scenario 1 selector (left map)
 - Scenario 2 selector (right map)
 - Attribute/factor selector
-- Color scale mode toggle (Rainbow / Metadata)
-- Dial range mode toggle (Full / Extent / Site)
+- Color scale mode toggle (Rainbow / Metadata) in COLOR SCALE section
 - Color scale legend
 - Zone statistics
 - Identify results table with horizontal bar visualization

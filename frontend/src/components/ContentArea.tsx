@@ -25,6 +25,7 @@ interface ContentAreaProps {
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
+  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
 }
 
@@ -71,6 +72,7 @@ function ContentArea({
   colorScaleMode,
   siteIndicators,
   rangeMode,
+  onRangeModeChange,
   mapStatistics,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
@@ -168,6 +170,7 @@ function ContentArea({
             colorScaleMode={colorScaleMode}
             siteIndicators={siteIndicators}
             rangeMode={rangeMode}
+            onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
           />
         </Box>

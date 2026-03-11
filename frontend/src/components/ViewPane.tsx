@@ -30,6 +30,7 @@ interface ViewPaneProps {
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
+  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
 }
 
@@ -65,6 +66,7 @@ function ViewPane({
   colorScaleMode,
   siteIndicators,
   rangeMode = 'domain',
+  onRangeModeChange,
   mapStatistics,
 }: ViewPaneProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('map');
@@ -205,6 +207,7 @@ function ViewPane({
         max={dialData?.max ?? 100}
         attribute={comparison.attribute}
         rangeMode={rangeMode}
+        onRangeModeChange={onRangeModeChange}
       />
 
       {/* Pane label (shown in quad mode) */}

@@ -20,18 +20,11 @@ import {
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
 import { useAttributeCanMap, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, RangeMode } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
-
-// Range mode configuration with icons
-const RANGE_MODE_CONFIG: { id: RangeMode; label: string; description: string; icon: React.ReactNode }[] = [
-  { id: 'domain', label: 'Full', description: 'Use min/max values from the entire dataset across all catchments', icon: <FiGlobe /> },
-  { id: 'extent', label: 'Extent', description: 'Calculate min/max from catchments visible in current map viewport', icon: <FiSquare /> },
-  { id: 'site', label: 'Site', description: 'Use min/max from catchments within the site boundary only', icon: <FiTarget /> },
-];
 
 interface ControlPanelProps {
   isOpen: boolean;
@@ -48,8 +41,6 @@ interface ControlPanelProps {
   isSwiperEnabled?: boolean;
   colorScaleMode: ColorScaleMode;
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
-  rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
 }
 
 import type { ZoneStats } from '../types';
@@ -190,8 +181,6 @@ function ControlPanel({
   isSwiperEnabled = true,
   colorScaleMode,
   onColorScaleModeChange,
-  rangeMode = 'domain',
-  onRangeModeChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
@@ -361,79 +350,6 @@ function ControlPanel({
               </Text>
             )}
 
-            <HStack mt={4} justify="space-between" align="center">
-              <Text fontSize="xs" fontWeight="600" color="gray.500">
-                Color scale
-              </Text>
-              <ButtonGroup size="xs" isAttached variant="outline">
-                <Button
-                  onClick={() => onColorScaleModeChange('rainbow')}
-                  variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
-                  colorScheme={colorScaleMode === 'rainbow' ? 'purple' : 'gray'}
-                >
-                  Rainbow
-                </Button>
-                <Button
-                  onClick={() => onColorScaleModeChange('metadata')}
-                  variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
-                  colorScheme={colorScaleMode === 'metadata' ? 'teal' : 'gray'}
-                >
-                  Metadata
-                </Button>
-              </ButtonGroup>
-            </HStack>
-
-            {/* Range mode selector for dial chart - beautiful segmented control */}
-            {onRangeModeChange && (
-              <Box mt={5}>
-                <HStack mb={2} spacing={1}>
-                  <Text fontSize="xs" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="wider">
-                    Dial Gauge Range
-                  </Text>
-                  <Tooltip label="Controls which catchments are used to calculate the min/max scale for the dial chart">
-                    <Box cursor="help" color="gray.500">
-                      <FiInfo size={12} />
-                    </Box>
-                  </Tooltip>
-                </HStack>
-                <HStack
-                  spacing={0}
-                  bg="whiteAlpha.50"
-                  borderRadius="xl"
-                  p={1}
-                  border="1px solid"
-                  borderColor="whiteAlpha.100"
-                >
-                  {RANGE_MODE_CONFIG.map((mode) => {
-                    const isActive = rangeMode === mode.id;
-                    return (
-                      <Tooltip key={mode.id} label={mode.description} placement="top" hasArrow>
-                        <Button
-                          flex={1}
-                          size="sm"
-                          onClick={() => onRangeModeChange(mode.id)}
-                          leftIcon={mode.icon as React.ReactElement}
-                          variant="ghost"
-                          bg={isActive ? 'cyan.500' : 'transparent'}
-                          color={isActive ? 'white' : 'gray.400'}
-                          borderRadius="lg"
-                          fontWeight={isActive ? '600' : '500'}
-                          fontSize="xs"
-                          _hover={{
-                            bg: isActive ? 'cyan.400' : 'whiteAlpha.100',
-                            color: isActive ? 'white' : 'gray.200',
-                          }}
-                          transition="all 0.2s"
-                          boxShadow={isActive ? '0 2px 8px rgba(0, 188, 212, 0.4)' : 'none'}
-                        >
-                          {mode.label}
-                        </Button>
-                      </Tooltip>
-                    );
-                  })}
-                </HStack>
-              </Box>
-            )}
           </Box>
 
           <Divider />
@@ -441,9 +357,27 @@ function ControlPanel({
           {/* Legend */}
           {comparison.attribute && (
             <Box>
-              <Text fontSize="xs" fontWeight="600" color="gray.500" mb={2}>
-                COLOR SCALE (Domain Range)
-              </Text>
+              <HStack justify="space-between" align="center" mb={2}>
+                <Text fontSize="xs" fontWeight="600" color="gray.500">
+                  COLOR SCALE (Domain Range)
+                </Text>
+                <ButtonGroup size="xs" isAttached variant="outline">
+                  <Button
+                    onClick={() => onColorScaleModeChange('rainbow')}
+                    variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
+                    colorScheme={colorScaleMode === 'rainbow' ? 'purple' : 'gray'}
+                  >
+                    Rainbow
+                  </Button>
+                  <Button
+                    onClick={() => onColorScaleModeChange('metadata')}
+                    variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
+                    colorScheme={colorScaleMode === 'metadata' ? 'teal' : 'gray'}
+                  >
+                    Metadata
+                  </Button>
+                </ButtonGroup>
+              </HStack>
               <Box
                 h="12px"
                 borderRadius="full"

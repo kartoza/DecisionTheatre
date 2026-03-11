@@ -392,6 +392,7 @@ function App() {
             colorScaleMode={colorScaleMode}
             siteIndicators={currentSite?.indicators}
             rangeMode={rangeMode}
+            onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
           />
         </Box>
@@ -412,8 +413,6 @@ function App() {
           isSwiperEnabled={isSwiperEnabled}
           colorScaleMode={colorScaleMode}
           onColorScaleModeChange={setColorScaleMode}
-          rangeMode={rangeMode}
-          onRangeModeChange={setRangeMode}
         />
       </Flex>
 

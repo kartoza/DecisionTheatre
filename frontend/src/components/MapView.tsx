@@ -1059,7 +1059,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Left container - clips at the slider position
     // Use z-index:2 so it renders above any React overlay elements
     const leftClipContainer = document.createElement('div');
-    leftClipContainer.style.cssText = 'position:absolute;top:0;left:0;width:50%;height:100%;overflow:hidden;z-index:2;';
+    leftClipContainer.style.cssText = 'position:absolute;top:0;left:0;width:0%;height:100%;overflow:hidden;z-index:2;';
     leftClipContainer.id = 'map-left-clip';
 
     const leftContainer = document.createElement('div');
@@ -1069,7 +1069,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Right container - clips at the slider position
     // Use z-index:2 so it renders above any React overlay elements (same level as left)
     const rightClipContainer = document.createElement('div');
-    rightClipContainer.style.cssText = 'position:absolute;top:0;right:0;width:50%;height:100%;overflow:hidden;z-index:2;';
+    rightClipContainer.style.cssText = 'position:absolute;top:0;right:0;width:100%;height:100%;overflow:hidden;z-index:2;';
     rightClipContainer.id = 'map-right-clip';
 
     const rightContainer = document.createElement('div');
@@ -1101,7 +1101,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     slider.style.cssText = `
       position:absolute;
       top:0;
-      left:50%;
+      left:0%;
       width:12px;
       height:100%;
       background:white;
@@ -1403,10 +1403,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (isSwiperEnabled) {
       slider.style.display = 'block';
-      slider.style.left = '50%';
-      leftClipContainer.style.width = '50%';
+      slider.style.left = '0%';
+      leftClipContainer.style.width = '0%';
       rightClipContainer.style.display = 'block';
-      rightClipContainer.style.width = '50%';
+      rightClipContainer.style.width = '100%';
       if (rightLabel) rightLabel.style.display = 'block';
     } else {
       slider.style.display = 'none';
