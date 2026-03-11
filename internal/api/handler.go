@@ -83,6 +83,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/indicators", h.handleExtractIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
 	r.HandleFunc("/sites/{id}/indicators/reset", h.handleResetIdealIndicators).Methods("POST")
+	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET")
 
 	// Site boundary editing (union/difference with catchments)
 	r.HandleFunc("/sites/{id}/boundary/union/{catchmentId}", h.handleBoundaryUnion).Methods("POST")
@@ -1140,6 +1141,41 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	}
 
 	respondJSON(w, http.StatusOK, updated)
+}
+
+// handleSiteCatchments returns per-catchment breakdown data for aggregate calculations
+func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	site, err := h.siteStore.Get(id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if len(site.CatchmentIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+		return
+	}
+
+	// Get indicator data for all catchments
+	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, catchmentData)
 }
 
 // ============================================================================

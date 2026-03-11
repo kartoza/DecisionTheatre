@@ -212,6 +212,16 @@ export interface BoundingBox {
   maxY: number;  // North
 }
 
+// CatchmentIndicators holds per-catchment indicator values
+// Used for displaying the breakdown in the aggregate table
+export interface CatchmentIndicators {
+  id: string;
+  areaKm2: number;
+  reference: Record<string, number>;
+  current: Record<string, number>;
+  aoiFraction?: number;
+}
+
 // SiteIndicators holds aggregated indicator values for a site
 // All values are area-weighted aggregations of constituent catchments
 export interface SiteIndicators {

@@ -118,6 +118,10 @@ function ContentArea({
               colorScaleMode={colorScaleMode}
               swiperPosition={swiperPosition}
               onSwiperPositionChange={onSwiperPositionChange}
+              siteIndicators={siteIndicators}
+              rangeMode={rangeMode}
+              onRangeModeChange={onRangeModeChange}
+              mapStatistics={mapStatistics}
             />
           </Box>
           <AnimatePresence>
@@ -145,6 +149,10 @@ function ContentArea({
                   colorScaleMode={colorScaleMode}
                   swiperPosition={swiperPosition}
                   onSwiperPositionChange={onSwiperPositionChange}
+                  siteIndicators={siteIndicators}
+                  rangeMode={rangeMode}
+                  onRangeModeChange={onRangeModeChange}
+                  mapStatistics={mapStatistics}
                 />
               </motion.div>
             ))}

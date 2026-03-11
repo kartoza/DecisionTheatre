@@ -1,19 +1,14 @@
-import { useMemo } from 'react';
-import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge } from '@chakra-ui/react';
+import { useMemo, useEffect, useState } from 'react';
+import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-
-interface CatchmentData {
-  id: string | number;
-  area: number;
-  fractionCovered: number;
-  value: number;
-}
+import type { CatchmentIndicators, Scenario } from '../types';
+import { getSiteCatchments } from '../hooks/useApi';
 
 interface AggregateTableProps {
   visible: boolean;
   attribute?: string;
-  catchments?: CatchmentData[];
-  scenario?: string;
+  siteId?: string | null;
+  scenario?: Scenario;
 }
 
 // Format numbers for display
@@ -24,32 +19,69 @@ function formatNumber(value: number, decimals = 2): string {
   return value.toFixed(decimals);
 }
 
-// Demo data when no real data is available
-function generateDemoData(): CatchmentData[] {
-  return [
-    { id: 1, area: 100, fractionCovered: 1.0, value: 0.10 },
-    { id: 2, area: 200, fractionCovered: 0.5, value: 0.30 },
-    { id: 3, area: 250, fractionCovered: 0.4, value: 0.20 },
-    { id: 4, area: 300, fractionCovered: 0.3, value: 0.40 },
-    { id: 5, area: 400, fractionCovered: 0.9, value: 0.80 },
-  ];
-}
-
 function AggregateTable({
   visible,
   attribute = 'Factor',
-  catchments,
-  scenario = 'Current',
+  siteId,
+  scenario = 'current',
 }: AggregateTableProps) {
-  // Use demo data if no catchments provided
-  const data = catchments && catchments.length > 0 ? catchments : generateDemoData();
+  const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  // Calculate all derived values
+  // Fetch catchment data when visible and siteId is available
+  useEffect(() => {
+    if (!visible || !siteId) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    getSiteCatchments(siteId)
+      .then((data) => {
+        if (!cancelled) {
+          setCatchments(data || []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCatchments([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, siteId]);
+
+  // Calculate all derived values from catchment data
+  // NOTE: This calculation uses the same area-weighted formula as the server-side
+  // SiteIndicators computation, ensuring DRY compliance. The formula is:
+  //   validArea = areaKm2 × aoiFraction
+  //   weight = validArea / totalValidArea
+  //   siteAverage = Σ(weight × value)
   const calculations = useMemo(() => {
-    const rows = data.map((c) => {
-      const validArea = c.area * c.fractionCovered;
+    if (!catchments || catchments.length === 0 || !attribute) {
+      return { rows: [], totalArea: 0, siteAverage: 0, hasData: false };
+    }
+
+    // Build rows with calculated values
+    const rows = catchments.map((c) => {
+      const fractionCovered = c.aoiFraction ?? 1.0; // Default to 1 if not provided
+      const validArea = c.areaKm2 * fractionCovered;
+      const scenarioValues = scenario === 'reference' ? c.reference : c.current;
+      const value = scenarioValues?.[attribute] ?? 0;
+
       return {
-        ...c,
+        id: c.id,
+        area: c.areaKm2,
+        fractionCovered,
+        value,
         validArea,
       };
     });
@@ -68,8 +100,9 @@ function AggregateTable({
       rows: rowsWithWeights,
       totalArea,
       siteAverage,
+      hasData: true,
     };
-  }, [data]);
+  }, [catchments, attribute, scenario]);
 
   return (
     <Box
@@ -79,7 +112,10 @@ function AggregateTable({
       right={0}
       bottom={0}
       overflow="hidden"
-      bg="#1a202c"
+      bg={visible ? "#1a202c" : "transparent"}
+      pointerEvents={visible ? "auto" : "none"}
+      opacity={visible ? 1 : 0}
+      transition="opacity 0.3s ease, background 0.3s ease"
     >
       <AnimatePresence>
         {visible && (
@@ -102,13 +138,13 @@ function AggregateTable({
                   </Text>
                 </VStack>
                 <Badge
-                  colorScheme="cyan"
+                  colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
                   fontSize="md"
                   px={4}
                   py={2}
                   borderRadius="full"
                 >
-                  {scenario}
+                  {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
                 </Badge>
               </HStack>
 
@@ -131,6 +167,42 @@ function AggregateTable({
               </Box>
             </VStack>
 
+            {loading ? (
+              /* Loading state */
+              <Box
+                bg="whiteAlpha.50"
+                borderRadius="xl"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                p={12}
+                textAlign="center"
+              >
+                <VStack spacing={4}>
+                  <Spinner size="xl" color="cyan.400" thickness="4px" />
+                  <Text color="gray.400" fontSize="lg">
+                    Loading catchment data...
+                  </Text>
+                </VStack>
+              </Box>
+            ) : !calculations.hasData ? (
+              /* No data message */
+              <Box
+                bg="whiteAlpha.50"
+                borderRadius="xl"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                p={12}
+                textAlign="center"
+              >
+                <Text color="gray.400" fontSize="lg" mb={2}>
+                  No catchment data available
+                </Text>
+                <Text color="gray.500" fontSize="sm">
+                  Create a site with catchments to see the aggregate calculation breakdown
+                </Text>
+              </Box>
+            ) : (
+            <>
             {/* Main calculation table */}
             <Box
               bg="whiteAlpha.50"
@@ -298,6 +370,8 @@ function AggregateTable({
                 Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
               </Text>
             </Box>
+            </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

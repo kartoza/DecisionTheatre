@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Scenario, ServerInfo, Site } from '../types';
+import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { getAppRuntime } from '../types/runtime';
 
 const API_BASE = '/api';
@@ -393,4 +393,18 @@ export async function deleteSite(id: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to delete site: ${response.statusText}`);
   }
+}
+
+// Get per-catchment breakdown data for a site
+export async function getSiteCatchments(siteId: string): Promise<CatchmentIndicators[]> {
+  if (isBrowserRuntime()) {
+    // Browser mode: no per-catchment data available
+    return [];
+  }
+
+  const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
+  if (!response.ok) {
+    throw new Error(`Failed to get site catchments: ${response.statusText}`);
+  }
+  return response.json();
 }

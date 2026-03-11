@@ -237,6 +237,7 @@ function ViewPane({
       <AggregateTable
         visible={viewMode === 'table'}
         attribute={comparison.attribute}
+        siteId={siteId}
         scenario={comparison.leftScenario}
       />
 
