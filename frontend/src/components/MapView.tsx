@@ -1520,6 +1520,51 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
   }, [debouncedApplyColors, handleIdentifyClick]);
 
+  // Resize maps when layout changes or container size updates
+  useEffect(() => {
+    const container = mapContainerRef.current;
+    const leftClipContainer = leftClipContainerRef.current;
+    const rightClipContainer = compareContainerRef.current;
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!container || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) {
+      return;
+    }
+
+    const leftContainer = container.querySelector('#map-left') as HTMLDivElement | null;
+    const rightContainer = container.querySelector('#map-right') as HTMLDivElement | null;
+    if (!leftContainer || !rightContainer) return;
+
+    const updateSizes = () => {
+      const parentWidth = container.offsetWidth;
+      const rightClipWidth = rightClipContainer.offsetWidth;
+      leftContainer.style.width = `${parentWidth}px`;
+      rightContainer.style.width = `${parentWidth}px`;
+      rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
+      leftMap.resize();
+      rightMap.resize();
+    };
+
+    const scheduleResize = () => {
+      requestAnimationFrame(updateSizes);
+    };
+
+    scheduleResize();
+
+    const observer = new ResizeObserver(() => {
+      scheduleResize();
+    });
+    observer.observe(container);
+
+    const transitionTimer = window.setTimeout(updateSizes, 650);
+
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(transitionTimer);
+    };
+  }, [isQuad]);
+
   // Toggle split-screen layout and slider visibility
   useEffect(() => {
     const container = mapContainerRef.current;
@@ -1838,12 +1883,32 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       console.log('Site boundary layers added');
     };
 
+    const addSiteBoundaryWhenReady = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
+      if (map.isStyleLoaded()) {
+        addSiteBoundary(map, geometry);
+        moveSiteBoundaryToTop(map);
+        return;
+      }
+
+      map.once('idle', () => {
+        if (!map.style) return;
+        addSiteBoundary(map, geometry);
+        moveSiteBoundaryToTop(map);
+      });
+    };
+
     // If no site, remove boundaries
     if (!siteId) {
       siteCatchmentIdsRef.current = null;
       removeSiteBoundary(leftMap);
       removeSiteBoundary(rightMap);
       return;
+    }
+
+    // Prefer the latest geometry from props to avoid missing boundaries
+    if (siteGeometry) {
+      addSiteBoundaryWhenReady(leftMap, siteGeometry);
+      addSiteBoundaryWhenReady(rightMap, siteGeometry);
     }
 
     // Fetch site data and add boundary
@@ -1880,8 +1945,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         if (geometry) {
           // Wait for maps to be idle before adding layers
           const addToMaps = () => {
-            addSiteBoundary(leftMap, geometry);
-            addSiteBoundary(rightMap, geometry);
+            addSiteBoundaryWhenReady(leftMap, geometry);
+            addSiteBoundaryWhenReady(rightMap, geometry);
             zoomToLoadedSiteBounds();
           };
 
@@ -1909,7 +1974,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
-  }, [siteId, areMapsReady]);
+  }, [siteId, siteGeometry, areMapsReady]);
 
   // Zoom to site bounds when siteBounds changes (with 10% padding)
   useEffect(() => {
