@@ -335,10 +335,10 @@ function ViewPane({
       />
 
       {/* Pane label (shown in quad mode) */}
-      {/* {compact && (
+      {compact && (
         <Box
           position="absolute"
-          top={20}
+          top={2}
           left={2}
           zIndex={5}
           bg="blackAlpha.700"
@@ -354,7 +354,7 @@ function ViewPane({
         >
           {paneLabel}
         </Box>
-      )} */}
+      )}
 
       {/* Per-pane toolbar */}
       <HStack
