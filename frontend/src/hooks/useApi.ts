@@ -4,6 +4,11 @@ import { getAppRuntime } from '../types/runtime';
 
 const API_BASE = '/api';
 const SITES_STORAGE_KEY = 'dt-sites';
+type SiteWithCatchments = Site & {
+  catchments?: CatchmentIndicators[];
+  catchmentIndicators?: CatchmentIndicators[];
+  catchmentData?: CatchmentIndicators[];
+};
 
 function isBrowserRuntime(): boolean {
   return getAppRuntime() === 'browser';
@@ -32,8 +37,38 @@ function saveLocalSites(sites: Site[]): void {
   }
 }
 
+function loadLocalCatchments(siteId: string): CatchmentIndicators[] {
+  const sites = loadLocalSites();
+  const site = sites.find((entry) => entry.id === siteId) as SiteWithCatchments | undefined;
+  if (!site) return [];
+
+  const stored = site.catchments ?? site.catchmentIndicators ?? site.catchmentData;
+  return Array.isArray(stored) ? stored : [];
+}
+
+function loadLocalSite(siteId: string): Site | null {
+  const sites = loadLocalSites();
+  return sites.find((entry) => entry.id === siteId) ?? null;
+}
+
 function sortSitesByCreatedAtDesc(sites: Site[]): Site[] {
   return [...sites].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function persistLocalCatchments(siteId: string, catchments: CatchmentIndicators[]): void {
+  const sites = loadLocalSites();
+  if (sites.length === 0) return;
+
+  const nextSites = sites.map((site) => {
+    if (site.id !== siteId) return site;
+    return {
+      ...site,
+      catchments,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  saveLocalSites(sortSitesByCreatedAtDesc(nextSites));
 }
 
 function generateSiteId(): string {
@@ -158,6 +193,22 @@ export function useAttributeCanMap() {
   }, []);
 
   return { canMap, loading };
+}
+
+export function useAttributeCanGraph() {
+  const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/cangraph`)
+      .then((data) => {
+        setCanGraph(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { canGraph, loading };
 }
 
 export function useScenarios() {
@@ -398,7 +449,35 @@ export async function deleteSite(id: string): Promise<void> {
 // Get per-catchment breakdown data for a site
 export async function getSiteCatchments(siteId: string): Promise<CatchmentIndicators[]> {
   if (isBrowserRuntime()) {
-    // Browser mode: no per-catchment data available
+    const localCatchments = loadLocalCatchments(siteId);
+    if (localCatchments.length > 0) {
+      return localCatchments;
+    }
+
+    try {
+      const localSite = loadLocalSite(siteId);
+      if (!localSite) {
+        return [];
+      }
+
+      const { thumbnail, ...siteWithoutThumbnail } = localSite;
+      const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+      });
+      if (!response.ok) {
+        return [];
+      }
+      const data = await response.json();
+      if (Array.isArray(data) && data.length > 0) {
+        persistLocalCatchments(siteId, data);
+        return data;
+      }
+    } catch {
+      return [];
+    }
+
     return [];
   }
 
@@ -406,5 +485,9 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
   if (!response.ok) {
     throw new Error(`Failed to get site catchments: ${response.statusText}`);
   }
-  return response.json();
+  const data = await response.json();
+  if (Array.isArray(data) && data.length > 0) {
+    persistLocalCatchments(siteId, data);
+  }
+  return data;
 }

@@ -2,7 +2,7 @@ import { useMemo, useEffect, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario } from '../types';
-import { getSiteCatchments } from '../hooks/useApi';
+import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 
 interface AggregateTableProps {
   visible: boolean;
@@ -27,6 +27,9 @@ function AggregateTable({
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
+  const { details: attributeDetails } = useAttributeDetails();
+
+  const attributeLabel = attributeDetails[attribute] ?? attribute;
 
   // Fetch catchment data when visible and siteId is available
   useEffect(() => {
@@ -161,7 +164,7 @@ function AggregateTable({
                     Selected Factor
                   </Text>
                   <Text color="cyan.300" fontSize="lg" fontWeight="bold">
-                    {attribute}
+                    {attributeLabel}
                   </Text>
                 </HStack>
               </Box>
@@ -218,7 +221,7 @@ function AggregateTable({
                     <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
                     <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
                     <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attribute}</Th>
+                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
                     <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
                     <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Weight</Th>
                     <Th color="cyan.300" borderColor="whiteAlpha.200" isNumeric>Weighted Value</Th>
@@ -327,7 +330,7 @@ function AggregateTable({
                     {formatNumber(calculations.siteAverage, 3)}
                   </Text>
                   <Text color="gray.400" fontSize="sm">
-                    {attribute}
+                    {attributeLabel}
                   </Text>
                 </VStack>
               </Box>

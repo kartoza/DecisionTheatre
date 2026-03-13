@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
 import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable } from 'react-icons/fi';
 import MapView from './MapView';
@@ -7,12 +7,15 @@ import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
+import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 
 interface ViewPaneProps {
   comparison: ComparisonState;
   compact?: boolean;
   paneIndex: number;
   layoutMode: LayoutMode;
+  viewMode: ViewMode;
+  onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onIdentify?: (result: IdentifyResult) => void;
@@ -28,6 +31,8 @@ interface ViewPaneProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  is3DMode?: boolean;
+  on3DModeChange?: (enabled: boolean) => void;
   // Slider synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -54,6 +59,8 @@ function ViewPane({
   compact = false,
   paneIndex,
   layoutMode,
+  viewMode,
+  onViewModeChange,
   onFocusPane,
   onGoQuad,
   onIdentify,
@@ -69,6 +76,8 @@ function ViewPane({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  is3DMode,
+  on3DModeChange,
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
@@ -76,17 +85,87 @@ function ViewPane({
   onRangeModeChange,
   mapStatistics,
 }: ViewPaneProps) {
-  const [viewMode, setViewMode] = useState<ViewMode>('map');
   const borderColor = useColorModeValue('gray.600', 'gray.600');
+  const { details: attributeDetails } = useAttributeDetails();
+  const [dialCatchmentData, setDialCatchmentData] = useState<{
+    referenceValue?: number;
+    currentValue?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (viewMode !== 'dial' || !siteId || !comparison.attribute) {
+      setDialCatchmentData(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    getSiteCatchments(siteId)
+      .then((catchments) => {
+        if (cancelled || !catchments || catchments.length === 0) {
+          return;
+        }
+
+        let totalArea = 0;
+        let referenceSum = 0;
+        let currentSum = 0;
+
+        for (const catchment of catchments) {
+          const fractionCovered = catchment.aoiFraction ?? 1.0;
+          const validArea = catchment.areaKm2 * fractionCovered;
+          if (!Number.isFinite(validArea) || validArea <= 0) continue;
+
+          const referenceValue = catchment.reference?.[comparison.attribute];
+          const currentValue = catchment.current?.[comparison.attribute];
+
+          if (typeof referenceValue === 'number') {
+            referenceSum += referenceValue * validArea;
+          }
+          if (typeof currentValue === 'number') {
+            currentSum += currentValue * validArea;
+          }
+
+          totalArea += validArea;
+        }
+
+        if (totalArea <= 0) {
+          if (!cancelled) setDialCatchmentData(null);
+          return;
+        }
+
+        const nextData = {
+          referenceValue: referenceSum / totalArea,
+          currentValue: currentSum / totalArea,
+        };
+
+        if (!cancelled) {
+          setDialCatchmentData(nextData);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDialCatchmentData(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [comparison.attribute, siteId, viewMode]);
+
+  const dialAttributeLabel = comparison.attribute
+    ? attributeDetails[comparison.attribute]
+      ?? comparison.attribute
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+    : undefined;
 
   // Cycle through view modes: map -> chart -> dial -> map
   const handleToggleViewMode = useCallback(() => {
-    setViewMode((prev) => {
-      const currentIndex = VIEW_MODES.indexOf(prev);
-      const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
-      return VIEW_MODES[nextIndex];
-    });
-  }, []);
+    const currentIndex = VIEW_MODES.indexOf(viewMode);
+    const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
+    onViewModeChange(paneIndex, VIEW_MODES[nextIndex]);
+  }, [onViewModeChange, paneIndex, viewMode]);
 
   // Calculate dial chart values based on current attribute and range mode
   const dialData = useMemo(() => {
@@ -104,6 +183,10 @@ function ViewPane({
       referenceValue = siteIndicators.reference?.[attribute];
       currentValue = siteIndicators.current?.[attribute];
       targetValue = siteIndicators.ideal?.[attribute];
+    } else if (dialCatchmentData) {
+      referenceValue = dialCatchmentData.referenceValue;
+      currentValue = dialCatchmentData.currentValue;
+      targetValue = dialCatchmentData.referenceValue;
     }
 
     // Determine min/max based on range mode
@@ -118,6 +201,13 @@ function ViewPane({
           ].filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
             min = Math.min(...values) * 0.9; // 10% padding
+            max = Math.max(...values) * 1.1;
+          }
+        } else if (dialCatchmentData) {
+          const values = [dialCatchmentData.referenceValue, dialCatchmentData.currentValue]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
         }
@@ -146,7 +236,7 @@ function ViewPane({
     }
 
     // If no siteIndicators, use map statistics for demonstration values
-    if (!siteIndicators && mapStatistics) {
+    if (!siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
       const rightMean = mapStatistics.rightStats?.mean;
 
@@ -167,7 +257,7 @@ function ViewPane({
     }
 
     return { min, max, referenceValue, currentValue, targetValue };
-  }, [comparison.attribute, siteIndicators, rangeMode, mapStatistics]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, rangeMode, mapStatistics]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
@@ -204,6 +294,7 @@ function ViewPane({
           onMapExtentChange={onMapExtentChange}
           onStatisticsChange={onStatisticsChange}
           isPanelOpen={isPanelOpen}
+          isQuad={isQuad}
           siteId={siteId}
           siteBounds={siteBounds}
           isBoundaryEditMode={isBoundaryEditMode}
@@ -212,6 +303,8 @@ function ViewPane({
           isSwiperEnabled={isSwiperEnabled}
           onSwiperEnabledChange={onSwiperEnabledChange}
           colorScaleMode={colorScaleMode}
+          is3DMode={is3DMode}
+          on3DModeChange={on3DModeChange}
           swiperPosition={swiperPosition}
           onSwiperPositionChange={onSwiperPositionChange}
         />
@@ -228,7 +321,7 @@ function ViewPane({
         targetValue={dialData?.targetValue}
         min={dialData?.min ?? 0}
         max={dialData?.max ?? 100}
-        attribute={comparison.attribute}
+        attribute={dialAttributeLabel}
         rangeMode={rangeMode}
         onRangeModeChange={onRangeModeChange}
       />
@@ -242,10 +335,10 @@ function ViewPane({
       />
 
       {/* Pane label (shown in quad mode) */}
-      {compact && (
+      {/* {compact && (
         <Box
           position="absolute"
-          top={2}
+          top={20}
           left={2}
           zIndex={5}
           bg="blackAlpha.700"
@@ -261,7 +354,7 @@ function ViewPane({
         >
           {paneLabel}
         </Box>
-      )}
+      )} */}
 
       {/* Per-pane toolbar */}
       <HStack
@@ -277,19 +370,25 @@ function ViewPane({
         backdropFilter="blur(8px)"
         transition="opacity 0.3s ease"
       >
-        {/* View mode toggle: map -> chart -> dial -> map */}
-        <Tooltip label={VIEW_MODE_CONFIG[viewMode].nextLabel} placement="top">
-          <IconButton
-            aria-label="Toggle view mode"
-            icon={VIEW_MODE_CONFIG[viewMode].icon}
-            onClick={handleToggleViewMode}
-            variant="ghost"
-            color="white"
-            _hover={{ bg: 'whiteAlpha.300' }}
-            size={btnSize}
-            borderRadius="md"
-          />
-        </Tooltip>
+        {/* View mode buttons: hide the active view only */}
+        {VIEW_MODES.map((mode) => {
+          if (mode === viewMode) return null;
+          const config = VIEW_MODE_CONFIG[mode];
+          return (
+            <Tooltip key={mode} label={`Show ${config.label}`} placement="top">
+              <IconButton
+                aria-label={`Show ${config.label}`}
+                icon={config.icon}
+                onClick={() => onViewModeChange(paneIndex, mode)}
+                variant="ghost"
+                color="white"
+                _hover={{ bg: 'whiteAlpha.300' }}
+                size={btnSize}
+                borderRadius="md"
+              />
+            </Tooltip>
+          );
+        })}
 
         {/* Layout toggle — context-dependent */}
         {isQuad ? (

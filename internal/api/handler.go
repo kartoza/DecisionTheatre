@@ -61,6 +61,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/variabletypes", h.handleMetadataVariableTypes).Methods("GET")
 	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
+	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
@@ -83,7 +84,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/indicators", h.handleExtractIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
 	r.HandleFunc("/sites/{id}/indicators/reset", h.handleResetIdealIndicators).Methods("POST")
-	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET")
+	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET", "POST")
 
 	// Site boundary editing (union/difference with catchments)
 	r.HandleFunc("/sites/{id}/boundary/union/{catchmentId}", h.handleBoundaryUnion).Methods("POST")
@@ -400,6 +401,69 @@ func (h *Handler) handleMetadataCanMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, canMap)
+}
+
+// handleMetadataCanGraph returns a map of attribute column names to canGraph flags.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata canGraph unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	columnIdx := -1
+	canGraphIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "canGraph"):
+			canGraphIdx = i
+		}
+	}
+
+	if columnIdx == -1 || canGraphIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	canGraph := make(map[string]bool)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || canGraphIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		flag := strings.TrimSpace(record[canGraphIdx])
+		if column == "" || flag == "" {
+			continue
+		}
+		allowed := flag == "1" || strings.EqualFold(flag, "true")
+		canGraph[column] = allowed
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			canGraph[normalized] = allowed
+		}
+	}
+
+	respondJSON(w, http.StatusOK, canGraph)
 }
 
 // respondJSON sends a JSON response (delegates to httputil)
@@ -1145,10 +1209,6 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 
 // handleSiteCatchments returns per-catchment breakdown data for aggregate calculations
 func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
-	if h.siteStore == nil {
-		respondError(w, http.StatusInternalServerError, "site store not initialized")
-		return
-	}
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
@@ -1157,10 +1217,54 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	site, err := h.siteStore.Get(id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
-		return
+	var site *sites.Site
+	var err error
+
+	if r.Method == http.MethodPost {
+		var req ExtractIndicatorsRequest
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if req.Runtime == "browser" {
+			if len(req.Site) == 0 {
+				respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
+				return
+			}
+
+			siteJSON, marshalErr := json.Marshal(req.Site)
+			if marshalErr != nil {
+				respondError(w, http.StatusBadRequest, "invalid site data in request body")
+				return
+			}
+
+			site = &sites.Site{}
+			if err = json.Unmarshal(siteJSON, site); err != nil {
+				respondError(w, http.StatusBadRequest, "invalid site data in request body")
+				return
+			}
+		} else {
+			if h.siteStore == nil {
+				respondError(w, http.StatusInternalServerError, "site store not initialized")
+				return
+			}
+			site, err = h.siteStore.Get(id)
+			if err != nil {
+				respondError(w, http.StatusNotFound, err.Error())
+				return
+			}
+		}
+	} else {
+		if h.siteStore == nil {
+			respondError(w, http.StatusInternalServerError, "site store not initialized")
+			return
+		}
+		site, err = h.siteStore.Get(id)
+		if err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 	}
 
 	if len(site.CatchmentIDs) == 0 {

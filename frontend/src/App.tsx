@@ -11,7 +11,7 @@ import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import { patchSite, useServerInfo } from './hooks/useApi';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
   loadPaneStates,
   savePaneStates,
@@ -32,6 +32,7 @@ function App() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
+  const [viewModes, setViewModes] = useState<ViewMode[]>(['map', 'map', 'map', 'map']);
   const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
     // Auto-open filter panel for the focused pane when starting in single mode
     const mode = loadLayoutMode();
@@ -47,6 +48,7 @@ function App() {
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
   const [isBoundaryEditMode, setIsBoundaryEditMode] = useState(false);
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
+  const [is3DMode, setIs3DMode] = useState(false);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
@@ -177,7 +179,8 @@ function App() {
   const handleGoQuad = useCallback(() => {
     setLayoutMode('quad');
     setIndicatorPaneIndex(null);
-  }, []);
+    setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
+  }, [focusedPane]);
 
   // Update a specific pane's comparison state
   const handlePaneStateChange = useCallback((paneIndex: number, partial: Partial<ComparisonState>) => {
@@ -187,6 +190,18 @@ function App() {
       return next;
     });
   }, []);
+
+  const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
+    setViewModes((prev) => {
+      if (layoutMode === 'quad') {
+        return prev.map(() => mode);
+      }
+
+      const next = [...prev];
+      next[paneIndex] = mode;
+      return next;
+    });
+  }, [layoutMode]);
 
   const handleLeftChange = useCallback((scenario: Scenario) => {
     if (indicatorPaneIndex !== null)
@@ -375,6 +390,8 @@ function App() {
           <ContentArea
             mode={layoutMode}
             paneStates={paneStates}
+            viewModes={viewModes}
+            onViewModeChange={handleViewModeChange}
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
@@ -391,6 +408,8 @@ function App() {
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
+            is3DMode={is3DMode}
+            on3DModeChange={setIs3DMode}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}
@@ -408,12 +427,24 @@ function App() {
           onRightChange={handleRightChange}
           onAttributeChange={handleAttributeChange}
           paneIndex={indicatorPaneIndex}
+          viewMode={indicatorPaneIndex !== null ? viewModes[indicatorPaneIndex] : viewModes[0]}
           identifyResult={identifyResult}
           onClearIdentify={() => setIdentifyResult(null)}
           isExploreMode={isExploreMode}
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
           isSwiperEnabled={isSwiperEnabled}
+          isSiteAggregationActive={Boolean(currentSiteId) && (indicatorPaneIndex !== null
+            ? viewModes[indicatorPaneIndex] === 'table'
+            : viewModes[0] === 'table')}
+          hideScenarioSelectors={indicatorPaneIndex !== null
+            ? viewModes[indicatorPaneIndex] === 'chart'
+            : viewModes[0] === 'chart'}
+          hideColorScale={(indicatorPaneIndex !== null
+            ? viewModes[indicatorPaneIndex] === 'chart'
+            : viewModes[0] === 'chart') || (Boolean(currentSiteId) && (indicatorPaneIndex !== null
+              ? viewModes[indicatorPaneIndex] === 'table'
+              : viewModes[0] === 'table'))}
           colorScaleMode={colorScaleMode}
           onColorScaleModeChange={setColorScaleMode}
         />

@@ -17,13 +17,17 @@ import {
   Tr,
   Th,
   Td,
+  Progress,
+  Icon,
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
-import { useAttributeCanMap, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin, FiTrendingUp, FiTrendingDown, FiMinus } from 'react-icons/fi';
+import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ControlPanelProps {
@@ -33,12 +37,16 @@ interface ControlPanelProps {
   onRightChange: (scenario: Scenario) => void;
   onAttributeChange: (attribute: string) => void;
   paneIndex: number | null;
+  viewMode?: ViewMode;
   identifyResult?: IdentifyResult;
   onClearIdentify?: () => void;
   isExploreMode?: boolean;
   onNavigateToCreateSite?: () => void;
   mapStatistics?: MapStatistics;
   isSwiperEnabled?: boolean;
+  isSiteAggregationActive?: boolean;
+  hideScenarioSelectors?: boolean;
+  hideColorScale?: boolean;
   colorScaleMode: ColorScaleMode;
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
 }
@@ -47,6 +55,14 @@ import type { ZoneStats } from '../types';
 
 const MIN_LEGEND_OPACITY = 0.15;
 const MAX_LEGEND_OPACITY = 0.9;
+
+function getTrend(current: number, reference: number): 'up' | 'down' | 'neutral' {
+  const threshold = 0.05;
+  const change = (current - reference) / Math.abs(reference || 1);
+  if (change > threshold) return 'up';
+  if (change < -threshold) return 'down';
+  return 'neutral';
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const normalized = hex.trim().replace('#', '');
@@ -78,12 +94,14 @@ function ScenarioSelector({
   onChange,
   side,
   zoneStats,
+  hideLabel,
 }: {
   label: string;
   value: Scenario;
   onChange: (s: Scenario) => void;
   side: 'left' | 'right';
   zoneStats?: ZoneStats | null;
+  hideLabel?: boolean;
 }) {
   const selectedInfo = SCENARIOS.find((s) => s.id === value);
   const borderColor = useColorModeValue('gray.200', 'gray.600');
@@ -98,19 +116,21 @@ function ScenarioSelector({
       _hover={{ borderColor: selectedInfo?.color || 'brand.400' }}
       transition="border-color 0.2s"
     >
-      <HStack mb={2}>
-        <Badge
-          colorScheme={side === 'left' ? 'orange' : 'blue'}
-          variant="subtle"
-          fontSize="xs"
-          borderRadius="full"
-        >
-          {side === 'left' ? 'LEFT' : 'RIGHT'}
-        </Badge>
-        <Text fontSize="sm" fontWeight="600" color="gray.400">
-          {label}
-        </Text>
-      </HStack>
+      {!hideLabel && (
+        <HStack mb={2}>
+          <Badge
+            colorScheme={side === 'left' ? 'orange' : 'blue'}
+            variant="subtle"
+            fontSize="xs"
+            borderRadius="full"
+          >
+            {side === 'left' ? 'LEFT' : 'RIGHT'}
+          </Badge>
+          <Text fontSize="sm" fontWeight="600" color="gray.400">
+            {label}
+          </Text>
+        </HStack>
+      )}
 
       <Select
         value={value}
@@ -173,12 +193,16 @@ function ControlPanel({
   onRightChange,
   onAttributeChange,
   paneIndex,
+  viewMode = 'map',
   identifyResult,
   onClearIdentify,
   isExploreMode,
   onNavigateToCreateSite,
   mapStatistics,
   isSwiperEnabled = true,
+  isSiteAggregationActive = false,
+  hideScenarioSelectors = false,
+  hideColorScale = false,
   colorScaleMode,
   onColorScaleModeChange,
 }: ControlPanelProps) {
@@ -186,6 +210,7 @@ function ControlPanel({
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const { canMap } = useAttributeCanMap();
+  const { canGraph } = useAttributeCanGraph();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
@@ -193,6 +218,47 @@ function ControlPanel({
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;
+  const [panelWidth, setPanelWidth] = useState(440);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeOriginX = useRef(0);
+  const resizeOriginWidth = useRef(0);
+  const minPanelWidth = 320;
+  const maxPanelWidth = 720;
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const delta = resizeOriginX.current - event.clientX;
+      const nextWidth = Math.min(
+        maxPanelWidth,
+        Math.max(minPanelWidth, resizeOriginWidth.current + delta)
+      );
+      setPanelWidth(nextWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
+  const handleResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
+    resizeOriginX.current = event.clientX;
+    resizeOriginWidth.current = panelWidth;
+    setIsResizing(true);
+  };
 
   return (
     <Slide
@@ -208,7 +274,7 @@ function ControlPanel({
       }}
     >
       <Box
-        w={{ base: '100vw', md: '400px', lg: '440px' }}
+        w={{ base: '100vw', md: `${panelWidth}px` }}
         h="100%"
         bg={bgColor}
         borderLeft="1px"
@@ -216,7 +282,20 @@ function ControlPanel({
         overflowY="auto"
         boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
         pt="56px" // Header height offset
+        position="relative"
       >
+        <Box
+          display={{ base: 'none', md: 'block' }}
+          position="absolute"
+          left={0}
+          top={0}
+          bottom={0}
+          width="6px"
+          cursor="col-resize"
+          zIndex={2}
+          onMouseDown={handleResizeStart}
+          _hover={{ bg: 'blackAlpha.200' }}
+        />
         {/* Close hint for mobile */}
         <Box display={{ base: 'block', md: 'none' }} p={2} textAlign="right">
           <IconButton
@@ -266,33 +345,38 @@ function ControlPanel({
               )}
             </HStack>
             <Text fontSize="sm" color="gray.500">
-              Choose a factor to colour the catchments on this map.
+              Choose a factor to display in this view.
             </Text>
           </Box>
 
           <Divider />
 
-          {/* Scenario 1 (Left) */}
-          <ScenarioSelector
-            label="Scenario 1"
-            value={comparison.leftScenario}
-            onChange={onLeftChange}
-            side="left"
-            zoneStats={mapStatistics?.leftStats}
-          />
+          {viewMode !== 'dial' && !hideScenarioSelectors && (
+            <>
+              {/* Scenario 1 (Left) */}
+              <ScenarioSelector
+                label="Scenario 1"
+                value={comparison.leftScenario}
+                onChange={onLeftChange}
+                side="left"
+                zoneStats={mapStatistics?.leftStats}
+                hideLabel={isSiteAggregationActive}
+              />
 
-          {/* Scenario 2 (Right) */}
-          {isSwiperEnabled && (
-            <ScenarioSelector
-              label="Scenario 2"
-              value={comparison.rightScenario}
-              onChange={onRightChange}
-              side="right"
-              zoneStats={mapStatistics?.rightStats}
-            />
+              {/* Scenario 2 (Right) */}
+              {isSwiperEnabled && !isSiteAggregationActive && (
+                <ScenarioSelector
+                  label="Scenario 2"
+                  value={comparison.rightScenario}
+                  onChange={onRightChange}
+                  side="right"
+                  zoneStats={mapStatistics?.rightStats}
+                />
+              )}
+            </>
           )}
 
-          <Divider />
+          {viewMode !== 'dial' && <Divider />}
 
           {/* Attribute selection */}
           <Box
@@ -323,8 +407,8 @@ function ControlPanel({
               fontWeight="500"
               _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
             >
-              {(Object.keys(canMap || {}).length > 0
-                ? columns.filter((col) => canMap[col])
+              {(Object.keys((viewMode === 'dial' ? canGraph : canMap) || {}).length > 0
+                ? columns.filter((col) => (viewMode === 'dial' ? canGraph[col] : canMap[col]))
                 : columns
               ).map((col) => {
                 const displayName = attributeDetails[col]
@@ -355,7 +439,7 @@ function ControlPanel({
           <Divider />
 
           {/* Legend */}
-          {comparison.attribute && (
+          {comparison.attribute && viewMode !== 'dial' && !hideColorScale && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
@@ -428,7 +512,7 @@ function ControlPanel({
                   border="1px"
                   borderColor={borderColor}
                   bg={cardBg}
-                  overflow="hidden"
+                  overflowX="auto"
                   maxH="400px"
                   overflowY="auto"
                 >
@@ -441,23 +525,37 @@ function ControlPanel({
                     >
                       <Tr>
                         <Th fontSize="xs" py={2} bg={tableHeaderBg}>Attribute</Th>
-                        {/* Order columns to match left/right map panes */}
-                        {[comparison.leftScenario, comparison.rightScenario].map((scenarioId, idx) => {
-                          const scenarioInfo = SCENARIOS.find((s) => s.id === scenarioId);
+                        {(() => {
+                          const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
+                          const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
                           return (
-                            <Th
-                              key={scenarioId}
-                              fontSize="xs"
-                              py={2}
-                              isNumeric
-                              borderLeft={`3px solid ${scenarioInfo?.color || '#fff'}`}
-                              color={scenarioInfo?.color}
-                              bg={tableHeaderBg}
-                            >
-                              {idx === 0 ? 'Left: ' : 'Right: '}{scenarioInfo?.label || scenarioId}
-                            </Th>
+                            <>
+                              <Th
+                                fontSize="xs"
+                                py={2}
+                                isNumeric
+                                borderLeft={`3px solid ${leftInfo?.color || '#fff'}`}
+                                color={leftInfo?.color}
+                                bg={tableHeaderBg}
+                              >
+                                Left: {leftInfo?.label || comparison.leftScenario}
+                              </Th>
+                              <Th fontSize="xs" py={2} bg={tableHeaderBg} textAlign="center">
+                                Trend
+                              </Th>
+                              <Th
+                                fontSize="xs"
+                                py={2}
+                                isNumeric
+                                borderLeft={`3px solid ${rightInfo?.color || '#fff'}`}
+                                color={rightInfo?.color}
+                                bg={tableHeaderBg}
+                              >
+                                Right: {rightInfo?.label || comparison.rightScenario}
+                              </Th>
+                            </>
                           );
-                        })}
+                        })()}
                       </Tr>
                     </Thead>
                     <Tbody>
@@ -476,23 +574,11 @@ function ControlPanel({
                           const leftVal = identifyResult.data[orderedScenarios[0]]?.[attr];
                           const rightVal = identifyResult.data[orderedScenarios[1]]?.[attr];
                           const displayName = attributeDetails[attr] ?? attr;
-
-                          // Calculate bar widths (percentage of cell)
-                          const maxVal = Math.max(
-                            typeof leftVal === 'number' ? Math.abs(leftVal) : 0,
-                            typeof rightVal === 'number' ? Math.abs(rightVal) : 0
-                          );
-
-                          const leftBarWidth = maxVal > 0 && typeof leftVal === 'number'
-                            ? (Math.abs(leftVal) / maxVal) * 100
+                          const hasNumbers = typeof leftVal === 'number' && typeof rightVal === 'number';
+                          const trend = hasNumbers ? getTrend(rightVal as number, leftVal as number) : 'neutral';
+                          const changePercent = hasNumbers
+                            ? Math.abs(((rightVal as number) - (leftVal as number)) / Math.abs((leftVal as number) || 1)) * 100
                             : 0;
-                          const rightBarWidth = maxVal > 0 && typeof rightVal === 'number'
-                            ? (Math.abs(rightVal) / maxVal) * 100
-                            : 0;
-
-                          // Get scenario colors
-                          const leftScenarioInfo = SCENARIOS.find((s) => s.id === orderedScenarios[0]);
-                          const rightScenarioInfo = SCENARIOS.find((s) => s.id === orderedScenarios[1]);
 
                           return (
                             <Tr key={attr}>
@@ -509,7 +595,7 @@ function ControlPanel({
                               >
                                 {displayName}
                               </Td>
-                              {/* Left scenario cell - bar from left */}
+                              {/* Left scenario cell */}
                               <Td
                                 fontSize="xs"
                                 isNumeric
@@ -517,24 +603,26 @@ function ControlPanel({
                                 position="relative"
                                 overflow="hidden"
                               >
-                                {/* Bar background - originates from left */}
-                                <Box
-                                  position="absolute"
-                                  top="2px"
-                                  bottom="2px"
-                                  left={0}
-                                  width={`${leftBarWidth}%`}
-                                  bg={leftScenarioInfo?.color || 'orange.400'}
-                                  opacity={0.25}
-                                  borderRightRadius="sm"
-                                  transition="width 0.3s ease"
-                                />
-                                {/* Value text */}
-                                <Text position="relative" zIndex={1}>
-                                  {leftVal != null ? leftVal.toFixed(2) : '-'}
-                                </Text>
+                                <Text>{leftVal != null ? leftVal.toFixed(2) : '-'}</Text>
                               </Td>
-                              {/* Right scenario cell - bar from right */}
+                              {/* Trend cell */}
+                              <Td fontSize="xs" py={1.5} textAlign="center">
+                                <HStack justify="center" spacing={2}>
+                                  {trend === 'up' && <Icon as={FiTrendingUp} color="green.400" />}
+                                  {trend === 'down' && <Icon as={FiTrendingDown} color="red.400" />}
+                                  {trend === 'neutral' && <Icon as={FiMinus} color="gray.500" />}
+                                  <Progress
+                                    value={Math.min(changePercent, 100)}
+                                    max={100}
+                                    size="xs"
+                                    w="50px"
+                                    colorScheme={trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray'}
+                                    bg="whiteAlpha.200"
+                                    borderRadius="full"
+                                  />
+                                </HStack>
+                              </Td>
+                              {/* Right scenario cell */}
                               <Td
                                 fontSize="xs"
                                 isNumeric
@@ -542,22 +630,7 @@ function ControlPanel({
                                 position="relative"
                                 overflow="hidden"
                               >
-                                {/* Bar background - originates from right */}
-                                <Box
-                                  position="absolute"
-                                  top="2px"
-                                  bottom="2px"
-                                  right={0}
-                                  width={`${rightBarWidth}%`}
-                                  bg={rightScenarioInfo?.color || 'blue.400'}
-                                  opacity={0.25}
-                                  borderLeftRadius="sm"
-                                  transition="width 0.3s ease"
-                                />
-                                {/* Value text */}
-                                <Text position="relative" zIndex={1}>
-                                  {rightVal != null ? rightVal.toFixed(2) : '-'}
-                                </Text>
+                                <Text>{rightVal != null ? rightVal.toFixed(2) : '-'}</Text>
                               </Td>
                             </Tr>
                           );
@@ -570,13 +643,7 @@ function ControlPanel({
             </>
           )}
 
-          {/* Info footer */}
-          <Box mt="auto" pt={4}>
-            <Text fontSize="xs" color="gray.600" textAlign="center">
-              Drag the slider on the map to compare scenarios side by side.
-              All data is served locally with no internet required.
-            </Text>
-          </Box>
+          {/* Info footer intentionally hidden */}
         </VStack>
       </Box>
     </Slide>

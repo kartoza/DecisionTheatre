@@ -1,11 +1,13 @@
 import { Box } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
-import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 
 interface ContentAreaProps {
   mode: LayoutMode;
   paneStates: PaneStates;
+  viewModes: ViewMode[];
+  onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
   focusedPane: number;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
@@ -22,6 +24,8 @@ interface ContentAreaProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  is3DMode?: boolean;
+  on3DModeChange?: (enabled: boolean) => void;
   // Slider synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -57,6 +61,8 @@ const paneVariants = {
 function ContentArea({
   mode,
   paneStates,
+  viewModes,
+  onViewModeChange,
   focusedPane,
   onFocusPane,
   onGoQuad,
@@ -73,6 +79,8 @@ function ContentArea({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  is3DMode,
+  on3DModeChange,
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
@@ -109,13 +117,19 @@ function ContentArea({
               compact
               paneIndex={0}
               layoutMode={mode}
+              viewMode={viewModes[0]}
+              onViewModeChange={onViewModeChange}
               onFocusPane={onFocusPane}
               onGoQuad={onGoQuad}
               onIdentify={onIdentify}
               identifyResult={identifyResult}
               siteId={siteId}
               siteBounds={siteBounds}
+              isSwiperEnabled={isSwiperEnabled}
+              onSwiperEnabledChange={onSwiperEnabledChange}
               colorScaleMode={colorScaleMode}
+              is3DMode={is3DMode}
+              on3DModeChange={on3DModeChange}
               swiperPosition={swiperPosition}
               onSwiperPositionChange={onSwiperPositionChange}
               siteIndicators={siteIndicators}
@@ -140,13 +154,19 @@ function ContentArea({
                   compact
                   paneIndex={i}
                   layoutMode={mode}
+                  viewMode={viewModes[i]}
+                  onViewModeChange={onViewModeChange}
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   onIdentify={onIdentify}
                   identifyResult={identifyResult}
                   siteId={siteId}
                   siteBounds={siteBounds}
+                  isSwiperEnabled={isSwiperEnabled}
+                  onSwiperEnabledChange={onSwiperEnabledChange}
                   colorScaleMode={colorScaleMode}
+                  is3DMode={is3DMode}
+                  on3DModeChange={on3DModeChange}
                   swiperPosition={swiperPosition}
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
@@ -170,6 +190,8 @@ function ContentArea({
             compact={false}
             paneIndex={visibleIndices[0]}
             layoutMode={mode}
+            viewMode={viewModes[visibleIndices[0]]}
+            onViewModeChange={onViewModeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
             onIdentify={onIdentify}
@@ -185,6 +207,8 @@ function ContentArea({
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={onSwiperEnabledChange}
             colorScaleMode={colorScaleMode}
+            is3DMode={is3DMode}
+            on3DModeChange={on3DModeChange}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}

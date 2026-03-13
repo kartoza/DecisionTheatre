@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, useAttributeColors } from '../hooks/useApi';
+import { getSite, useAttributeColors, useAttributeDetails } from '../hooks/useApi';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -17,6 +17,7 @@ interface MapViewProps {
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
+  isQuad?: boolean;
   siteId?: string | null;
   siteBounds?: BoundingBox | null;
   isBoundaryEditMode?: boolean;
@@ -28,6 +29,8 @@ interface MapViewProps {
   // Slider position synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
+  is3DMode?: boolean;
+  on3DModeChange?: (enabled: boolean) => void;
 }
 
 // Layer IDs for choropleth
@@ -454,8 +457,9 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange }: MapViewProps) {
   const { colors: attributeColors } = useAttributeColors();
+  const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   const rightMapRef = useRef<maplibregl.Map | null>(null);
@@ -480,9 +484,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const [areMapsReady, setAreMapsReady] = useState(false);
 
   // 3D mode state
-  const [is3DMode, setIs3DMode] = useState(false);
+  const [internal3DMode, setInternal3DMode] = useState(false);
+  const is3DMode = is3DModeProp ?? internal3DMode;
   const is3DModeRef = useRef(is3DMode);
-  is3DModeRef.current = is3DMode;
 
   // Store latest comparison in a ref so async callbacks see current values
   const comparisonRef = useRef(comparison);
@@ -600,13 +604,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
       }
 
-      console.log('Applying choropleth with site catchment filter:', siteCatchmentIds);
       const leftFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
         ? filterDatasetByCatchmentIds(leftData, siteCatchmentIds)
         : leftData;
       const rightFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
         ? filterDatasetByCatchmentIds(rightData, siteCatchmentIds)
         : rightData;
+      const leftDisplay = leftData;
+      const rightDisplay = rightData;
 
       // Use site-scoped domain once a site is established; fall back to API global domain.
       let min = 0;
@@ -644,12 +649,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         : undefined;
 
       // Apply to left map - verify the map is ready
-      if (leftFiltered && leftFiltered.features.length > 0) {
+      if (leftDisplay && leftDisplay.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded, attributeColor);
+          applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftFiltered, c.attribute, min, max, extruded, attributeColor);
+            applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor);
           });
         }
       } else {
@@ -657,12 +662,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       // Apply to right map - verify the map is ready
-      if (rightFiltered && rightFiltered.features.length > 0) {
+      if (rightDisplay && rightDisplay.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded, attributeColor);
+          applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightFiltered, c.attribute, min, max, extruded, attributeColor);
+            applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor);
           });
         }
       } else {
@@ -950,18 +955,56 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     onSwiperEnabledChange?.(next);
   }, [isSwiperEnabled, isSwiperEnabledProp, onSwiperEnabledChange]);
 
+  const deriveBoundsFromGeometry = useCallback((geometry: GeoJSON.Geometry | null): BoundingBox | null => {
+    if (!geometry) return null;
+
+    try {
+      const [minX, minY, maxX, maxY] = turfBbox({
+        type: 'Feature',
+        properties: {},
+        geometry,
+      } as GeoJSON.Feature) as [number, number, number, number];
+
+      return { minX, minY, maxX, maxY };
+    } catch (err) {
+      console.error('Failed to derive site bounds from geometry:', err);
+      return null;
+    }
+  }, []);
+
+  const resolveSiteBounds = useCallback(async (): Promise<BoundingBox | null> => {
+    if (siteBounds) return siteBounds;
+
+    const geometryBounds = deriveBoundsFromGeometry(siteGeometryRef.current ?? null);
+    if (geometryBounds) return geometryBounds;
+
+    if (!siteId) return null;
+
+    try {
+      const site = await getSite(siteId);
+      if (site?.boundingBox) return site.boundingBox;
+      return deriveBoundsFromGeometry(site?.geometry ?? null);
+    } catch (err) {
+      console.error('Failed to fetch site bounds:', err);
+      return null;
+    }
+  }, [siteBounds, siteId, deriveBoundsFromGeometry]);
+
   // Zoom to site bounds with 10% padding
-  const zoomToSite = useCallback(() => {
+  const zoomToSite = useCallback(async () => {
     const leftMap = leftMapRef.current;
-    if (!leftMap || !siteBounds) return;
+    if (!leftMap) return;
+
+    const resolvedBounds = await resolveSiteBounds();
+    if (!resolvedBounds) return;
 
     // Add 10% padding to bounds
-    const dx = (siteBounds.maxX - siteBounds.minX) * 0.1;
-    const dy = (siteBounds.maxY - siteBounds.minY) * 0.1;
+    const dx = (resolvedBounds.maxX - resolvedBounds.minX) * 0.1;
+    const dy = (resolvedBounds.maxY - resolvedBounds.minY) * 0.1;
 
     const paddedBounds: [[number, number], [number, number]] = [
-      [siteBounds.minX - dx, siteBounds.minY - dy],
-      [siteBounds.maxX + dx, siteBounds.maxY + dy],
+      [resolvedBounds.minX - dx, resolvedBounds.minY - dy],
+      [resolvedBounds.maxX + dx, resolvedBounds.maxY + dy],
     ];
 
     leftMap.fitBounds(paddedBounds, {
@@ -969,30 +1012,38 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       duration: 1000,
       maxZoom: 14,
     });
-  }, [siteBounds]);
+  }, [resolveSiteBounds]);
 
   // Toggle 3D mode - smoothly ease pitch between 0 and 60 degrees
   // and rebuild layers with/without extrusion
-  const toggle3DMode = useCallback(() => {
-    setIs3DMode(prev => {
-      const newMode = !prev;
-      const targetPitch = newMode ? 60 : 0;
+  const apply3DMode = useCallback((nextMode: boolean) => {
+    const targetPitch = nextMode ? 60 : 0;
+    if (leftMapRef.current) {
+      leftMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
+    }
+    if (rightMapRef.current) {
+      rightMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
+    }
 
-      if (leftMapRef.current) {
-        leftMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
-      }
-      if (rightMapRef.current) {
-        rightMapRef.current.easeTo({ pitch: targetPitch, duration: 800 });
-      }
-
-      // Update the ref immediately so applyColors reads the new value
-      is3DModeRef.current = newMode;
-      // Rebuild layers with extrusion toggled
-      applyColors();
-
-      return newMode;
-    });
+    // Update the ref immediately so applyColors reads the new value
+    is3DModeRef.current = nextMode;
+    // Rebuild layers with extrusion toggled
+    applyColors();
   }, [applyColors]);
+
+  const toggle3DMode = useCallback(() => {
+    const nextMode = !is3DModeRef.current;
+    if (is3DModeProp === undefined) {
+      setInternal3DMode(nextMode);
+    }
+    on3DModeChange?.(nextMode);
+    apply3DMode(nextMode);
+  }, [apply3DMode, is3DModeProp, on3DModeChange]);
+
+  useEffect(() => {
+    if (is3DModeRef.current === is3DMode) return;
+    apply3DMode(is3DMode);
+  }, [apply3DMode, is3DMode]);
 
   // Update cursor when identify mode changes
   useEffect(() => {
@@ -1262,6 +1313,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       style: styleUrl,
       center: [20, 0],
       zoom: 3,
+      pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       scrollZoom: true,
       dragPan: true,
@@ -1280,6 +1332,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       style: styleUrl,
       center: [20, 0],
       zoom: 3,
+      pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       scrollZoom: true,
       dragPan: true,
@@ -1290,6 +1343,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       touchZoomRotate: true,
       touchPitch: true,
     });
+    rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
 
     // Initial sizing of map containers
     updateMapSizes();
@@ -1612,13 +1666,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }
 
     if (indicatorLabel) {
-      indicatorLabel.textContent = comparison.attribute || '';
+      const friendlyAttribute = comparison.attribute
+        ? attributeDetails[comparison.attribute]
+          ?? comparison.attribute
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase())
+        : '';
+      indicatorLabel.textContent = friendlyAttribute;
       indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
     }
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, attributeColors]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, attributeColors, attributeDetails]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
@@ -2268,6 +2328,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Check if panel is unconfigured (no indicator selected)
   const isUnconfigured = !comparison.attribute;
+  const canZoomToSite = Boolean(siteBounds || siteGeometry || siteId);
 
   return (
     <Box
@@ -2418,22 +2479,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           </Tooltip>
 
           {/* Identify button */}
-          <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
-            <IconButton
-              aria-label="Toggle identify mode"
-              icon={<FiInfo />}
-              size="sm"
-              colorScheme={isIdentifyMode ? "blue" : "gray"}
-              variant="solid"
-              bg={isIdentifyMode ? "blue.500" : "white"}
-              color={isIdentifyMode ? "white" : "gray.700"}
-              onClick={toggleIdentifyMode}
-              boxShadow="md"
-              _hover={{
-                bg: isIdentifyMode ? "blue.600" : "gray.100"
-              }}
-            />
-          </Tooltip>
+          {!isQuad && (
+            <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
+              <IconButton
+                aria-label="Toggle identify mode"
+                icon={<FiInfo />}
+                size="sm"
+                colorScheme={isIdentifyMode ? "blue" : "gray"}
+                variant="solid"
+                bg={isIdentifyMode ? "blue.500" : "white"}
+                color={isIdentifyMode ? "white" : "gray.700"}
+                onClick={toggleIdentifyMode}
+                boxShadow="md"
+                _hover={{
+                  bg: isIdentifyMode ? "blue.600" : "gray.100"
+                }}
+              />
+            </Tooltip>
+          )}
 
           {/* Swiper toggle button */}
           <Tooltip label={isSwiperEnabled ? "Disable map swiper" : "Enable map swiper"} placement="right">
@@ -2454,7 +2517,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           </Tooltip>
 
           {/* Zoom to Site button - only show when site bounds are available */}
-          {siteBounds && (
+          {canZoomToSite && (
             <Tooltip label="Zoom to Site" placement="right">
               <IconButton
                 aria-label="Zoom to site"
