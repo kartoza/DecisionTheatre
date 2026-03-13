@@ -470,6 +470,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const sliderDockedRef = useRef<'left' | 'right' | null>(null);
   const isDragging = useRef(false);
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+  const resizeFrameRef = useRef<number | null>(null);
 
   // Compare swiper state (split-screen on/off)
   const [internalSwiperEnabled, setInternalSwiperEnabled] = useState(true);
@@ -682,6 +683,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   useEffect(() => {
     applyColorsRef.current = applyColors;
   }, [applyColors]);
+
+  // Clear stale choropleth layers immediately when comparison changes
+  useEffect(() => {
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+
+    removeChoroplethLayers(leftMap, 'left');
+    removeChoroplethLayers(rightMap, 'right');
+    applyColorsRef.current();
+  }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
 
   // Compute a site-scoped domain range (min/max) so color scale is based on the site,
   // not on global dataset extrema, once a site exists.
@@ -1547,7 +1560,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     const scheduleResize = () => {
-      requestAnimationFrame(updateSizes);
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        updateSizes();
+      });
     };
 
     scheduleResize();
@@ -1562,6 +1579,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     return () => {
       observer.disconnect();
       window.clearTimeout(transitionTimer);
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
     };
   }, [isQuad]);
 
