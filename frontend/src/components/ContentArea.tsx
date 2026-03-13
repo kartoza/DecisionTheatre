@@ -125,6 +125,9 @@ function ContentArea({
               identifyResult={identifyResult}
               siteId={siteId}
               siteBounds={siteBounds}
+              isBoundaryEditMode={isBoundaryEditMode}
+              siteGeometry={siteGeometry}
+              onBoundaryUpdate={onBoundaryUpdate}
               isSwiperEnabled={isSwiperEnabled}
               onSwiperEnabledChange={onSwiperEnabledChange}
               colorScaleMode={colorScaleMode}
@@ -162,6 +165,9 @@ function ContentArea({
                   identifyResult={identifyResult}
                   siteId={siteId}
                   siteBounds={siteBounds}
+                  isBoundaryEditMode={isBoundaryEditMode}
+                  siteGeometry={siteGeometry}
+                  onBoundaryUpdate={onBoundaryUpdate}
                   isSwiperEnabled={isSwiperEnabled}
                   onSwiperEnabledChange={onSwiperEnabledChange}
                   colorScaleMode={colorScaleMode}
