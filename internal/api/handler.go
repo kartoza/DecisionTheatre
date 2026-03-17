@@ -1293,6 +1293,66 @@ type BoundaryOperationResponse struct {
 	Area        float64            `json:"area"`
 }
 
+// normalizeUnionBoundaryGeometry removes interior rings from union results to avoid
+// rendering artifacts (small internal loops/slivers) after repeated add-catchment edits.
+func normalizeUnionBoundaryGeometry(geometry json.RawMessage) json.RawMessage {
+	if len(geometry) == 0 {
+		return geometry
+	}
+
+	var parsed struct {
+		Type        string          `json:"type"`
+		Coordinates json.RawMessage `json:"coordinates"`
+	}
+	if err := json.Unmarshal(geometry, &parsed); err != nil {
+		return geometry
+	}
+
+	switch parsed.Type {
+	case "Polygon":
+		var coords [][][]float64
+		if err := json.Unmarshal(parsed.Coordinates, &coords); err != nil {
+			return geometry
+		}
+		if len(coords) <= 1 {
+			return geometry
+		}
+		cleaned, err := json.Marshal(map[string]interface{}{
+			"type":        "Polygon",
+			"coordinates": coords[:1],
+		})
+		if err != nil {
+			return geometry
+		}
+		return cleaned
+
+	case "MultiPolygon":
+		var coords [][][][]float64
+		if err := json.Unmarshal(parsed.Coordinates, &coords); err != nil {
+			return geometry
+		}
+
+		cleanedPolygons := make([][][][]float64, 0, len(coords))
+		for _, polygon := range coords {
+			if len(polygon) == 0 {
+				continue
+			}
+			cleanedPolygons = append(cleanedPolygons, [][][]float64{polygon[0]})
+		}
+
+		cleaned, err := json.Marshal(map[string]interface{}{
+			"type":        "MultiPolygon",
+			"coordinates": cleanedPolygons,
+		})
+		if err != nil {
+			return geometry
+		}
+		return cleaned
+	}
+
+	return geometry
+}
+
 // handleBoundaryUnion adds a catchment to the site boundary using geometry union
 func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 	if h.siteStore == nil {
@@ -1337,6 +1397,7 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "union failed: "+err.Error())
 		return
 	}
+	newGeometry = normalizeUnionBoundaryGeometry(newGeometry)
 
 	// Update catchment IDs (add the new catchment)
 	catchmentIDStr := catchmentID

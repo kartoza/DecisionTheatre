@@ -17,12 +17,10 @@ import {
   Tr,
   Th,
   Td,
-  Progress,
-  Icon,
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin, FiTrendingUp, FiTrendingDown, FiMinus } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
@@ -62,6 +60,64 @@ function getTrend(current: number, reference: number): 'up' | 'down' | 'neutral'
   if (change > threshold) return 'up';
   if (change < -threshold) return 'down';
   return 'neutral';
+}
+
+type ReferenceDeltaDirection = 'left' | 'right' | 'neutral';
+
+function getReferenceDirection(value: number, reference: number): ReferenceDeltaDirection {
+  if (value > reference) return 'right';
+  if (value < reference) return 'left';
+  return 'neutral';
+}
+
+function ReferenceTrendBar({ reference, value, color }: { reference: number; value: number; color: string }) {
+  const maxLinePx = 28;
+  const referenceMagnitude = Math.abs(reference) || 1;
+  const delta = value - reference;
+  const direction = getReferenceDirection(value, reference);
+  const ratio = Math.min(1, Math.abs(delta) / referenceMagnitude);
+  const width = Math.max(2, ratio * maxLinePx);
+
+  return (
+    <Box position="relative" w="72px" h="12px" aria-hidden="true">
+      <Box
+        position="absolute"
+        left="50%"
+        top="1px"
+        bottom="1px"
+        w="2px"
+        bg="gray.500"
+        transform="translateX(-1px)"
+        borderRadius="full"
+      />
+      {direction === 'neutral' ? (
+        <Box
+          position="absolute"
+          left="50%"
+          top="4px"
+          w="4px"
+          h="4px"
+          bg={color}
+          borderRadius="full"
+          transform="translateX(-2px)"
+        />
+      ) : (
+        <Box
+          position="absolute"
+          top="5px"
+          left={
+            direction === 'right'
+              ? `calc(50% + 1px)`
+              : `calc(50% - ${width + 1}px)`
+          }
+          w={`${width}px`}
+          h="2px"
+          bg={color}
+          borderRadius="full"
+        />
+      )}
+    </Box>
+  );
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -576,9 +632,7 @@ function ControlPanel({
                           const displayName = attributeDetails[attr] ?? attr;
                           const hasNumbers = typeof leftVal === 'number' && typeof rightVal === 'number';
                           const trend = hasNumbers ? getTrend(rightVal as number, leftVal as number) : 'neutral';
-                          const changePercent = hasNumbers
-                            ? Math.abs(((rightVal as number) - (leftVal as number)) / Math.abs((leftVal as number) || 1)) * 100
-                            : 0;
+                          const trendColor = trend === 'up' ? 'green.400' : trend === 'down' ? 'red.400' : 'gray.400';
 
                           return (
                             <Tr key={attr}>
@@ -608,18 +662,15 @@ function ControlPanel({
                               {/* Trend cell */}
                               <Td fontSize="xs" py={1.5} textAlign="center">
                                 <HStack justify="center" spacing={2}>
-                                  {trend === 'up' && <Icon as={FiTrendingUp} color="green.400" />}
-                                  {trend === 'down' && <Icon as={FiTrendingDown} color="red.400" />}
-                                  {trend === 'neutral' && <Icon as={FiMinus} color="gray.500" />}
-                                  <Progress
-                                    value={Math.min(changePercent, 100)}
-                                    max={100}
-                                    size="xs"
-                                    w="50px"
-                                    colorScheme={trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray'}
-                                    bg="whiteAlpha.200"
-                                    borderRadius="full"
-                                  />
+                                  {hasNumbers ? (
+                                    <ReferenceTrendBar
+                                      reference={leftVal as number}
+                                      value={rightVal as number}
+                                      color={trendColor}
+                                    />
+                                  ) : (
+                                    <Text color="gray.500">-</Text>
+                                  )}
                                 </HStack>
                               </Td>
                               {/* Right scenario cell */}

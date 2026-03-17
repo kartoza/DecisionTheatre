@@ -1,13 +1,14 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
-import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns } from 'react-icons/fi';
+import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanIntersects, bbox as turfBbox } from '@turf/turf';
+import { booleanIntersects, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, useAttributeColors, useAttributeDetails } from '../hooks/useApi';
+import { getAppRuntime } from '../types/runtime';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -72,6 +73,66 @@ const MAX_EXTRUSION_HEIGHT = 50000;
 
 const MIN_FILL_OPACITY = 0.15;
 const MAX_FILL_OPACITY = 0.9;
+
+type PolygonalGeometry = GeoJSON.Polygon | GeoJSON.MultiPolygon;
+
+function isPolygonalGeometry(geometry: GeoJSON.Geometry | null | undefined): geometry is PolygonalGeometry {
+  return Boolean(geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon'));
+}
+
+function geometryToPolygonFeature(
+  geometry: GeoJSON.Geometry | null | undefined,
+): GeoJSON.Feature<PolygonalGeometry> | null {
+  if (!isPolygonalGeometry(geometry)) {
+    return null;
+  }
+
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry,
+  };
+}
+
+function stripInteriorRings(geometry: GeoJSON.Geometry): GeoJSON.Geometry {
+  if (geometry.type === 'Polygon') {
+    const outerRing = geometry.coordinates[0] ? [geometry.coordinates[0]] : [];
+    return { type: 'Polygon', coordinates: outerRing };
+  }
+
+  if (geometry.type === 'MultiPolygon') {
+    const cleaned = geometry.coordinates.map((polygon) => (polygon[0] ? [polygon[0]] : []));
+    return { type: 'MultiPolygon', coordinates: cleaned };
+  }
+
+  return geometry;
+}
+
+function normalizeBoundaryGeometry(geometry: GeoJSON.Geometry): GeoJSON.Geometry {
+  const stripped = stripInteriorRings(geometry);
+
+  if (stripped.type === 'MultiPolygon') {
+    let largestRing: number[][] | null = null;
+    let largestArea = -Infinity;
+
+    for (const polygon of stripped.coordinates) {
+      const ring = polygon[0];
+      if (!ring || ring.length < 3) continue;
+      const candidate = { type: 'Polygon', coordinates: [ring] } as GeoJSON.Polygon;
+      const area = turfArea(candidate as GeoJSON.Geometry);
+      if (area > largestArea) {
+        largestArea = area;
+        largestRing = ring;
+      }
+    }
+
+    if (largestRing) {
+      return { type: 'Polygon', coordinates: [largestRing] };
+    }
+  }
+
+  return stripped;
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const normalized = hex.trim().replace('#', '');
@@ -1840,7 +1901,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Helper to add glowing neon boundary layers with off-white backing
     const addSiteBoundary = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
-      console.log('Adding site boundary to map, geometry type:', geometry.type);
+      const normalized = normalizeBoundaryGeometry(geometry);
+      console.log('Adding site boundary to map, geometry type:', normalized.type);
       removeSiteBoundary(map);
 
       // Add GeoJSON source
@@ -1849,7 +1911,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         data: {
           type: 'Feature',
           properties: {},
-          geometry,
+          geometry: normalized,
         },
       });
 
@@ -1918,6 +1980,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       });
     };
 
+    const updateSiteBoundarySource = (map: maplibregl.Map, geometry: GeoJSON.Geometry): boolean => {
+      if (!map.style) return false;
+      const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource;
+      if (!source) return false;
+
+      const normalized = normalizeBoundaryGeometry(geometry);
+
+      source.setData({
+        type: 'Feature',
+        properties: {},
+        geometry: normalized,
+      });
+      map.triggerRepaint();
+      return true;
+    };
+
     // If no site, remove boundaries
     if (!siteId) {
       siteCatchmentIdsRef.current = null;
@@ -1928,8 +2006,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Prefer the latest geometry from props to avoid missing boundaries
     if (siteGeometry) {
-      addSiteBoundaryWhenReady(leftMap, siteGeometry);
-      addSiteBoundaryWhenReady(rightMap, siteGeometry);
+      const leftUpdated = updateSiteBoundarySource(leftMap, siteGeometry);
+      const rightUpdated = updateSiteBoundarySource(rightMap, siteGeometry);
+      if (!leftUpdated) addSiteBoundaryWhenReady(leftMap, siteGeometry);
+      if (!rightUpdated) addSiteBoundaryWhenReady(rightMap, siteGeometry);
     }
 
     // Fetch site data and add boundary
@@ -1944,6 +2024,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         console.log(`[Site Boundary] Site ${siteId} catchments:`, catchmentCount);
 
         const zoomToLoadedSiteBounds = () => {
+          if (isBoundaryEditModeRef.current) return;
           const bounds = site?.boundingBox;
           if (!bounds) return;
 
@@ -1963,11 +2044,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         };
 
         const geometry = site?.geometry;
-        if (geometry) {
+        if (geometry && !siteGeometry) {
           // Wait for maps to be idle before adding layers
           const addToMaps = () => {
-            addSiteBoundaryWhenReady(leftMap, geometry);
-            addSiteBoundaryWhenReady(rightMap, geometry);
+            const leftUpdated = updateSiteBoundarySource(leftMap, geometry);
+            const rightUpdated = updateSiteBoundarySource(rightMap, geometry);
+            if (!leftUpdated) addSiteBoundaryWhenReady(leftMap, geometry);
+            if (!rightUpdated) addSiteBoundaryWhenReady(rightMap, geometry);
             zoomToLoadedSiteBounds();
           };
 
@@ -1999,7 +2082,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Zoom to site bounds when siteBounds changes (with 10% padding)
   useEffect(() => {
-    if (!siteBounds) return;
+    if (!siteBounds || isBoundaryEditModeRef.current) return;
 
     const zoomToBounds = () => {
       const leftMap = leftMapRef.current;
@@ -2049,9 +2132,110 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const catchmentEditModeRef = useRef(catchmentEditMode);
   catchmentEditModeRef.current = catchmentEditMode;
 
+  const [vertexEditMode, setVertexEditMode] = useState<'delete' | 'add' | null>(null);
+  const vertexEditModeRef = useRef(vertexEditMode);
+  vertexEditModeRef.current = vertexEditMode;
+
+  const ADD_CATCHMENT_CURSOR =
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='black' stroke-width='3'><circle cx='12' cy='12' r='9'/><line x1='12' y1='7' x2='12' y2='17'/><line x1='7' y1='12' x2='17' y2='12'/></svg>\") 12 12, copy";
+  const REMOVE_CATCHMENT_CURSOR =
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke='black' stroke-width='3'><circle cx='12' cy='12' r='9'/><line x1='7' y1='12' x2='17' y2='12'/></svg>\") 12 12, not-allowed";
+  const DELETE_VERTEX_CURSOR = REMOVE_CATCHMENT_CURSOR;
+  const ADD_VERTEX_CURSOR = ADD_CATCHMENT_CURSOR;
+
+  const insertVertexAtClosestSegment = useCallback((
+    vertices: [number, number][],
+    point: [number, number],
+  ): [number, number][] => {
+    if (vertices.length < 2) return [...vertices, point];
+
+    let closestIndex = 0;
+    let closestDistance = Infinity;
+
+    for (let i = 0; i < vertices.length; i += 1) {
+      const start = vertices[i];
+      const end = vertices[(i + 1) % vertices.length];
+
+      const dx = end[0] - start[0];
+      const dy = end[1] - start[1];
+      const lengthSq = dx * dx + dy * dy;
+      if (lengthSq === 0) continue;
+
+      const t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSq;
+      const clamped = Math.max(0, Math.min(1, t));
+      const projX = start[0] + clamped * dx;
+      const projY = start[1] + clamped * dy;
+      const distSq = (point[0] - projX) * (point[0] - projX) + (point[1] - projY) * (point[1] - projY);
+
+      if (distSq < closestDistance) {
+        closestDistance = distSq;
+        closestIndex = i;
+      }
+    }
+
+    const nextVertices = [...vertices];
+    nextVertices.splice(closestIndex + 1, 0, point);
+    return nextVertices;
+  }, []);
+
+  const updateBoundarySource = useCallback((geometry: GeoJSON.Geometry) => {
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+    const normalized = normalizeBoundaryGeometry(geometry);
+
+    const updateMap = (map: maplibregl.Map) => {
+      if (!map.style) return;
+      const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource;
+      if (!source) return;
+
+      source.setData({
+        type: 'Feature',
+        properties: {},
+        geometry: normalized,
+      });
+      map.triggerRepaint();
+    };
+
+    if (leftMap) updateMap(leftMap);
+    if (rightMap) updateMap(rightMap);
+
+    return normalized;
+  }, []);
+
+  const applyLocalBoundaryOperation = useCallback(
+    (
+      operation: 'union' | 'difference',
+      catchmentGeometry: GeoJSON.Geometry,
+    ) => {
+      if (!siteGeometryRef.current || !onBoundaryUpdateRef.current) return;
+
+      const siteFeature = geometryToPolygonFeature(siteGeometryRef.current);
+      const catchmentFeature = geometryToPolygonFeature(catchmentGeometry);
+      if (!siteFeature || !catchmentFeature) return;
+
+      const result =
+        operation === 'union'
+          ? union(featureCollection([siteFeature, catchmentFeature]))
+          : difference(featureCollection([siteFeature, catchmentFeature]));
+
+      if (result?.geometry) {
+        const normalized = updateBoundarySource(result.geometry);
+        onBoundaryUpdateRef.current(normalized);
+      }
+    },
+    [updateBoundarySource],
+  );
+
   // Handle adding a catchment to the site boundary
-  const handleAddCatchment = useCallback(async (catchmentId: string) => {
+  const handleAddCatchment = useCallback(async (catchmentId: string, catchmentGeometry?: GeoJSON.Geometry) => {
     if (!siteGeometryRef.current || !onBoundaryUpdateRef.current || !siteId) return;
+
+    if (getAppRuntime() === 'browser') {
+      if (catchmentGeometry) {
+        applyLocalBoundaryOperation('union', catchmentGeometry);
+      }
+      return;
+    }
 
     try {
       // Use the union API endpoint to merge the catchment with the site
@@ -2062,7 +2246,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (response.ok) {
         const result = await response.json();
         if (result.geometry) {
-          onBoundaryUpdateRef.current(result.geometry);
+          const normalized = updateBoundarySource(result.geometry);
+          onBoundaryUpdateRef.current(normalized);
         }
       } else {
         console.error('Failed to add catchment to boundary');
@@ -2070,11 +2255,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error adding catchment:', err);
     }
-  }, [siteId]);
+  }, [applyLocalBoundaryOperation, siteId]);
 
   // Handle removing a catchment from the site boundary
-  const handleRemoveCatchment = useCallback(async (catchmentId: string) => {
+  const handleRemoveCatchment = useCallback(async (catchmentId: string, catchmentGeometry?: GeoJSON.Geometry) => {
     if (!siteGeometryRef.current || !onBoundaryUpdateRef.current || !siteId) return;
+
+    if (getAppRuntime() === 'browser') {
+      if (catchmentGeometry) {
+        applyLocalBoundaryOperation('difference', catchmentGeometry);
+      }
+      return;
+    }
 
     try {
       // Use the difference API endpoint to remove the catchment from the site
@@ -2085,7 +2277,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (response.ok) {
         const result = await response.json();
         if (result.geometry) {
-          onBoundaryUpdateRef.current(result.geometry);
+          const normalized = updateBoundarySource(result.geometry);
+          onBoundaryUpdateRef.current(normalized);
         }
       } else {
         console.error('Failed to remove catchment from boundary');
@@ -2093,7 +2286,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error removing catchment:', err);
     }
-  }, [siteId]);
+  }, [applyLocalBoundaryOperation, siteId]);
 
   // Handle catchment click in add/remove mode
   const handleCatchmentEditClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
@@ -2119,12 +2312,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!catchmentId) return;
 
     const catchmentIdStr = String(catchmentId);
+    const catchmentGeometry = features[0].geometry;
 
     if (catchmentEditModeRef.current === 'add') {
-      handleAddCatchment(catchmentIdStr);
+      handleAddCatchment(catchmentIdStr, catchmentGeometry);
     } else if (catchmentEditModeRef.current === 'remove') {
-      handleRemoveCatchment(catchmentIdStr);
+      handleRemoveCatchment(catchmentIdStr, catchmentGeometry);
     }
+
+    map.getCanvas().style.cursor =
+      catchmentEditModeRef.current === 'add' ? ADD_CATCHMENT_CURSOR : REMOVE_CATCHMENT_CURSOR;
   }, [handleAddCatchment, handleRemoveCatchment]);
 
   // Extract vertices from geometry
@@ -2174,7 +2371,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Create feature collection for vertices
       const features: GeoJSON.Feature[] = vertices.map((coord, idx) => ({
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: coord },
+        geometry: { type: 'Point', coordinates: [coord[0], coord[1]] },
         properties: { index: idx },
       }));
 
@@ -2231,8 +2428,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     };
 
-    if (leftMap.loaded()) updateMapVertices(leftMap);
-    if (rightMap.loaded()) updateMapVertices(rightMap);
+    if (leftMap.style) updateMapVertices(leftMap);
+    if (rightMap.style) updateMapVertices(rightMap);
   }, []);
 
   // Remove edit vertices layers
@@ -2301,15 +2498,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       // Set up drag handlers
       const handleMouseDown = (e: maplibregl.MapMouseEvent, map: maplibregl.Map) => {
+        if (vertexEditModeRef.current) return;
         // Query for vertex points
         const features = map.queryRenderedFeatures(e.point, {
           layers: [EDIT_VERTICES_INNER, EDIT_VERTICES_OUTER, EDIT_VERTICES_GLOW],
         });
 
         if (features.length > 0) {
-          const vertexIndex = features[0].properties?.index;
-          if (typeof vertexIndex === 'number') {
-            draggingVertexIndexRef.current = vertexIndex;
+          const rawVertexIndex = features[0].properties?.index;
+          const parsedVertexIndex =
+            typeof rawVertexIndex === 'number'
+              ? rawVertexIndex
+              : Number.parseInt(String(rawVertexIndex), 10);
+
+          if (
+            Number.isInteger(parsedVertexIndex)
+            && parsedVertexIndex >= 0
+            && parsedVertexIndex < editVerticesRef.current.length
+          ) {
+            draggingVertexIndexRef.current = parsedVertexIndex;
             map.getCanvas().style.cursor = 'grabbing';
             // Disable map dragging while we drag the vertex
             map.dragPan.disable();
@@ -2322,9 +2529,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         if (draggingVertexIndexRef.current !== null) {
           const idx = draggingVertexIndexRef.current;
           const newCoord: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-          editVerticesRef.current[idx] = newCoord;
-          updateEditVerticesLayer(editVerticesRef.current);
-          updateBoundaryDisplay(editVerticesRef.current);
+          const nextVertices = [...editVerticesRef.current];
+          nextVertices[idx] = newCoord;
+          editVerticesRef.current = nextVertices;
+          updateEditVerticesLayer(nextVertices);
+          updateBoundaryDisplay(nextVertices);
         }
       };
 
@@ -2383,20 +2592,40 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       return;
     }
 
+    if (vertexEditModeRef.current) {
+      setVertexEditMode(null);
+    }
+
     // Change cursor based on mode
-    const cursor = catchmentEditMode === 'add' ? 'crosshair' : 'not-allowed';
+    const cursor = catchmentEditMode === 'add' ? ADD_CATCHMENT_CURSOR : REMOVE_CATCHMENT_CURSOR;
     leftMap.getCanvas().style.cursor = cursor;
     rightMap.getCanvas().style.cursor = cursor;
 
+    // Prevent drag-pan from stealing the click for catchment edits
+    leftMap.dragPan.disable();
+    rightMap.dragPan.disable();
+
     const onLeftClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(leftMap, e);
     const onRightClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(rightMap, e);
+    const onLeftMove = () => {
+      leftMap.getCanvas().style.cursor = cursor;
+    };
+    const onRightMove = () => {
+      rightMap.getCanvas().style.cursor = cursor;
+    };
 
     leftMap.on('click', onLeftClick);
     rightMap.on('click', onRightClick);
+    leftMap.on('mousemove', onLeftMove);
+    rightMap.on('mousemove', onRightMove);
 
     return () => {
       leftMap.off('click', onLeftClick);
       rightMap.off('click', onRightClick);
+      leftMap.off('mousemove', onLeftMove);
+      rightMap.off('mousemove', onRightMove);
+      leftMap.dragPan.enable();
+      rightMap.dragPan.enable();
       // Restore cursor based on whether we're still in edit mode
       if (isBoundaryEditModeRef.current) {
         leftMap.getCanvas().style.cursor = 'grab';
@@ -2405,10 +2634,111 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
   }, [isBoundaryEditMode, catchmentEditMode, handleCatchmentEditClick]);
 
+  // Handle vertex delete/add mode
+  useEffect(() => {
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+
+    if (!leftMap || !rightMap || !isBoundaryEditMode || !vertexEditMode) {
+      return;
+    }
+
+    if (catchmentEditModeRef.current) {
+      setCatchmentEditMode(null);
+    }
+
+    const cursor = vertexEditMode === 'delete' ? DELETE_VERTEX_CURSOR : ADD_VERTEX_CURSOR;
+    leftMap.getCanvas().style.cursor = cursor;
+    rightMap.getCanvas().style.cursor = cursor;
+
+    const handleVertexDelete = (map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
+      const features = map.queryRenderedFeatures(e.point, {
+        layers: [EDIT_VERTICES_INNER, EDIT_VERTICES_OUTER, EDIT_VERTICES_GLOW],
+      });
+
+      if (features.length === 0) return;
+
+      const rawVertexIndex = features[0].properties?.index;
+      const parsedVertexIndex =
+        typeof rawVertexIndex === 'number'
+          ? rawVertexIndex
+          : Number.parseInt(String(rawVertexIndex), 10);
+
+      if (!Number.isInteger(parsedVertexIndex)) return;
+
+      const currentVertices = editVerticesRef.current;
+      if (currentVertices.length <= 3) return;
+
+      const nextVertices = currentVertices.filter((_, idx) => idx !== parsedVertexIndex);
+      editVerticesRef.current = nextVertices;
+      updateEditVerticesLayer(nextVertices);
+      updateBoundaryDisplay(nextVertices);
+
+      if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
+        const newGeometry = buildGeometryFromVertices(nextVertices, siteGeometryRef.current);
+        onBoundaryUpdateRef.current(newGeometry);
+      }
+    };
+
+    const handleVertexAdd = (e: maplibregl.MapMouseEvent) => {
+      const currentVertices = editVerticesRef.current;
+      if (currentVertices.length < 3) return;
+
+      const point: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+      const nextVertices = insertVertexAtClosestSegment(currentVertices, point);
+      editVerticesRef.current = nextVertices;
+      updateEditVerticesLayer(nextVertices);
+      updateBoundaryDisplay(nextVertices);
+
+      if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
+        const newGeometry = buildGeometryFromVertices(nextVertices, siteGeometryRef.current);
+        onBoundaryUpdateRef.current(newGeometry);
+      }
+    };
+
+    const onLeftClick = (e: maplibregl.MapMouseEvent) => {
+      if (vertexEditMode === 'delete') {
+        handleVertexDelete(leftMap, e);
+      } else {
+        handleVertexAdd(e);
+      }
+    };
+    const onRightClick = (e: maplibregl.MapMouseEvent) => {
+      if (vertexEditMode === 'delete') {
+        handleVertexDelete(rightMap, e);
+      } else {
+        handleVertexAdd(e);
+      }
+    };
+    const onLeftMove = () => {
+      leftMap.getCanvas().style.cursor = cursor;
+    };
+    const onRightMove = () => {
+      rightMap.getCanvas().style.cursor = cursor;
+    };
+
+    leftMap.on('click', onLeftClick);
+    rightMap.on('click', onRightClick);
+    leftMap.on('mousemove', onLeftMove);
+    rightMap.on('mousemove', onRightMove);
+
+    return () => {
+      leftMap.off('click', onLeftClick);
+      rightMap.off('click', onRightClick);
+      leftMap.off('mousemove', onLeftMove);
+      rightMap.off('mousemove', onRightMove);
+      if (isBoundaryEditModeRef.current) {
+        leftMap.getCanvas().style.cursor = 'grab';
+        rightMap.getCanvas().style.cursor = 'grab';
+      }
+    };
+  }, [isBoundaryEditMode, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
+
   // Reset catchment edit mode when boundary edit mode is disabled
   useEffect(() => {
     if (!isBoundaryEditMode) {
       setCatchmentEditMode(null);
+      setVertexEditMode(null);
     }
   }, [isBoundaryEditMode]);
 
@@ -2656,7 +2986,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               }}
             />
             <Text color="gray.900" fontWeight="bold" fontSize="sm">
-              {catchmentEditMode === 'add'
+              {vertexEditMode === 'delete'
+                ? 'Click vertices to DELETE from boundary'
+                : vertexEditMode === 'add'
+                ? 'Click boundary to ADD vertices'
+                : catchmentEditMode === 'add'
                 ? 'Click catchments to ADD to boundary'
                 : catchmentEditMode === 'remove'
                 ? 'Click catchments to REMOVE from boundary'
@@ -2688,7 +3022,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
                 variant="solid"
                 bg={catchmentEditMode === 'add' ? "cyan.400" : "green.500"}
                 color="white"
-                onClick={() => setCatchmentEditMode(prev => prev === 'add' ? null : 'add')}
+                onClick={() => {
+                  setVertexEditMode(null);
+                  setCatchmentEditMode(prev => prev === 'add' ? null : 'add');
+                }}
                 _hover={{ bg: catchmentEditMode === 'add' ? "cyan.300" : "green.400", transform: "scale(1.05)" }}
                 transition="all 0.2s"
                 boxShadow={catchmentEditMode === 'add' ? "0 0 12px rgba(0, 255, 255, 0.6)" : undefined}
@@ -2702,10 +3039,51 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
                 variant="solid"
                 bg={catchmentEditMode === 'remove' ? "cyan.400" : "red.500"}
                 color="white"
-                onClick={() => setCatchmentEditMode(prev => prev === 'remove' ? null : 'remove')}
+                onClick={() => {
+                  setVertexEditMode(null);
+                  setCatchmentEditMode(prev => prev === 'remove' ? null : 'remove');
+                }}
                 _hover={{ bg: catchmentEditMode === 'remove' ? "cyan.300" : "red.400", transform: "scale(1.05)" }}
                 transition="all 0.2s"
                 boxShadow={catchmentEditMode === 'remove' ? "0 0 12px rgba(0, 255, 255, 0.6)" : undefined}
+              />
+            </Tooltip>
+            <Box w="100%" h="1px" bg="whiteAlpha.300" />
+            <Text fontSize="xs" fontWeight="bold" color="cyan.300" letterSpacing="wider">
+              VERTICES
+            </Text>
+            <Tooltip label={vertexEditMode === 'add' ? "Cancel add" : "Add vertices"} placement="left">
+              <IconButton
+                aria-label="Add vertices"
+                icon={<FiPlus />}
+                size="sm"
+                variant="solid"
+                bg={vertexEditMode === 'add' ? "cyan.400" : "blue.500"}
+                color="white"
+                onClick={() => {
+                  setCatchmentEditMode(null);
+                  setVertexEditMode(prev => prev === 'add' ? null : 'add');
+                }}
+                _hover={{ bg: vertexEditMode === 'add' ? "cyan.300" : "blue.400", transform: "scale(1.05)" }}
+                transition="all 0.2s"
+                boxShadow={vertexEditMode === 'add' ? "0 0 12px rgba(0, 255, 255, 0.6)" : undefined}
+              />
+            </Tooltip>
+            <Tooltip label={vertexEditMode === 'delete' ? "Cancel delete" : "Delete vertices"} placement="left">
+              <IconButton
+                aria-label="Delete vertices"
+                icon={<FiTrash2 />}
+                size="sm"
+                variant="solid"
+                bg={vertexEditMode === 'delete' ? "cyan.400" : "orange.500"}
+                color="white"
+                onClick={() => {
+                  setCatchmentEditMode(null);
+                  setVertexEditMode(prev => prev === 'delete' ? null : 'delete');
+                }}
+                _hover={{ bg: vertexEditMode === 'delete' ? "cyan.300" : "orange.400", transform: "scale(1.05)" }}
+                transition="all 0.2s"
+                boxShadow={vertexEditMode === 'delete' ? "0 0 12px rgba(0, 255, 255, 0.6)" : undefined}
               />
             </Tooltip>
           </VStack>
