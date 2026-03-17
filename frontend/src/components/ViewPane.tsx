@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
 import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable } from 'react-icons/fi';
 import MapView from './MapView';
@@ -159,13 +159,6 @@ function ViewPane({
         .replace(/_/g, ' ')
         .replace(/\b\w/g, (c) => c.toUpperCase())
     : undefined;
-
-  // Cycle through view modes: map -> chart -> dial -> map
-  const handleToggleViewMode = useCallback(() => {
-    const currentIndex = VIEW_MODES.indexOf(viewMode);
-    const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
-    onViewModeChange(paneIndex, VIEW_MODES[nextIndex]);
-  }, [onViewModeChange, paneIndex, viewMode]);
 
   // Calculate dial chart values based on current attribute and range mode
   const dialData = useMemo(() => {

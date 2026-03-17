@@ -10,7 +10,6 @@ import {
   Input,
   NumberInput,
   NumberInputField,
-  Progress,
   Spinner,
   Stat,
   StatHelpText,
@@ -40,9 +39,6 @@ import {
   FiEdit2,
   FiCheck,
   FiX,
-  FiTrendingUp,
-  FiTrendingDown,
-  FiMinus,
   FiChevronDown,
   FiChevronRight,
 } from 'react-icons/fi';
@@ -113,6 +109,126 @@ function getTrend(current: number, reference: number): 'up' | 'down' | 'neutral'
   if (change > threshold) return 'up';
   if (change < -threshold) return 'down';
   return 'neutral';
+}
+
+type ReferenceDeltaDirection = 'left' | 'right' | 'neutral';
+
+function getReferenceDirection(value: number, reference: number): ReferenceDeltaDirection {
+  if (value > reference) return 'right';
+  if (value < reference) return 'left';
+  return 'neutral';
+}
+
+function ReferenceDeltaGlyph({ direction, color }: { direction: ReferenceDeltaDirection; color: string }) {
+  const lineLength = 10;
+  const lineOffset = 1;
+
+  return (
+    <Box
+      as="span"
+      display="inline-block"
+      position="relative"
+      w="22px"
+      h="12px"
+      verticalAlign="middle"
+      aria-hidden="true"
+    >
+      <Box
+        position="absolute"
+        left="50%"
+        top="1px"
+        bottom="1px"
+        w="2px"
+        bg="gray.500"
+        transform="translateX(-1px)"
+        borderRadius="full"
+      />
+      {direction === 'neutral' ? (
+        <Box
+          position="absolute"
+          left="50%"
+          top="4px"
+          w="4px"
+          h="4px"
+          bg={color}
+          borderRadius="full"
+          transform="translateX(-2px)"
+        />
+      ) : (
+        <Box
+          position="absolute"
+          top="5px"
+          left={direction === 'right' ? `calc(50% + ${lineOffset}px)` : `calc(50% - ${lineLength + lineOffset}px)`}
+          w={`${lineLength}px`}
+          h="2px"
+          bg={color}
+          borderRadius="full"
+        />
+      )}
+    </Box>
+  );
+}
+
+function ReferenceTrendLines({ reference, current, target }: { reference: number; current: number; target: number }) {
+  const maxLinePx = 26;
+  const referenceMagnitude = Math.abs(reference) || 1;
+
+  const buildLine = (value: number, color: string, top: string) => {
+    const delta = value - reference;
+    const direction = getReferenceDirection(value, reference);
+    if (direction === 'neutral') {
+      return (
+        <Box
+          key={`${color}-neutral`}
+          position="absolute"
+          left="50%"
+          top={top}
+          w="4px"
+          h="4px"
+          bg={color}
+          borderRadius="full"
+          transform="translate(-2px, -1px)"
+        />
+      );
+    }
+
+    const ratio = Math.min(1, Math.abs(delta) / referenceMagnitude);
+    const width = Math.max(2, ratio * maxLinePx);
+    const left =
+      direction === 'right'
+        ? `calc(50% + 1px)`
+        : `calc(50% - ${width + 1}px)`;
+
+    return (
+      <Box
+        key={`${color}-${direction}`}
+        position="absolute"
+        top={top}
+        left={left}
+        w={`${width}px`}
+        h="2px"
+        bg={color}
+        borderRadius="full"
+      />
+    );
+  };
+
+  return (
+    <Box position="relative" w="90px" h="16px" aria-hidden="true">
+      <Box
+        position="absolute"
+        left="50%"
+        top="1px"
+        bottom="1px"
+        w="2px"
+        bg="gray.500"
+        transform="translateX(-1px)"
+        borderRadius="full"
+      />
+      {buildLine(current, 'cyan.300', '4px')}
+      {buildLine(target, 'green.300', '10px')}
+    </Box>
+  );
 }
 
 export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }: IndicatorEditorPageProps) {
@@ -661,21 +777,21 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               <StatNumber color="white">{summaryStats.total}</StatNumber>
             </Stat>
             <Stat size="sm">
-              <StatLabel color="gray.500">Improved</StatLabel>
-              <StatNumber color="green.400">{summaryStats.improved}</StatNumber>
-              <StatHelpText color="green.500">
-                <FiTrendingUp style={{ display: 'inline' }} /> vs reference
+              <StatLabel color="gray.500">Above Ecological Reference</StatLabel>
+              <StatNumber color="red.400">{summaryStats.improved}</StatNumber>
+              <StatHelpText color="red.500">
+                <ReferenceDeltaGlyph direction="right" color="red.400" /> above ecological reference
               </StatHelpText>
             </Stat>
             <Stat size="sm">
-              <StatLabel color="gray.500">Degraded</StatLabel>
+              <StatLabel color="gray.500">Below Ecological Reference</StatLabel>
               <StatNumber color="red.400">{summaryStats.degraded}</StatNumber>
               <StatHelpText color="red.500">
-                <FiTrendingDown style={{ display: 'inline' }} /> vs reference
+                <ReferenceDeltaGlyph direction="left" color="red.400" /> below ecological reference
               </StatHelpText>
             </Stat>
             <Stat size="sm">
-              <StatLabel color="gray.500">Unchanged</StatLabel>
+              <StatLabel color="gray.500">At Ecological Reference</StatLabel>
               <StatNumber color="gray.400">{summaryStats.unchanged}</StatNumber>
             </Stat>
           </HStack>
@@ -688,7 +804,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           <Thead position="sticky" top={0} bg={tableBg} zIndex={5} style={{ background: "#171923", paddingBottom: "10px" }}>
             <Tr>
               <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Reference</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Ecological Reference</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200">Trend</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
@@ -757,19 +873,15 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           <Text color="cyan.300" fontFamily="mono">{formatValue(row.current)}</Text>
                         </Td>
                         <Td borderColor="whiteAlpha.100">
-                          <HStack>
-                            {trend === 'up' && <Icon as={FiTrendingUp} color="green.400" />}
-                            {trend === 'down' && <Icon as={FiTrendingDown} color="red.400" />}
-                            {trend === 'neutral' && <Icon as={FiMinus} color="gray.500" />}
-                            <Progress
-                              value={Math.abs(((row.current - row.reference) / (row.reference || 1)) * 100)}
-                              max={100}
-                              size="xs"
-                              w="60px"
-                              colorScheme={trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray'}
-                              bg="whiteAlpha.200"
-                              borderRadius="full"
+                          <HStack spacing={3}>
+                            <ReferenceTrendLines
+                              reference={row.reference}
+                              current={row.current}
+                              target={row.ideal}
                             />
+                            <Text fontSize="xs" color="gray.500">
+                              {trend === 'up' ? 'Above' : trend === 'down' ? 'Below' : 'Equal'}
+                            </Text>
                           </HStack>
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>

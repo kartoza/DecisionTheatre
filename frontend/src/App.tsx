@@ -65,6 +65,7 @@ function App() {
   // Auto-save site state when user interacts with the map (debounced)
   const siteAutoSaveTimerRef = useRef<number | null>(null);
   const isLoadingSiteRef = useRef(false); // Prevent saving while loading
+  const boundaryUpdateRequestSeqRef = useRef(0);
 
   useEffect(() => {
     // Don't save if no site is open, we're loading a site, or on create-site page
@@ -250,8 +251,19 @@ function App() {
   const handleBoundaryUpdate = useCallback(async (newGeometry: GeoJSON.Geometry) => {
     if (!currentSiteId) return;
 
+    // Apply immediately so map state stays in sync while requests are in flight.
+    setCurrentSite(prev => {
+      if (!prev || prev.id !== currentSiteId) return prev;
+      return { ...prev, geometry: newGeometry };
+    });
+
+    const requestSeq = ++boundaryUpdateRequestSeqRef.current;
+
     try {
       const updatedSite = await patchSite(currentSiteId, { geometry: newGeometry });
+      if (requestSeq !== boundaryUpdateRequestSeqRef.current) {
+        return;
+      }
       setCurrentSite(updatedSite);
     } catch (err) {
       console.error('Failed to update site boundary:', err);
