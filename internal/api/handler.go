@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -1402,7 +1401,6 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 
 	// Update catchment IDs (add the new catchment)
 	catchmentIDStr := catchmentID
-	fmt.Printf("Decision Theatre", catchmentIDStr)
 	alreadyExists := false
 	for _, id := range site.CatchmentIDs {
 		if id == catchmentIDStr {
@@ -1411,16 +1409,8 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fmt.Printf("Exists", alreadyExists)
-
 	if !alreadyExists {
 		site.CatchmentIDs = append(site.CatchmentIDs, catchmentIDStr)
-	}
-
-	print("Updated Catchment IDs", site.CatchmentIDs)
-
-	for _, id := range site.CatchmentIDs {
-		fmt.Printf("ID: %s\n", id)
 	}
 
 	// Compute new bounding box
