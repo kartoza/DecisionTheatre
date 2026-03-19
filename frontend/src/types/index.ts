@@ -168,6 +168,8 @@ export interface MapStatistics {
   domainRange: DomainRange | null;
   leftStats: ZoneStats | null;
   rightStats: ZoneStats | null;
+  fullStats?: { left: ZoneStats | null; right: ZoneStats | null } | null;
+  siteStats?: { left: ZoneStats | null; right: ZoneStats | null } | null;
 }
 
 const STORAGE_CURRENT_SITE_KEY = 'dt-current-site';

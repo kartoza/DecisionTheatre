@@ -14,7 +14,7 @@ function isBrowserRuntime(): boolean {
   return getAppRuntime() === 'browser';
 }
 
-function loadLocalSites(): Site[] {
+export function loadLocalSites(): Site[] {
   if (typeof window === 'undefined') return [];
 
   try {
@@ -27,7 +27,7 @@ function loadLocalSites(): Site[] {
   }
 }
 
-function saveLocalSites(sites: Site[]): void {
+export function saveLocalSites(sites: Site[]): void {
   if (typeof window === 'undefined') return;
 
   try {

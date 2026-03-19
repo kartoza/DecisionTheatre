@@ -20,12 +20,12 @@ import {
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiX, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode } from '../types';
+import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
 
 interface ControlPanelProps {
@@ -47,6 +47,8 @@ interface ControlPanelProps {
   hideColorScale?: boolean;
   colorScaleMode: ColorScaleMode;
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
+  rangeMode?: RangeMode;
+  onRangeModeChange?: (mode: RangeMode) => void;
 }
 
 import type { ZoneStats } from '../types';
@@ -151,6 +153,7 @@ function ScenarioSelector({
   side,
   zoneStats,
   hideLabel,
+  zoneStatsLabel,
 }: {
   label: string;
   value: Scenario;
@@ -158,6 +161,7 @@ function ScenarioSelector({
   side: 'left' | 'right';
   zoneStats?: ZoneStats | null;
   hideLabel?: boolean;
+  zoneStatsLabel?: string;
 }) {
   const selectedInfo = SCENARIOS.find((s) => s.id === value);
   const borderColor = useColorModeValue('gray.200', 'gray.600');
@@ -214,7 +218,7 @@ function ScenarioSelector({
       {zoneStats && (
         <Box mt={3} pt={3} borderTop="1px" borderColor={borderColor}>
           <Text fontSize="xs" color="gray.500" mb={2}>
-            Visible Zone Statistics ({zoneStats.count} catchments)
+            {zoneStatsLabel ?? 'Visible Zone Statistics'} ({zoneStats.count} catchments)
           </Text>
           <HStack justify="space-between">
             <VStack spacing={0} align="start">
@@ -261,6 +265,8 @@ function ControlPanel({
   hideColorScale = false,
   colorScaleMode,
   onColorScaleModeChange,
+  rangeMode = 'domain',
+  onRangeModeChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
@@ -274,6 +280,22 @@ function ControlPanel({
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;
+  const effectiveRangeMode: RangeMode = isSiteAggregationActive ? 'site' : rangeMode;
+  const zoneStatsLabel = effectiveRangeMode === 'domain'
+    ? 'Full Zone Statistics'
+    : effectiveRangeMode === 'extent'
+      ? 'Extent Zone Statistics'
+      : 'Site Zone Statistics';
+  const leftZoneStats = effectiveRangeMode === 'domain'
+    ? mapStatistics?.fullStats?.left ?? null
+    : effectiveRangeMode === 'site'
+      ? mapStatistics?.siteStats?.left ?? null
+      : mapStatistics?.leftStats ?? null;
+  const rightZoneStats = effectiveRangeMode === 'domain'
+    ? mapStatistics?.fullStats?.right ?? null
+    : effectiveRangeMode === 'site'
+      ? mapStatistics?.siteStats?.right ?? null
+      : mapStatistics?.rightStats ?? null;
   const [panelWidth, setPanelWidth] = useState(440);
   const [isResizing, setIsResizing] = useState(false);
   const resizeOriginX = useRef(0);
@@ -415,8 +437,9 @@ function ControlPanel({
                 value={comparison.leftScenario}
                 onChange={onLeftChange}
                 side="left"
-                zoneStats={mapStatistics?.leftStats}
+                zoneStats={leftZoneStats}
                 hideLabel={isSiteAggregationActive}
+                zoneStatsLabel={zoneStatsLabel}
               />
 
               {/* Scenario 2 (Right) */}
@@ -426,10 +449,47 @@ function ControlPanel({
                   value={comparison.rightScenario}
                   onChange={onRightChange}
                   side="right"
-                  zoneStats={mapStatistics?.rightStats}
+                  zoneStats={rightZoneStats}
+                  zoneStatsLabel={zoneStatsLabel}
                 />
               )}
             </>
+          )}
+
+          {viewMode !== 'dial' && onRangeModeChange && (
+            <Box>
+              <HStack justify="space-between" align="center" mb={2}>
+                <Text fontSize="xs" fontWeight="600" color="gray.500">
+                  ZONE RANGE
+                </Text>
+              </HStack>
+              <ButtonGroup size="xs" isAttached variant="outline">
+                <Button
+                  leftIcon={<FiGlobe size={12} />}
+                  onClick={() => onRangeModeChange('domain')}
+                  variant={rangeMode === 'domain' ? 'solid' : 'outline'}
+                  colorScheme={rangeMode === 'domain' ? 'cyan' : 'gray'}
+                >
+                  Full
+                </Button>
+                <Button
+                  leftIcon={<FiSquare size={12} />}
+                  onClick={() => onRangeModeChange('extent')}
+                  variant={rangeMode === 'extent' ? 'solid' : 'outline'}
+                  colorScheme={rangeMode === 'extent' ? 'cyan' : 'gray'}
+                >
+                  Extent
+                </Button>
+                <Button
+                  leftIcon={<FiTarget size={12} />}
+                  onClick={() => onRangeModeChange('site')}
+                  variant={rangeMode === 'site' ? 'solid' : 'outline'}
+                  colorScheme={rangeMode === 'site' ? 'cyan' : 'gray'}
+                >
+                  Site
+                </Button>
+              </ButtonGroup>
+            </Box>
           )}
 
           {viewMode !== 'dial' && <Divider />}
@@ -632,7 +692,7 @@ function ControlPanel({
                           const displayName = attributeDetails[attr] ?? attr;
                           const hasNumbers = typeof leftVal === 'number' && typeof rightVal === 'number';
                           const trend = hasNumbers ? getTrend(rightVal as number, leftVal as number) : 'neutral';
-                          const trendColor = trend === 'up' ? 'green.400' : trend === 'down' ? 'red.400' : 'gray.400';
+                          const trendColor = trend === 'up' ? 'red.400' : trend === 'down' ? 'red.400' : 'gray.400';
 
                           return (
                             <Tr key={attr}>

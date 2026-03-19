@@ -29,7 +29,7 @@ import {
   VStack,
 } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FiArrowLeft,
   FiRefreshCw,
@@ -241,6 +241,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const [searchFilter, setSearchFilter] = useState('');
   const [selectedIndicatorKey, setSelectedIndicatorKey] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const lastCatchmentCountRef = useRef<number | null>(null);
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
   const { userInputs } = useAttributeUserInputs();
@@ -250,38 +251,17 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const tableBg = useColorModeValue('gray.850', 'gray.850');
   const hoverBg = useColorModeValue('whiteAlpha.100', 'whiteAlpha.100');
 
-  // Extract indicators on mount if not already present
-  useEffect(() => {
-    if (!site.indicators && site.catchmentIds && site.catchmentIds.length > 0) {
-      extractIndicators();
-    }
-  }, [site.id]);
-
   const extractIndicators = useCallback(async () => {
     setIsLoading(true);
     const runtime = getAppRuntime();
     var jsonData = {}
     if (runtime === 'browser') {
-        // Get site data from localStorage
-        let siteData = {};
-        try {
-          const raw = window.localStorage.getItem('dt-sites');
-          if (raw) {
-            const sites = JSON.parse(raw);
-            const currentSite = Array.isArray(sites) ? sites.find(s => s.id === site.id) : null;
-            if (currentSite) {
-              // Exclude thumbnail from the request payload
-              const { thumbnail, ...siteWithoutThumbnail } = currentSite;
-              siteData = siteWithoutThumbnail;
-            }
-          }
-        } catch (error) {
-          console.warn('Failed to read site from localStorage:', error);
-        }
+        // Use current in-memory site state so boundary edits are included
+        const { thumbnail, ...siteWithoutThumbnail } = site;
         jsonData = {
           "runtime": "browser",
-          "site": siteData
-        }
+          "site": siteWithoutThumbnail,
+        };
     }
     else if (runtime === 'webview') {
         jsonData = {
@@ -341,6 +321,48 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
       setIsLoading(false);
     }
   }, [site.id, onSiteUpdated, toast]);
+
+  // Extract indicators on mount if not already present
+  useEffect(() => {
+    if (!site.indicators && site.catchmentIds && site.catchmentIds.length > 0) {
+      extractIndicators();
+    }
+  }, [site.id, extractIndicators, site.catchmentIds, site.indicators]);
+
+  useEffect(() => {
+    if (!site.indicators) return;
+    if (!localIndicators || !hasChanges) {
+      setLocalIndicators(site.indicators);
+      return;
+    }
+
+    setLocalIndicators((prev) => {
+      if (!prev) return site.indicators ?? null;
+      return {
+        ...prev,
+        catchmentCount: site.indicators?.catchmentCount ?? prev.catchmentCount,
+        totalAreaKm2: site.indicators?.totalAreaKm2 ?? prev.totalAreaKm2,
+        catchmentIds: site.indicators?.catchmentIds ?? prev.catchmentIds,
+        extractedAt: site.indicators?.extractedAt ?? prev.extractedAt,
+      };
+    });
+  }, [site.id, site.indicators, hasChanges, localIndicators]);
+
+  useEffect(() => {
+    const nextCount = site.catchmentIds?.length ?? null;
+    if (nextCount === null) return;
+    if (lastCatchmentCountRef.current === null) {
+      lastCatchmentCountRef.current = nextCount;
+      return;
+    }
+
+    if (nextCount !== lastCatchmentCountRef.current) {
+      lastCatchmentCountRef.current = nextCount;
+      if (!hasChanges && !isLoading) {
+        extractIndicators();
+      }
+    }
+  }, [site.catchmentIds, hasChanges, isLoading, extractIndicators]);
 
   const handleSaveChanges = useCallback(async () => {
     if (!localIndicators) return;

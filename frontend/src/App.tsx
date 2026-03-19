@@ -459,6 +459,8 @@ function App() {
               : viewModes[0] === 'table'))}
           colorScaleMode={colorScaleMode}
           onColorScaleModeChange={setColorScaleMode}
+          rangeMode={rangeMode}
+          onRangeModeChange={setRangeMode}
         />
       </Flex>
 

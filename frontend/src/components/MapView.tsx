@@ -2,7 +2,9 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanIntersects, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
+import { booleanIntersects, booleanWithin, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
+import * as turf from '@turf/turf';
+import type { Feature as GeoJSONFeature, Geometry as GeoJSONGeometry } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -286,7 +288,7 @@ function inferCatchmentIdsFromBoundary(
       if (!featureGeometry) continue;
 
       try {
-        if (booleanIntersects(featureGeometry, boundaryGeometry)) {
+        if (booleanWithin(featureGeometry, boundaryGeometry)) {
           inferredIds.add(String(featureId));
         }
       } catch {
@@ -416,8 +418,26 @@ function buildFillColorExpression(
   max: number,
   baseColor?: string | null
 ): maplibregl.ExpressionSpecification | string {
+  // When a metadata base color is provided, blend from black (low values)
+  // to the base color (high values) instead of using opacity.
   if (baseColor) {
-    return baseColor;
+    const rgb = hexToRgb(baseColor);
+    if (!rgb) return baseColor;
+
+    const range = max - min;
+    if (range === 0) {
+      return baseColor;
+    }
+
+    return [
+      'interpolate',
+      ['linear'],
+      ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+      0,
+      '#000000',
+      1,
+      baseColor,
+    ] as maplibregl.ExpressionSpecification;
   }
 
   const range = max - min;
@@ -442,20 +462,10 @@ function buildFillOpacityExpression(
   minOpacity: number,
   maxOpacity: number
 ): maplibregl.ExpressionSpecification | number {
-  const range = max - min;
-  if (range === 0) {
-    return maxOpacity;
-  }
-
-  return [
-    'interpolate',
-    ['linear'],
-    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
-    0,
-    minOpacity,
-    1,
-    maxOpacity,
-  ] as maplibregl.ExpressionSpecification;
+  // Opacity is no longer used to encode value when metadata colors are
+  // selected; callers that pass through attribute-based opacity scaling
+  // should instead call this and receive a constant (max) opacity.
+  return maxOpacity;
 }
 
 function buildOpacityColorExpression(
@@ -466,12 +476,14 @@ function buildOpacityColorExpression(
   minOpacity: number,
   maxOpacity: number
 ): maplibregl.ExpressionSpecification | string {
+  // Blend color from black (low values) to the metadata base color
+  // (high values). Opacity will be handled separately by layer paint.
   const rgb = hexToRgb(baseColor);
   if (!rgb) return baseColor;
 
   const range = max - min;
   if (range === 0) {
-    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${maxOpacity})`;
+    return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
   }
 
   return [
@@ -479,9 +491,9 @@ function buildOpacityColorExpression(
     ['linear'],
     ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
     0,
-    `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${minOpacity})`,
+    '#000000',
     1,
-    `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${maxOpacity})`,
+    baseColor,
   ] as maplibregl.ExpressionSpecification;
 }
 
@@ -574,6 +586,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Site-scoped domain range cache (used for color scaling when a site is established)
   const siteDomainRangeRef = useRef<DomainRange | null>(null);
   const siteZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
+  const fullZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
+  const extentZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
+  const lastDomainRangeRef = useRef<DomainRange | null>(null);
   const siteCatchmentIdsRef = useRef<Set<string> | null>(null);
   const boundaryGeometryRef = useRef<GeoJSON.Geometry | null>(siteGeometry ?? null);
   boundaryGeometryRef.current = siteGeometry ?? null;
@@ -595,8 +610,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!c.attribute) {
       removeChoroplethLayers(leftMap, 'left');
       removeChoroplethLayers(rightMap, 'right');
+      fullZoneStatsRef.current = null;
+      extentZoneStatsRef.current = null;
       if (onStatisticsChangeRef.current) {
-        onStatisticsChangeRef.current({ domainRange: null, leftStats: null, rightStats: null });
+        onStatisticsChangeRef.current({
+          domainRange: null,
+          leftStats: null,
+          rightStats: null,
+          fullStats: null,
+          siteStats: null,
+        });
       }
       return;
     }
@@ -606,8 +629,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (currentZoom < MIN_CATCHMENT_ZOOM) {
       removeChoroplethLayers(leftMap, 'left');
       removeChoroplethLayers(rightMap, 'right');
+      extentZoneStatsRef.current = null;
       if (onStatisticsChangeRef.current) {
-        onStatisticsChangeRef.current({ domainRange: null, leftStats: null, rightStats: null });
+        onStatisticsChangeRef.current({
+          domainRange: null,
+          leftStats: null,
+          rightStats: null,
+          fullStats: fullZoneStatsRef.current,
+          siteStats: siteZoneStatsRef.current,
+        });
       }
       return;
     }
@@ -662,6 +692,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           for (const id of nearbyIds) mergedIds.add(id);
           siteCatchmentIds = mergedIds;
           siteCatchmentIdsRef.current = mergedIds;
+          console.log(`New site id's ${siteCatchmentIds.size}`);
           console.log(`[Site Boundary] Expanded with ${nearbyIds.size} nearby catchments`);
         }
       }
@@ -688,21 +719,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         min = rightData.domain_min;
         max = rightData.domain_max;
       }
+      lastDomainRangeRef.current = { min, max };
 
-      // Compute zone statistics. For an established site, use site-specific stats
-      // (based on selected site catchments) instead of viewport-only stats.
-      const leftStatsComputed = (siteId && siteZoneStatsRef.current)
-        ? siteZoneStatsRef.current.left
-        : (leftFiltered ? computeZoneStats(leftFiltered, c.attribute) : null);
-      const rightStatsComputed = (siteId && siteZoneStatsRef.current)
-        ? siteZoneStatsRef.current.right
-        : (rightFiltered ? computeZoneStats(rightFiltered, c.attribute) : null);
+      // Extent-based stats are always derived from the current viewport.
+      const leftExtentStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
+      const rightExtentStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+      extentZoneStatsRef.current = { left: leftExtentStats, right: rightExtentStats };
 
       if (onStatisticsChangeRef.current) {
         onStatisticsChangeRef.current({
           domainRange: { min, max },
-          leftStats: leftStatsComputed,
-          rightStats: rightStatsComputed,
+          leftStats: leftExtentStats,
+          rightStats: rightExtentStats,
+          fullStats: fullZoneStatsRef.current,
+          siteStats: siteZoneStatsRef.current,
         });
       }
 
@@ -745,6 +775,65 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     applyColorsRef.current = applyColors;
   }, [applyColors]);
 
+  // Reset site stats when boundary geometry changes so stats recompute.
+  useEffect(() => {
+    if (!siteId) return;
+    siteCatchmentIdsRef.current = null;
+    siteZoneStatsRef.current = null;
+    siteDomainRangeRef.current = null;
+    applyColorsRef.current();
+  }, [siteId, siteGeometry]);
+
+  // Compute full-dataset stats so "Full" range has stable values.
+  useEffect(() => {
+    let cancelled = false;
+    const c = comparisonRef.current;
+
+    if (!c.attribute) {
+      fullZoneStatsRef.current = null;
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const fullBounds = new maplibregl.LngLatBounds([-180, -90], [180, 90]);
+
+    const fetchFullStats = async () => {
+      try {
+        const [leftData, rightData] = await Promise.all([
+          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds),
+          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds),
+        ]);
+
+        if (cancelled) return;
+
+        const leftFullStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
+        const rightFullStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+        fullZoneStatsRef.current = { left: leftFullStats, right: rightFullStats };
+
+        if (onStatisticsChangeRef.current) {
+          onStatisticsChangeRef.current({
+            domainRange: lastDomainRangeRef.current,
+            leftStats: extentZoneStatsRef.current?.left ?? null,
+            rightStats: extentZoneStatsRef.current?.right ?? null,
+            fullStats: fullZoneStatsRef.current,
+            siteStats: siteZoneStatsRef.current,
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to compute full zone statistics:', err);
+        }
+      }
+    };
+
+    fetchFullStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
+
   // Clear stale choropleth layers immediately when comparison changes
   useEffect(() => {
     const leftMap = leftMapRef.current;
@@ -775,6 +864,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       let bounds = siteBounds;
       let catchmentIds: string[] = [];
       let siteGeometryFromApi: GeoJSON.Geometry | null = null;
+      const deriveBoundsFromGeometry = (geometry: GeoJSON.Geometry | null): BoundingBox | null => {
+        if (!geometry) return null;
+        try {
+          const [minX, minY, maxX, maxY] = turfBbox({
+            type: 'Feature',
+            properties: {},
+            geometry,
+          } as GeoJSON.Feature) as [number, number, number, number];
+          return { minX, minY, maxX, maxY };
+        } catch {
+          return null;
+        }
+      };
       try {
         const site = await getSite(siteId);
         if (!bounds) {
@@ -786,6 +888,31 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         siteGeometryFromApi = site?.geometry ?? null;
       } catch (err) {
         console.error('Failed to fetch site data for domain scaling:', err);
+      }
+
+      const mergeBounds = (a: BoundingBox, b: BoundingBox): BoundingBox => ({
+        minX: Math.min(a.minX, b.minX),
+        minY: Math.min(a.minY, b.minY),
+        maxX: Math.max(a.maxX, b.maxX),
+        maxY: Math.max(a.maxY, b.maxY),
+      });
+
+      const liveBoundarySource = leftMapRef.current?.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
+        serialize?: () => maplibregl.SourceSpecification;
+      }) | undefined;
+      const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
+      const boundaryGeometry =
+        boundaryGeometryRef.current
+        ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
+        ?? extractBoundaryGeometryFromStyleSource(leftMapRef.current?.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE])
+        ?? siteGeometryFromApi;
+      const boundaryBounds = deriveBoundsFromGeometry(boundaryGeometry);
+      if (boundaryBounds) {
+        bounds = bounds ? mergeBounds(bounds, boundaryBounds) : boundaryBounds;
+      }
+
+      if (!bounds) {
+        bounds = deriveBoundsFromGeometry(siteGeometryFromApi);
       }
 
       if (!bounds) {
@@ -808,14 +935,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         if (cancelled) return;
 
-        const catchmentIdSet = new Set(catchmentIds);
-        const nearbyCatchmentIds = inferNearbyCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometryRef.current ?? siteGeometryFromApi);
-        for (const id of nearbyCatchmentIds) {
-          catchmentIdSet.add(id);
-        }
-        siteCatchmentIdsRef.current = catchmentIdSet;
-        const leftFiltered = filterDatasetByCatchmentIds(leftData, catchmentIdSet);
-        const rightFiltered = filterDatasetByCatchmentIds(rightData, catchmentIdSet);
+        const explicitCatchmentIds = new Set(catchmentIds);
+        const liveBoundarySource = leftMapRef.current?.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
+          serialize?: () => maplibregl.SourceSpecification;
+        }) | undefined;
+        const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
+        const boundaryGeometry =
+          boundaryGeometryRef.current
+          ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
+          ?? extractBoundaryGeometryFromStyleSource(leftMapRef.current?.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE])
+          ?? siteGeometryFromApi;
+        const inferredCatchmentIds = boundaryGeometry
+          ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry)
+          : new Set<string>();
+        const statsCatchmentIds = boundaryGeometry
+          ? (inferredCatchmentIds.size > 0 ? inferredCatchmentIds : explicitCatchmentIds)
+          : (explicitCatchmentIds.size > 0 ? explicitCatchmentIds : inferredCatchmentIds);
+        siteCatchmentIdsRef.current = statsCatchmentIds;
+        const leftFiltered = filterDatasetByCatchmentIds(leftData, statsCatchmentIds);
+        const rightFiltered = filterDatasetByCatchmentIds(rightData, statsCatchmentIds);
 
         const siteDomainRange = computeDomainRangeFromDatasets([leftFiltered, rightFiltered], c.attribute);
         const leftSiteStats = leftFiltered ? computeZoneStats(leftFiltered, c.attribute) : null;
@@ -823,6 +961,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         siteDomainRangeRef.current = siteDomainRange;
         siteZoneStatsRef.current = { left: leftSiteStats, right: rightSiteStats };
+        if (onStatisticsChangeRef.current) {
+          onStatisticsChangeRef.current({
+            domainRange: siteDomainRange ?? lastDomainRangeRef.current,
+            leftStats: extentZoneStatsRef.current?.left ?? null,
+            rightStats: extentZoneStatsRef.current?.right ?? null,
+            fullStats: fullZoneStatsRef.current,
+            siteStats: siteZoneStatsRef.current,
+          });
+        }
         applyColors();
       } catch (err) {
         if (!cancelled) {
@@ -840,7 +987,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     return () => {
       cancelled = true;
     };
-  }, [siteId, siteBounds, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors]);
+  }, [siteId, siteBounds, siteGeometry, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors]);
 
   /**
    * Remove choropleth layers from a map.
@@ -2199,8 +2346,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (leftMap) updateMap(leftMap);
     if (rightMap) updateMap(rightMap);
 
+    boundaryGeometryRef.current = normalized;
+    if (siteId) {
+      siteCatchmentIdsRef.current = null;
+      siteZoneStatsRef.current = null;
+      siteDomainRangeRef.current = null;
+    }
+    applyColorsRef.current();
+
     return normalized;
-  }, []);
+  }, [siteId]);
 
   const applyLocalBoundaryOperation = useCallback(
     (
@@ -2220,6 +2375,78 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (result?.geometry) {
         const normalized = updateBoundarySource(result.geometry);
+        // --- Extract catchment IDs inside the new geometry ---
+        try {
+          // Get all catchment features from the map source (left map)
+          const leftMap = leftMapRef.current;
+          if (leftMap && leftMap.getSource('UoW Tiles')) {
+            // Query all rendered features from the catchments layer
+            const features = leftMap.querySourceFeatures('UoW Tiles', {
+              sourceLayer: 'catchments_lev12',
+            });
+            // Use turf.booleanWithin to check if each catchment is inside the new geometry
+            // (Assume turf is imported as 'import * as turf from "@turf/turf";')
+            const insideIds: string[] = [];
+            for (const feat of features) {
+              if (feat.geometry && feat.properties && feat.properties[CATCHMENT_ID_PROP] != null) {
+                try {
+                  // Convert to turf.js feature
+                  const catchmentTurf: GeoJSONFeature<GeoJSONGeometry> = {
+                    type: 'Feature',
+                    geometry: feat.geometry as GeoJSONGeometry,
+                    properties: {},
+                  };
+                  const boundaryTurf: GeoJSONFeature<GeoJSONGeometry> = {
+                    type: 'Feature',
+                    geometry: normalized as GeoJSONGeometry,
+                    properties: {},
+                  };
+                  // Use turf.booleanWithin or turf.booleanContains
+                  // (booleanWithin: is catchment fully inside boundary)
+                  // (booleanContains: does boundary fully contain catchment)
+                  if (turf.booleanContains && turf.booleanContains(boundaryTurf, catchmentTurf)) {
+                    console.log(`Catchment ${feat.properties[CATCHMENT_ID_PROP]} is inside the new boundary`);
+                    insideIds.push(String(feat.properties[CATCHMENT_ID_PROP]));
+                  }
+                } catch (e) {
+                  // Ignore errors for invalid geometries
+                }
+              }
+            }
+            // Save insideIds to localStorage in the 'dt-sites' array for the current siteId
+            if (siteId) {
+              console.log(`Catchment IDs inside boundary for site ${siteId}:`, insideIds);
+              const key = 'dt-sites';
+              let dtSites: any[] = [];
+              try {
+                const raw = localStorage.getItem(key);
+                if (raw) {
+                  dtSites = JSON.parse(raw);
+                  if (!Array.isArray(dtSites)) dtSites = [];
+                }
+              } catch (e) {
+                dtSites = [];
+              }
+              // Find the site object by id
+              let found = false;
+              for (let i = 0; i < dtSites.length; i++) {
+                if (dtSites[i] && dtSites[i].id === siteId) {
+                  dtSites[i].catchmentIds = insideIds;
+                  found = true;
+                  break;
+                }
+              }
+              // If not found, add a new site object
+              if (!found) {
+                dtSites.push({ id: siteId, catchmentIds: insideIds });
+              }
+              localStorage.setItem(key, JSON.stringify(dtSites));
+              console.log(`Saved catchment IDs for site ${siteId} in dt-sites:`, insideIds);
+            }
+          }
+        } catch (e) {
+          console.error('Error extracting catchment IDs inside boundary:', e);
+        }
         onBoundaryUpdateRef.current(normalized);
       }
     },

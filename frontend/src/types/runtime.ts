@@ -5,6 +5,6 @@ export function isGoWebViewRuntime(): boolean {
 }
 
 export function getAppRuntime(): AppRuntime {
-  // return isGoWebViewRuntime() ? 'webview' : 'browser';
-  return "webview";
+  return isGoWebViewRuntime() ? 'webview' : 'browser';
+  // return "webview";
 }
