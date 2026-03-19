@@ -429,33 +429,6 @@ function ControlPanel({
 
           <Divider />
 
-          {viewMode !== 'dial' && !hideScenarioSelectors && (
-            <>
-              {/* Scenario 1 (Left) */}
-              <ScenarioSelector
-                label="Scenario 1"
-                value={comparison.leftScenario}
-                onChange={onLeftChange}
-                side="left"
-                zoneStats={leftZoneStats}
-                hideLabel={isSiteAggregationActive}
-                zoneStatsLabel={zoneStatsLabel}
-              />
-
-              {/* Scenario 2 (Right) */}
-              {isSwiperEnabled && !isSiteAggregationActive && (
-                <ScenarioSelector
-                  label="Scenario 2"
-                  value={comparison.rightScenario}
-                  onChange={onRightChange}
-                  side="right"
-                  zoneStats={rightZoneStats}
-                  zoneStatsLabel={zoneStatsLabel}
-                />
-              )}
-            </>
-          )}
-
           {viewMode !== 'dial' && onRangeModeChange && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
@@ -490,6 +463,33 @@ function ControlPanel({
                 </Button>
               </ButtonGroup>
             </Box>
+          )}
+
+          {viewMode !== 'dial' && !hideScenarioSelectors && (
+            <>
+              {/* Scenario 1 (Left) */}
+              <ScenarioSelector
+                label="Scenario 1"
+                value={comparison.leftScenario}
+                onChange={onLeftChange}
+                side="left"
+                zoneStats={leftZoneStats}
+                hideLabel={isSiteAggregationActive}
+                zoneStatsLabel={zoneStatsLabel}
+              />
+
+              {/* Scenario 2 (Right) */}
+              {isSwiperEnabled && !isSiteAggregationActive && (
+                <ScenarioSelector
+                  label="Scenario 2"
+                  value={comparison.rightScenario}
+                  onChange={onRightChange}
+                  side="right"
+                  zoneStats={rightZoneStats}
+                  zoneStatsLabel={zoneStatsLabel}
+                />
+              )}
+            </>
           )}
 
           {viewMode !== 'dial' && <Divider />}
