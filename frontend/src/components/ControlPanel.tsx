@@ -296,6 +296,20 @@ function ControlPanel({
     : effectiveRangeMode === 'site'
       ? mapStatistics?.siteStats?.right ?? null
       : mapStatistics?.rightStats ?? null;
+  // Compute combined domain range from both scenarios so legend updates when zone range changes
+  const combinedDomainRange: { min: number; max: number } | null = (() => {
+    if (leftZoneStats && rightZoneStats) {
+      return {
+        min: Math.min(leftZoneStats.min, rightZoneStats.min),
+        max: Math.max(leftZoneStats.max, rightZoneStats.max),
+      };
+    }
+    if (leftZoneStats) return { min: leftZoneStats.min, max: leftZoneStats.max };
+    if (rightZoneStats) return { min: rightZoneStats.min, max: rightZoneStats.max };
+    // Fallback to overall domainRange from mapStatistics if available
+    if (mapStatistics?.domainRange) return { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max };
+    return null;
+  })();
   const [panelWidth, setPanelWidth] = useState(440);
   const [isResizing, setIsResizing] = useState(false);
   const resizeOriginX = useRef(0);
@@ -337,6 +351,15 @@ function ControlPanel({
     resizeOriginWidth.current = panelWidth;
     setIsResizing(true);
   };
+
+  // If the user navigates into explore mode and the current range is 'site',
+  // automatically switch to 'extent' because there is no site to base 'site'
+  // range on when exploring.
+  useEffect(() => {
+    if (isExploreMode && rangeMode === 'site' && onRangeModeChange) {
+      onRangeModeChange('extent');
+    }
+  }, [isExploreMode, rangeMode, onRangeModeChange]);
 
   return (
     <Slide
@@ -458,6 +481,7 @@ function ControlPanel({
                   onClick={() => onRangeModeChange('site')}
                   variant={rangeMode === 'site' ? 'solid' : 'outline'}
                   colorScheme={rangeMode === 'site' ? 'cyan' : 'gray'}
+                  isDisabled={!!isExploreMode}
                 >
                   Site
                 </Button>
@@ -574,7 +598,7 @@ function ControlPanel({
                     variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
                     colorScheme={colorScaleMode === 'metadata' ? 'teal' : 'gray'}
                   >
-                    Metadata
+                    Single
                   </Button>
                 </ButtonGroup>
               </HStack>
@@ -585,14 +609,18 @@ function ControlPanel({
               />
               <HStack justify="space-between" mt={1}>
                 <Text fontSize="xs" color="gray.500">
-                  {mapStatistics?.domainRange
-                    ? formatNumber(mapStatistics.domainRange.min)
-                    : 'Low'}
+                  {combinedDomainRange
+                    ? formatNumber(combinedDomainRange.min)
+                    : mapStatistics?.domainRange
+                      ? formatNumber(mapStatistics.domainRange.min)
+                      : 'Low'}
                 </Text>
                 <Text fontSize="xs" color="gray.500">
-                  {mapStatistics?.domainRange
-                    ? formatNumber(mapStatistics.domainRange.max)
-                    : 'High'}
+                  {combinedDomainRange
+                    ? formatNumber(combinedDomainRange.max)
+                    : mapStatistics?.domainRange
+                      ? formatNumber(mapStatistics.domainRange.max)
+                      : 'High'}
                 </Text>
               </HStack>
             </Box>

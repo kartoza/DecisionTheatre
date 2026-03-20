@@ -2405,7 +2405,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
                   // (booleanWithin: is catchment fully inside boundary)
                   // (booleanContains: does boundary fully contain catchment)
                   if (turf.booleanContains && turf.booleanContains(boundaryTurf, catchmentTurf)) {
-                    console.log(`Catchment ${feat.properties[CATCHMENT_ID_PROP]} is inside the new boundary`);
                     insideIds.push(String(feat.properties[CATCHMENT_ID_PROP]));
                   }
                 } catch (e) {
@@ -2415,7 +2414,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             }
             // Save insideIds to localStorage in the 'dt-sites' array for the current siteId
             if (siteId) {
-              console.log(`Catchment IDs inside boundary for site ${siteId}:`, insideIds);
               const key = 'dt-sites';
               let dtSites: any[] = [];
               try {
@@ -3181,7 +3179,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       )}
 
       {/* Boundary Edit Mode Overlay */}
-      {isBoundaryEditMode && (
+      {isBoundaryEditMode && siteGeometry && isPolygonalGeometry(siteGeometry) && (
         <>
           {/* Edit mode banner */}
           <Flex
