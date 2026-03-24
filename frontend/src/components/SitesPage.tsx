@@ -28,6 +28,7 @@ import {
 } from 'react-icons/fi';
 import type { AppPage, Site } from '../types';
 import { listSites, deleteSite } from '../hooks/useApi';
+import { colors } from '../styles/colors';
 
 const MotionBox = motion(Box);
 
@@ -161,7 +162,7 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
             >
               <Icon as={FiMapPin} mr={4} verticalAlign="middle" />
               Your{' '}
-              <Text as="span" bgGradient="linear(to-r, cyan.300, purple.400)" bgClip="text">
+              <Text as="span" bg={colors.sage} bgClip="text">
                 Sites
               </Text>
             </Heading>
@@ -179,14 +180,14 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
             >
               <Button
                 size="lg"
-                bgGradient="linear(to-r, cyan.400, purple.500)"
+                bg={colors.orange}
                 color="white"
                 leftIcon={<FiPlus />}
                 onClick={() => onNavigate('create-site')}
                 _hover={{
                   transform: 'translateY(-2px)',
-                  boxShadow: '0 10px 30px -10px rgba(0, 255, 255, 0.5)',
-                  bgGradient: 'linear(to-r, cyan.300, purple.400)',
+                  boxShadow: '0 10px 30px -10px rgba(47, 47, 47, 0.5)',
+                  bg: colors.orangeHover,
                 }}
                 transition="all 0.2s"
                 px={8}

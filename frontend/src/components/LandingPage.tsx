@@ -1,218 +1,309 @@
 import {
   Box,
   Button,
+  Container,
   Flex,
+  Grid,
   Heading,
+  HStack,
+  Image,
   Text,
   VStack,
-  useColorModeValue,
 } from '@chakra-ui/react';
-import { useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { FiInfo, FiCompass } from 'react-icons/fi';
 import type { AppPage } from '../types';
-import { getAppRuntime } from '../types/runtime';
+import { colors } from '../styles/colors';
 
-const MotionBox = motion(Box);
-const MotionVStack = motion(VStack);
+import witsLogo from '../assets/wits_logo.png';
+import apEsLogo from '../assets/ap_es_logo.png';
+import gciLogo from '../assets/gci_logo.png';
+import rcoLogo from '../assets/rco_logo.png';
+import backgroundImage1 from '../assets/image_1.png';
+import backgroundImage2 from '../assets/image_2.png';
+import spatialAnalysisImage from '../assets/AiOutlineFundView.png';
+import collaborativeDecisionImage from '../assets/GoOrganization.png';
+import scenarioModellingImage from '../assets/GoGraph.png';
+import openSourceImage from '../assets/HiCode.png';
+
+
+const FEATURES = [
+  {
+    img: spatialAnalysisImage,
+    title: 'Spatial Analysis',
+    desc: 'Location-based data is analysed to reveal patterns, relationships, and trends within complex systems.',
+  },
+  {
+    img: collaborativeDecisionImage,
+    title: 'Collaborative Decision Making',
+    desc: 'Teams use shared data and insights to make informed decisions together across departments and disciplines.',
+  },
+  {
+    img: scenarioModellingImage,
+    title: 'Scenario Modelling',
+    desc: 'Different future outcomes are explored by simulating how variables may change under specific conditions.',
+  },
+  {
+    img: openSourceImage,
+    title: 'Open Source',
+    desc: 'Open-source tools provide flexible, transparent solutions that can be adapted to meet changing project needs.',
+  },
+];
 
 interface LandingPageProps {
   onNavigate: (page: AppPage) => void;
 }
 
+
 function LandingPage({ onNavigate }: LandingPageProps) {
-  const overlayBg = useColorModeValue(
-    'linear-gradient(135deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.6) 100%)',
-    'linear-gradient(135deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.7) 100%)'
-  );
-  const cardBg = useColorModeValue(
-    'rgba(255,255,255,0.1)',
-    'rgba(0,0,0,0.3)'
-  );
-
-  useEffect(() => {
-    const runtime = getAppRuntime();
-    if (runtime === 'webview') {
-      // window.alert('Running in Go WebView');
-      // return;
-    }
-    // window.alert('Running in a normal browser');
-  }, []);
-
   return (
-    <Box
-      position="relative"
-      w="100%"
-      h="100%"
-      overflow="hidden"
-    >
-      {/* Background landscape image */}
-      <Box
-        position="absolute"
-        top={0}
-        left={0}
-        right={0}
-        bottom={0}
-        backgroundImage="url('https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=crop&w=2000&q=80')"
-        backgroundSize="cover"
-        backgroundPosition="center"
-        backgroundRepeat="no-repeat"
-        filter="brightness(0.9)"
-      />
+    <Box w="100%" h="100%" overflowY="auto" bg="white" color="gray.900">
+      <Box h="25px" bg={colors.pastelGray} />
 
-      {/* Gradient overlay */}
-      <Box
-        position="absolute"
-        top={0}
-        left={0}
-        right={0}
-        bottom={0}
-        bg={overlayBg}
-      />
+      {/* ── HERO ──────────────────────────────────────────── */}
+      <Box position="relative">
+        <Box position="relative" minH="440px">
+          {/* Background image */}
+          <Box
+            position="absolute"
+            inset={0}
+            backgroundImage={`url(${backgroundImage1})`}
+            backgroundSize="cover"
+            backgroundPosition="center"
+          />
 
-      {/* Content */}
-      <Flex
-        position="relative"
-        direction="column"
-        align="center"
-        justify="center"
-        h="100%"
-        px={6}
-      >
-        <MotionVStack
-          spacing={8}
-          textAlign="center"
-          maxW="800px"
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, ease: 'easeOut' }}
-        >
-          {/* Glassmorphism card */}
-          <MotionBox
-            bg={cardBg}
-            backdropFilter="blur(20px)"
-            borderRadius="2xl"
-            p={{ base: 8, md: 12 }}
-            border="1px solid"
-            borderColor="whiteAlpha.200"
-            boxShadow="0 25px 50px -12px rgba(0, 0, 0, 0.5)"
-            initial={{ scale: 0.95 }}
-            animate={{ scale: 1 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
+          {/* Dark overlay */}
+          <Box position="absolute" inset={0} bg="blackAlpha.500" />
+
+          {/* Content */}
+          <Flex
+            position="relative"
+            direction="column"
+            align="center"
+            justify="center"
+            minH="440px"
+            px={6}
+            py={20}
+            textAlign="center"
+            zIndex={1}
           >
-            <VStack spacing={6}>
-              {/* Title */}
-              <Heading
-                as="h1"
-                fontSize={{ base: '3xl', md: '5xl', lg: '6xl' }}
-                fontWeight="bold"
-                color="white"
-                textShadow="0 4px 20px rgba(0,0,0,0.4)"
-                letterSpacing="tight"
-                lineHeight="1.1"
-              >
-                Landscape{' '}
-                <Text
-                  as="span"
-                  bgGradient="linear(to-r, brand.300, accent.300)"
-                  bgClip="text"
-                >
-                  Decision Theatre
-                </Text>
-              </Heading>
+            <Heading
+              as="h1"
+              fontSize={{ base: '2xl', md: '3xl', lg: '4xl' }}
+              fontWeight="bold"
+              color="white"
+              mb={5}
+              maxW="680px"
+              lineHeight="1.25"
+            >
+              Welcome to the Landscape Decision Tool
+            </Heading>
 
-              {/* Strapline */}
-              <Text
-                fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }}
-                color="whiteAlpha.900"
-                maxW="600px"
-                fontWeight="medium"
-                textShadow="0 2px 10px rgba(0,0,0,0.3)"
-              >
-                Exploring the possibilities of sustainable land use practices.
-              </Text>
+            <Text
+              fontSize={{ base: 'sm', md: 'md' }}
+              color="whiteAlpha.900"
+              maxW="560px"
+              mb={9}
+              lineHeight="1.7"
+            >
+              Step into a powerful decision theatre where science meets strategy.
+              This interactive tool brings together real-world data and ecosystem
+              response models to reveal the complex relationships between vegetation
+              structure, productivity, carbon storage, and vital ecological processes.
+            </Text>
 
-              {/* Action buttons */}
-              <Flex
-                direction={{ base: 'column', sm: 'row' }}
-                gap={4}
-                pt={4}
-              >
-                <Button
-                  size="lg"
-                  variant="outline"
-                  colorScheme="whiteAlpha"
-                  color="white"
-                  borderColor="whiteAlpha.400"
-                  leftIcon={<FiInfo />}
-                  onClick={() => onNavigate('about')}
-                  _hover={{
-                    bg: 'whiteAlpha.200',
-                    borderColor: 'whiteAlpha.600',
-                    transform: 'translateY(-2px)',
-                  }}
-                  transition="all 0.2s"
-                  px={8}
-                >
-                  About
-                </Button>
-                <Button
-                  size="lg"
-                  colorScheme="brand"
-                  leftIcon={<FiCompass />}
-                  onClick={() => onNavigate('explore')}
-                  _hover={{
-                    transform: 'translateY(-2px)',
-                    boxShadow: '0 10px 30px -10px rgba(43, 176, 237, 0.5)',
-                  }}
-                  transition="all 0.2s"
-                  px={8}
-                >
-                  Explore
-                </Button>
-              </Flex>
-            </VStack>
-          </MotionBox>
-        </MotionVStack>
-
-        {/* Animated background particles effect */}
-        <Box
-          position="absolute"
-          top={0}
-          left={0}
-          right={0}
-          bottom={0}
-          pointerEvents="none"
-          overflow="hidden"
-        >
-          {[...Array(6)].map((_, i) => (
-            <MotionBox
-              key={i}
-              position="absolute"
+            <Button
+              bg={colors.orange}
+              color="white"
               borderRadius="full"
-              bg="whiteAlpha.100"
-              initial={{
-                x: `${Math.random() * 100}%`,
-                y: `${Math.random() * 100}%`,
-                scale: 0,
-              }}
-              animate={{
-                y: [null, '-20%'],
-                scale: [0, 1, 0],
-                opacity: [0, 0.5, 0],
-              }}
-              transition={{
-                duration: 8 + Math.random() * 4,
-                repeat: Infinity,
-                delay: i * 1.5,
-                ease: 'easeInOut',
-              }}
-              w={`${60 + Math.random() * 100}px`}
-              h={`${60 + Math.random() * 100}px`}
-            />
-          ))}
+              px={8}
+              h="46px"
+              fontSize="sm"
+              fontWeight="semibold"
+              onClick={() => onNavigate('explore')}
+              _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
+              transition="all 0.2s"
+              boxShadow="md"
+            >
+              Explore the Future of Ecosystem Decision-Making
+            </Button>
+          </Flex>
         </Box>
-      </Flex>
+
+        {/* Orange bottom strip */}
+        <Box h="25px" bg={colors.pastelLightOrange} />
+      </Box>
+
+      {/* ── OUR MISSION ───────────────────────────────────── */}
+      <Box bg="white" py={16} px={6}>
+        <Container maxW="660px" textAlign="center">
+          <Heading
+            as="h2"
+            fontSize={{ base: '2xl', md: '3xl' }}
+            fontWeight="bold"
+            color="gray.900"
+            mb={6}
+          >
+            Our Mission
+          </Heading>
+          <Text fontSize="md" color="gray.700" lineHeight="1.75">
+            To empower land owners, local communities, and society as a whole with
+            tools that bring together real-world data and ecosystem response models,
+            for informed decision making and assisting in conservation efforts.
+          </Text>
+        </Container>
+      </Box>
+
+      {/* ── ANALYSE SCENARIOS ─────────────────────────────── */}
+      <Box bg="white" py={10} pb={20} px={6}>
+        <Container maxW="860px">
+          <Heading
+            as="h2"
+            fontSize={{ base: '2xl', md: '3xl' }}
+            fontWeight="bold"
+            color="gray.900"
+            textAlign="center"
+            mb={10}
+          >
+            Analyse Scenarios
+          </Heading>
+
+          <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={4}>
+            {FEATURES.map((item, i) => (
+              <Box
+                key={i}
+                bg={colors.pastelLightGreen}
+                borderRadius="lg"
+                p={6}
+              >
+                <HStack spacing={4} align="start">
+                  <Box
+                    flexShrink={0}
+                    p={3}
+                  >
+                    <Image src={item.img} boxSize={10} objectFit="contain" />
+                  </Box>
+                  <VStack align="start" spacing={1}>
+                    <Text fontWeight="bold" fontSize="md" color="gray.900">
+                      {item.title}
+                    </Text>
+                    <Text fontSize="sm" color="gray.700" lineHeight="1.65">
+                      {item.desc}
+                    </Text>
+                  </VStack>
+                </HStack>
+              </Box>
+            ))}
+          </Grid>
+        </Container>
+      </Box>
+
+      {/* ── FUNDERS & PARTNERS ────────────────────────────── */}
+      <Box bg="white" py={16} px={6}>
+        <Container maxW="860px" textAlign="center">
+          <Heading
+            as="h2"
+            fontSize={{ base: '2xl', md: '3xl' }}
+            fontWeight="bold"
+            color="gray.900"
+            mb={4}
+          >
+            Funders &amp; Partners
+          </Heading>
+          <Text fontSize="md" color="gray.600" mb={12}>
+            Our funders and partners help make the impossible possible.
+          </Text>
+
+          <HStack
+            spacing={0}
+            justify="center"
+            flexWrap="wrap"
+            gap={{ base: 8, md: 14 }}
+            mb={12}
+          >
+            <Image src={rcoLogo}  h="100px" objectFit="contain" />
+            <Image src={gciLogo}  h="100px" objectFit="contain" />
+            <Image src={apEsLogo} h="100px" objectFit="contain" />
+            <Image src={witsLogo} h="100px" objectFit="contain" />
+          </HStack>
+
+          <Button
+            variant="outline"
+            borderColor="gray.400"
+            color="gray.700"
+            borderRadius="full"
+            px={8}
+            h="44px"
+            fontSize="sm"
+            onClick={() => onNavigate('about')}
+            _hover={{ bg: 'gray.50', borderColor: 'gray.600' }}
+          >
+            Read More About How We Work
+          </Button>
+        </Container>
+      </Box>
+
+      <Box h="25px" bg={colors.pastelLightGreen} />
+
+      {/* ── BOTTOM BANNER ─────────────────────────────────── */}
+      <Box position="relative">
+        <Box position="relative" minH="340px">
+          {/* Background image */}
+          <Box
+            position="absolute"
+            inset={0}
+            backgroundImage={`url(${backgroundImage2})`}
+            backgroundSize="cover"
+            backgroundPosition="center"
+          />
+
+          {/* Overlay */}
+          <Box position="absolute" inset={0} bg="blackAlpha.500" />
+
+          {/* Content */}
+          <Flex
+            position="relative"
+            direction="column"
+            align="center"
+            justify="center"
+            minH="340px"
+            px={6}
+            py={16}
+            textAlign="center"
+            zIndex={1}
+          >
+            <Heading
+              as="h2"
+              fontSize={{ base: '2xl', md: '3xl', lg: '4xl' }}
+              fontWeight="bold"
+              color="white"
+              maxW="680px"
+              mb={8}
+              lineHeight="1.25"
+            >
+              An Africa-led, Africa-centred program to influence thinking and
+              action in new ways.
+            </Heading>
+
+            <Button
+              bg={colors.orange}
+              color="white"
+              borderRadius="full"
+              px={8}
+              h="46px"
+              fontSize="sm"
+              fontWeight="semibold"
+              onClick={() => onNavigate('about')}
+              _hover={{ bg: colors.orangeHover, transform: 'translateY(-1px)' }}
+              transition="all 0.2s"
+              boxShadow="md"
+            >
+              Explore Our Library of Resources
+            </Button>
+          </Flex>
+        </Box>
+
+        <Box h="25px" bg={colors.pastelLightBlue} />
+      </Box>
+
     </Box>
   );
 }

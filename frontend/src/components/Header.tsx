@@ -12,6 +12,8 @@ import {
 import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2 } from 'react-icons/fi';
 import { useServerInfo } from '../hooks/useApi';
 import type { AppPage } from '../types';
+import rewildLogo from '../assets/rewild_logo_white.png';
+import { colors } from '../styles/colors';
 
 interface HeaderProps {
   onToggleDocs: () => void;
@@ -43,22 +45,13 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
       boxShadow="sm"
     >
       <HStack spacing={3}>
-        <Heading
-          size="md"
-          bgGradient="linear(to-r, brand.400, accent.400)"
-          bgClip="text"
-          fontWeight="bold"
-          letterSpacing="tight"
-          cursor={onNavigate ? 'pointer' : 'default'}
-          onClick={() => onNavigate?.('landing')}
-          _hover={onNavigate ? { opacity: 0.8 } : undefined}
-          transition="opacity 0.2s"
-        >
-          Landscape Decision Theatre
-        </Heading>
+        <img 
+        style={{width: "150px"}}
+        src={rewildLogo} alt="Rewild Capital Logo" />
         {info?.version && (
           <Badge
-            colorScheme="brand"
+            bg={colors.darkGreen}
+            color={colors.dark}
             variant="subtle"
             fontSize="xs"
             borderRadius="full"
@@ -81,7 +74,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
             >
               {siteTitle}
             </Text>
-            {onEditBoundary && (
+            {onEditBoundary && currentPage === 'map' && (
               <Tooltip label={isBoundaryEditMode ? "Exit edit mode" : "Edit site boundary"}>
                 <IconButton
                   aria-label="Edit site boundary"

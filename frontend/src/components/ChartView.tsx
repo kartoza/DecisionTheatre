@@ -116,12 +116,17 @@ function ChartView({
 
     switch (rangeMode) {
       case 'extent':
-        refVal = statForScenario('reference', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario);
-        curVal = statForScenario('current', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario);
+        // Use map viewport stats for whichever scenarios are visible; fall back to site data for the rest
+        refVal = statForScenario('reference', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
+          ?? siteIndicators?.reference?.[attribute];
+        curVal = statForScenario('current', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
+          ?? siteIndicators?.current?.[attribute];
         break;
       case 'domain':
-        refVal = statForScenario('reference', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario);
-        curVal = statForScenario('current', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario);
+        refVal = statForScenario('reference', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario)
+          ?? siteIndicators?.reference?.[attribute];
+        curVal = statForScenario('current', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario)
+          ?? siteIndicators?.current?.[attribute];
         break;
       case 'site':
       default:

@@ -236,10 +236,8 @@ function ViewPane({
       // Use left scenario mean as "reference", right as "current"
       if (leftMean !== undefined) referenceValue = leftMean;
       if (rightMean !== undefined) currentValue = rightMean;
-      // Target is midpoint between min and max (aspirational)
-      if (min !== undefined && max !== undefined) {
-        targetValue = min + (max - min) * 0.3; // Lower is typically better
-      }
+      // Target mirrors reference value in explore mode
+      targetValue = referenceValue;
     }
 
     // Ensure min < max
@@ -326,6 +324,7 @@ function ViewPane({
         attribute={dialAttributeLabel}
         rangeMode={rangeMode}
         onRangeModeChange={onRangeModeChange}
+        isSiteAvailable={!!siteId}
       />
 
       {/* Aggregate Table layer */}

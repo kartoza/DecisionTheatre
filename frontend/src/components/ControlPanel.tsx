@@ -27,6 +27,7 @@ import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttrib
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
+import { colors } from '../styles/colors';
 
 interface ControlPanelProps {
   isOpen: boolean;
@@ -179,7 +180,8 @@ function ScenarioSelector({
       {!hideLabel && (
         <HStack mb={2}>
           <Badge
-            colorScheme={side === 'left' ? 'orange' : 'blue'}
+            bg={side === 'left' ? colors.pastelLightOrange : colors.pastelLightBlue}
+            color={colors.dark}
             variant="subtle"
             fontSize="xs"
             borderRadius="full"
@@ -416,12 +418,11 @@ function ControlPanel({
                 width="100%"
                 leftIcon={<FiMapPin />}
                 onClick={onNavigateToCreateSite}
-                bgGradient="linear(to-r, cyan.400, purple.500)"
+                bg={colors.orange}
                 color="white"
                 _hover={{
                   transform: 'translateY(-2px)',
-                  boxShadow: '0 10px 30px -10px rgba(0, 255, 255, 0.5)',
-                  bgGradient: 'linear(to-r, cyan.300, purple.400)',
+                  bg: colors.orangeHover,
                 }}
                 transition="all 0.2s"
               >
@@ -440,7 +441,7 @@ function ControlPanel({
                 Indicator
               </Heading>
               {paneIndex !== null && (
-                <Badge colorScheme="purple" variant="subtle" fontSize="xs" borderRadius="full">
+                <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   Pane {paneIndex + 1}
                 </Badge>
               )}
@@ -464,7 +465,9 @@ function ControlPanel({
                   leftIcon={<FiGlobe size={12} />}
                   onClick={() => onRangeModeChange('domain')}
                   variant={rangeMode === 'domain' ? 'solid' : 'outline'}
-                  colorScheme={rangeMode === 'domain' ? 'cyan' : 'gray'}
+                  colorScheme="gray"
+                  bg={rangeMode === 'domain' ? colors.pastelLightBlue : undefined}
+                  color={rangeMode === 'domain' ? colors.dark: undefined}
                 >
                   Full
                 </Button>
@@ -472,7 +475,9 @@ function ControlPanel({
                   leftIcon={<FiSquare size={12} />}
                   onClick={() => onRangeModeChange('extent')}
                   variant={rangeMode === 'extent' ? 'solid' : 'outline'}
-                  colorScheme={rangeMode === 'extent' ? 'cyan' : 'gray'}
+                  colorScheme="gray"
+                  bg={rangeMode === 'extent' ? colors.pastelLightBlue : undefined}
+                  color={rangeMode === 'extent' ? colors.dark: undefined}
                 >
                   Extent
                 </Button>
@@ -480,7 +485,9 @@ function ControlPanel({
                   leftIcon={<FiTarget size={12} />}
                   onClick={() => onRangeModeChange('site')}
                   variant={rangeMode === 'site' ? 'solid' : 'outline'}
-                  colorScheme={rangeMode === 'site' ? 'cyan' : 'gray'}
+                  colorScheme="gray"
+                  bg={rangeMode === 'site' ? colors.pastelLightBlue : undefined}
+                  color={rangeMode === 'site' ? colors.dark: undefined}
                   isDisabled={!!isExploreMode}
                 >
                   Site
@@ -527,7 +534,7 @@ function ControlPanel({
             bg={useColorModeValue('white', 'gray.750')}
           >
             <HStack mb={2}>
-              <Badge colorScheme="green" variant="subtle" fontSize="xs" borderRadius="full">
+              <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                 FACTOR
               </Badge>
               <Tooltip label="Select a data attribute to visualize on the map">
@@ -589,14 +596,14 @@ function ControlPanel({
                   <Button
                     onClick={() => onColorScaleModeChange('rainbow')}
                     variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
-                    colorScheme={colorScaleMode === 'rainbow' ? 'purple' : 'gray'}
+                    bg={colorScaleMode === 'rainbow' ? colors.pastelDarkGreen : undefined}
                   >
                     Rainbow
                   </Button>
                   <Button
                     onClick={() => onColorScaleModeChange('metadata')}
                     variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
-                    colorScheme={colorScaleMode === 'metadata' ? 'teal' : 'gray'}
+                    bg={colorScaleMode === 'metadata' ? colors.pastelDarkGreen : undefined}
                   >
                     Single
                   </Button>
@@ -633,7 +640,7 @@ function ControlPanel({
               <Box>
                 <HStack justify="space-between" mb={3}>
                   <HStack>
-                    <Badge colorScheme="blue" variant="subtle" fontSize="xs" borderRadius="full">
+                    <Badge bg={colors.pastelLightBlue} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                       IDENTIFY
                     </Badge>
                     <Text fontSize="sm" fontWeight="600" color="gray.400">

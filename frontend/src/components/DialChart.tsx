@@ -111,6 +111,7 @@ interface DialChartProps {
   unit?: string;
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
+  isSiteAvailable?: boolean;
 }
 
 function DialChart({
@@ -124,6 +125,7 @@ function DialChart({
   unit = '',
   rangeMode = 'domain',
   onRangeModeChange,
+  isSiteAvailable = true,
 }: DialChartProps) {
   // Determine minimum for the dial. Prefer the provided input min, but never
   // assume 0 if any of the values go negative — expand the minimum to include
@@ -485,19 +487,21 @@ function DialChart({
                 <HStack spacing={1}>
                   {RANGE_MODES.map((mode) => {
                     const isActive = rangeMode === mode.id;
+                    const isDisabled = mode.id === 'site' && !isSiteAvailable;
                     return (
-                      <Tooltip key={mode.id} label={mode.description} placement="bottom">
+                      <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : mode.description} placement="bottom">
                         <Button
                           size="sm"
                           leftIcon={mode.icon as React.ReactElement}
-                          onClick={() => onRangeModeChange(mode.id)}
+                          onClick={() => !isDisabled && onRangeModeChange(mode.id)}
                           variant="ghost"
                           bg={isActive ? 'cyan.500' : 'transparent'}
-                          color={isActive ? 'white' : 'gray.300'}
-                          _hover={{ bg: isActive ? 'cyan.400' : 'whiteAlpha.200' }}
+                          color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
+                          _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
                           fontSize="xs"
                           fontWeight={isActive ? '600' : '400'}
                           px={3}
+                          cursor={isDisabled ? 'not-allowed' : 'pointer'}
                         >
                           {mode.label}
                         </Button>

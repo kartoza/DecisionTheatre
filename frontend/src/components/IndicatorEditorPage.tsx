@@ -45,6 +45,7 @@ import {
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
+import { colors } from '../styles/colors';
 
 const MotionTr = motion(Tr);
 
@@ -60,6 +61,8 @@ interface IndicatorRow {
   reference: number;
   current: number;
   ideal: number;
+  idealLower: number;
+  idealUpper: number;
   unit: string;
   description?: string;
 }
@@ -236,6 +239,8 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const [isSaving, setIsSaving] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [editBoundsExpanded, setEditBoundsExpanded] = useState(false);
+  const [editUpperValue, setEditUpperValue] = useState<string>('');
   const [localIndicators, setLocalIndicators] = useState<SiteIndicators | null>(site.indicators || null);
   const [hasChanges, setHasChanges] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
@@ -278,7 +283,9 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         body: JSON.stringify(jsonData),
       });
       if (response.ok) {
-        const updatedSite: Site = await response.json();
+        const updatedSiteFromApi: Site = await response.json();
+        // Preserve the local thumbnail since it was excluded from the API request
+        const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
         if (runtime === 'browser') {
           try {
             const raw = window.localStorage.getItem('dt-sites');
@@ -407,7 +414,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         const response = await fetch(`/api/sites/${site.id}/indicators`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ideal: localIndicators.ideal }),
+          body: JSON.stringify({ ideal: localIndicators.ideal, idealLower: localIndicators.idealLower, idealUpper: localIndicators.idealUpper }),
         });
 
         if (response.ok) {
@@ -453,6 +460,8 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
           reference: { ...(localIndicators.reference || {}) },
           current: { ...(localIndicators.current || {}) },
           ideal: { ...(localIndicators.reference || {}) },
+          idealLower: { ...(localIndicators.reference || {}) },
+          idealUpper: { ...(localIndicators.reference || {}) },
           extractedAt: localIndicators.extractedAt,
           catchmentCount: localIndicators.catchmentCount,
           totalAreaKm2: localIndicators.totalAreaKm2,
@@ -522,39 +531,46 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     }
   }, [site, localIndicators, onSiteUpdated, toast]);
 
-  const handleStartEdit = useCallback((key: string, currentValue: number) => {
+  const handleStartEdit = useCallback((key: string, lower: number, upper: number) => {
     setEditingKey(key);
-    setEditValue(currentValue.toString());
+    setEditBoundsExpanded(lower !== upper);
+    setEditValue(parseFloat(lower.toFixed(2)).toString());
+    setEditUpperValue(parseFloat(upper.toFixed(2)).toString());
   }, []);
 
   const handleCancelEdit = useCallback(() => {
     setEditingKey(null);
     setEditValue('');
+    setEditUpperValue('');
+    setEditBoundsExpanded(false);
   }, []);
 
   const handleConfirmEdit = useCallback(() => {
     if (!editingKey || !localIndicators) return;
 
-    const newValue = parseFloat(editValue);
-    if (isNaN(newValue)) {
+    const lower = parseFloat(editValue);
+    const upper = parseFloat(editUpperValue || editValue);
+    if (isNaN(lower) || isNaN(upper)) {
       toast({ title: 'Invalid value', status: 'error', duration: 2000 });
       return;
     }
+    const mid = (lower + upper) / 2;
 
     setLocalIndicators(prev => {
       if (!prev) return prev;
       return {
         ...prev,
-        ideal: {
-          ...prev.ideal,
-          [editingKey]: newValue,
-        },
+        ideal: { ...prev.ideal, [editingKey]: mid },
+        idealLower: { ...(prev.idealLower ?? {}), [editingKey]: lower },
+        idealUpper: { ...(prev.idealUpper ?? {}), [editingKey]: upper },
       };
     });
     setHasChanges(true);
     setEditingKey(null);
     setEditValue('');
-  }, [editingKey, editValue, localIndicators, toast]);
+    setEditUpperValue('');
+    setEditBoundsExpanded(false);
+  }, [editingKey, editValue, editUpperValue, localIndicators, toast]);
 
   const availableIndicatorKeys = useMemo(() => {
     if (!localIndicators) return [] as string[];
@@ -603,14 +619,20 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
             return displayLabel.includes(searchFilter.toLowerCase())
               || entry.key.toLowerCase().includes(searchFilter.toLowerCase());
           })
-          .map(entry => ({
-            key: entry.key,
-            label: attributeDetails[entry.key] ?? getIndicatorLabel(entry.key),
-            reference: localIndicators.reference?.[entry.key] ?? 0,
-            current: localIndicators.current?.[entry.key] ?? 0,
-            ideal: localIndicators.ideal?.[entry.key] ?? localIndicators.current?.[entry.key] ?? 0,
-            unit: getIndicatorUnit(entry.key),
-          }));
+          .map(entry => {
+            const refVal = localIndicators.reference?.[entry.key] ?? 0;
+            const idealVal = localIndicators.ideal?.[entry.key] ?? refVal;
+            return {
+              key: entry.key,
+              label: attributeDetails[entry.key] ?? getIndicatorLabel(entry.key),
+              reference: refVal,
+              current: localIndicators.current?.[entry.key] ?? 0,
+              ideal: idealVal,
+              idealLower: localIndicators.idealLower?.[entry.key] ?? idealVal,
+              idealUpper: localIndicators.idealUpper?.[entry.key] ?? idealVal,
+              unit: getIndicatorUnit(entry.key),
+            };
+          });
 
         return { groupName: group.groupName, rows };
       })
@@ -779,7 +801,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
 
             <Button
               leftIcon={<FiSave />}
-              colorScheme="cyan"
+              bg={colors.pastelLightGreen}
               size="sm"
               onClick={handleSaveChanges}
               isLoading={isSaving}
@@ -871,7 +893,8 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                     {!isCollapsed && group.rows.map((row, index) => {
                     const trend = getTrend(row.current, row.reference);
                     const isEditing = editingKey === row.key;
-                    const idealChanged = row.ideal !== row.current;
+                    const boundsSet = row.idealLower !== row.idealUpper;
+                    const idealChanged = row.idealLower !== row.current || row.idealUpper !== row.current;
 
                     return (
                       <MotionTr
@@ -908,31 +931,77 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>
                           {isEditing ? (
-                            <NumberInput
-                              size="sm"
-                              value={editValue}
-                              onChange={(v) => setEditValue(v)}
-                              min={0}
-                              step={0.01}
-                            >
-                              <NumberInputField
-                                bg="whiteAlpha.200"
-                                border="none"
-                                textAlign="right"
-                                autoFocus
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleConfirmEdit();
-                                  if (e.key === 'Escape') handleCancelEdit();
-                                }}
-                              />
-                            </NumberInput>
+                            <VStack spacing={1} align="stretch">
+                              {editBoundsExpanded ? (
+                                <>
+                                  <HStack spacing={1} justify="flex-end">
+                                    <Text fontSize="xs" color="gray.500" minW="10px">lo</Text>
+                                    <NumberInput size="sm" value={editValue} onChange={(v) => setEditValue(v)} step={0.01} precision={2}>
+                                      <NumberInputField
+                                        bg="whiteAlpha.200"
+                                        border="none"
+                                        textAlign="right"
+                                        w="130px"
+                                        autoFocus
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleConfirmEdit();
+                                          if (e.key === 'Escape') handleCancelEdit();
+                                        }}
+                                      />
+                                    </NumberInput>
+                                  </HStack>
+                                  <HStack spacing={1} justify="flex-end">
+                                    <Text fontSize="xs" color="gray.500" minW="10px">hi</Text>
+                                    <NumberInput size="sm" value={editUpperValue} onChange={(v) => setEditUpperValue(v)} step={0.01} precision={2}>
+                                      <NumberInputField
+                                        bg="whiteAlpha.200"
+                                        border="none"
+                                        textAlign="right"
+                                        w="130px"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleConfirmEdit();
+                                          if (e.key === 'Escape') handleCancelEdit();
+                                        }}
+                                      />
+                                    </NumberInput>
+                                  </HStack>
+                                </>
+                              ) : (
+                                <HStack spacing={1} justify="flex-end">
+                                  <NumberInput size="sm" value={editValue} onChange={(v) => { setEditValue(v); setEditUpperValue(v); }} step={0.01} precision={2}>
+                                    <NumberInputField
+                                      bg="whiteAlpha.200"
+                                      border="none"
+                                      textAlign="right"
+                                      w="130px"
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleConfirmEdit();
+                                        if (e.key === 'Escape') handleCancelEdit();
+                                      }}
+                                    />
+                                  </NumberInput>
+                                  <Tooltip label="Set separate lower/upper bounds">
+                                    <IconButton
+                                      aria-label="Expand bounds"
+                                      icon={<FiChevronDown />}
+                                      size="xs"
+                                      variant="ghost"
+                                      onClick={() => { setEditUpperValue(editValue); setEditBoundsExpanded(true); }}
+                                    />
+                                  </Tooltip>
+                                </HStack>
+                              )}
+                            </VStack>
                           ) : (
                             <Text
                               color={idealChanged ? 'green.300' : 'gray.300'}
                               fontFamily="mono"
                               fontWeight={idealChanged ? 'bold' : 'normal'}
                             >
-                              {formatValue(row.ideal)}
+                              {boundsSet
+                                ? `${formatValue(row.idealLower)} – ${formatValue(row.idealUpper)}`
+                                : formatValue(row.idealLower)}
                             </Text>
                           )}
                         </Td>
@@ -960,7 +1029,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                               icon={<FiEdit2 />}
                               size="xs"
                               variant="ghost"
-                              onClick={() => handleStartEdit(row.key, row.ideal)}
+                              onClick={() => handleStartEdit(row.key, row.idealLower, row.idealUpper)}
                             />
                           )}
                         </Td>

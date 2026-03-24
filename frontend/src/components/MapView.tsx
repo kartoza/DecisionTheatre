@@ -11,6 +11,8 @@ import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, useAttributeColors, useAttributeDetails } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
+import { colors } from '../styles/colors';
+import { color } from 'framer-motion';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -25,7 +27,7 @@ interface MapViewProps {
   siteBounds?: BoundingBox | null;
   isBoundaryEditMode?: boolean;
   siteGeometry?: GeoJSON.Geometry | null;
-  onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
+  onBoundaryUpdate?: (geometry: GeoJSON.Geometry, thumbnail?: string | null) => void;
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
@@ -2357,6 +2359,42 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     return normalized;
   }, [siteId]);
 
+  // Capture a thumbnail from the left map canvas
+  const captureMapThumbnail = useCallback((): string | null => {
+    const leftMap = leftMapRef.current;
+    if (!leftMap) return null;
+    try {
+      const canvas = leftMap.getCanvas();
+      const maxWidth = 400;
+      const scale = Math.min(maxWidth / canvas.width, 1);
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = canvas.width * scale;
+      thumbCanvas.height = canvas.height * scale;
+      const ctx = thumbCanvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+        return thumbCanvas.toDataURL('image/jpeg', 0.85);
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }, []);
+
+  // Notify parent of a boundary update, capturing a thumbnail after the next map render
+  const notifyBoundaryUpdate = useCallback((geometry: GeoJSON.Geometry) => {
+    const leftMap = leftMapRef.current;
+    if (!onBoundaryUpdateRef.current) return;
+    if (leftMap) {
+      leftMap.once('render', () => {
+        const thumbnail = captureMapThumbnail();
+        onBoundaryUpdateRef.current?.(geometry, thumbnail);
+      });
+    } else {
+      onBoundaryUpdateRef.current(geometry);
+    }
+  }, [captureMapThumbnail]);
+
   const applyLocalBoundaryOperation = useCallback(
     (
       operation: 'union' | 'difference',
@@ -2445,10 +2483,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         } catch (e) {
           console.error('Error extracting catchment IDs inside boundary:', e);
         }
-        onBoundaryUpdateRef.current(normalized);
+        notifyBoundaryUpdate(normalized);
       }
     },
-    [updateBoundarySource],
+    [updateBoundarySource, notifyBoundaryUpdate],
   );
 
   // Handle adding a catchment to the site boundary
@@ -2472,7 +2510,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const result = await response.json();
         if (result.geometry) {
           const normalized = updateBoundarySource(result.geometry);
-          onBoundaryUpdateRef.current(normalized);
+          notifyBoundaryUpdate(normalized);
         }
       } else {
         console.error('Failed to add catchment to boundary');
@@ -2480,7 +2518,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error adding catchment:', err);
     }
-  }, [applyLocalBoundaryOperation, siteId]);
+  }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle removing a catchment from the site boundary
   const handleRemoveCatchment = useCallback(async (catchmentId: string, catchmentGeometry?: GeoJSON.Geometry) => {
@@ -2503,7 +2541,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const result = await response.json();
         if (result.geometry) {
           const normalized = updateBoundarySource(result.geometry);
-          onBoundaryUpdateRef.current(normalized);
+          notifyBoundaryUpdate(normalized);
         }
       } else {
         console.error('Failed to remove catchment from boundary');
@@ -2511,7 +2549,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error removing catchment:', err);
     }
-  }, [applyLocalBoundaryOperation, siteId]);
+  }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle catchment click in add/remove mode
   const handleCatchmentEditClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
@@ -2773,7 +2811,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           // Notify parent of the updated geometry
           if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
             const newGeometry = buildGeometryFromVertices(editVerticesRef.current, siteGeometryRef.current);
-            onBoundaryUpdateRef.current(newGeometry);
+            notifyBoundaryUpdate(newGeometry);
           }
         }
       };
@@ -2901,7 +2939,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
         const newGeometry = buildGeometryFromVertices(nextVertices, siteGeometryRef.current);
-        onBoundaryUpdateRef.current(newGeometry);
+        notifyBoundaryUpdate(newGeometry);
       }
     };
 
@@ -2917,7 +2955,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
         const newGeometry = buildGeometryFromVertices(nextVertices, siteGeometryRef.current);
-        onBoundaryUpdateRef.current(newGeometry);
+        notifyBoundaryUpdate(newGeometry);
       }
     };
 
@@ -3036,7 +3074,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             {!isPanelOpen && (
               <Button
                 leftIcon={<FiSliders />}
-                colorScheme="blue"
+                bg={colors.blue}
                 size="lg"
                 onClick={onOpenSettings}
                 _hover={{ transform: 'translateY(-2px)', boxShadow: 'lg' }}
@@ -3109,7 +3147,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               size="sm"
               colorScheme={is3DMode ? "blue" : "gray"}
               variant="solid"
-              bg={is3DMode ? "blue.500" : "white"}
+              bg={is3DMode ? colors.blue : "white"}
               color={is3DMode ? "white" : "gray.700"}
               onClick={toggle3DMode}
               boxShadow="md"
@@ -3128,7 +3166,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
                 size="sm"
                 colorScheme={isIdentifyMode ? "blue" : "gray"}
                 variant="solid"
-                bg={isIdentifyMode ? "blue.500" : "white"}
+                bg={isIdentifyMode ? colors.blue: "white"}
                 color={isIdentifyMode ? "white" : "gray.700"}
                 onClick={toggleIdentifyMode}
                 boxShadow="md"
@@ -3147,7 +3185,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               size="sm"
               colorScheme={isSwiperEnabled ? "blue" : "gray"}
               variant="solid"
-              bg={isSwiperEnabled ? "blue.500" : "white"}
+              bg={isSwiperEnabled ? colors.blue: "white"}
               color={isSwiperEnabled ? "white" : "gray.700"}
               onClick={toggleSwiper}
               boxShadow="md"

@@ -1,0 +1,16 @@
+export const colors = {
+  orange: '#f29630',
+  orangeHover: '#f6b07c',
+  sage: '#9ecb9e',
+  blue: '#3dcde1',
+  brightGreen: '#70b62b',
+  darkGreen: '#008579',
+  pastelLightOrange: '#f7d99c',
+  pastelDarkOrange: '#f6b07c',
+  pastelLightBlue: '#8ccde1',
+  pastelLightGreen: '#9ecb9e',
+  pastelDarkGreen: '#9ec9b8',
+  pastelYellow: '#e3e3a3',
+  pastelGray: '#9d9d9d',
+  dark: '#000000',
+} as const;

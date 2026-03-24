@@ -36,16 +36,16 @@ export const theme = extendTheme({
       900: '#035388',
     },
     accent: {
-      50: '#fff3e0',
-      100: '#ffe0b2',
-      200: '#ffcc80',
-      300: '#ffb74d',
-      400: '#ffa726',
-      500: '#ff9800',
-      600: '#fb8c00',
-      700: '#f57c00',
-      800: '#ef6c00',
-      900: '#e65100',
+      50:  '#FFF3E8',
+      100: '#FDE3C4',
+      200: '#FBC77A',
+      300: '#F5A355',
+      400: '#F09840',
+      500: '#E88930',
+      600: '#D8832A',
+      700: '#B06818',
+      800: '#885010',
+      900: '#603808',
     },
   },
   fonts: {
@@ -54,8 +54,22 @@ export const theme = extendTheme({
   },
   components: {
     Button: {
+      baseStyle: {
+        borderRadius: 'full',
+        fontWeight: 'semibold',
+        fontSize: 'sm',
+        transition: 'all 0.2s',
+        _hover: {
+          transform: 'translateY(-1px)',
+          _disabled: { transform: 'none' },
+        },
+        _active: {
+          transform: 'translateY(0)',
+        },
+      },
       defaultProps: {
-        colorScheme: 'brand',
+        colorScheme: 'accent',
+        variant: 'solid',
       },
     },
     Select: {

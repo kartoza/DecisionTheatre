@@ -248,19 +248,21 @@ function App() {
   }, []);
 
   // Handle geometry update from boundary editing
-  const handleBoundaryUpdate = useCallback(async (newGeometry: GeoJSON.Geometry) => {
+  const handleBoundaryUpdate = useCallback(async (newGeometry: GeoJSON.Geometry, thumbnail?: string | null) => {
     if (!currentSiteId) return;
 
     // Apply immediately so map state stays in sync while requests are in flight.
     setCurrentSite(prev => {
       if (!prev || prev.id !== currentSiteId) return prev;
-      return { ...prev, geometry: newGeometry };
+      return { ...prev, geometry: newGeometry, ...(thumbnail !== undefined && { thumbnail }) };
     });
 
     const requestSeq = ++boundaryUpdateRequestSeqRef.current;
 
     try {
-      const updatedSite = await patchSite(currentSiteId, { geometry: newGeometry });
+      const patch: Partial<Site> = { geometry: newGeometry };
+      if (thumbnail !== undefined) patch.thumbnail = thumbnail;
+      const updatedSite = await patchSite(currentSiteId, patch);
       if (requestSeq !== boundaryUpdateRequestSeqRef.current) {
         return;
       }
@@ -387,7 +389,7 @@ function App() {
         onNavigate={handleNavigate}
         currentPage={currentPage}
         siteTitle={currentSite?.title}
-        onEditBoundary={currentSite ? handleToggleBoundaryEdit : undefined}
+        onEditBoundary={currentSite && viewModes[focusedPane] === 'map' ? handleToggleBoundaryEdit : undefined}
         isBoundaryEditMode={isBoundaryEditMode}
       />
 

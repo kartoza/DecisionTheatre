@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FiCheck, FiRotateCcw, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
+import { colors } from '../styles/colors';
 
 const MotionBox = motion(Box);
 
@@ -686,7 +687,7 @@ function SiteCreationMap({
             <Button
               size="lg"
               leftIcon={<FiCheck />}
-              bgGradient={`linear(to-r, ${SITE_COLORS.primary}, ${SITE_COLORS.glow})`}
+              bg={colors.orange}
               color="black"
               fontWeight="bold"
               px={8}

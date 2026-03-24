@@ -116,19 +116,19 @@ export const SCENARIOS: ScenarioInfo[] = [
     id: 'reference',
     label: 'Ecological Reference',
     description: `Condition compared to scientifically determined optimal standards`,
-    color: '#e65100',
+    color: '#f6b07c',
   },
   {
     id: 'current',
     label: 'Current State',
     description: 'Current observed conditions',
-    color: '#2bb0ed',
+    color: '#8ccde1',
   },
   {
     id: 'future',
     label: 'Target State',
     description: 'User-defined target condition with aim to achieve.',
-    color: '#4caf50',
+    color: '#9ecb9e',
   },
 ];
 
@@ -231,8 +231,12 @@ export interface SiteIndicators {
   reference: Record<string, number>;
   // Current scenario values (current observed conditions)
   current: Record<string, number>;
-  // Ideal values (starts as copy of current, user-editable)
+  // Ideal values (starts as copy of reference mean, user-editable)
   ideal: Record<string, number>;
+  // Lower bound of acceptable ideal range (defaults to ideal when not set)
+  idealLower?: Record<string, number>;
+  // Upper bound of acceptable ideal range (defaults to ideal when not set)
+  idealUpper?: Record<string, number>;
   // Metadata about the extraction
   extractedAt: string;      // When indicators were extracted
   catchmentCount: number;   // Number of catchments used

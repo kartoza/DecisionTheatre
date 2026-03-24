@@ -37,6 +37,7 @@ import SiteCreationMap from './SiteCreationMap';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
 import { getAppRuntime } from '../types/runtime';
 import { createSite, updateSite } from '../hooks/useApi';
+import { colors } from '../styles/colors';
 
 const MotionBox = motion(Box);
 const MotionFlex = motion(Flex);
@@ -76,8 +77,8 @@ const creationMethods: CreationMethodOption[] = [
     icon: FiFile,
     title: 'Shapefile',
     description: 'Upload a ZIP with .shp, .shx, .dbf',
-    color: SITE_COLORS.primary,
-    gradient: 'linear(135deg, #00D4FF 0%, #0066FF 100%)',
+    color: colors.blue,
+    gradient: `linear(135deg, ${colors.blue} 0%, ${colors.blue} 100%)`,
     emoji: '📦',
   },
   {
@@ -85,8 +86,8 @@ const creationMethods: CreationMethodOption[] = [
     icon: FiUpload,
     title: 'GeoJSON',
     description: 'Drop a .geojson or .json file',
-    color: SITE_COLORS.secondary,
-    gradient: 'linear(135deg, #FF00FF 0%, #8B00FF 100%)',
+    color: colors.brightGreen,
+    gradient: `linear(135deg, ${colors.brightGreen} 0%, ${colors.brightGreen} 100%)`,
     emoji: '🗺️',
   },
   {
@@ -94,8 +95,8 @@ const creationMethods: CreationMethodOption[] = [
     icon: FiEdit3,
     title: 'Draw',
     description: 'Click to draw your boundary',
-    color: SITE_COLORS.accent,
-    gradient: 'linear(135deg, #FFD700 0%, #FF8C00 100%)',
+    color: colors.orange,
+    gradient: `linear(135deg, ${colors.orange} 0%, ${colors.orange} 100%)`,
     emoji: '✏️',
   },
   {
@@ -103,8 +104,8 @@ const creationMethods: CreationMethodOption[] = [
     icon: FiLayers,
     title: 'Catchments',
     description: 'Select & merge catchments',
-    color: SITE_COLORS.glow,
-    gradient: 'linear(135deg, #00FF88 0%, #00CC66 100%)',
+    color: colors.sage,
+    gradient: `linear(135deg, ${colors.sage} 0%, ${colors.sage} 100%)`,
     emoji: '🧩',
   },
 ];
@@ -455,7 +456,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
                         px={4}
                         py={2}
                         borderRadius="full"
-                        bg={isActive ? 'cyan.500' : isPast ? 'green.500' : 'whiteAlpha.100'}
+                        bg={isActive ? colors.orange : isPast ? colors.darkGreen : 'whiteAlpha.100'}
                         color="white"
                         fontWeight="bold"
                         fontSize="sm"
@@ -506,8 +507,6 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
               </Text>
               <Text
                 as="span"
-                bgGradient="linear(to-r, #00FFFF, #FF00FF, #FFFF00)"
-                bgClip="text"
               >
                 {step === 'method' ? 'Your Site' : step === 'geometry' ? 'Boundary' : 'Your Site'}
               </Text>
@@ -949,7 +948,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
                         w="100%"
                         fontSize="xl"
                         fontWeight="black"
-                        bgGradient="linear(135deg, #00FFFF 0%, #FF00FF 50%, #FFFF00 100%)"
+                        bg={colors.orange}
                         backgroundSize="200% 200%"
                         color="black"
                         borderRadius="2xl"
@@ -958,7 +957,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
                         loadingText={isEditMode ? 'Saving...' : 'Creating...'}
                         _hover={{
                           transform: 'translateY(-4px) scale(1.02)',
-                          boxShadow: '0 20px 60px -20px rgba(0, 255, 255, 0.6), 0 0 100px -20px rgba(255, 0, 255, 0.4)',
+                          boxShadow: `0 20px 60px -20px ${colors.orangeHover}, 0 0 100px -20px ${colors.orangeHover}`,
                         }}
                         _active={{
                           transform: 'translateY(0) scale(0.98)',
