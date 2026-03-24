@@ -547,8 +547,8 @@ function ControlPanel({
               fontWeight="500"
               _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
             >
-              {(Object.keys((viewMode === 'dial' ? canGraph : canMap) || {}).length > 0
-                ? columns.filter((col) => (viewMode === 'dial' ? canGraph[col] : canMap[col]))
+              {(Object.keys((viewMode === 'chart' || viewMode === 'dial' ? canGraph : canMap) || {}).length > 0
+                ? columns.filter((col) => (viewMode === 'chart' || viewMode === 'dial' ? canGraph[col] : canMap[col]))
                 : columns
               ).map((col) => {
                 const displayName = attributeDetails[col]

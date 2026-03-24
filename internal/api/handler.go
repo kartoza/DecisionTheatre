@@ -62,6 +62,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
+	r.HandleFunc("/metadata/axislabels", h.handleMetadataAxisLabels).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
@@ -464,6 +465,68 @@ func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondJSON(w, http.StatusOK, canGraph)
+}
+
+// handleMetadataAxisLabels returns a map of attribute column names to axis labels.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataAxisLabels(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata axis labels unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	axisLabelIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch normalized {
+		case "ColumnName":
+			columnIdx = i
+		case "axis label":
+			axisLabelIdx = i
+		}
+	}
+
+	if columnIdx == -1 || axisLabelIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	axisLabels := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || axisLabelIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		axisLabel := strings.TrimSpace(record[axisLabelIdx])
+		if column == "" || axisLabel == "" {
+			continue
+		}
+		axisLabels[column] = axisLabel
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			axisLabels[normalized] = axisLabel
+		}
+	}
+
+	respondJSON(w, http.StatusOK, axisLabels)
 }
 
 // respondJSON sends a JSON response (delegates to httputil)

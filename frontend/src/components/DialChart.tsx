@@ -11,15 +11,58 @@ const SCENARIO_COLORS = {
   future: '#4caf50',     // Green
 };
 
-// Gradient stops for the arc (cool to warm spectrum)
-const ARC_GRADIENT_STOPS = [
-  { offset: 0, color: '#2ecc40' },     // Green (good/low)
-  { offset: 0.15, color: '#01ff70' },  // Light green
-  { offset: 0.35, color: '#ffdc00' },  // Yellow
-  { offset: 0.55, color: '#ff851b' },  // Orange
-  { offset: 0.75, color: '#ff4136' },  // Red-orange
-  { offset: 1, color: '#e8003f' },     // Red (high)
-];
+// Dynamic gradient stops for the arc: green zone for reference, yellow-red outside
+// Center the green zone on the reference value by default
+function getArcGradientStops(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08) {
+  // greenWidth: fraction of total (e.g. 0.1 = 10% of range)
+  if (referenceValue === undefined || isNaN(referenceValue)) {
+    // fallback: all yellow-red
+    return [
+      { offset: 0, color: '#ffdc00' }, // yellow
+      { offset: 0.5, color: '#ff851b' },
+      { offset: 1, color: '#e8003f' },
+    ];
+  }
+  const range = max - min;
+  if (range <= 0) {
+    return [
+      { offset: 0, color: '#2ecc40' },
+      { offset: 1, color: '#2ecc40' },
+    ];
+  }
+  // Center green zone on referenceValue
+  let refNorm = (referenceValue - min) / range;
+  refNorm = Math.max(0, Math.min(1, refNorm));
+  const halfGreen = greenWidth / 2;
+  const greenStart = Math.max(0, refNorm - halfGreen);
+  const greenEnd = Math.min(1, refNorm + halfGreen);
+  // Add intermediate stops for a smoother fade
+  const fadeWidth = Math.max(0.01, greenWidth * 0.5);
+  const fadeStart = Math.max(0, greenStart - fadeWidth);
+  const fadeEnd = Math.min(1, greenEnd + fadeWidth);
+  return [
+    { offset: 0, color: '#ff4136' }, // red
+    { offset: fadeStart, color: '#ffdc00' }, // yellow
+    { offset: greenStart, color: '#b6e86f' }, // yellow-green
+    { offset: (greenStart + greenEnd) / 2, color: '#2ecc40' }, // green center
+    { offset: greenEnd, color: '#b6e86f' }, // yellow-green
+    { offset: fadeEnd, color: '#ffdc00' }, // yellow
+    { offset: 1, color: '#e8003f' }, // red
+  ];
+}
+
+// Compute the normalized center (0..1) of the green zone so arrows can align
+function computeGreenCenter(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08): number | null {
+  if (referenceValue === undefined || isNaN(referenceValue)) return null;
+  const range = max - min;
+  if (range <= 0) return 0.5;
+  let refNorm = (referenceValue - min) / range;
+  refNorm = Math.max(0, Math.min(1, refNorm));
+  const halfGreen = greenWidth / 2;
+  const greenStart = Math.max(0, refNorm - halfGreen);
+  const greenEnd = Math.min(1, refNorm + halfGreen);
+  return (greenStart + greenEnd) / 2;
+}
 
 // Range mode config
 const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
@@ -75,13 +118,32 @@ function DialChart({
   referenceValue,
   currentValue,
   targetValue,
-  min,
-  max,
+  min: _inputMin,
+  max: inputMax,
   attribute = '',
   unit = '',
   rangeMode = 'domain',
   onRangeModeChange,
 }: DialChartProps) {
+  // Determine minimum for the dial. Prefer the provided input min, but never
+  // assume 0 if any of the values go negative — expand the minimum to include
+  // negative current/reference/target values so the needle and ticks render correctly.
+  let min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
+  // Ensure we include zero unless input explicitly larger; then allow negatives
+  min = Math.min(min, 0);
+  const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
+    (v): v is number => typeof v === 'number' && !isNaN(v) && v < min
+  );
+  if (negativeCandidates.length > 0) {
+    min = Math.min(min, ...negativeCandidates);
+  }
+  // Adjust max if current or target is above 100
+  let max = inputMax;
+  if ((currentValue !== undefined && currentValue > 100) || (targetValue !== undefined && targetValue > 100)) {
+    max = Math.max(inputMax, currentValue ?? -Infinity, targetValue ?? -Infinity);
+    // Optionally add a small buffer
+    max = Math.ceil(max * 1.05);
+  }
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [needleProgress, setNeedleProgress] = useState(0);
@@ -181,7 +243,8 @@ function DialChart({
   // For a half-circle: height needed = radius (arc) + ~120px (labels below center)
   const maxRadiusFromWidth = availableWidth / 2;
   const maxRadiusFromHeight = availableHeight - 120; // Reserve space for labels below
-  const radius = Math.min(maxRadiusFromWidth, maxRadiusFromHeight) * 0.75;
+  // Reduce scale so dial is narrower and leaves room for top labels
+  const radius = Math.min(maxRadiusFromWidth, maxRadiusFromHeight) * 0.62;
   const arcWidth = Math.max(40, radius * 0.15);
 
   // Center the dial vertically within the container
@@ -191,6 +254,9 @@ function DialChart({
   const totalDialHeight = spaceAbove + spaceBelow;
   const verticalOffset = (availableHeight - totalDialHeight) / 2;
   const centerY = PADDING.top + spaceAbove + verticalOffset;
+
+  const startAngle = -90; // or whatever your arc starts at
+  const arcAngle = 180;    // semicircle gauge
 
   // Generate tick marks around the arc
   const tickCount = 11;
@@ -239,10 +305,12 @@ function DialChart({
   }, [centerX, centerY, radius, arcWidth]);
 
   // Create arrow needle
+  // If isPrimary or isTarget, render filled arrow; else, render line
   const createArrowNeedle = (
     value: number | undefined,
     color: string,
-    isPrimary: boolean
+    isPrimary: boolean,
+    isTarget?: boolean
   ) => {
     if (value === undefined) return null;
 
@@ -251,16 +319,18 @@ function DialChart({
     const animatedAngle = 90 + (targetAngle - 90) * needleProgress;
     const angleRad = (animatedAngle * Math.PI) / 180;
 
-    const needleLength = radius - arcWidth / 2 - (isPrimary ? 15 : 35);
-    const arrowHeadSize = isPrimary ? 18 : 12;
-    const shaftWidth = isPrimary ? 8 : 4;
+    // Current uses a filled arrow; target uses a dashed shaft with a triangular head
+    const filled = !!isPrimary;
+    const needleLength = radius - arcWidth / 2 - (filled ? 15 : 35);
+    const arrowHeadSize = filled ? 18 : 12;
+    const shaftWidth = filled ? 8 : 4;
 
     // Arrow tip
     const tipX = centerX + Math.cos(angleRad) * needleLength;
     const tipY = centerY - Math.sin(angleRad) * needleLength;
 
     // Arrow base (near center)
-    const baseDistance = isPrimary ? 30 : 20;
+    const baseDistance = filled ? 30 : 20;
     const baseX = centerX + Math.cos(angleRad) * baseDistance;
     const baseY = centerY - Math.sin(angleRad) * baseDistance;
 
@@ -273,7 +343,9 @@ function DialChart({
     const headBaseX = centerX + Math.cos(angleRad) * (needleLength - arrowHeadSize);
     const headBaseY = centerY - Math.sin(angleRad) * (needleLength - arrowHeadSize);
 
-    const arrowPath = isPrimary ? `
+    // For filled arrows (current) keep the richer rendering
+    if (filled) {
+      const arrowPath = `
       M ${baseX - perpX * shaftWidth} ${baseY - perpY * shaftWidth}
       L ${headBaseX - perpX * shaftWidth} ${headBaseY - perpY * shaftWidth}
       L ${headBaseX - perpX * arrowHeadSize} ${headBaseY - perpY * arrowHeadSize}
@@ -282,43 +354,35 @@ function DialChart({
       L ${headBaseX + perpX * shaftWidth} ${headBaseY + perpY * shaftWidth}
       L ${baseX + perpX * shaftWidth} ${baseY + perpY * shaftWidth}
       Z
-    ` : `M ${baseX} ${baseY} L ${tipX} ${tipY}`;
+    `;
 
-    return (
-      <g key={color}>
-        {/* Glow */}
-        {isPrimary && (
+      return (
+        <g key={color + (isTarget ? '-target' : '')}>
+          {/* Glow */}
           <path
             d={arrowPath}
             fill={color}
             opacity={0.5 * needleProgress}
             style={{ filter: 'blur(12px)' }}
           />
-        )}
-        {/* Shadow */}
-        {isPrimary && (
+          {/* Shadow */}
           <path
             d={arrowPath}
             fill="rgba(0,0,0,0.5)"
             transform="translate(3, 3)"
             opacity={needleProgress}
           />
-        )}
-        {/* Main needle */}
-        <path
-          d={arrowPath}
-          fill={isPrimary ? color : 'none'}
-          stroke={color}
-          strokeWidth={isPrimary ? 2 : 4}
-          strokeLinecap="round"
-          strokeDasharray={isPrimary ? undefined : '10,8'}
-          opacity={needleProgress}
-          style={{
-            filter: isPrimary ? `drop-shadow(0 0 10px ${color})` : undefined,
-          }}
-        />
-        {/* Tip highlight */}
-        {isPrimary && (
+          {/* Main needle */}
+          <path
+            d={arrowPath}
+            fill={color}
+            stroke={color}
+            strokeWidth={2}
+            strokeLinecap="round"
+            opacity={needleProgress}
+            style={{ filter: `drop-shadow(0 0 10px ${color})` }}
+          />
+          {/* Tip highlight */}
           <circle
             cx={tipX}
             cy={tipY}
@@ -326,12 +390,67 @@ function DialChart({
             fill="white"
             opacity={0.9 * needleProgress}
           />
-        )}
+        </g>
+      );
+    }
+
+    // For target arrows: draw a dashed shaft and a triangular head matching the legend
+    const linePath = `M ${baseX} ${baseY} L ${tipX} ${tipY}`;
+    const leftX = headBaseX - perpX * arrowHeadSize;
+    const leftY = headBaseY - perpY * arrowHeadSize;
+    const rightX = headBaseX + perpX * arrowHeadSize;
+    const rightY = headBaseY + perpY * arrowHeadSize;
+
+    return (
+      <g key={color + (isTarget ? '-target' : '')}>
+        <path
+          d={linePath}
+          fill="none"
+          stroke={color}
+          strokeWidth={4}
+          strokeDasharray="8,6"
+          strokeLinecap="round"
+          opacity={needleProgress}
+        />
+        <polygon
+          points={`${leftX} ${leftY} ${tipX} ${tipY} ${rightX} ${rightY}`}
+          fill={color}
+          opacity={needleProgress}
+        />
       </g>
     );
   };
 
+
   const gradientId = 'dial-gradient-main';
+  const arcGradientStops = useMemo(
+    () => getArcGradientStops(min, max, referenceValue, 0.12, 0.08),
+    [min, max, referenceValue]
+  );
+
+  // Normalized center of the green zone (0..1) so needles can be aligned visually
+  const greenCenter = useMemo(
+    () => computeGreenCenter(min, max, referenceValue, 0.12, 0.08),
+    [min, max, referenceValue]
+  );
+
+  // If the target equals the reference and a green center exists, render the target arrow
+  // at the visual center of the green zone so arrow and gradient match.
+  const targetRenderValue = (targetValue !== undefined && referenceValue !== undefined && targetValue === referenceValue && greenCenter !== null)
+    ? min + (max - min) * greenCenter
+    : targetValue;
+
+  // Compute final tip coordinates for the target (used for a verification marker).
+  const targetTip = useMemo(() => {
+    if (targetRenderValue === undefined || targetRenderValue === null) return null;
+    const targetAngle = valueToAngle(targetRenderValue, min, max);
+    const angleRad = (targetAngle * Math.PI) / 180;
+    const needleLength = radius - arcWidth / 2 - 15; // matches filled target arrow
+    return {
+      x: centerX + Math.cos(angleRad) * needleLength,
+      y: centerY - Math.sin(angleRad) * needleLength,
+    };
+  }, [targetRenderValue, min, max, radius, arcWidth, centerX, centerY]);
 
   return (
     <Box
@@ -400,16 +519,24 @@ function DialChart({
 
               {/* Gradient definition */}
               <defs>
-                <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
-                  {ARC_GRADIENT_STOPS.map((stop, i) => (
-                    <stop key={i} offset={`${stop.offset * 100}%`} stopColor={stop.color} />
-                  ))}
-                </linearGradient>
-                <filter id="arc-glow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="6" result="blur" />
-                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                </filter>
-              </defs>
+              {/* Conic gradient */}
+              <radialGradient id={`${gradientId}-fallback`} cx="50%" cy="50%" r="50%">
+                {arcGradientStops.map((stop, i) => (
+                  <stop key={i} offset={`${stop.offset * 100}%`} stopColor={stop.color} />
+                ))}
+              </radialGradient>
+
+              {/* Mask that cuts gradient into the exact arc shape (use filled path) */}
+              <mask id={`${gradientId}-mask`}>
+                <rect width={width} height={height} fill="black" />
+                <path d={arcPath} fill="white" />
+              </mask>
+
+              <filter id="arc-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="5" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              </filter>
+            </defs>
 
               {/* Decorative rings */}
               <path
@@ -429,14 +556,31 @@ function DialChart({
                 strokeWidth={2}
                 opacity={arcProgress}
               />
-
-              {/* Arc gradient */}
-              <path
-                d={arcPath}
-                fill={`url(#${gradientId})`}
-                opacity={0.95 * arcProgress}
+              
+              {/* Conic gradient arc */}
+              <foreignObject
+                x="0"
+                y="0"
+                width={width}
+                height={height}
+                mask={`url(#${gradientId}-mask)`}
                 style={{ filter: 'url(#arc-glow)' }}
-              />
+                opacity={0.95 * arcProgress}
+              >
+                <div
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    background: `conic-gradient(
+                      from ${startAngle}deg at ${centerX}px ${centerY}px,
+                      ${arcGradientStops
+                        .map(stop => `${stop.color} ${stop.offset * arcAngle}deg`)
+                        .join(", ")},
+                      transparent ${arcAngle}deg
+                    )`
+                  }}
+                />
+              </foreignObject>
 
               {/* Tick marks */}
               {ticks.map((tick, i) => (
@@ -525,9 +669,22 @@ function DialChart({
               <circle cx={centerX} cy={centerY} r={10} fill="#5a6a7c" opacity={arcProgress} />
 
               {/* Needles */}
-              {createArrowNeedle(referenceValue, SCENARIO_COLORS.reference, false)}
-              {createArrowNeedle(targetValue, SCENARIO_COLORS.future, false)}
+              {/* Reference arrow removed as requested */}
+              {/* If target equals reference, use the center of the green zone for the arrow */}
+              {createArrowNeedle(
+                targetRenderValue,
+                SCENARIO_COLORS.future,
+                false,
+                true
+              )}
               {createArrowNeedle(currentValue, SCENARIO_COLORS.current, true)}
+
+              {/* Verification marker: final target tip position (helps confirm arrow alignment) */}
+              {targetTip && (
+                <g opacity={Math.min(1, 0.6 + 0.4 * needleProgress)}>
+                  <circle cx={targetTip.x} cy={targetTip.y} r={7} fill={SCENARIO_COLORS.future} stroke="#fff" strokeWidth={1.5} />
+                </g>
+              )}
 
               {/* Center cap */}
               <circle cx={centerX} cy={centerY} r={12} fill="#4a5568" stroke="#718096" strokeWidth={2} opacity={needleProgress} />
@@ -579,16 +736,7 @@ function DialChart({
               )}
 
               {/* Legend */}
-              <g transform={`translate(${centerX - 220}, ${centerY + 95})`} opacity={needleProgress}>
-                {/* Reference */}
-                <g>
-                  <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.reference} strokeWidth={4} strokeDasharray="8,6" />
-                  <polygon points="30,-5 42,0 30,5" fill={SCENARIO_COLORS.reference} />
-                  <text x={50} y={5} fill="#e2e8f0" fontSize={14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
-                    Reference: {referenceValue !== undefined ? formatValue(referenceValue) : 'N/A'}
-                  </text>
-                </g>
-
+              <g transform={`translate(${centerX - 380}, ${centerY + 100})`} opacity={needleProgress}>
                 {/* Current */}
                 <g transform="translate(220, 0)">
                   <rect x={0} y={-8} width={35} height={16} rx={3} fill={SCENARIO_COLORS.current} />

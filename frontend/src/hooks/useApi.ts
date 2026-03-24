@@ -195,6 +195,22 @@ export function useAttributeCanMap() {
   return { canMap, loading };
 }
 
+export function useAttributeAxisLabels() {
+  const [axisLabels, setAxisLabels] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/axislabels`)
+      .then((data) => {
+        setAxisLabels(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { axisLabels, loading };
+}
+
 export function useAttributeCanGraph() {
   const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);

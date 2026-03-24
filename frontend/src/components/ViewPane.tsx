@@ -304,7 +304,16 @@ function ViewPane({
       </Box>
 
       {/* Line Chart layer */}
-      <ChartView visible={viewMode === 'chart'} />
+      <ChartView
+        visible={viewMode === 'chart'}
+        attribute={comparison.attribute}
+        siteIndicators={siteIndicators}
+        siteId={siteId}
+        rangeMode={rangeMode}
+        mapStatistics={mapStatistics}
+        leftScenario={comparison.leftScenario}
+        rightScenario={comparison.rightScenario}
+      />
 
       {/* Dial Chart layer */}
       <DialChart
