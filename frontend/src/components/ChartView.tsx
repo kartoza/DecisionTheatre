@@ -61,13 +61,6 @@ function resolveValue(
     return siteIndicators?.ideal?.[column] ?? resolveValue(column, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
   }
   const scenarioKey: Scenario = scenario;
-  // When siteIndicators is available, use the site's actual values regardless of rangeMode.
-  // Return undefined (not 0) for absent columns so group scatter points are omitted rather
-  // than plotted at zero — the return still prevents fall-through to zone stats.
-  if (siteIndicators) {
-    const val = siteIndicators[scenario]?.[column];
-    return typeof val === 'number' ? val : undefined;
-  }
   switch (rangeMode) {
     case 'extent':
       return statForScenario(scenarioKey, mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
@@ -77,6 +70,12 @@ function resolveValue(
         ?? catchmentData?.[scenario]?.[column];
     case 'site':
     default:
+      // Use site-specific values when available; return undefined (not 0) for absent columns
+      // so group scatter points are omitted rather than plotted at zero.
+      if (siteIndicators) {
+        const val = siteIndicators[scenario]?.[column];
+        return typeof val === 'number' ? val : undefined;
+      }
       return catchmentData?.[scenario]?.[column];
   }
 }
