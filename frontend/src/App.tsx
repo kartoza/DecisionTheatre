@@ -52,6 +52,7 @@ function App() {
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
+  const [chartGroup, setChartGroup] = useState<string | null>(null);
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -218,6 +219,7 @@ function App() {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { attribute });
   }, [indicatorPaneIndex, handlePaneStateChange]);
+
 
   const handleIdentify = useCallback((result: IdentifyResult) => {
     setIdentifyResult(result);
@@ -430,6 +432,7 @@ function App() {
             rangeMode={rangeMode}
             onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
+            chartGroup={chartGroup}
           />
         </Box>
 
@@ -463,6 +466,8 @@ function App() {
           onColorScaleModeChange={setColorScaleMode}
           rangeMode={rangeMode}
           onRangeModeChange={setRangeMode}
+          chartGroup={chartGroup}
+          onChartGroupChange={setChartGroup}
         />
       </Flex>
 

@@ -227,6 +227,59 @@ export function useAttributeCanGraph() {
   return { canGraph, loading };
 }
 
+export function useAttributeChartTypes() {
+  const [chartTypes, setChartTypes] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/charttypes`)
+      .then((data) => {
+        setChartTypes(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { chartTypes, loading };
+}
+
+export function useAttributeGroupingValues() {
+  const [groupingValues, setGroupingValues] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvalues`)
+      .then((data) => {
+        setGroupingValues(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { groupingValues, loading };
+}
+
+export interface DrilldownComponent {
+  column: string;
+  label: string;
+  color: string;
+  chartType: string;
+}
+
+export interface DrilldownGroup {
+  components: DrilldownComponent[];
+}
+
+export interface DrilldownAxisGroup {
+  units: string;
+  groups: Record<string, DrilldownGroup>;
+}
+
+export interface DrilldownEntry {
+  variableType: string;
+  axisGroups: Record<string, DrilldownAxisGroup>;
+}
+
 export function useScenarios() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [loading, setLoading] = useState(true);

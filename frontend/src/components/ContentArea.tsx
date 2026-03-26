@@ -34,6 +34,7 @@ interface ContentAreaProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
+  chartGroup?: string | null;
 }
 
 const paneVariants = {
@@ -87,6 +88,7 @@ function ContentArea({
   rangeMode,
   onRangeModeChange,
   mapStatistics,
+  chartGroup,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
@@ -139,6 +141,7 @@ function ContentArea({
               rangeMode={rangeMode}
               onRangeModeChange={onRangeModeChange}
               mapStatistics={mapStatistics}
+              chartGroup={chartGroup}
             />
           </Box>
           <AnimatePresence>
@@ -221,6 +224,7 @@ function ContentArea({
             rangeMode={rangeMode}
             onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
+            chartGroup={chartGroup}
           />
         </Box>
       )}

@@ -67,11 +67,17 @@ type BoundingBox struct {
 // All values are area-weighted aggregations of constituent catchments
 type SiteIndicators struct {
 	// Reference scenario values (historical baseline)
-	Reference map[string]float64 `json:"reference"`
+	Reference      map[string]float64 `json:"reference"`
+	ReferenceLower map[string]float64 `json:"referenceLower,omitempty"`
+	ReferenceUpper map[string]float64 `json:"referenceUpper,omitempty"`
 	// Current scenario values (current observed conditions)
-	Current map[string]float64 `json:"current"`
+	Current      map[string]float64 `json:"current"`
+	CurrentLower map[string]float64 `json:"currentLower,omitempty"`
+	CurrentUpper map[string]float64 `json:"currentUpper,omitempty"`
 	// Ideal values (starts as copy of current, user-editable)
-	Ideal map[string]float64 `json:"ideal"`
+	Ideal      map[string]float64 `json:"ideal"`
+	IdealLower map[string]float64 `json:"idealLower,omitempty"`
+	IdealUpper map[string]float64 `json:"idealUpper,omitempty"`
 	// Metadata about the extraction
 	ExtractedAt    string   `json:"extractedAt"`    // When indicators were extracted
 	CatchmentCount int      `json:"catchmentCount"` // Number of catchments used

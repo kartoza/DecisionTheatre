@@ -4,6 +4,7 @@ import {
   Heading,
   Text,
   Select,
+  Input,
   Divider,
   Badge,
   useColorModeValue,
@@ -21,9 +22,9 @@ import {
   ButtonGroup,
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo, FiX, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns, useAttributeVariableTypes, useAttributeGroupingValues } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -50,6 +51,8 @@ interface ControlPanelProps {
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
+  chartGroup?: string | null;
+  onChartGroupChange?: (group: string | null) => void;
 }
 
 import type { ZoneStats } from '../types';
@@ -145,6 +148,112 @@ function buildOpacityGradient(color?: string): string {
   const rgb = hexToRgb(color);
   if (!rgb) return PRISM_CSS_GRADIENT;
   return `linear-gradient(to right, rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MIN_LEGEND_OPACITY}), rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MAX_LEGEND_OPACITY}))`;
+}
+
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  focusColor = '#2bb0ed',
+  allowClear = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  focusColor?: string;
+  allowClear?: boolean;
+}) {
+  const [search, setSearch] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownBg = useColorModeValue('white', 'gray.700');
+  const hoverBg = useColorModeValue('gray.100', 'gray.600');
+  const dropdownBorderColor = useColorModeValue('gray.200', 'gray.600');
+  const inputBg = useColorModeValue('gray.50', 'gray.700');
+
+  const selectedLabel = useMemo(
+    () => options.find((o) => o.value === value)?.label ?? '',
+    [options, value],
+  );
+
+  const filtered = useMemo(() => {
+    if (!search) return options;
+    const q = search.toLowerCase();
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, search]);
+
+  const handleSelect = (val: string) => {
+    onChange(val);
+    setSearch('');
+    setIsOpen(false);
+  };
+
+  return (
+    <Box position="relative">
+      <Input
+        value={isOpen ? search : selectedLabel}
+        onChange={(e) => setSearch(e.target.value)}
+        onFocus={() => { setSearch(''); setIsOpen(true); }}
+        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        placeholder={value ? selectedLabel : (placeholder ?? 'Select...')}
+        size="md"
+        bg={inputBg}
+        border="none"
+        fontWeight="500"
+        _focus={{ boxShadow: `0 0 0 2px ${focusColor}` }}
+      />
+      {isOpen && (
+        <Box
+          position="absolute"
+          top="100%"
+          left={0}
+          right={0}
+          zIndex={20}
+          bg={dropdownBg}
+          border="1px"
+          borderColor={dropdownBorderColor}
+          borderRadius="md"
+          boxShadow="lg"
+          maxH="200px"
+          overflowY="auto"
+          mt={1}
+        >
+          {allowClear && (
+            <Box
+              px={3} py={2}
+              fontSize="sm"
+              cursor="pointer"
+              color="gray.500"
+              _hover={{ bg: hoverBg }}
+              onMouseDown={() => handleSelect('')}
+            >
+              — None —
+            </Box>
+          )}
+          {filtered.length === 0 ? (
+            <Box px={3} py={2} fontSize="sm" color="gray.500">No results</Box>
+          ) : (
+            filtered.map((opt) => (
+              <Box
+                key={opt.value}
+                px={3} py={2}
+                fontSize="sm"
+                cursor="pointer"
+                fontWeight={opt.value === value ? '600' : '400'}
+                color={opt.value === value ? 'white' : undefined}
+                bg={opt.value === value ? 'blue.600' : undefined}
+                _hover={{ bg: opt.value === value ? 'blue.700' : hoverBg }}
+                onMouseDown={() => handleSelect(opt.value)}
+              >
+                {opt.label}
+              </Box>
+            ))
+          )}
+        </Box>
+      )}
+    </Box>
+  );
 }
 
 function ScenarioSelector({
@@ -248,6 +357,7 @@ function ScenarioSelector({
   );
 }
 
+
 function ControlPanel({
   isOpen,
   comparison,
@@ -269,16 +379,62 @@ function ControlPanel({
   onColorScaleModeChange,
   rangeMode = 'domain',
   onRangeModeChange,
+  chartGroup,
+  onChartGroupChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const { canMap } = useAttributeCanMap();
   const { canGraph } = useAttributeCanGraph();
+  const { variableTypes } = useAttributeVariableTypes();
+  const { groupingValues } = useAttributeGroupingValues();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
   const tableHeaderBg = useColorModeValue('gray.100', 'gray.700');
+  const [chartSubGroup, setChartSubGroup] = useState<string | null>(null);
+
+  // Reset sub-group when the parent group changes away from Herbivores
+  useEffect(() => {
+    if (chartGroup !== 'Herbivores') {
+      setChartSubGroup(null);
+    }
+  }, [chartGroup]);
+
+  const uniqueGroups = useMemo(
+    () => [...new Set(Object.values(variableTypes))].filter((t) => t && t !== 'catchID').sort(),
+    [variableTypes],
+  );
+
+  const uniqueSubGroups = useMemo(() => {
+    if (chartGroup !== 'Herbivores') return [];
+    return [...new Set(
+      Object.entries(groupingValues)
+        .filter(([col]) => variableTypes[col] === 'Herbivores')
+        .map(([, val]) => val)
+        .filter(Boolean),
+    )].sort();
+  }, [chartGroup, groupingValues, variableTypes]);
+
+  const factorOptions = useMemo(() => {
+    const useGraphable = viewMode === 'chart' || viewMode === 'dial';
+    const filterMap = useGraphable ? canGraph : canMap;
+    const filtered = Object.keys(filterMap).length > 0
+      ? columns.filter((col) => {
+          if (!filterMap[col]) return false;
+          if (viewMode === 'chart' && chartGroup) {
+            if (variableTypes[col] !== chartGroup) return false;
+            if (chartSubGroup && groupingValues[col] !== chartSubGroup) return false;
+          }
+          return true;
+        })
+      : columns;
+    return filtered.map((col) => ({
+      value: col,
+      label: attributeDetails[col] ?? col.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    }));
+  }, [viewMode, canGraph, canMap, columns, chartGroup, chartSubGroup, variableTypes, groupingValues, attributeDetails]);
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;
@@ -525,6 +681,63 @@ function ControlPanel({
 
           {viewMode !== 'dial' && <Divider />}
 
+          {/* Parent Group selector — chart view only */}
+          {viewMode === 'chart' && (
+            <Box
+              p={4}
+              borderRadius="lg"
+              border="1px"
+              borderColor={borderColor}
+              bg={cardBg}
+            >
+              <HStack mb={2}>
+                <Badge bg={colors.pastelLightOrange} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                  GROUP
+                </Badge>
+                <Tooltip label="Overlay all variables in this group as scatter points on the chart">
+                  <Box cursor="help">
+                    <FiInfo size={14} color="gray" />
+                  </Box>
+                </Tooltip>
+              </HStack>
+
+              <SearchableSelect
+                value={chartGroup ?? ''}
+                onChange={(val) => onChartGroupChange?.(val || null)}
+                options={uniqueGroups.map((g) => ({ value: g, label: g.replace(/_/g, ' ') }))}
+                placeholder="No group selected"
+                focusColor="#e65100"
+                allowClear
+              />
+
+              {chartGroup && (
+                <Text fontSize="xs" color="gray.500" mt={2}>
+                  Showing scatter summary for{' '}
+                  <Text as="span" fontWeight="600" color="orange.400">
+                    {chartGroup.replace(/_/g, ' ')}
+                  </Text>
+                </Text>
+              )}
+
+              {/* Sub-group drill-down — Herbivores only */}
+              {chartGroup === 'Herbivores' && uniqueSubGroups.length > 0 && (
+                <Box mt={3} pt={3} borderTop="1px" borderColor={borderColor}>
+                  <Text fontSize="xs" fontWeight="600" color="gray.500" mb={2}>
+                    GROUPING VALUE
+                  </Text>
+                  <SearchableSelect
+                    value={chartSubGroup ?? ''}
+                    onChange={(val) => setChartSubGroup(val || null)}
+                    options={uniqueSubGroups.map((v) => ({ value: v, label: v }))}
+                    placeholder="All values"
+                    focusColor="#e65100"
+                    allowClear
+                  />
+                </Box>
+              )}
+            </Box>
+          )}
+
           {/* Attribute selection */}
           <Box
             p={4}
@@ -544,31 +757,30 @@ function ControlPanel({
               </Tooltip>
             </HStack>
 
-            <Select
-              value={comparison.attribute}
-              onChange={(e) => onAttributeChange(e.target.value)}
-              placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
-              size="md"
-              bg={useColorModeValue('gray.50', 'gray.700')}
-              border="none"
-              fontWeight="500"
-              _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
-            >
-              {(Object.keys((viewMode === 'chart' || viewMode === 'dial' ? canGraph : canMap) || {}).length > 0
-                ? columns.filter((col) => (viewMode === 'chart' || viewMode === 'dial' ? canGraph[col] : canMap[col]))
-                : columns
-              ).map((col) => {
-                const displayName = attributeDetails[col]
-                  ?? col
-                    .replace(/_/g, ' ')
-                    .replace(/\b\w/g, (c) => c.toUpperCase());
-                return (
-                <option key={col} value={col}>
-                  {displayName}
-                </option>
-                );
-              })}
-            </Select>
+            {viewMode === 'chart' ? (
+              <SearchableSelect
+                value={comparison.attribute ?? ''}
+                onChange={onAttributeChange}
+                options={factorOptions}
+                placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
+                focusColor="#4caf50"
+              />
+            ) : (
+              <Select
+                value={comparison.attribute}
+                onChange={(e) => onAttributeChange(e.target.value)}
+                placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
+                size="md"
+                bg={useColorModeValue('gray.50', 'gray.700')}
+                border="none"
+                fontWeight="500"
+                _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
+              >
+                {factorOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </Select>
+            )}
 
             {comparison.attribute && (
               <Text fontSize="xs" color="gray.500" mt={2}>

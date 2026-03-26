@@ -41,6 +41,7 @@ interface ViewPaneProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
+  chartGroup?: string | null;
 }
 
 // View mode cycle order
@@ -84,6 +85,7 @@ function ViewPane({
   rangeMode = 'domain',
   onRangeModeChange,
   mapStatistics,
+  chartGroup,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
@@ -311,6 +313,7 @@ function ViewPane({
         mapStatistics={mapStatistics}
         leftScenario={comparison.leftScenario}
         rightScenario={comparison.rightScenario}
+        chartGroup={chartGroup}
       />
 
       {/* Dial Chart layer */}

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { getSiteCatchments, useAttributeAxisLabels } from '../hooks/useApi';
+import { getSiteCatchments, useAttributeAxisLabels, useAttributeChartTypes, useAttributeVariableTypes, useColumns, useAttributeCanGraph } from '../hooks/useApi';
 import type { SiteIndicators, MapStatistics, RangeMode, Scenario, ZoneStats } from '../types';
 
 // Kartoza color scheme: orange, blue, green
 const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
-const SERIES_LABELS = ['Reference', 'Current', 'Ideal Future'];
+const SERIES_LABELS = ['Reference', 'Current', 'Target'];
+// Lighter pastel variants used for the group scatter overlay dots
+const GROUP_SCATTER_COLORS = ['#ffccbc', '#b3e5fc', '#c8e6c9'];
 
-const PADDING = { top: 50, right: 60, bottom: 70, left: 70 };
+const PADDING = { top: 50, right: 60, bottom: 100, left: 80 };
 
 function easeOutExpo(t: number): number {
   return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
@@ -23,6 +25,7 @@ interface ChartViewProps {
   mapStatistics?: MapStatistics | null;
   leftScenario?: Scenario;
   rightScenario?: Scenario;
+  chartGroup?: string | null;
 }
 
 /** Returns the mean from whichever stats bucket (left or right) matches the target scenario. */
@@ -38,6 +41,46 @@ function statForScenario(
   return undefined;
 }
 
+function formatVal(val: number): string {
+  if (Math.abs(val) >= 10000) return val.toExponential(1);
+  return parseFloat(val.toPrecision(3)).toString();
+}
+
+/** Resolve a value for a given attribute column from site/catchment/map data. */
+function resolveValue(
+  column: string,
+  scenario: 'reference' | 'current' | 'ideal',
+  siteIndicators: SiteIndicators | null | undefined,
+  catchmentData: { reference: Record<string, number>; current: Record<string, number> } | null,
+  rangeMode: RangeMode,
+  mapStatistics: MapStatistics | null | undefined,
+  leftScenario: Scenario | undefined,
+  rightScenario: Scenario | undefined,
+): number | undefined {
+  if (scenario === 'ideal') {
+    return siteIndicators?.ideal?.[column] ?? resolveValue(column, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+  }
+  const scenarioKey: Scenario = scenario;
+  // When siteIndicators is available, use the site's actual values regardless of rangeMode.
+  // Return undefined (not 0) for absent columns so group scatter points are omitted rather
+  // than plotted at zero — the return still prevents fall-through to zone stats.
+  if (siteIndicators) {
+    const val = siteIndicators[scenario]?.[column];
+    return typeof val === 'number' ? val : undefined;
+  }
+  switch (rangeMode) {
+    case 'extent':
+      return statForScenario(scenarioKey, mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
+        ?? catchmentData?.[scenario]?.[column];
+    case 'domain':
+      return statForScenario(scenarioKey, mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario)
+        ?? catchmentData?.[scenario]?.[column];
+    case 'site':
+    default:
+      return catchmentData?.[scenario]?.[column];
+  }
+}
+
 function ChartView({
   visible,
   attribute,
@@ -47,6 +90,7 @@ function ChartView({
   mapStatistics,
   leftScenario,
   rightScenario,
+  chartGroup,
 }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 500 });
@@ -56,6 +100,10 @@ function ChartView({
   const controls = useAnimation();
 
   const { axisLabels } = useAttributeAxisLabels();
+  const { chartTypes } = useAttributeChartTypes();
+  const { columns } = useColumns();
+  const { variableTypes } = useAttributeVariableTypes();
+  const { canGraph } = useAttributeCanGraph();
 
   // Fallback catchment data when no siteIndicators
   const [catchmentData, setCatchmentData] = useState<{
@@ -65,7 +113,6 @@ function ChartView({
 
   useEffect(() => {
     if (!visible || !attribute) return;
-    // extent and domain use mapStatistics (already computed) — no fetch needed
     if (siteIndicators || !siteId || rangeMode !== 'site') {
       setCatchmentData(null);
       return;
@@ -107,34 +154,12 @@ function ChartView({
     return () => { cancelled = true; };
   }, [siteIndicators, siteId, attribute, visible, rangeMode]);
 
-  // Build chart data for the selected attribute only
-  const chartData = useMemo(() => {
+  // Build summary chart data (existing behavior)
+  const summaryData = useMemo(() => {
     if (!attribute) return null;
 
-    let refVal: number | undefined;
-    let curVal: number | undefined;
-
-    switch (rangeMode) {
-      case 'extent':
-        // Use map viewport stats for whichever scenarios are visible; fall back to site data for the rest
-        refVal = statForScenario('reference', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
-          ?? siteIndicators?.reference?.[attribute];
-        curVal = statForScenario('current', mapStatistics?.leftStats, mapStatistics?.rightStats, leftScenario, rightScenario)
-          ?? siteIndicators?.current?.[attribute];
-        break;
-      case 'domain':
-        refVal = statForScenario('reference', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario)
-          ?? siteIndicators?.reference?.[attribute];
-        curVal = statForScenario('current', mapStatistics?.fullStats?.left, mapStatistics?.fullStats?.right, leftScenario, rightScenario)
-          ?? siteIndicators?.current?.[attribute];
-        break;
-      case 'site':
-      default:
-        refVal = siteIndicators?.reference?.[attribute] ?? catchmentData?.reference?.[attribute];
-        curVal = siteIndicators?.current?.[attribute] ?? catchmentData?.current?.[attribute];
-        break;
-    }
-
+    const refVal = resolveValue(attribute, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+    const curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
     const idealVal = siteIndicators?.ideal?.[attribute] ?? refVal;
 
     const hasData = [refVal, curVal, idealVal].some(
@@ -143,16 +168,45 @@ function ChartView({
     if (!hasData) return null;
 
     const xLabel = axisLabels[attribute] ?? attribute.replace(/_/g, ' ');
+    const chartType = chartTypes[attribute] ?? 'line';
 
     return {
       xLabel,
+      chartType,
       values: [
         typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null,
         typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null,
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData]);
+  }, [attribute, axisLabels, chartTypes, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData]);
+
+  // Build scatter data for all columns in the selected parent group
+  const groupData = useMemo(() => {
+    if (!chartGroup) return null;
+
+    const groupColumns = columns.filter(
+      (col) => variableTypes[col] === chartGroup && canGraph[col],
+    );
+    if (groupColumns.length === 0) return null;
+
+    const points: { ref: number | null; cur: number | null; target: number | null }[] = [];
+
+    for (const col of groupColumns) {
+      const refVal = resolveValue(col, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+      const curVal = resolveValue(col, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+      const targetVal = siteIndicators?.ideal?.[col] ?? (typeof refVal === 'number' ? refVal : undefined);
+
+      points.push({
+        ref: typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null,
+        cur: typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null,
+        target: typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null,
+      });
+    }
+
+    const valid = points.filter((p) => p.ref !== null || p.cur !== null || p.target !== null);
+    return valid.length > 0 ? valid : null;
+  }, [chartGroup, columns, variableTypes, canGraph, siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario]);
 
   // Responsive sizing
   useEffect(() => {
@@ -182,10 +236,10 @@ function ChartView({
     animFrameRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const hasChartData = chartData !== null;
+  const hasData = summaryData !== null;
 
   useEffect(() => {
-    if (visible && hasChartData) {
+    if (visible && hasData) {
       setProgress(0);
       controls.start({
         opacity: 1,
@@ -201,11 +255,11 @@ function ChartView({
       });
     }
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [visible, hasChartData, controls, animateTo]);
+  }, [visible, hasData, controls, animateTo]);
 
   const { width, height } = size;
 
-  if (!chartData) {
+  if (!hasData) {
     return (
       <Box
         ref={containerRef}
@@ -219,32 +273,283 @@ function ChartView({
         fontSize="sm"
         bg="#1a202c"
       >
-        {visible ? (attribute ? 'Loading…' : 'No attribute selected') : null}
+        {visible ? (attribute ? 'Loading\u2026' : 'No attribute selected') : null}
       </Box>
     );
   }
 
-  const { xLabel, values } = chartData;
-  const numericVals = values.filter((v): v is number => v !== null);
-  const minVal = Math.min(...numericVals) * (Math.min(...numericVals) >= 0 ? 0.9 : 1.1);
-  const maxVal = Math.max(...numericVals) * (Math.max(...numericVals) >= 0 ? 1.1 : 0.9);
-  const range = maxVal - minVal || 1;
-
+  const svgHeight = height;
   const plotW = width - PADDING.left - PADDING.right;
-  const plotH = height - PADDING.top - PADDING.bottom;
-
-  const xTickLabels = ['Reference', 'Current', 'Target'];
-  const stepX = plotW / (values.length - 1);
+  const plotH = svgHeight - PADDING.top - PADDING.bottom;
 
   const yTickCount = 5;
-  const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) =>
-    minVal + (range / yTickCount) * i,
-  );
 
-  const pointX = (i: number) => PADDING.left + i * stepX;
-  const pointY = (val: number) => {
-    const animatedVal = minVal + (val - minVal) * progress;
-    return PADDING.top + plotH - ((animatedVal - minVal) / range) * plotH;
+  const renderSummaryChart = () => {
+    if (!summaryData) return null;
+    const { xLabel, chartType, values } = summaryData;
+    const isBar = chartType === 'bar';
+    const numericVals = values.filter((v): v is number => v !== null);
+    const minVal = isBar ? 0 : Math.min(...numericVals) * (Math.min(...numericVals) >= 0 ? 0.9 : 1.1);
+    const maxVal = Math.max(...numericVals) * (Math.max(...numericVals) >= 0 ? 1.1 : 0.9);
+    const range = maxVal - minVal || 1;
+
+    const barCount = values.length;
+    const barGap = plotW * 0.1;
+    const barWidth = (plotW - barGap * (barCount + 1)) / barCount;
+    const stepX = plotW / (values.length - 1);
+
+    const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) =>
+      minVal + (range / yTickCount) * i,
+    );
+
+    const pointX = (i: number) => PADDING.left + i * stepX;
+    const barXPos = (i: number) => PADDING.left + barGap + i * (barWidth + barGap);
+    const pointY = (val: number) => {
+      const animatedVal = minVal + (val - minVal) * progress;
+      return PADDING.top + plotH - ((animatedVal - minVal) / range) * plotH;
+    };
+
+    const xTickLabels = ['Reference', 'Current', 'Target'];
+
+    return (
+      <svg
+        width={width}
+        height={svgHeight}
+        viewBox={`0 0 ${width} ${svgHeight}`}
+        style={{ display: 'block' }}
+      >
+        <rect width={width} height={svgHeight} fill="#1a202c" />
+
+        {/* Grid lines */}
+        {yTicks.map((val, ti) => {
+          const y = PADDING.top + plotH - ((val - minVal) / range) * plotH;
+          return (
+            <g key={`grid-${ti}`}>
+              <line
+                x1={PADDING.left} y1={y}
+                x2={width - PADDING.right} y2={y}
+                stroke="#2d3748" strokeWidth={1}
+              />
+              <text
+                x={PADDING.left - 8} y={y + 4}
+                textAnchor="end" fill="#718096"
+                fontSize={11} fontFamily="Inter, sans-serif"
+              >
+                {formatVal(val)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Axes */}
+        <line
+          x1={PADDING.left} y1={PADDING.top}
+          x2={PADDING.left} y2={PADDING.top + plotH}
+          stroke="#4a5568" strokeWidth={1}
+        />
+        <line
+          x1={PADDING.left} y1={PADDING.top + plotH}
+          x2={width - PADDING.right} y2={PADDING.top + plotH}
+          stroke="#4a5568" strokeWidth={1}
+        />
+
+        {isBar ? (
+          values.map((val, i) => {
+            if (val === null) return null;
+            const x = barXPos(i);
+            const barH = ((val - minVal) / range) * plotH * progress;
+            const y = PADDING.top + plotH - barH;
+            return (
+              <g key={`bar-${i}`}>
+                <rect
+                  x={x} y={y}
+                  width={barWidth} height={barH}
+                  fill={SERIES_COLORS[i]} fillOpacity={0.8}
+                  rx={3}
+                />
+                {progress > 0.8 && (
+                  <text
+                    x={x + barWidth / 2} y={y - 8}
+                    textAnchor="middle" fill={SERIES_COLORS[i]}
+                    fontSize={11} fontFamily="Inter, sans-serif" fontWeight={600}
+                  >
+                    {formatVal(val)}
+                  </text>
+                )}
+              </g>
+            );
+          })
+        ) : (
+          <>
+            {(() => {
+              const pts = values
+                .map((val, i) => val !== null ? `${pointX(i)},${pointY(val)}` : null)
+                .filter(Boolean) as string[];
+              if (pts.length < 2) return null;
+              const baseline = PADDING.top + plotH;
+              return (
+                <path
+                  d={`M${pointX(0)},${baseline} L${pts.join(' L')} L${pointX(values.length - 1)},${baseline} Z`}
+                  fill="#2bb0ed"
+                  fillOpacity={0.06}
+                />
+              );
+            })()}
+            {(() => {
+              const pts = values
+                .map((val, i) => val !== null ? `${i === 0 ? 'M' : 'L'}${pointX(i)},${pointY(val)}` : null)
+                .filter(Boolean)
+                .join(' ');
+              return pts ? (
+                <path
+                  d={pts}
+                  fill="none"
+                  stroke="#4a5568"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                />
+              ) : null;
+            })()}
+            {values.map((val, i) => {
+              if (val === null) return null;
+              const cx = pointX(i);
+              const cy = pointY(val);
+              return (
+                <g key={`pt-${i}`}>
+                  <circle cx={cx} cy={cy} r={10} fill={SERIES_COLORS[i]} fillOpacity={0.15} />
+                  <circle cx={cx} cy={cy} r={6} fill={SERIES_COLORS[i]} stroke="#1a202c" strokeWidth={2} />
+                  {progress > 0.8 && (
+                    <text
+                      x={cx} y={cy - 14}
+                      textAnchor="middle" fill={SERIES_COLORS[i]}
+                      fontSize={11} fontFamily="Inter, sans-serif" fontWeight={600}
+                    >
+                      {formatVal(val)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </>
+        )}
+
+        {xTickLabels.map((label, i) => (
+          <text
+            key={`xtick-${i}`}
+            x={isBar ? barXPos(i) + barWidth / 2 : pointX(i)}
+            y={PADDING.top + plotH + 20}
+            textAnchor="middle" fill="#718096"
+            fontSize={12} fontFamily="Inter, sans-serif"
+          >
+            {label}
+          </text>
+        ))}
+
+        <text
+          x={PADDING.left + plotW / 2}
+          y={svgHeight - 8}
+          textAnchor="middle" fill="#a0aec0"
+          fontSize={13} fontFamily="Inter, sans-serif" fontWeight={500}
+        >
+          {xLabel}
+        </text>
+
+        {SERIES_LABELS.map((label, i) => {
+          if (values[i] === null) return null;
+          const legendX = PADDING.left + i * 150;
+          return (
+            <g key={`legend-${i}`}>
+              <circle cx={legendX + 6} cy={14} r={6} fill={SERIES_COLORS[i]} />
+              <text
+                x={legendX + 18} y={19}
+                fill="#a0aec0" fontSize={12}
+                fontFamily="Inter, sans-serif" fontWeight={500}
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Group scatter overlay */}
+        {groupData && (() => {
+          const allGroupVals = groupData.flatMap((p) =>
+            [p.ref, p.cur, p.target].filter((v): v is number => v !== null),
+          );
+          if (allGroupVals.length === 0) return null;
+          const gMin = Math.min(...allGroupVals);
+          const gMax = Math.max(...allGroupVals);
+          const gRange = gMax - gMin || 1;
+          const groupY = (val: number) =>
+            PADDING.top + plotH - ((val - gMin) / gRange) * plotH * progress;
+
+          return (
+            <g opacity={0.6}>
+              {/* Right axis label */}
+              <text
+                x={width - PADDING.right + 10}
+                y={PADDING.top}
+                fill="#718096" fontSize={10}
+                fontFamily="Inter, sans-serif"
+                textAnchor="start"
+              >
+                Group
+              </text>
+              <text
+                x={width - PADDING.right + 10}
+                y={PADDING.top + 12}
+                fill="#718096" fontSize={10}
+                fontFamily="Inter, sans-serif"
+                textAnchor="start"
+              >
+                (norm.)
+              </text>
+              {/* 0% and 100% tick marks on right axis */}
+              <line
+                x1={width - PADDING.right} y1={PADDING.top}
+                x2={width - PADDING.right + 4} y2={PADDING.top}
+                stroke="#4a5568" strokeWidth={1}
+              />
+              <text x={width - PADDING.right + 6} y={PADDING.top + 4} fill="#4a5568" fontSize={9} fontFamily="Inter, sans-serif">max</text>
+              <line
+                x1={width - PADDING.right} y1={PADDING.top + plotH}
+                x2={width - PADDING.right + 4} y2={PADDING.top + plotH}
+                stroke="#4a5568" strokeWidth={1}
+              />
+              <text x={width - PADDING.right + 6} y={PADDING.top + plotH + 4} fill="#4a5568" fontSize={9} fontFamily="Inter, sans-serif">min</text>
+
+              {(() => {
+                const means = ([
+                  groupData.map((p) => p.ref),
+                  groupData.map((p) => p.cur),
+                  groupData.map((p) => p.target),
+                ] as (number | null)[][]).map((vals) => {
+                  const nums = vals.filter((v): v is number => v !== null);
+                  return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+                });
+                return means.map((val, si) => {
+                  if (val === null) return null;
+                  const cx = isBar ? barXPos(si) + barWidth / 2 : pointX(si);
+                  const cy = groupY(val);
+                  return (
+                    <circle
+                      key={`group-summary-${si}`}
+                      cx={cx} cy={cy}
+                      r={5}
+                      fill={GROUP_SCATTER_COLORS[si]}
+                      fillOpacity={0.85}
+                      stroke={SERIES_COLORS[si]}
+                      strokeWidth={1.5}
+                      strokeOpacity={0.8}
+                    />
+                  );
+                });
+              })()}
+            </g>
+          );
+        })()}
+      </svg>
+    );
   };
 
   return (
@@ -262,147 +567,7 @@ function ChartView({
             exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.3 } }}
             style={{ width: '100%', height: '100%' }}
           >
-            <svg
-              width={width}
-              height={height}
-              viewBox={`0 0 ${width} ${height}`}
-              style={{ display: 'block' }}
-            >
-              {/* Background */}
-              <rect width={width} height={height} fill="#1a202c" />
-
-              {/* Grid lines */}
-              {yTicks.map((val, ti) => {
-                const y = PADDING.top + plotH - ((val - minVal) / range) * plotH;
-                const label = Math.abs(val) >= 10000
-                  ? val.toExponential(1)
-                  : parseFloat(val.toPrecision(3)).toString();
-                return (
-                  <g key={`grid-${ti}`}>
-                    <line
-                      x1={PADDING.left} y1={y}
-                      x2={width - PADDING.right} y2={y}
-                      stroke="#2d3748" strokeWidth={1}
-                    />
-                    <text
-                      x={PADDING.left - 8} y={y + 4}
-                      textAnchor="end" fill="#718096"
-                      fontSize={11} fontFamily="Inter, sans-serif"
-                    >
-                      {label}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {/* Axes */}
-              <line
-                x1={PADDING.left} y1={PADDING.top}
-                x2={PADDING.left} y2={PADDING.top + plotH}
-                stroke="#4a5568" strokeWidth={1}
-              />
-              <line
-                x1={PADDING.left} y1={PADDING.top + plotH}
-                x2={width - PADDING.right} y2={PADDING.top + plotH}
-                stroke="#4a5568" strokeWidth={1}
-              />
-
-              {/* Area fill under line */}
-              {(() => {
-                const pts = values
-                  .map((val, i) => val !== null ? `${pointX(i)},${pointY(val)}` : null)
-                  .filter(Boolean) as string[];
-                if (pts.length < 2) return null;
-                const baseline = PADDING.top + plotH;
-                return (
-                  <path
-                    d={`M${pointX(0)},${baseline} L${pts.join(' L')} L${pointX(values.length - 1)},${baseline} Z`}
-                    fill="#2bb0ed"
-                    fillOpacity={0.06}
-                  />
-                );
-              })()}
-
-              {/* Line connecting points */}
-              {(() => {
-                const pts = values
-                  .map((val, i) => val !== null ? `${i === 0 ? 'M' : 'L'}${pointX(i)},${pointY(val)}` : null)
-                  .filter(Boolean)
-                  .join(' ');
-                return pts ? (
-                  <path
-                    d={pts}
-                    fill="none"
-                    stroke="#4a5568"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 3"
-                  />
-                ) : null;
-              })()}
-
-              {/* Data points */}
-              {values.map((val, i) => {
-                if (val === null) return null;
-                const cx = pointX(i);
-                const cy = pointY(val);
-                return (
-                  <g key={`pt-${i}`}>
-                    <circle cx={cx} cy={cy} r={10} fill={SERIES_COLORS[i]} fillOpacity={0.15} />
-                    <circle cx={cx} cy={cy} r={6} fill={SERIES_COLORS[i]} stroke="#1a202c" strokeWidth={2} />
-                    {/* Value label above point */}
-                    {progress > 0.8 && (
-                      <text
-                        x={cx} y={cy - 14}
-                        textAnchor="middle" fill={SERIES_COLORS[i]}
-                        fontSize={11} fontFamily="Inter, sans-serif" fontWeight={600}
-                      >
-                        {parseFloat(val.toPrecision(3)).toString()}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-
-              {/* X-axis tick labels (scenario names) */}
-              {xTickLabels.map((label, i) => (
-                <text
-                  key={`xtick-${i}`}
-                  x={pointX(i)} y={PADDING.top + plotH + 20}
-                  textAnchor="middle" fill="#718096"
-                  fontSize={12} fontFamily="Inter, sans-serif"
-                >
-                  {label}
-                </text>
-              ))}
-
-              {/* X-axis title (axis label from metadata) */}
-              <text
-                x={PADDING.left + plotW / 2}
-                y={height - 8}
-                textAnchor="middle" fill="#a0aec0"
-                fontSize={13} fontFamily="Inter, sans-serif" fontWeight={500}
-              >
-                {xLabel}
-              </text>
-
-              {/* Legend */}
-              {SERIES_LABELS.map((label, i) => {
-                if (values[i] === null) return null;
-                const legendX = PADDING.left + i * 150;
-                return (
-                  <g key={`legend-${i}`}>
-                    <circle cx={legendX + 6} cy={14} r={6} fill={SERIES_COLORS[i]} />
-                    <text
-                      x={legendX + 18} y={19}
-                      fill="#a0aec0" fontSize={12}
-                      fontFamily="Inter, sans-serif" fontWeight={500}
-                    >
-                      {label}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
+            {renderSummaryChart()}
           </motion.div>
         )}
       </AnimatePresence>

@@ -63,6 +63,8 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
 	r.HandleFunc("/metadata/axislabels", h.handleMetadataAxisLabels).Methods("GET")
+	r.HandleFunc("/metadata/charttypes", h.handleMetadataChartTypes).Methods("GET")
+	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
@@ -527,6 +529,130 @@ func (h *Handler) handleMetadataAxisLabels(w http.ResponseWriter, r *http.Reques
 	}
 
 	respondJSON(w, http.StatusOK, axisLabels)
+}
+
+// handleMetadataChartTypes returns a map of attribute column names to chart types.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataChartTypes(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata chart types unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	chartTypeIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch normalized {
+		case "ColumnName":
+			columnIdx = i
+		case "chartType":
+			chartTypeIdx = i
+		}
+	}
+
+	if columnIdx == -1 || chartTypeIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	chartTypes := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || chartTypeIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		chartType := strings.TrimSpace(record[chartTypeIdx])
+		if column == "" || chartType == "" {
+			continue
+		}
+		chartTypes[column] = chartType
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			chartTypes[normalized] = chartType
+		}
+	}
+
+	respondJSON(w, http.StatusOK, chartTypes)
+}
+
+// handleMetadataGroupingValues returns a map of attribute column names to their GroupingValues.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataGroupingValues(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata grouping values unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	groupingValuesIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "GroupingValues"):
+			groupingValuesIdx = i
+		}
+	}
+
+	if columnIdx == -1 || groupingValuesIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	groupingValues := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || groupingValuesIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		groupingValue := strings.TrimSpace(record[groupingValuesIdx])
+		if column == "" || groupingValue == "" {
+			continue
+		}
+		groupingValues[column] = groupingValue
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			groupingValues[normalized] = groupingValue
+		}
+	}
+
+	respondJSON(w, http.StatusOK, groupingValues)
 }
 
 // respondJSON sends a JSON response (delegates to httputil)
@@ -1171,6 +1297,7 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 	for key := range allKeys {
 		refSum := 0.0
 		curSum := 0.0
+		hadCur := false
 
 		for i, c := range catchments {
 			weight := validAreas[i] / totalValidArea // AOI proportion
@@ -1180,24 +1307,37 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 			}
 			if val, ok := c.Current[key]; ok {
 				curSum += val * weight
+				hadCur = true
 			}
 		}
 
-		// Store the weighted values
+		// Store the weighted values; only write Current when at least one catchment
+		// had current data for this key — otherwise curSum stays 0 which is misleading
+		// (e.g. a column that only exists in reference would appear as current=0).
 		indicators.Reference[key] = refSum
 		indicators.Ideal[key] = refSum // Initialize Ideal same as Reference
-		indicators.Current[key] = curSum
+		if hadCur {
+			indicators.Current[key] = curSum
+		}
 	}
 
 	return indicators
 }
 
-// UpdateIndicatorsRequest represents a request to update ideal indicator values
+// UpdateIndicatorsRequest represents a request to update indicator values
 type UpdateIndicatorsRequest struct {
-	Ideal map[string]float64 `json:"ideal"`
+	Ideal          map[string]float64 `json:"ideal"`
+	IdealLower     map[string]float64 `json:"idealLower"`
+	IdealUpper     map[string]float64 `json:"idealUpper"`
+	Reference      map[string]float64 `json:"reference"`
+	ReferenceLower map[string]float64 `json:"referenceLower"`
+	ReferenceUpper map[string]float64 `json:"referenceUpper"`
+	Current        map[string]float64 `json:"current"`
+	CurrentLower   map[string]float64 `json:"currentLower"`
+	CurrentUpper   map[string]float64 `json:"currentUpper"`
 }
 
-// handleUpdateIndicators updates the ideal indicator values for a site
+// handleUpdateIndicators updates the indicator values for a site
 func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request) {
 	if h.siteStore == nil {
 		respondError(w, http.StatusInternalServerError, "site store not initialized")
@@ -1222,10 +1362,27 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Update ideal values
-	for key, value := range req.Ideal {
-		site.Indicators.Ideal[key] = value
+	mergeMap := func(dst *map[string]float64, src map[string]float64) {
+		if len(src) == 0 {
+			return
+		}
+		if *dst == nil {
+			*dst = make(map[string]float64)
+		}
+		for k, v := range src {
+			(*dst)[k] = v
+		}
 	}
+
+	mergeMap(&site.Indicators.Ideal, req.Ideal)
+	mergeMap(&site.Indicators.IdealLower, req.IdealLower)
+	mergeMap(&site.Indicators.IdealUpper, req.IdealUpper)
+	mergeMap(&site.Indicators.Reference, req.Reference)
+	mergeMap(&site.Indicators.ReferenceLower, req.ReferenceLower)
+	mergeMap(&site.Indicators.ReferenceUpper, req.ReferenceUpper)
+	mergeMap(&site.Indicators.Current, req.Current)
+	mergeMap(&site.Indicators.CurrentLower, req.CurrentLower)
+	mergeMap(&site.Indicators.CurrentUpper, req.CurrentUpper)
 
 	updated, err := h.siteStore.Update(id, site)
 	if err != nil {

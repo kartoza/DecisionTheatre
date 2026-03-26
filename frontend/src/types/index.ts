@@ -229,8 +229,16 @@ export interface CatchmentIndicators {
 export interface SiteIndicators {
   // Reference scenario values (historical baseline)
   reference: Record<string, number>;
+  // Lower bound of reference range (defaults to reference when not set)
+  referenceLower?: Record<string, number>;
+  // Upper bound of reference range (defaults to reference when not set)
+  referenceUpper?: Record<string, number>;
   // Current scenario values (current observed conditions)
   current: Record<string, number>;
+  // Lower bound of current range (defaults to current when not set)
+  currentLower?: Record<string, number>;
+  // Upper bound of current range (defaults to current when not set)
+  currentUpper?: Record<string, number>;
   // Ideal values (starts as copy of reference mean, user-editable)
   ideal: Record<string, number>;
   // Lower bound of acceptable ideal range (defaults to ideal when not set)
