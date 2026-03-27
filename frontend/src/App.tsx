@@ -276,8 +276,8 @@ function App() {
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
-  // Show setup guide when tiles aren't loaded (on map/explore pages)
-  if ((currentPage === 'map' || currentPage === 'explore') && info && !info.tiles_loaded) {
+  // Show setup guide when tiles aren't loaded
+  if (info && !info.tiles_loaded) {
     return <SetupGuide info={info} />;
   }
 

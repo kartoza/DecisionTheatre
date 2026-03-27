@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   Box,
   Heading,
@@ -8,7 +8,6 @@ import {
   Flex,
   Badge,
   Divider,
-  Input,
   Button,
   HStack,
   Alert,
@@ -23,13 +22,31 @@ interface SetupGuideProps {
 }
 
 function SetupGuide({ info }: SetupGuideProps) {
-  const [zipPath, setZipPath] = useState('');
+  const [selectedPath, setSelectedPath] = useState('');
+  const [browsing, setBrowsing] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pollTimerRef = useRef<number | null>(null);
   const toast = useToast();
 
+  const handleBrowse = async () => {
+    setBrowsing(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/dialog/open-file', { method: 'POST' });
+      const data = await res.json();
+      if (data.path) {
+        setSelectedPath(data.path);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not open file dialog');
+    } finally {
+      setBrowsing(false);
+    }
+  };
+
   const handleInstall = async () => {
-    if (!zipPath.trim()) return;
+    if (!selectedPath) return;
     setInstalling(true);
     setError(null);
 
@@ -37,29 +54,64 @@ function SetupGuide({ info }: SetupGuideProps) {
       const res = await fetch('/api/datapack/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: zipPath.trim() }),
+        body: JSON.stringify({ path: selectedPath }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         setError(data.error || 'Installation failed');
+        setInstalling(false);
         return;
       }
 
-      toast({
-        title: 'Data pack installed',
-        description: 'Reloading application...',
-        status: 'success',
-        duration: 2000,
-      });
-
-      // Reload after a short delay so the user sees the success message
-      setTimeout(() => window.location.reload(), 1500);
+      // Server returned 202 — extraction is running in the background.
+      // Poll the status endpoint until it reports done or error.
+      pollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Network error');
-    } finally {
       setInstalling(false);
     }
+  };
+
+  const pollStatus = () => {
+    const startTime = Date.now();
+    const maxWaitMs = 15 * 60 * 1000; // 15 minutes
+
+    const tick = async () => {
+      if (Date.now() - startTime > maxWaitMs) {
+        setError('Installation timed out. Please restart the application.');
+        setInstalling(false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/datapack/status');
+        const data = await res.json();
+
+        if (data.install_status === 'error') {
+          setError(data.install_error || 'Installation failed');
+          setInstalling(false);
+          return;
+        }
+
+        if (data.install_status === 'done' || data.installed) {
+          toast({
+            title: 'Data pack installed',
+            description: 'Reloading application...',
+            status: 'success',
+            duration: 2000,
+          });
+          setTimeout(() => window.location.reload(), 1500);
+          return;
+        }
+      } catch (_) {
+        // Server may be briefly unavailable while routes are rebuilt — keep polling
+      }
+
+      pollTimerRef.current = window.setTimeout(tick, 2000);
+    };
+
+    pollTimerRef.current = window.setTimeout(tick, 2000);
   };
 
   return (
@@ -108,30 +160,44 @@ function SetupGuide({ info }: SetupGuideProps) {
               Install Data Pack
             </Heading>
             <Text color="gray.300" mb={3}>
-              Provide the path to a Decision Theatre data pack (.zip) file.
-              The application will extract and register it automatically.
+              Select a Decision Theatre data pack (.zip or .7z) file and click Install.
             </Text>
-            <HStack spacing={2}>
-              <Input
-                placeholder="/path/to/decision-theatre-data-v1.0.0.zip"
-                value={zipPath}
-                onChange={(e) => setZipPath(e.target.value)}
-                bg="gray.800"
-                borderColor="gray.600"
-                isDisabled={installing}
-                onKeyDown={(e) => e.key === 'Enter' && handleInstall()}
-              />
+            <VStack spacing={3} align="stretch">
               <Button
-                colorScheme="blue"
-                onClick={handleInstall}
-                isLoading={installing}
-                loadingText="Installing"
-                isDisabled={!zipPath.trim() || installing}
-                flexShrink={0}
+                onClick={handleBrowse}
+                isLoading={browsing}
+                loadingText="Opening..."
+                isDisabled={installing}
+                variant="outline"
+                borderColor="gray.600"
+                color="gray.300"
+                _hover={{ borderColor: 'gray.400', color: 'white' }}
               >
-                Install
+                Browse for data pack...
               </Button>
-            </HStack>
+              {selectedPath && (
+                <HStack spacing={2}>
+                  <Text
+                    fontSize="sm"
+                    color="gray.300"
+                    flex={1}
+                    isTruncated
+                    title={selectedPath}
+                  >
+                    {selectedPath.split(/[\\/]/).pop()}
+                  </Text>
+                  <Button
+                    colorScheme="blue"
+                    onClick={handleInstall}
+                    isLoading={installing}
+                    loadingText="Installing"
+                    flexShrink={0}
+                  >
+                    Install
+                  </Button>
+                </HStack>
+              )}
+            </VStack>
             {installing && (
               <Progress size="xs" isIndeterminate mt={2} colorScheme="blue" />
             )}
@@ -186,7 +252,7 @@ nix run`}</Code>
               fontSize="sm"
               whiteSpace="pre"
               color="gray.400"
-            >{`Data Pack (.zip):
+            >{`Data Pack (.zip or .7z):
   manifest.json             <- pack metadata
   data/
     mbtiles/

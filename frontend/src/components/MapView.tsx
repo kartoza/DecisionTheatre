@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanIntersects, booleanWithin, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
+import { booleanWithin, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
 import * as turf from '@turf/turf';
 import type { Feature as GeoJSONFeature, Geometry as GeoJSONGeometry } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -12,7 +12,6 @@ import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, useAttributeColors, useAttributeDetails } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
-import { color } from 'framer-motion';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -75,7 +74,6 @@ const MIN_CATCHMENT_ZOOM = 7;
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-const MIN_FILL_OPACITY = 0.15;
 const MAX_FILL_OPACITY = 0.9;
 
 type PolygonalGeometry = GeoJSON.Polygon | GeoJSON.MultiPolygon;
@@ -458,10 +456,6 @@ function buildFillColorExpression(
 }
 
 function buildFillOpacityExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  minOpacity: number,
   maxOpacity: number
 ): maplibregl.ExpressionSpecification | number {
   // Opacity is no longer used to encode value when metadata colors are
@@ -474,9 +468,7 @@ function buildOpacityColorExpression(
   attribute: string,
   min: number,
   max: number,
-  baseColor: string,
-  minOpacity: number,
-  maxOpacity: number
+  baseColor: string
 ): maplibregl.ExpressionSpecification | string {
   // Blend color from black (low values) to the metadata base color
   // (high values). Opacity will be handled separately by layer paint.
@@ -699,12 +691,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
       }
 
-      const leftFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
-        ? filterDatasetByCatchmentIds(leftData, siteCatchmentIds)
-        : leftData;
-      const rightFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
-        ? filterDatasetByCatchmentIds(rightData, siteCatchmentIds)
-        : rightData;
+      // const leftFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
+      //   ? filterDatasetByCatchmentIds(leftData, siteCatchmentIds)
+      //   : leftData;
+      // const rightFiltered = (siteCatchmentIds && siteCatchmentIds.size > 0)
+      //   ? filterDatasetByCatchmentIds(rightData, siteCatchmentIds)
+      //   : rightData;
       const leftDisplay = leftData;
       const rightDisplay = rightData;
 
@@ -1049,7 +1041,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           source: sourceId,
           paint: {
             'fill-extrusion-color': useOpacityScale && attributeColor
-              ? buildOpacityColorExpression(attribute, min, max, attributeColor, MIN_FILL_OPACITY, MAX_FILL_OPACITY)
+              ? buildOpacityColorExpression(attribute, min, max, attributeColor)
               : buildFillColorExpression(attribute, min, max, attributeColor),
             'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
             'fill-extrusion-base': 0,
@@ -1065,7 +1057,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           paint: {
             'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
             'fill-opacity': useOpacityScale
-              ? buildFillOpacityExpression(attribute, min, max, MIN_FILL_OPACITY, MAX_FILL_OPACITY)
+              ? buildFillOpacityExpression(MAX_FILL_OPACITY)
               : 0.75,
           },
         });

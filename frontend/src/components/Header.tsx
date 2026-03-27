@@ -1,6 +1,5 @@
 import {
   Flex,
-  Heading,
   IconButton,
   Spacer,
   Badge,

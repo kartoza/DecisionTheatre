@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -35,6 +36,11 @@ type Server struct {
 	tileStore  *tiles.MBTilesStore
 	gpkgStore  *geodata.GpkgStore
 	siteStore  *sites.Store
+
+	// Install state — protected by installMu
+	installMu     sync.Mutex
+	installStatus string // "idle" | "installing" | "done" | "error"
+	installErr    string
 }
 
 // New creates a new Server with all components initialized
@@ -85,6 +91,7 @@ func (s *Server) setupRoutes() {
 	// Data pack management routes
 	s.router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
 	s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
+	s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
 
 	// Tile routes - served directly for performance
 	if s.tileStore != nil {
@@ -148,11 +155,13 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 // Start begins listening for HTTP connections
 func (s *Server) Start() error {
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.cfg.Port),
-		Handler:      s.router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:        fmt.Sprintf(":%d", s.cfg.Port),
+		Handler:     s.router,
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout is intentionally unset (0 = disabled) — long-running operations
+		// such as datapack extraction can take several minutes on large archives.
+		// This is safe because the server only listens on localhost.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	log.Printf("Server listening on http://localhost:%d", s.cfg.Port)
@@ -247,6 +256,16 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	json.NewEncoder(w).Encode(tileJSON)
+}
+
+// rebuildRoutes creates a new router and re-registers all routes with the current store references.
+// This is needed after a datapack install, since the old apiHandler holds stale nil store pointers.
+func (s *Server) rebuildRoutes() {
+	s.router = mux.NewRouter()
+	s.setupRoutes()
+	if s.httpServer != nil {
+		s.httpServer.Handler = s.router
+	}
 }
 
 // spaHandler serves the SPA, falling back to index.html for client-side routing
