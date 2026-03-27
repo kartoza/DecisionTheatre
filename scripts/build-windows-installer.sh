@@ -208,7 +208,7 @@ GOOS=windows \
 GOARCH=amd64 \
 CC=x86_64-w64-mingw32-gcc \
 CXX=x86_64-w64-mingw32-g++ \
-go build -ldflags "-s -w -X main.version=$RAW_VERSION" -o "$WINDOWS_EXE" .
+go build -ldflags "-s -w -H windowsgui -X main.version=$RAW_VERSION" -o "$WINDOWS_EXE" .
 
 # product.wxs currently references dist\decision-theatre.exe.
 cp "$WINDOWS_EXE" "$DIST_DIR/decision-theatre.exe"
