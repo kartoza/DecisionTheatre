@@ -336,6 +336,7 @@ function ViewPane({
         attribute={comparison.attribute}
         siteId={siteId}
         scenario={comparison.leftScenario}
+        siteGeometry={siteGeometry}
       />
 
       {/* Pane label (shown in quad mode) */}

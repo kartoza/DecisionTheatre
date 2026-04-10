@@ -56,11 +56,20 @@ func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 
 			dbPath := filepath.Join(dir, entry.Name())
 
-			db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+			// immutable=1: hint to SQLite that the file won't change, allowing
+			// aggressive read optimisations. cache=shared lets multiple connections
+			// share the same page cache, reducing memory and improving locality.
+			db, err := sql.Open("sqlite3", dbPath+"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000")
 			if err != nil {
 				log.Printf("Warning: Failed to open MBTiles %s: %v", name, err)
 				continue
 			}
+
+			// Allow up to 8 concurrent read connections so that simultaneous tile
+			// requests (e.g. the ~12 tiles needed at initial zoom-3 view) are
+			// served in parallel rather than serialised through one connection.
+			db.SetMaxOpenConns(8)
+			db.SetMaxIdleConns(8)
 
 			// Verify it's a valid MBTiles database
 			var count int

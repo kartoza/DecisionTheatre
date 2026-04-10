@@ -9,6 +9,7 @@ interface AggregateTableProps {
   attribute?: string;
   siteId?: string | null;
   scenario?: Scenario;
+  siteGeometry?: GeoJSON.Geometry | null;
 }
 
 // Format numbers for display
@@ -24,6 +25,7 @@ function AggregateTable({
   attribute = 'Factor',
   siteId,
   scenario = 'current',
+  siteGeometry,
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +62,7 @@ function AggregateTable({
     return () => {
       cancelled = true;
     };
-  }, [visible, siteId]);
+  }, [visible, siteId, siteGeometry]);
 
   // Calculate all derived values from catchment data
   // NOTE: This calculation uses the same area-weighted formula as the server-side

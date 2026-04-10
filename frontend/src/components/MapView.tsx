@@ -9,7 +9,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, useAttributeColors, useAttributeDetails } from '../hooks/useApi';
+import { getSite, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 
@@ -75,6 +75,8 @@ const MIN_CATCHMENT_ZOOM = 7;
 const MAX_EXTRUSION_HEIGHT = 50000;
 
 const MAX_FILL_OPACITY = 0.9;
+
+let mapViewInstanceCounter = 0;
 
 type PolygonalGeometry = GeoJSON.Polygon | GeoJSON.MultiPolygon;
 
@@ -525,6 +527,7 @@ const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
 function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange }: MapViewProps) {
+  const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -840,6 +843,107 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     applyColorsRef.current();
   }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
 
+  const addBoundaryLayersIfMissing = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
+    if (!map.style) return;
+
+    const normalized = normalizeBoundaryGeometry(geometry);
+    const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (source) {
+      source.setData({
+        type: 'Feature',
+        properties: {},
+        geometry: normalized,
+      });
+    } else {
+      map.addSource(SITE_BOUNDARY_SOURCE, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: {},
+          geometry: normalized,
+        },
+      });
+    }
+
+    if (!map.getLayer(SITE_BOUNDARY_GLOW_OUTER)) {
+      map.addLayer({
+        id: SITE_BOUNDARY_GLOW_OUTER,
+        type: 'fill',
+        source: SITE_BOUNDARY_SOURCE,
+        paint: {
+          'fill-color': '#FF00FF',
+          'fill-opacity': 0,
+        },
+      });
+    }
+
+    if (!map.getLayer(SITE_BOUNDARY_OFFWHITE)) {
+      map.addLayer({
+        id: SITE_BOUNDARY_OFFWHITE,
+        type: 'line',
+        source: SITE_BOUNDARY_SOURCE,
+        paint: {
+          'line-color': '#F5F5F0',
+          'line-width': 20,
+          'line-opacity': 0.6,
+        },
+      });
+    }
+
+    if (!map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)) {
+      map.addLayer({
+        id: SITE_BOUNDARY_GLOW_MIDDLE,
+        type: 'line',
+        source: SITE_BOUNDARY_SOURCE,
+        paint: {
+          'line-color': '#FF00FF',
+          'line-width': 14,
+          'line-opacity': 0.5,
+          'line-blur': 8,
+        },
+      });
+    }
+
+    if (!map.getLayer(SITE_BOUNDARY_LINE)) {
+      map.addLayer({
+        id: SITE_BOUNDARY_LINE,
+        type: 'line',
+        source: SITE_BOUNDARY_SOURCE,
+        paint: {
+          'line-color': '#FF00FF',
+          'line-width': 4,
+          'line-opacity': 1,
+        },
+      });
+    }
+
+    moveSiteBoundaryToTop(map);
+    map.triggerRepaint();
+  };
+
+  const reapplyBoundaryLayers = useCallback(() => {
+    const geometry = boundaryGeometryRef.current;
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+    if (!geometry || !leftMap || !rightMap) return;
+
+    const applyToMap = (map: maplibregl.Map) => {
+      if (map.style) {
+        addBoundaryLayersIfMissing(map, geometry);
+        return;
+      }
+      const onStyleData = () => {
+        if (!map.isStyleLoaded()) return;
+        map.off('styledata', onStyleData);
+        addBoundaryLayersIfMissing(map, geometry);
+      };
+      map.on('styledata', onStyleData);
+    };
+
+    applyToMap(leftMap);
+    applyToMap(rightMap);
+  }, []);
+
   // Compute a site-scoped domain range (min/max) so color scale is based on the site,
   // not on global dataset extrema, once a site exists.
   useEffect(() => {
@@ -942,9 +1046,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const inferredCatchmentIds = boundaryGeometry
           ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry)
           : new Set<string>();
-        const statsCatchmentIds = boundaryGeometry
-          ? (inferredCatchmentIds.size > 0 ? inferredCatchmentIds : explicitCatchmentIds)
-          : (explicitCatchmentIds.size > 0 ? explicitCatchmentIds : inferredCatchmentIds);
+        // Prefer server-authoritative explicit IDs; only infer from geometry when none are stored
+        const statsCatchmentIds = explicitCatchmentIds.size > 0
+          ? explicitCatchmentIds
+          : inferredCatchmentIds;
         siteCatchmentIdsRef.current = statsCatchmentIds;
         const leftFiltered = filterDatasetByCatchmentIds(leftData, statsCatchmentIds);
         const rightFiltered = filterDatasetByCatchmentIds(rightData, statsCatchmentIds);
@@ -1021,52 +1126,87 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const layer3dId = `${layerId}-3d`;
     const sourceId = `choropleth-source-${side}`;
 
-    // Remove existing layers and source
-    removeChoroplethLayers(map, side);
-
     try {
-      // Add the GeoJSON source
-      map.addSource(sourceId, {
-        type: 'geojson',
-        data: data as unknown as GeoJSON.FeatureCollection,
-      });
-
       const useOpacityScale = Boolean(attributeColor);
 
-      if (extruded) {
-        // 3D fill-extrusion layer
-        map.addLayer({
-          id: layer3dId,
-          type: 'fill-extrusion',
-          source: sourceId,
-          paint: {
-            'fill-extrusion-color': useOpacityScale && attributeColor
-              ? buildOpacityColorExpression(attribute, min, max, attributeColor)
-              : buildFillColorExpression(attribute, min, max, attributeColor),
-            'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
-            'fill-extrusion-base': 0,
-            'fill-extrusion-opacity': useOpacityScale ? 1 : 0.8,
-          },
-        });
+      const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (source) {
+        source.setData(data as unknown as GeoJSON.FeatureCollection);
       } else {
-        // 2D fill layer
-        map.addLayer({
-          id: layerId,
-          type: 'fill',
-          source: sourceId,
-          paint: {
-            'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
-            'fill-opacity': useOpacityScale
-              ? buildFillOpacityExpression(MAX_FILL_OPACITY)
-              : 0.75,
-          },
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: data as unknown as GeoJSON.FeatureCollection,
         });
       }
 
-      // Move site boundary layers to top if they exist
-      moveSiteBoundaryToTop(map);
+      if (extruded) {
+        if (map.getLayer(layerId)) {
+          map.removeLayer(layerId);
+        }
 
-      // Force a re-render to ensure the layer is drawn
+        if (!map.getLayer(layer3dId)) {
+          map.addLayer({
+            id: layer3dId,
+            type: 'fill-extrusion',
+            source: sourceId,
+            paint: {
+              'fill-extrusion-color': useOpacityScale && attributeColor
+                ? buildOpacityColorExpression(attribute, min, max, attributeColor)
+                : buildFillColorExpression(attribute, min, max, attributeColor),
+              'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
+              'fill-extrusion-base': 0,
+              'fill-extrusion-opacity': useOpacityScale ? 1 : 0.8,
+            },
+          });
+        } else {
+          map.setPaintProperty(
+            layer3dId,
+            'fill-extrusion-color',
+            useOpacityScale && attributeColor
+              ? buildOpacityColorExpression(attribute, min, max, attributeColor)
+              : buildFillColorExpression(attribute, min, max, attributeColor),
+          );
+          map.setPaintProperty(
+            layer3dId,
+            'fill-extrusion-height',
+            buildExtrusionExpression(attribute, min, max),
+          );
+          map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', useOpacityScale ? 1 : 0.8);
+        }
+      } else {
+        if (map.getLayer(layer3dId)) {
+          map.removeLayer(layer3dId);
+        }
+
+        if (!map.getLayer(layerId)) {
+          map.addLayer({
+            id: layerId,
+            type: 'fill',
+            source: sourceId,
+            paint: {
+              'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
+              'fill-opacity': useOpacityScale
+                ? buildFillOpacityExpression(MAX_FILL_OPACITY)
+                : 0.75,
+            },
+          });
+        } else {
+          map.setPaintProperty(
+            layerId,
+            'fill-color',
+            buildFillColorExpression(attribute, min, max, attributeColor),
+          );
+          map.setPaintProperty(
+            layerId,
+            'fill-opacity',
+            useOpacityScale
+              ? buildFillOpacityExpression(MAX_FILL_OPACITY)
+              : 0.75,
+          );
+        }
+      }
+
+      moveSiteBoundaryToTop(map);
       map.triggerRepaint();
     } catch (err) {
       console.error(`Error adding choropleth layer for ${side}:`, err);
@@ -1083,62 +1223,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }
 
     try {
-      // Remove existing layers (not source)
-      if (map.getLayer(SITE_BOUNDARY_LINE)) map.removeLayer(SITE_BOUNDARY_LINE);
-      if (map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)) map.removeLayer(SITE_BOUNDARY_GLOW_MIDDLE);
-      if (map.getLayer(SITE_BOUNDARY_GLOW_OUTER)) map.removeLayer(SITE_BOUNDARY_GLOW_OUTER);
-      if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) map.removeLayer(SITE_BOUNDARY_OFFWHITE);
-
-      // Re-add layers (they'll be on top now)
-      // Fully transparent fill (outline only)
-      map.addLayer({
-        id: SITE_BOUNDARY_GLOW_OUTER,
-        type: 'fill',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'fill-color': '#FF00FF',
-          'fill-opacity': 0,
-        },
-      });
-
-      // Thick semi-transparent off-white border (below the neon glow)
-      map.addLayer({
-        id: SITE_BOUNDARY_OFFWHITE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#F5F5F0',  // Off-white
-          'line-width': 20,
-          'line-opacity': 0.6,
-        },
-      });
-
-      // Neon glow line around boundary
-      map.addLayer({
-        id: SITE_BOUNDARY_GLOW_MIDDLE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#FF00FF',
-          'line-width': 14,
-          'line-opacity': 0.5,
-          'line-blur': 8,
-        },
-      });
-
-      // Core solid neon line
-      map.addLayer({
-        id: SITE_BOUNDARY_LINE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#FF00FF',
-          'line-width': 4,
-          'line-opacity': 1,
-        },
-      });
-
-      console.log('Site boundary moved to top');
+      if (map.getLayer(SITE_BOUNDARY_GLOW_OUTER)) {
+        map.moveLayer(SITE_BOUNDARY_GLOW_OUTER);
+      }
+      if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) {
+        map.moveLayer(SITE_BOUNDARY_OFFWHITE);
+      }
+      if (map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)) {
+        map.moveLayer(SITE_BOUNDARY_GLOW_MIDDLE);
+      }
+      if (map.getLayer(SITE_BOUNDARY_LINE)) {
+        map.moveLayer(SITE_BOUNDARY_LINE);
+      }
     } catch (err) {
       console.error('Error moving site boundary to top:', err);
     }
@@ -1206,7 +1302,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   }, [siteBounds, siteId, deriveBoundsFromGeometry]);
 
   // Zoom to site bounds with 10% padding
-  const zoomToSite = useCallback(async () => {
+  const zoomToSite = useCallback(async (extraOptions?: Partial<maplibregl.FitBoundsOptions>) => {
     const leftMap = leftMapRef.current;
     if (!leftMap) return;
 
@@ -1226,6 +1322,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       padding: 50,
       duration: 1000,
       maxZoom: 14,
+      ...extraOptions,
     });
   }, [resolveSiteBounds]);
 
@@ -1597,26 +1694,48 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     });
     leftMap.on('zoomend', () => debouncedApplyColors());
+    leftMap.on('zoom', () => console.log('[MapView] zoom:', leftMap.getZoom()));
 
-    // When maps are loaded, mark ready, resize, and apply initial colours
+    // When maps are loaded, mark ready, resize, and apply initial colours.
+    // setAreMapsReady is called only once BOTH maps have loaded so the boundary
+    // effect always runs with both maps in a fully styled state.
+    // reapplyBoundaryLayers() is also called directly here to avoid relying on
+    // the React effect cycle, which can be delayed for freshly-mounted panes
+    // (e.g. panes 1-3 when switching from single to quad view).
+    // Force tile re-evaluation after resize — resize() alone doesn't always
+    // trigger maplibre to re-request tiles for a newly-sized viewport.
+    function resizeAndRefresh(map: maplibregl.Map) {
+      updateMapSizes();
+      map.resize();
+      map.jumpTo({ center: map.getCenter(), zoom: map.getZoom() });
+    }
+
     leftMap.on('load', () => {
       mapsReady.current.left = true;
-      // Ensure proper sizing after load
-      updateMapSizes();
-      leftMap.resize();
+      console.log(`[MapView ${mapViewIdRef.current}] left map loaded`, { isQuad: Boolean(isQuad) });
+      resizeAndRefresh(leftMap);
       if (mapsReady.current.right) {
+        resizeAndRefresh(rightMap);
         applyColorsRef.current();
         setAreMapsReady(true);
+        reapplyBoundaryLayers();
+        // Deferred retry: ensures boundary is on top after applyColors async
+        // continuation and React boundary effect have both completed.
+        requestAnimationFrame(() => reapplyBoundaryLayers());
       }
     });
     rightMap.on('load', () => {
       mapsReady.current.right = true;
-      // Ensure proper sizing after load
-      updateMapSizes();
-      rightMap.resize();
+      console.log(`[MapView ${mapViewIdRef.current}] right map loaded`, { isQuad: Boolean(isQuad) });
+      resizeAndRefresh(rightMap);
       if (mapsReady.current.left) {
+        resizeAndRefresh(leftMap);
         applyColorsRef.current();
         setAreMapsReady(true);
+        reapplyBoundaryLayers();
+        // Deferred retry: ensures boundary is on top after applyColors async
+        // continuation and React boundary effect have both completed.
+        requestAnimationFrame(() => reapplyBoundaryLayers());
       }
     });
 
@@ -1678,11 +1797,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Update both clip containers
       leftClipContainer.style.width = `${percent}%`;
       rightClipContainer.style.width = `${100 - percent}%`;
-      updateMapSizes();
 
-      // Trigger resize for both maps
-      leftMap.resize();
-      rightMap.resize();
+      // Update clip-related sizing without resizing maps mid-drag
+      if (resizeFrameRef.current === null) {
+        resizeFrameRef.current = requestAnimationFrame(() => {
+          resizeFrameRef.current = null;
+          updateMapSizes();
+        });
+      }
 
       // Notify parent of position change for synchronization
       if (onSwiperPositionChange) {
@@ -1697,6 +1819,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Re-enable map interactions
       leftMap.dragPan.enable();
       rightMap.dragPan.enable();
+
+      // Ensure a final resize after drag ends; add a tiny delay for layout settle
+      window.setTimeout(() => {
+        if (resizeFrameRef.current === null) {
+          resizeFrameRef.current = requestAnimationFrame(() => {
+            resizeFrameRef.current = null;
+            updateMapSizes();
+            leftMap.resize();
+            rightMap.resize();
+          });
+        }
+      }, 80);
     }
 
     slider.addEventListener('pointerdown', onSliderPointerDown);
@@ -1759,6 +1893,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
       leftMap.resize();
       rightMap.resize();
+
+      if (isQuad && siteId) {
+        reapplyBoundaryLayers();
+      }
     };
 
     const scheduleResize = () => {
@@ -1786,7 +1924,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         resizeFrameRef.current = null;
       }
     };
-  }, [isQuad]);
+  }, [isQuad, siteId, reapplyBoundaryLayers]);
 
   // Toggle split-screen layout and slider visibility
   useEffect(() => {
@@ -2029,6 +2167,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Wait until maps are ready (state-based trigger ensures re-run)
     if (!leftMap || !rightMap || !areMapsReady) return;
 
+    console.log(`[MapView ${mapViewIdRef.current}] boundary effect start`, {
+      siteId: siteId ?? null,
+      hasGeometry: Boolean(siteGeometry),
+      leftReady: mapsReady.current.left,
+      rightReady: mapsReady.current.right,
+    });
+
+    const getMapLabel = (map: maplibregl.Map) => {
+      if (map === leftMap) return 'left';
+      if (map === rightMap) return 'right';
+      return 'unknown';
+    };
+
     // Helper to remove site boundary layers from a map
     const removeSiteBoundary = (map: maplibregl.Map) => {
       // Safety check: map.style is undefined after map.remove() is called
@@ -2043,82 +2194,53 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Helper to add glowing neon boundary layers with off-white backing
     const addSiteBoundary = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
       const normalized = normalizeBoundaryGeometry(geometry);
-      console.log('Adding site boundary to map, geometry type:', normalized.type);
-      removeSiteBoundary(map);
-
-      // Add GeoJSON source
-      map.addSource(SITE_BOUNDARY_SOURCE, {
-        type: 'geojson',
-        data: {
-          type: 'Feature',
-          properties: {},
-          geometry: normalized,
-        },
+      boundaryGeometryRef.current = normalized;
+      console.log(`[MapView ${mapViewIdRef.current}] adding site boundary`, {
+        map: getMapLabel(map),
+        geometryType: normalized.type,
       });
+      addBoundaryLayersIfMissing(map, normalized);
 
-      // Fully transparent fill (outline only)
-      map.addLayer({
-        id: SITE_BOUNDARY_GLOW_OUTER,
-        type: 'fill',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'fill-color': '#FF00FF',
-          'fill-opacity': 0,
-        },
+      console.log(`[MapView ${mapViewIdRef.current}] site boundary layers added`, {
+        map: getMapLabel(map),
+        hasSource: Boolean(map.getSource(SITE_BOUNDARY_SOURCE)),
+        hasLine: Boolean(map.getLayer(SITE_BOUNDARY_LINE)),
+        hasGlow: Boolean(map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)),
       });
-
-      // Thick semi-transparent off-white border (below the neon glow)
-      map.addLayer({
-        id: SITE_BOUNDARY_OFFWHITE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#F5F5F0',  // Off-white
-          'line-width': 20,
-          'line-opacity': 0.6,
-        },
-      });
-
-      // Neon glow line around boundary
-      map.addLayer({
-        id: SITE_BOUNDARY_GLOW_MIDDLE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#FF00FF',
-          'line-width': 14,
-          'line-opacity': 0.5,
-          'line-blur': 8,
-        },
-      });
-
-      // Core solid neon line
-      map.addLayer({
-        id: SITE_BOUNDARY_LINE,
-        type: 'line',
-        source: SITE_BOUNDARY_SOURCE,
-        paint: {
-          'line-color': '#FF00FF',
-          'line-width': 4,
-          'line-opacity': 1,
-        },
-      });
-
-      console.log('Site boundary layers added');
     };
 
     const addSiteBoundaryWhenReady = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
-      if (map.isStyleLoaded()) {
+      if (map.style) {
+        console.log(`[MapView ${mapViewIdRef.current}] boundary add immediate`, {
+          map: getMapLabel(map),
+        });
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
         return;
       }
 
-      map.once('idle', () => {
+      const onStyleData = () => {
+        if (!map.isStyleLoaded()) return;
+        map.off('styledata', onStyleData);
+        console.log(`[MapView ${mapViewIdRef.current}] boundary add on styledata`, {
+          map: getMapLabel(map),
+        });
         if (!map.style) return;
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
+      };
+      map.on('styledata', onStyleData);
+    };
+
+    const ensureBoundaryLayers = (map: maplibregl.Map) => {
+      const geometry = boundaryGeometryRef.current;
+      if (!geometry) return;
+      if (map.getLayer(SITE_BOUNDARY_LINE) && map.getSource(SITE_BOUNDARY_SOURCE)) return;
+
+      console.log(`[MapView ${mapViewIdRef.current}] re-adding boundary on styledata`, {
+        map: getMapLabel(map),
       });
+      addSiteBoundaryWhenReady(map, geometry);
     };
 
     const updateSiteBoundarySource = (map: maplibregl.Map, geometry: GeoJSON.Geometry): boolean => {
@@ -2147,6 +2269,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Prefer the latest geometry from props to avoid missing boundaries
     if (siteGeometry) {
+      boundaryGeometryRef.current = siteGeometry;
+      console.log(`[MapView ${mapViewIdRef.current}] applying site geometry`, {
+        leftLoaded: leftMap.loaded(),
+        rightLoaded: rightMap.loaded(),
+      });
       const leftUpdated = updateSiteBoundarySource(leftMap, siteGeometry);
       const rightUpdated = updateSiteBoundarySource(rightMap, siteGeometry);
       if (!leftUpdated) addSiteBoundaryWhenReady(leftMap, siteGeometry);
@@ -2186,6 +2313,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         const geometry = site?.geometry;
         if (geometry && !siteGeometry) {
+          boundaryGeometryRef.current = geometry;
           // Wait for maps to be idle before adding layers
           const addToMaps = () => {
             const leftUpdated = updateSiteBoundarySource(leftMap, geometry);
@@ -2213,13 +2341,32 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       })
       .catch((err) => console.error('Failed to fetch site boundary:', err));
 
+    const handleLeftStyleData = () => ensureBoundaryLayers(leftMap);
+    const handleRightStyleData = () => ensureBoundaryLayers(rightMap);
+
+    leftMap.on('styledata', handleLeftStyleData);
+    rightMap.on('styledata', handleRightStyleData);
+
     // Cleanup on unmount or siteId change
     return () => {
       siteCatchmentIdsRef.current = null;
+      leftMap.off('styledata', handleLeftStyleData);
+      rightMap.off('styledata', handleRightStyleData);
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
   }, [siteId, siteGeometry, areMapsReady]);
+
+  useEffect(() => {
+    if (!isQuad || !siteId) return;
+    const timer = window.setTimeout(() => {
+      reapplyBoundaryLayers();
+    }, 700);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isQuad, siteId, reapplyBoundaryLayers]);
 
   // Zoom to site bounds when siteBounds changes (with 10% padding)
   useEffect(() => {
@@ -2263,6 +2410,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   isBoundaryEditModeRef.current = isBoundaryEditMode;
   const siteGeometryRef = useRef(siteGeometry);
   siteGeometryRef.current = siteGeometry;
+  const zoomToSiteRef = useRef(zoomToSite);
+  zoomToSiteRef.current = zoomToSite;
   const onBoundaryUpdateRef = useRef(onBoundaryUpdate);
   onBoundaryUpdateRef.current = onBoundaryUpdate;
   const editVerticesRef = useRef<[number, number][]>([]);
@@ -2391,6 +2540,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     (
       operation: 'union' | 'difference',
       catchmentGeometry: GeoJSON.Geometry,
+      catchmentId: string,
     ) => {
       if (!siteGeometryRef.current || !onBoundaryUpdateRef.current) return;
 
@@ -2405,80 +2555,31 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (result?.geometry) {
         const normalized = updateBoundarySource(result.geometry);
-        // --- Extract catchment IDs inside the new geometry ---
-        try {
-          // Get all catchment features from the map source (left map)
-          const leftMap = leftMapRef.current;
-          if (leftMap && leftMap.getSource('UoW Tiles')) {
-            // Query all rendered features from the catchments layer
-            const features = leftMap.querySourceFeatures('UoW Tiles', {
-              sourceLayer: 'catchments_lev12',
-            });
-            // Use turf.booleanWithin to check if each catchment is inside the new geometry
-            // (Assume turf is imported as 'import * as turf from "@turf/turf";')
-            const insideIds: string[] = [];
-            for (const feat of features) {
-              if (feat.geometry && feat.properties && feat.properties[CATCHMENT_ID_PROP] != null) {
-                try {
-                  // Convert to turf.js feature
-                  const catchmentTurf: GeoJSONFeature<GeoJSONGeometry> = {
-                    type: 'Feature',
-                    geometry: feat.geometry as GeoJSONGeometry,
-                    properties: {},
-                  };
-                  const boundaryTurf: GeoJSONFeature<GeoJSONGeometry> = {
-                    type: 'Feature',
-                    geometry: normalized as GeoJSONGeometry,
-                    properties: {},
-                  };
-                  // Use turf.booleanWithin or turf.booleanContains
-                  // (booleanWithin: is catchment fully inside boundary)
-                  // (booleanContains: does boundary fully contain catchment)
-                  if (turf.booleanContains && turf.booleanContains(boundaryTurf, catchmentTurf)) {
-                    insideIds.push(String(feat.properties[CATCHMENT_ID_PROP]));
-                  }
-                } catch (e) {
-                  // Ignore errors for invalid geometries
-                }
-              }
-            }
-            // Save insideIds to localStorage in the 'dt-sites' array for the current siteId
-            if (siteId) {
-              const key = 'dt-sites';
-              let dtSites: any[] = [];
-              try {
-                const raw = localStorage.getItem(key);
-                if (raw) {
-                  dtSites = JSON.parse(raw);
-                  if (!Array.isArray(dtSites)) dtSites = [];
-                }
-              } catch (e) {
-                dtSites = [];
-              }
-              // Find the site object by id
-              let found = false;
-              for (let i = 0; i < dtSites.length; i++) {
-                if (dtSites[i] && dtSites[i].id === siteId) {
-                  dtSites[i].catchmentIds = insideIds;
-                  found = true;
-                  break;
-                }
-              }
-              // If not found, add a new site object
-              if (!found) {
-                dtSites.push({ id: siteId, catchmentIds: insideIds });
-              }
-              localStorage.setItem(key, JSON.stringify(dtSites));
-              console.log(`Saved catchment IDs for site ${siteId} in dt-sites:`, insideIds);
-            }
+
+        // Maintain catchmentIds explicitly (add/remove the clicked ID) rather than
+        // re-deriving from geometry, which fails for edge-sharing catchments in a union.
+        if (siteId) {
+          const sites = loadLocalSites();
+          const siteIndex = sites.findIndex(s => s.id === siteId);
+          if (siteIndex >= 0) {
+            const existing = sites[siteIndex];
+            const existingIds = Array.isArray(existing.catchmentIds)
+              ? existing.catchmentIds.map(String)
+              : [];
+            const newIds = operation === 'union'
+              ? (existingIds.includes(catchmentId) ? existingIds : [...existingIds, catchmentId])
+              : existingIds.filter(id => id !== catchmentId);
+            // Also clear cached per-catchment data so AggregateTable re-fetches with the new IDs
+            const { catchments: _c, catchmentIndicators: _ci, catchmentData: _cd, ...rest } = existing as Record<string, unknown>;
+            sites[siteIndex] = { ...rest, catchmentIds: newIds } as typeof existing;
+            saveLocalSites(sites);
           }
-        } catch (e) {
-          console.error('Error extracting catchment IDs inside boundary:', e);
         }
+
         notifyBoundaryUpdate(normalized);
       }
     },
-    [updateBoundarySource, notifyBoundaryUpdate],
+    [updateBoundarySource, notifyBoundaryUpdate, siteId],
   );
 
   // Handle adding a catchment to the site boundary
@@ -2487,7 +2588,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (getAppRuntime() === 'browser') {
       if (catchmentGeometry) {
-        applyLocalBoundaryOperation('union', catchmentGeometry);
+        applyLocalBoundaryOperation('union', catchmentGeometry, catchmentId);
       }
       return;
     }
@@ -2518,7 +2619,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (getAppRuntime() === 'browser') {
       if (catchmentGeometry) {
-        applyLocalBoundaryOperation('difference', catchmentGeometry);
+        applyLocalBoundaryOperation('difference', catchmentGeometry, catchmentId);
       }
       return;
     }
@@ -2746,6 +2847,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const vertices = extractVertices(siteGeometry);
       editVerticesRef.current = vertices;
       updateEditVerticesLayer(vertices);
+
+      // Zoom to site bounds so the user can see the boundary to edit, and flatten pitch
+      zoomToSiteRef.current({ pitch: 0 });
 
       // Change cursor to indicate draggable points
       leftMap.getCanvas().style.cursor = 'grab';

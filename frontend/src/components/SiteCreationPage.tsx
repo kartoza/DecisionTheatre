@@ -31,6 +31,7 @@ import {
   FiX,
   FiChevronRight,
   FiZap,
+  FiInfo,
 } from 'react-icons/fi';
 import type { AppPage, Site, SiteCreationMethod, BoundingBox } from '../types';
 import SiteCreationMap from './SiteCreationMap';
@@ -521,7 +522,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
               {step === 'method' && 'Choose how you want to define your site boundary'}
               {step === 'geometry' && (
                 selectedMethod === 'drawn' ? 'Click on the map to draw your boundary' :
-                selectedMethod === 'catchments' ? 'Click catchments to select them' :
+                selectedMethod === 'catchments' ? 'Zoom in until catchments appear, then click to select them' :
                 'Review and confirm your boundary'
               )}
               {step === 'details' && 'Give your site a memorable name and description'}
@@ -659,9 +660,29 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
                 transition={bounceConfig}
                 h="calc(100vh - 320px)"
                 minH="500px"
+                display="flex"
+                flexDirection="column"
               >
+                {selectedMethod === 'catchments' && (
+                  <HStack
+                    mb={3}
+                    px={4}
+                    py={3}
+                    borderRadius="xl"
+                    bg="rgba(0, 200, 255, 0.08)"
+                    border="1px solid"
+                    borderColor="cyan.700"
+                    spacing={3}
+                  >
+                    <Icon as={FiInfo} color="cyan.300" boxSize={5} flexShrink={0} />
+                    <Text color="cyan.200" fontSize="sm" fontWeight="medium">
+                      Zoom in on the map until catchment boundaries appear, then click them to select and build your site boundary.
+                    </Text>
+                  </HStack>
+                )}
                 <Box
-                  h="100%"
+                  flex="1"
+                  minH="0"
                   borderRadius="3xl"
                   overflow="hidden"
                   border="3px solid"

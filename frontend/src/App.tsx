@@ -247,7 +247,8 @@ function App() {
   // Toggle boundary edit mode
   const handleToggleBoundaryEdit = useCallback(() => {
     setIsBoundaryEditMode(prev => !prev);
-  }, []);
+    if (!isBoundaryEditMode) setIs3DMode(false); // entering edit mode → flatten map
+  }, [isBoundaryEditMode]);
 
   // Handle geometry update from boundary editing
   const handleBoundaryUpdate = useCallback(async (newGeometry: GeoJSON.Geometry, thumbnail?: string | null) => {

@@ -150,6 +150,10 @@ function SiteCreationMap({
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
     map.on('load', () => {
+      // Force tile re-evaluation — resize() alone doesn't always trigger
+      // maplibre to re-request tiles for a newly-sized viewport.
+      map.resize();
+      map.jumpTo({ center: map.getCenter(), zoom: map.getZoom() });
       mapRef.current = map;
       setIsMapReady(true);
 
@@ -561,9 +565,9 @@ function SiteCreationMap({
           ? `Click to add more points (${3 - drawnPoints.length} more needed)`
           : 'Click to add more points, or confirm when ready';
       case 'catchments':
-        return selectedCatchments.size === 0
-          ? 'Click on catchments to select them for your site'
-          : `${selectedCatchments.size} catchment${selectedCatchments.size > 1 ? 's' : ''} selected`;
+        return selectedCatchments.size != 0
+          ? `${selectedCatchments.size} catchment${selectedCatchments.size > 1 ? 's' : ''} selected`
+          : '0 Catchments selected';
       default:
         return 'Review your site boundary';
     }
