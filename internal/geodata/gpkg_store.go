@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -151,6 +152,68 @@ func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]floa
 	}
 
 	return result, nil
+}
+
+// GetScenarioAverages returns area-weighted means for one scenario across multiple attributes.
+// When bbox is provided, the aggregation is restricted to catchments intersecting that bbox.
+func (s *GpkgStore) GetScenarioAverages(scenario string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+	if len(attributes) == 0 {
+		return nil, fmt.Errorf("no attributes provided")
+	}
+
+	tableName := resolveScenarioTable(scenario)
+
+	selectExprs := make([]string, 0, len(attributes))
+	for i, attr := range attributes {
+		if !s.isValidColumn(attr) {
+			return nil, fmt.Errorf("invalid attribute: %s", attr)
+		}
+		alias := fmt.Sprintf("a%d", i)
+		expr := fmt.Sprintf(
+			`SUM(CASE WHEN s."%s" IS NOT NULL THEN s."%s" * c.SUB_AREA END) / NULLIF(SUM(CASE WHEN s."%s" IS NOT NULL THEN c.SUB_AREA END), 0) AS %s`,
+			attr, attr, attr, alias,
+		)
+		selectExprs = append(selectExprs, expr)
+	}
+
+	query := fmt.Sprintf(
+		`SELECT %s
+		 FROM %s s
+		 JOIN catchments_lev12 c ON s.catchment_id_int = c.HYBAS_ID_int`,
+		strings.Join(selectExprs, ", "),
+		tableName,
+	)
+
+	args := make([]interface{}, 0)
+	if bbox != nil {
+		query += `
+		 WHERE c.fid IN (
+			SELECT id FROM rtree_catchments_lev12_geom
+			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
+		 )`
+		minx, miny, maxx, maxy := bbox[0], bbox[1], bbox[2], bbox[3]
+		args = append(args, maxx, minx, maxy, miny)
+	}
+
+	row := s.db.QueryRow(query, args...)
+	vals := make([]sql.NullFloat64, len(attributes))
+	scanArgs := make([]interface{}, len(attributes))
+	for i := range vals {
+		scanArgs[i] = &vals[i]
+	}
+
+	if err := row.Scan(scanArgs...); err != nil {
+		return nil, fmt.Errorf("failed to query scenario averages: %w", err)
+	}
+
+	out := make(map[string]float64)
+	for i, attr := range attributes {
+		if vals[i].Valid {
+			out[attr] = vals[i].Float64
+		}
+	}
+
+	return out, nil
 }
 
 // GetComparisonData returns comparison data for two scenarios for a given attribute
@@ -648,23 +711,110 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 		return nil, 0, fmt.Errorf("empty polygon")
 	}
 
-	// Convert polyclip polygon to GeoJSON coordinates
-	coords := make([][][2]float64, 0, len(poly))
+	type ringData struct {
+		coords  [][2]float64
+		absArea float64
+	}
+
+	rings := make([]ringData, 0, len(poly))
 	for _, contour := range poly {
+		if len(contour) < 3 {
+			continue
+		}
+
 		ring := make([][2]float64, 0, len(contour)+1)
 		for _, pt := range contour {
 			ring = append(ring, [2]float64{pt.X, pt.Y})
 		}
-		// Close the ring if not already closed
-		if len(ring) > 0 && (ring[0] != ring[len(ring)-1]) {
+		if ring[0] != ring[len(ring)-1] {
 			ring = append(ring, ring[0])
 		}
-		coords = append(coords, ring)
+
+		rawArea := signedRingArea(ring)
+		if math.Abs(rawArea) <= 1e-12 {
+			continue
+		}
+
+		rings = append(rings, ringData{coords: ring, absArea: math.Abs(rawArea)})
 	}
 
-	result := map[string]interface{}{
-		"type":        "Polygon",
-		"coordinates": coords,
+	if len(rings) == 0 {
+		return nil, 0, fmt.Errorf("empty polygon")
+	}
+
+	// Build parent-child nesting by containment. This preserves holes and supports
+	// disconnected outers by emitting MultiPolygon when needed.
+	parents := make([]int, len(rings))
+	depths := make([]int, len(rings))
+	for i := range parents {
+		parents[i] = -1
+	}
+
+	for i := range rings {
+		pt := rings[i].coords[0]
+		bestParent := -1
+		bestArea := math.MaxFloat64
+		for j := range rings {
+			if i == j {
+				continue
+			}
+			if rings[j].absArea <= rings[i].absArea {
+				continue
+			}
+			if pointInRing(pt, rings[j].coords) && rings[j].absArea < bestArea {
+				bestParent = j
+				bestArea = rings[j].absArea
+			}
+		}
+		parents[i] = bestParent
+	}
+
+	for i := range rings {
+		d := 0
+		p := parents[i]
+		for p != -1 {
+			d++
+			p = parents[p]
+		}
+		depths[i] = d
+	}
+
+	outerToPolygon := make(map[int]int)
+	multiCoords := make([][][][2]float64, 0)
+	for i := range rings {
+		if depths[i]%2 != 0 {
+			continue
+		}
+		outerToPolygon[i] = len(multiCoords)
+		multiCoords = append(multiCoords, [][][2]float64{rings[i].coords})
+	}
+
+	for i := range rings {
+		if depths[i]%2 == 0 {
+			continue
+		}
+		p := parents[i]
+		for p != -1 && depths[p]%2 != 0 {
+			p = parents[p]
+		}
+		if p == -1 {
+			continue
+		}
+		idx := outerToPolygon[p]
+		multiCoords[idx] = append(multiCoords[idx], rings[i].coords)
+	}
+
+	var result map[string]interface{}
+	if len(multiCoords) == 1 {
+		result = map[string]interface{}{
+			"type":        "Polygon",
+			"coordinates": multiCoords[0],
+		}
+	} else {
+		result = map[string]interface{}{
+			"type":        "MultiPolygon",
+			"coordinates": multiCoords,
+		}
 	}
 
 	resultJSON, err := json.Marshal(result)
@@ -673,6 +823,38 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 	}
 
 	return resultJSON, 0, nil
+}
+
+func signedRingArea(ring [][2]float64) float64 {
+	if len(ring) < 4 {
+		return 0
+	}
+	area := 0.0
+	for i := 0; i < len(ring)-1; i++ {
+		area += ring[i][0]*ring[i+1][1] - ring[i+1][0]*ring[i][1]
+	}
+	return area / 2
+}
+
+func pointInRing(point [2]float64, ring [][2]float64) bool {
+	if len(ring) < 4 {
+		return false
+	}
+
+	inside := false
+	px, py := point[0], point[1]
+	for i, j := 0, len(ring)-1; i < len(ring); j, i = i, i+1 {
+		xi, yi := ring[i][0], ring[i][1]
+		xj, yj := ring[j][0], ring[j][1]
+
+		intersects := ((yi > py) != (yj > py)) &&
+			(px < (xj-xi)*(py-yi)/(yj-yi)+xi)
+		if intersects {
+			inside = !inside
+		}
+	}
+
+	return inside
 }
 
 // GetCatchmentAttributes returns all attributes for a specific catchment across both scenarios
@@ -895,6 +1077,51 @@ func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
 	defer rows.Close()
 
 	var features []GeoJSONFeature
+	for rows.Next() {
+		var id float64
+		var geojsonStr string
+		if err := rows.Scan(&id, &geojsonStr); err != nil {
+			continue
+		}
+
+		features = append(features, GeoJSONFeature{
+			Type:     "Feature",
+			ID:       int64(id),
+			Geometry: json.RawMessage(geojsonStr),
+			Properties: map[string]interface{}{
+				"HYBAS_ID": int64(id),
+			},
+		})
+	}
+
+	return features, nil
+}
+
+// GetCatchmentsByBBox returns catchment geometries intersecting the provided bounding box.
+// The limit is capped by the caller to avoid very large responses.
+func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit int) ([]GeoJSONFeature, error) {
+	if limit <= 0 {
+		limit = 5000
+	}
+
+	query := `
+		SELECT HYBAS_ID, geojson
+		FROM catchments_lev12
+		WHERE geojson IS NOT NULL
+		  AND fid IN (
+			SELECT id FROM rtree_catchments_lev12_geom
+			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
+		  )
+		LIMIT ?
+	`
+
+	rows, err := s.db.Query(query, maxx, minx, maxy, miny, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query catchments by bbox: %w", err)
+	}
+	defer rows.Close()
+
+	features := make([]GeoJSONFeature, 0)
 	for rows.Next() {
 		var id float64
 		var geojsonStr string

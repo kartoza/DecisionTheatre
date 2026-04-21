@@ -139,6 +139,7 @@ export const SCENARIOS: ScenarioInfo[] = [
 export interface MapExtent {
   center: [number, number]; // [lng, lat]
   zoom: number;
+  bounds?: [number, number, number, number]; // [minX, minY, maxX, maxY]
 }
 
 // Identify result: scenario -> attribute -> value

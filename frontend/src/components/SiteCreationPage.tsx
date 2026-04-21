@@ -676,7 +676,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
                   >
                     <Icon as={FiInfo} color="cyan.300" boxSize={5} flexShrink={0} />
                     <Text color="cyan.200" fontSize="sm" fontWeight="medium">
-                      Zoom in on the map until catchment boundaries appear, then click them to select and build your site boundary.
+                      Zoom in on the map until catchment boundaries appear, then click catchments or use Box Select to draw a bounding box and add all catchments inside.
                     </Text>
                   </HStack>
                 )}

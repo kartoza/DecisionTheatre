@@ -53,6 +53,7 @@ function App() {
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
   const [chartGroup, setChartGroup] = useState<string | null>(null);
+  const [chartAxisLabelFilter, setChartAxisLabelFilter] = useState<string | null>(null);
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -434,6 +435,8 @@ function App() {
             onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
             chartGroup={chartGroup}
+            chartAxisLabelFilter={chartAxisLabelFilter}
+            mapExtent={mapExtent}
           />
         </Box>
 
@@ -446,8 +449,6 @@ function App() {
           onAttributeChange={handleAttributeChange}
           paneIndex={indicatorPaneIndex}
           viewMode={indicatorPaneIndex !== null ? viewModes[indicatorPaneIndex] : viewModes[0]}
-          identifyResult={identifyResult}
-          onClearIdentify={() => setIdentifyResult(null)}
           isExploreMode={isExploreMode}
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
@@ -469,6 +470,8 @@ function App() {
           onRangeModeChange={setRangeMode}
           chartGroup={chartGroup}
           onChartGroupChange={setChartGroup}
+          chartAxisLabelFilter={chartAxisLabelFilter}
+          onChartAxisLabelFilterChange={setChartAxisLabelFilter}
         />
       </Flex>
 

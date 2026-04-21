@@ -12,21 +12,15 @@ import {
   IconButton,
   HStack,
   Tooltip,
-  Table,
-  Thead,
-  Tbody,
-  Tr,
-  Th,
-  Td,
   Button,
   ButtonGroup,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiX, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useAttributeDetails, useColumns, useAttributeVariableTypes, useAttributeGroupingValues } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, IdentifyResult, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
+import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
 
@@ -38,8 +32,6 @@ interface ControlPanelProps {
   onAttributeChange: (attribute: string) => void;
   paneIndex: number | null;
   viewMode?: ViewMode;
-  identifyResult?: IdentifyResult;
-  onClearIdentify?: () => void;
   isExploreMode?: boolean;
   onNavigateToCreateSite?: () => void;
   mapStatistics?: MapStatistics;
@@ -53,77 +45,80 @@ interface ControlPanelProps {
   onRangeModeChange?: (mode: RangeMode) => void;
   chartGroup?: string | null;
   onChartGroupChange?: (group: string | null) => void;
+  chartAxisLabelFilter?: string | null;
+  onChartAxisLabelFilterChange?: (axisLabel: string | null) => void;
 }
 
 import type { ZoneStats } from '../types';
 
-const MIN_LEGEND_OPACITY = 0.15;
-const MAX_LEGEND_OPACITY = 0.9;
+function resolveGroupingVariableForColumn(column: string, groupingVariables: Record<string, string>): string {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
 
-function getTrend(current: number, reference: number): 'up' | 'down' | 'neutral' {
-  const threshold = 0.05;
-  const change = (current - reference) / Math.abs(reference || 1);
-  if (change > threshold) return 'up';
-  if (change < -threshold) return 'down';
-  return 'neutral';
+  for (const key of candidates) {
+    const group = groupingVariables[key];
+    if (group && group.trim().length > 0) return group;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, group] of Object.entries(groupingVariables)) {
+    if (normalizeColumnKey(key) === normalizedColumn && group.trim().length > 0) return group;
+  }
+
+  return '';
 }
 
-type ReferenceDeltaDirection = 'left' | 'right' | 'neutral';
+function resolveVariableTypeForColumn(column: string, variableTypes: Record<string, string>): string {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
 
-function getReferenceDirection(value: number, reference: number): ReferenceDeltaDirection {
-  if (value > reference) return 'right';
-  if (value < reference) return 'left';
-  return 'neutral';
+  for (const key of candidates) {
+    const variableType = variableTypes[key];
+    if (variableType && variableType.trim().length > 0) return variableType;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, variableType] of Object.entries(variableTypes)) {
+    if (normalizeColumnKey(key) === normalizedColumn && variableType.trim().length > 0) return variableType;
+  }
+
+  return '';
 }
 
-function ReferenceTrendBar({ reference, value, color }: { reference: number; value: number; color: string }) {
-  const maxLinePx = 28;
-  const referenceMagnitude = Math.abs(reference) || 1;
-  const delta = value - reference;
-  const direction = getReferenceDirection(value, reference);
-  const ratio = Math.min(1, Math.abs(delta) / referenceMagnitude);
-  const width = Math.max(2, ratio * maxLinePx);
+function normalizeColumnKey(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/_/g, '.')
+    .replace(/ - /g, '.')
+    .replace(/-/g, '.')
+    .replace(/\s+/g, '.')
+    .replace(/\$/g, '.')
+    .replace(/'s/g, '.s')
+    .replace(/'/g, '.')
+    .replace(/\//g, '.')
+    .replace(/\+/g, '.')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^\.|\.$/g, '')
+    .toLowerCase();
 
-  return (
-    <Box position="relative" w="72px" h="12px" aria-hidden="true">
-      <Box
-        position="absolute"
-        left="50%"
-        top="1px"
-        bottom="1px"
-        w="2px"
-        bg="gray.500"
-        transform="translateX(-1px)"
-        borderRadius="full"
-      />
-      {direction === 'neutral' ? (
-        <Box
-          position="absolute"
-          left="50%"
-          top="4px"
-          w="4px"
-          h="4px"
-          bg={color}
-          borderRadius="full"
-          transform="translateX(-2px)"
-        />
-      ) : (
-        <Box
-          position="absolute"
-          top="5px"
-          left={
-            direction === 'right'
-              ? `calc(50% + 1px)`
-              : `calc(50% - ${width + 1}px)`
-          }
-          w={`${width}px`}
-          h="2px"
-          bg={color}
-          borderRadius="full"
-        />
-      )}
-    </Box>
-  );
+  return normalized
+    .replace(/\.functional\.group\./g, '.fg.')
+    .replace(/\.species\./g, '.sp.')
+    .replace(/\.{2,}/g, '.');
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -147,7 +142,7 @@ function buildOpacityGradient(color?: string): string {
   if (!color) return PRISM_CSS_GRADIENT;
   const rgb = hexToRgb(color);
   if (!rgb) return PRISM_CSS_GRADIENT;
-  return `linear-gradient(to right, rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MIN_LEGEND_OPACITY}), rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${MAX_LEGEND_OPACITY}))`;
+  return `linear-gradient(to right, rgb(255, 255, 255), rgb(${rgb.r}, ${rgb.g}, ${rgb.b}))`;
 }
 
 function SearchableSelect({
@@ -366,8 +361,6 @@ function ControlPanel({
   onAttributeChange,
   paneIndex,
   viewMode = 'map',
-  identifyResult,
-  onClearIdentify,
   isExploreMode,
   onNavigateToCreateSite,
   mapStatistics,
@@ -381,41 +374,50 @@ function ControlPanel({
   onRangeModeChange,
   chartGroup,
   onChartGroupChange,
+  chartAxisLabelFilter,
+  onChartAxisLabelFilterChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const { canMap } = useAttributeCanMap();
   const { canGraph } = useAttributeCanGraph();
+  const { groupingVariables } = useAttributeGroupingVariables();
   const { variableTypes } = useAttributeVariableTypes();
-  const { groupingValues } = useAttributeGroupingValues();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
-  const tableHeaderBg = useColorModeValue('gray.100', 'gray.700');
-  const [chartSubGroup, setChartSubGroup] = useState<string | null>(null);
 
-  // Reset sub-group when the parent group changes away from Herbivores
-  useEffect(() => {
-    if (chartGroup !== 'Herbivores') {
-      setChartSubGroup(null);
-    }
-  }, [chartGroup]);
-
-  const uniqueGroups = useMemo(
+  const uniqueVariableTypes = useMemo(
     () => [...new Set(Object.values(variableTypes))].filter((t) => t && t !== 'catchID').sort(),
     [variableTypes],
   );
 
-  const uniqueSubGroups = useMemo(() => {
-    if (chartGroup !== 'Herbivores') return [];
-    return [...new Set(
-      Object.entries(groupingValues)
-        .filter(([col]) => variableTypes[col] === 'Herbivores')
-        .map(([, val]) => val)
-        .filter(Boolean),
-    )].sort();
-  }, [chartGroup, groupingValues, variableTypes]);
+  const groupingVariableOptions = useMemo(() => {
+    if (!chartGroup) return [];
+
+    const fromChartableColumns = columns
+      .filter((col) => canGraph[col] && resolveVariableTypeForColumn(col, variableTypes) === chartGroup)
+      .map((col) => resolveGroupingVariableForColumn(col, groupingVariables))
+      .filter((group): group is string => Boolean(group && group.trim().length > 0 && group !== 'catchID'));
+
+    const groups = fromChartableColumns.length > 0
+      ? fromChartableColumns
+      : Object.entries(groupingVariables)
+          .filter(([col, group]) => {
+            if (!group || group === 'catchID') return false;
+            return resolveVariableTypeForColumn(col, variableTypes) === chartGroup;
+          })
+          .map(([, group]) => group);
+
+    return [...new Set(groups)].sort().map((group) => ({ value: group, label: group.replace(/_/g, ' ') }));
+  }, [chartGroup, columns, canGraph, variableTypes, groupingVariables]);
+
+  useEffect(() => {
+    if (chartAxisLabelFilter && !groupingVariableOptions.some((option) => option.value === chartAxisLabelFilter)) {
+      onChartAxisLabelFilterChange?.(null);
+    }
+  }, [chartAxisLabelFilter, groupingVariableOptions, onChartAxisLabelFilterChange]);
 
   const factorOptions = useMemo(() => {
     const useGraphable = viewMode === 'chart' || viewMode === 'dial';
@@ -423,18 +425,20 @@ function ControlPanel({
     const filtered = Object.keys(filterMap).length > 0
       ? columns.filter((col) => {
           if (!filterMap[col]) return false;
-          if (viewMode === 'chart' && chartGroup) {
-            if (variableTypes[col] !== chartGroup) return false;
-            if (chartSubGroup && groupingValues[col] !== chartSubGroup) return false;
+          if (viewMode === 'chart' && chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) {
+            return false;
+          }
+          if (viewMode === 'chart' && chartAxisLabelFilter) {
+            if (resolveGroupingVariableForColumn(col, groupingVariables) !== chartAxisLabelFilter) return false;
           }
           return true;
         })
       : columns;
     return filtered.map((col) => ({
       value: col,
-      label: attributeDetails[col] ?? col.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      label: attributeDetails[col] || col,
     }));
-  }, [viewMode, canGraph, canMap, columns, chartGroup, chartSubGroup, variableTypes, groupingValues, attributeDetails]);
+  }, [viewMode, canGraph, canMap, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;
@@ -692,9 +696,9 @@ function ControlPanel({
             >
               <HStack mb={2}>
                 <Badge bg={colors.pastelLightOrange} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                  GROUP
+                  VARIABLE TYPE
                 </Badge>
-                <Tooltip label="Overlay all variables in this group as scatter points on the chart">
+                <Tooltip label="Select a VariableType_highest level of grouping from metadata.csv">
                   <Box cursor="help">
                     <FiInfo size={14} color="gray" />
                   </Box>
@@ -704,33 +708,40 @@ function ControlPanel({
               <SearchableSelect
                 value={chartGroup ?? ''}
                 onChange={(val) => onChartGroupChange?.(val || null)}
-                options={uniqueGroups.map((g) => ({ value: g, label: g.replace(/_/g, ' ') }))}
-                placeholder="No group selected"
+                options={uniqueVariableTypes.map((group) => ({ value: group, label: group.replace(/_/g, ' ') }))}
+                placeholder="No variable type selected"
                 focusColor="#e65100"
                 allowClear
               />
 
               {chartGroup && (
                 <Text fontSize="xs" color="gray.500" mt={2}>
-                  Showing scatter summary for{' '}
+                  Showing charted factors for variable type{' '}
                   <Text as="span" fontWeight="600" color="orange.400">
                     {chartGroup.replace(/_/g, ' ')}
                   </Text>
                 </Text>
               )}
 
-              {/* Sub-group drill-down — Herbivores only */}
-              {chartGroup === 'Herbivores' && uniqueSubGroups.length > 0 && (
-                <Box mt={3} pt={3} borderTop="1px" borderColor={borderColor}>
-                  <Text fontSize="xs" fontWeight="600" color="gray.500" mb={2}>
-                    GROUPING VALUE
-                  </Text>
+              {chartGroup && (
+                <Box mt={3}>
+                  <HStack mb={2}>
+                    <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                      GROUPING VARIABLE
+                    </Badge>
+                    <Tooltip label="Select a Grouping variable filtered by the selected variable type">
+                      <Box cursor="help">
+                        <FiInfo size={14} color="gray" />
+                      </Box>
+                    </Tooltip>
+                  </HStack>
+
                   <SearchableSelect
-                    value={chartSubGroup ?? ''}
-                    onChange={(val) => setChartSubGroup(val || null)}
-                    options={uniqueSubGroups.map((v) => ({ value: v, label: v }))}
-                    placeholder="All values"
-                    focusColor="#e65100"
+                    value={chartAxisLabelFilter ?? ''}
+                    onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
+                    options={groupingVariableOptions}
+                    placeholder="No grouping variable selected"
+                    focusColor="#4caf50"
                     allowClear
                   />
                 </Box>
@@ -738,34 +749,25 @@ function ControlPanel({
             </Box>
           )}
 
-          {/* Attribute selection */}
-          <Box
-            p={4}
-            borderRadius="lg"
-            border="1px"
-            borderColor={borderColor}
-            bg={useColorModeValue('white', 'gray.750')}
-          >
-            <HStack mb={2}>
-              <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                FACTOR
-              </Badge>
-              <Tooltip label="Select a data attribute to visualize on the map">
-                <Box cursor="help">
-                  <FiInfo size={14} color="gray" />
-                </Box>
-              </Tooltip>
-            </HStack>
+          {viewMode !== 'chart' && (
+            <Box
+              p={4}
+              borderRadius="lg"
+              border="1px"
+              borderColor={borderColor}
+              bg={useColorModeValue('white', 'gray.750')}
+            >
+              <HStack mb={2}>
+                <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                  FACTOR
+                </Badge>
+                <Tooltip label="Select a data attribute to visualize on the map">
+                  <Box cursor="help">
+                    <FiInfo size={14} color="gray" />
+                  </Box>
+                </Tooltip>
+              </HStack>
 
-            {viewMode === 'chart' ? (
-              <SearchableSelect
-                value={comparison.attribute ?? ''}
-                onChange={onAttributeChange}
-                options={factorOptions}
-                placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
-                focusColor="#4caf50"
-              />
-            ) : (
               <Select
                 value={comparison.attribute}
                 onChange={(e) => onAttributeChange(e.target.value)}
@@ -780,20 +782,18 @@ function ControlPanel({
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </Select>
-            )}
 
-            {comparison.attribute && (
-              <Text fontSize="xs" color="gray.500" mt={2}>
-                Showing{' '}
-                <Text as="span" fontWeight="600" color="green.400">
-                  {attributeDetails[comparison.attribute]
-                    ?? comparison.attribute.replace(/_/g, ' ')}
-                </Text>{' '}
-                values per catchment
-              </Text>
-            )}
-
-          </Box>
+              {comparison.attribute && (
+                <Text fontSize="xs" color="gray.500" mt={2}>
+                  Showing{' '}
+                  <Text as="span" fontWeight="600" color="green.400">
+                      {comparison.attribute}
+                  </Text>{' '}
+                  values per catchment
+                </Text>
+              )}
+            </Box>
+          )}
 
           <Divider />
 
@@ -843,162 +843,6 @@ function ControlPanel({
                 </Text>
               </HStack>
             </Box>
-          )}
-
-          {/* Identify Results */}
-          {identifyResult && (
-            <>
-              <Divider />
-              <Box>
-                <HStack justify="space-between" mb={3}>
-                  <HStack>
-                    <Badge bg={colors.pastelLightBlue} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                      IDENTIFY
-                    </Badge>
-                    <Text fontSize="sm" fontWeight="600" color="gray.400">
-                      Catchment {identifyResult.catchmentID}
-                    </Text>
-                  </HStack>
-                  {onClearIdentify && (
-                    <IconButton
-                      aria-label="Clear identify"
-                      icon={<FiX />}
-                      size="xs"
-                      variant="ghost"
-                      onClick={onClearIdentify}
-                    />
-                  )}
-                </HStack>
-
-                <Box
-                  borderRadius="lg"
-                  border="1px"
-                  borderColor={borderColor}
-                  bg={cardBg}
-                  overflowX="auto"
-                  maxH="400px"
-                  overflowY="auto"
-                >
-                  <Table size="sm" variant="striped">
-                    <Thead
-                      position="sticky"
-                      top={0}
-                      zIndex={2}
-                      boxShadow="0 2px 4px rgba(0,0,0,0.1)"
-                    >
-                      <Tr>
-                        <Th fontSize="xs" py={2} bg={tableHeaderBg}>Attribute</Th>
-                        {(() => {
-                          const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
-                          const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
-                          return (
-                            <>
-                              <Th
-                                fontSize="xs"
-                                py={2}
-                                isNumeric
-                                borderLeft={`3px solid ${leftInfo?.color || '#fff'}`}
-                                color={leftInfo?.color}
-                                bg={tableHeaderBg}
-                              >
-                                Left: {leftInfo?.label || comparison.leftScenario}
-                              </Th>
-                              <Th fontSize="xs" py={2} bg={tableHeaderBg} textAlign="center">
-                                Trend
-                              </Th>
-                              <Th
-                                fontSize="xs"
-                                py={2}
-                                isNumeric
-                                borderLeft={`3px solid ${rightInfo?.color || '#fff'}`}
-                                color={rightInfo?.color}
-                                bg={tableHeaderBg}
-                              >
-                                Right: {rightInfo?.label || comparison.rightScenario}
-                              </Th>
-                            </>
-                          );
-                        })()}
-                      </Tr>
-                    </Thead>
-                    <Tbody>
-                      {(() => {
-                        // Collect all attribute names across scenarios
-                        const allAttrs = new Set<string>();
-                        for (const scenarioData of Object.values(identifyResult.data)) {
-                          for (const attr of Object.keys(scenarioData)) {
-                            allAttrs.add(attr);
-                          }
-                        }
-                        // Use ordered scenarios matching left/right panes
-                        const orderedScenarios = [comparison.leftScenario, comparison.rightScenario];
-                        return Array.from(allAttrs).sort().map((attr) => {
-                          // Get values for both scenarios
-                          const leftVal = identifyResult.data[orderedScenarios[0]]?.[attr];
-                          const rightVal = identifyResult.data[orderedScenarios[1]]?.[attr];
-                          const displayName = attributeDetails[attr] ?? attr;
-                          const hasNumbers = typeof leftVal === 'number' && typeof rightVal === 'number';
-                          const trend = hasNumbers ? getTrend(rightVal as number, leftVal as number) : 'neutral';
-                          const trendColor = trend === 'up' ? 'red.400' : trend === 'down' ? 'red.400' : 'gray.400';
-
-                          return (
-                            <Tr key={attr}>
-                              <Td
-                                fontSize="xs"
-                                fontWeight={attr === comparison.attribute ? '700' : '400'}
-                                color={attr === comparison.attribute ? 'blue.400' : undefined}
-                                py={1.5}
-                                maxW="160px"
-                                overflow="hidden"
-                                textOverflow="ellipsis"
-                                whiteSpace="nowrap"
-                                title={displayName}
-                              >
-                                {displayName}
-                              </Td>
-                              {/* Left scenario cell */}
-                              <Td
-                                fontSize="xs"
-                                isNumeric
-                                py={1.5}
-                                position="relative"
-                                overflow="hidden"
-                              >
-                                <Text>{leftVal != null ? leftVal.toFixed(2) : '-'}</Text>
-                              </Td>
-                              {/* Trend cell */}
-                              <Td fontSize="xs" py={1.5} textAlign="center">
-                                <HStack justify="center" spacing={2}>
-                                  {hasNumbers ? (
-                                    <ReferenceTrendBar
-                                      reference={leftVal as number}
-                                      value={rightVal as number}
-                                      color={trendColor}
-                                    />
-                                  ) : (
-                                    <Text color="gray.500">-</Text>
-                                  )}
-                                </HStack>
-                              </Td>
-                              {/* Right scenario cell */}
-                              <Td
-                                fontSize="xs"
-                                isNumeric
-                                py={1.5}
-                                position="relative"
-                                overflow="hidden"
-                              >
-                                <Text>{rightVal != null ? rightVal.toFixed(2) : '-'}</Text>
-                              </Td>
-                            </Tr>
-                          );
-                        });
-                      })()}
-                    </Tbody>
-                  </Table>
-                </Box>
-              </Box>
-            </>
           )}
 
           {/* Info footer intentionally hidden */}

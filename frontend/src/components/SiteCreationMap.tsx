@@ -9,7 +9,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FiCheck, FiRotateCcw, FiTrash2 } from 'react-icons/fi';
+import { FiCheck, FiRotateCcw, FiSquare, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
 import { colors } from '../styles/colors';
@@ -69,6 +69,11 @@ function SiteCreationMap({
   const [selectedCatchments, setSelectedCatchments] = useState<Map<string, GeoJSON.Feature>>(new Map());
   const [isAnimating, setIsAnimating] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [isBoxSelectionMode, setIsBoxSelectionMode] = useState(false);
+  const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const boxStartPointRef = useRef<{ x: number; y: number } | null>(null);
+  const isDraggingBoxRef = useRef(false);
+  const catchmentGeometryCacheRef = useRef<Map<string, GeoJSON.Feature>>(new Map());
   const toast = useToast();
 
   // Capture map as thumbnail
@@ -93,6 +98,23 @@ function SiteCreationMap({
       console.error('Failed to capture map thumbnail:', error);
     }
     return undefined;
+  }, []);
+
+  const resolveCatchmentFeature = useCallback(async (
+    catchmentId: string,
+    fallbackFeature: maplibregl.MapGeoJSONFeature,
+  ): Promise<GeoJSON.Feature> => {
+    try {
+      const response = await fetch(`/api/catchments/geometry/${catchmentId}`);
+      if (response.ok) {
+        const fullFeature = await response.json();
+        return fullFeature as GeoJSON.Feature;
+      }
+    } catch {
+      // Fall back to the rendered vector tile feature
+    }
+
+    return fallbackFeature as unknown as GeoJSON.Feature;
   }, []);
 
   // Update selected catchments layer (defined early for use in interaction handlers)
@@ -196,6 +218,15 @@ function SiteCreationMap({
     };
   }, [initialGeometry, boundingBox, initialExtent]);
 
+  useEffect(() => {
+    if (mode !== 'catchments') {
+      setIsBoxSelectionMode(false);
+      setSelectionBox(null);
+      boxStartPointRef.current = null;
+      isDraggingBoxRef.current = false;
+    }
+  }, [mode]);
+
   // Set up interaction handlers based on mode
   useEffect(() => {
     const map = mapRef.current;
@@ -223,9 +254,9 @@ function SiteCreationMap({
 
     if (mode === 'catchments') {
       // Catchment selection mode
-      map.getCanvas().style.cursor = 'pointer';
+      map.getCanvas().style.cursor = isBoxSelectionMode ? 'grab' : 'pointer';
 
-      const handleClick = async (e: maplibregl.MapMouseEvent) => {
+      const handleClick = (e: maplibregl.MapMouseEvent) => {
         // Query features at click point from the transparent fill layer
         const features = map.queryRenderedFeatures(e.point, {
           layers: ['catchments-selectable-fill'],
@@ -234,57 +265,228 @@ function SiteCreationMap({
         if (features.length > 0) {
           const feature = features[0];
           const catchmentId = String(feature.properties?.HYBAS_ID || feature.id);
+          const fallbackFeature = feature as unknown as GeoJSON.Feature;
 
-          // Check if already selected - toggle off
-          if (selectedCatchments.has(catchmentId)) {
-            setSelectedCatchments(prev => {
-              const next = new Map(prev);
+          // Apply selection state immediately so first click feels responsive.
+          let wasRemoved = false;
+          setSelectedCatchments(prev => {
+            const next = new Map(prev);
+            if (next.has(catchmentId)) {
               next.delete(catchmentId);
+              wasRemoved = true;
+            } else {
+              next.set(catchmentId, fallbackFeature);
+            }
+            updateSelectedCatchmentsLayer(map, next);
+            return next;
+          });
+
+          if (wasRemoved) {
+            return;
+          }
+
+          // Upgrade to full geometry in the background for better visual fidelity.
+          const cachedFeature = catchmentGeometryCacheRef.current.get(catchmentId);
+          if (cachedFeature) {
+            setSelectedCatchments(prev => {
+              if (!prev.has(catchmentId)) return prev;
+              const next = new Map(prev);
+              next.set(catchmentId, cachedFeature);
               updateSelectedCatchmentsLayer(map, next);
               return next;
             });
             return;
           }
 
-          // Fetch full geometry from API for better visual display
-          try {
-            const response = await fetch(`/api/catchments/geometry/${catchmentId}`);
-            if (response.ok) {
-              const fullFeature = await response.json();
-              setSelectedCatchments(prev => {
-                const next = new Map(prev);
-                next.set(catchmentId, fullFeature as GeoJSON.Feature);
-                updateSelectedCatchmentsLayer(map, next);
-                return next;
-              });
-            } else {
-              // Fallback to tile geometry if API fails
-              setSelectedCatchments(prev => {
-                const next = new Map(prev);
-                next.set(catchmentId, feature as unknown as GeoJSON.Feature);
-                updateSelectedCatchmentsLayer(map, next);
-                return next;
-              });
-            }
-          } catch {
-            // Fallback to tile geometry on error
+          void resolveCatchmentFeature(catchmentId, feature).then((resolvedFeature) => {
+            catchmentGeometryCacheRef.current.set(catchmentId, resolvedFeature);
             setSelectedCatchments(prev => {
+              if (!prev.has(catchmentId)) return prev;
               const next = new Map(prev);
-              next.set(catchmentId, feature as unknown as GeoJSON.Feature);
+              next.set(catchmentId, resolvedFeature);
               updateSelectedCatchmentsLayer(map, next);
               return next;
             });
-          }
+          });
         }
       };
 
+      const handleMouseDown = (e: maplibregl.MapMouseEvent) => {
+        if (!isBoxSelectionMode) return;
+        if ((e.originalEvent as MouseEvent).button !== 0) return;
+
+        const start = { x: e.point.x, y: e.point.y };
+        boxStartPointRef.current = start;
+        isDraggingBoxRef.current = true;
+        setSelectionBox({ left: start.x, top: start.y, width: 0, height: 0 });
+        map.dragPan.disable();
+      };
+
+      const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+        if (!isBoxSelectionMode || !isDraggingBoxRef.current || !boxStartPointRef.current) return;
+
+        const start = boxStartPointRef.current;
+        const current = { x: e.point.x, y: e.point.y };
+        const left = Math.min(start.x, current.x);
+        const top = Math.min(start.y, current.y);
+        const width = Math.abs(current.x - start.x);
+        const height = Math.abs(current.y - start.y);
+
+        setSelectionBox({ left, top, width, height });
+      };
+
+      const finishBoxSelection = async (endPoint?: { x: number; y: number }) => {
+        if (!isBoxSelectionMode || !isDraggingBoxRef.current || !boxStartPointRef.current) return;
+
+        const start = boxStartPointRef.current;
+        const end = endPoint ?? start;
+        const left = Math.min(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const right = Math.max(start.x, end.x);
+        const bottom = Math.max(start.y, end.y);
+
+        boxStartPointRef.current = null;
+        isDraggingBoxRef.current = false;
+        setSelectionBox(null);
+        map.dragPan.enable();
+
+        // Ignore tiny drags that are effectively clicks.
+        if (Math.abs(right - left) < 4 || Math.abs(bottom - top) < 4) return;
+
+        const nw = map.unproject([left, top]);
+        const se = map.unproject([right, bottom]);
+        const bbox = {
+          minX: Math.min(nw.lng, se.lng),
+          minY: Math.min(nw.lat, se.lat),
+          maxX: Math.max(nw.lng, se.lng),
+          maxY: Math.max(nw.lat, se.lat),
+          limit: 5000,
+        };
+
+        let bboxFeatures: GeoJSON.Feature[] = [];
+        let isTruncated = false;
+
+        try {
+          const response = await fetch('/api/catchments/in-bbox', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bbox),
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to query catchments in bounding box');
+          }
+
+          const result = await response.json() as {
+            features?: GeoJSON.Feature[];
+            truncated?: boolean;
+          };
+
+          bboxFeatures = Array.isArray(result.features) ? result.features : [];
+          isTruncated = result.truncated === true;
+        } catch (error) {
+          toast({
+            title: 'Box select failed',
+            description: error instanceof Error ? error.message : 'Unknown error',
+            status: 'error',
+            duration: 3000,
+          });
+          return;
+        }
+
+        const featureById = new Map<string, GeoJSON.Feature>();
+        for (const feature of bboxFeatures) {
+          const catchmentId = String(feature.properties?.HYBAS_ID || feature.id);
+          if (!catchmentId || featureById.has(catchmentId)) continue;
+          featureById.set(catchmentId, feature);
+        }
+
+        if (featureById.size === 0) {
+          toast({
+            title: 'No catchments found in box',
+            status: 'info',
+            duration: 2500,
+          });
+          return;
+        }
+
+        const alreadySelected = new Set(selectedCatchments.keys());
+        const idsToAdd = Array.from(featureById.keys()).filter((id) => !alreadySelected.has(id));
+        if (idsToAdd.length === 0) {
+          toast({
+            title: 'All catchments in this box are already selected',
+            status: 'info',
+            duration: 2500,
+          });
+          return;
+        }
+
+        setSelectedCatchments((prev) => {
+          const next = new Map(prev);
+          for (const id of idsToAdd) {
+            const feature = featureById.get(id);
+            if (feature) {
+              next.set(id, feature);
+            }
+          }
+          updateSelectedCatchmentsLayer(map, next);
+          return next;
+        });
+
+        toast({
+          title: `${idsToAdd.length} catchment${idsToAdd.length > 1 ? 's' : ''} added`,
+          status: 'success',
+          duration: 2500,
+        });
+
+        if (isTruncated) {
+          toast({
+            title: 'Selection limit reached',
+            description: 'Not all catchments in this box were returned. Zoom in and select again to add more.',
+            status: 'warning',
+            duration: 4000,
+          });
+        }
+      };
+
+      const handleMouseUp = (e: maplibregl.MapMouseEvent) => {
+        void finishBoxSelection({ x: e.point.x, y: e.point.y });
+      };
+
+      const handleMouseLeave = () => {
+        void finishBoxSelection();
+      };
+
       map.on('click', handleClick);
+      map.on('mousedown', handleMouseDown);
+      map.on('mousemove', handleMouseMove);
+      map.on('mouseup', handleMouseUp);
+      map.on('mouseleave', handleMouseLeave);
+
       return () => {
         map.off('click', handleClick);
+        map.off('mousedown', handleMouseDown);
+        map.off('mousemove', handleMouseMove);
+        map.off('mouseup', handleMouseUp);
+        map.off('mouseleave', handleMouseLeave);
+        if (!map.dragPan.isEnabled()) {
+          map.dragPan.enable();
+        }
+        boxStartPointRef.current = null;
+        isDraggingBoxRef.current = false;
+        setSelectionBox(null);
         map.getCanvas().style.cursor = '';
       };
     }
-  }, [mode, isMapReady, selectedCatchments, updateSelectedCatchmentsLayer]);
+  }, [
+    mode,
+    isMapReady,
+    isBoxSelectionMode,
+    selectedCatchments,
+    resolveCatchmentFeature,
+    updateSelectedCatchmentsLayer,
+    toast,
+  ]);
 
   // Update drawing preview
   const updateDrawingPreview = useCallback((map: maplibregl.Map, points: [number, number][]) => {
@@ -522,6 +724,10 @@ function SiteCreationMap({
     setDrawnPoints([]);
     setSelectedCatchments(new Map());
     setShowConfirm(false);
+    setSelectionBox(null);
+    setIsBoxSelectionMode(false);
+    boxStartPointRef.current = null;
+    isDraggingBoxRef.current = false;
 
     const map = mapRef.current;
     if (!map) return;
@@ -567,7 +773,9 @@ function SiteCreationMap({
       case 'catchments':
         return selectedCatchments.size != 0
           ? `${selectedCatchments.size} catchment${selectedCatchments.size > 1 ? 's' : ''} selected`
-          : '0 Catchments selected';
+          : isBoxSelectionMode
+          ? 'Drag to draw a selection box and add catchments'
+          : 'Click catchments, or enable Box Select to drag a bounding box';
       default:
         return 'Review your site boundary';
     }
@@ -649,7 +857,7 @@ function SiteCreationMap({
 
       {/* Catchment controls */}
       <AnimatePresence>
-        {mode === 'catchments' && selectedCatchments.size > 0 && (
+        {mode === 'catchments' && (
           <MotionBox
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -658,19 +866,49 @@ function SiteCreationMap({
             bottom={6}
             left={6}
           >
-            <Button
-              leftIcon={<FiTrash2 />}
-              onClick={handleReset}
-              bg="blackAlpha.700"
-              color="white"
-              _hover={{ bg: 'blackAlpha.600' }}
-              backdropFilter="blur(10px)"
-            >
-              Clear Selection
-            </Button>
+            <HStack spacing={3}>
+              <Button
+                leftIcon={<FiSquare />}
+                onClick={() => setIsBoxSelectionMode((prev) => !prev)}
+                bg={isBoxSelectionMode ? 'cyan.500' : 'blackAlpha.700'}
+                color={isBoxSelectionMode ? 'black' : 'white'}
+                _hover={{ bg: isBoxSelectionMode ? 'cyan.400' : 'blackAlpha.600' }}
+                backdropFilter="blur(10px)"
+              >
+                {isBoxSelectionMode ? 'Box Select: ON' : 'Box Select'}
+              </Button>
+              {selectedCatchments.size > 0 && (
+                <Button
+                  leftIcon={<FiTrash2 />}
+                  onClick={handleReset}
+                  bg="blackAlpha.700"
+                  color="white"
+                  _hover={{ bg: 'blackAlpha.600' }}
+                  backdropFilter="blur(10px)"
+                >
+                  Clear Selection
+                </Button>
+              )}
+            </HStack>
           </MotionBox>
         )}
       </AnimatePresence>
+
+      {/* Box selection visual overlay */}
+      {mode === 'catchments' && isBoxSelectionMode && selectionBox && (
+        <Box
+          position="absolute"
+          left={`${selectionBox.left}px`}
+          top={`${selectionBox.top}px`}
+          width={`${selectionBox.width}px`}
+          height={`${selectionBox.height}px`}
+          border="2px solid"
+          borderColor="cyan.300"
+          bg="cyan.300"
+          opacity={0.2}
+          pointerEvents="none"
+        />
+      )}
 
       {/* Confirm button */}
       <AnimatePresence>

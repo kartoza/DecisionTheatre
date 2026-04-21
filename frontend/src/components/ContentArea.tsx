@@ -35,6 +35,8 @@ interface ContentAreaProps {
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroup?: string | null;
+  chartAxisLabelFilter?: string | null;
+  mapExtent?: MapExtent | null;
 }
 
 const paneVariants = {
@@ -89,6 +91,8 @@ function ContentArea({
   onRangeModeChange,
   mapStatistics,
   chartGroup,
+  chartAxisLabelFilter,
+  mapExtent,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
 
@@ -142,6 +146,8 @@ function ContentArea({
               onRangeModeChange={onRangeModeChange}
               mapStatistics={mapStatistics}
               chartGroup={chartGroup}
+              chartAxisLabelFilter={chartAxisLabelFilter}
+              mapExtent={mapExtent}
             />
           </Box>
           <AnimatePresence>
@@ -182,6 +188,8 @@ function ContentArea({
                   rangeMode={rangeMode}
                   onRangeModeChange={onRangeModeChange}
                   mapStatistics={mapStatistics}
+                  mapExtent={mapExtent}
+                  chartAxisLabelFilter={chartAxisLabelFilter}
                 />
               </motion.div>
             ))}
@@ -225,6 +233,8 @@ function ContentArea({
             onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
             chartGroup={chartGroup}
+            chartAxisLabelFilter={chartAxisLabelFilter}
+            mapExtent={mapExtent}
           />
         </Box>
       )}
