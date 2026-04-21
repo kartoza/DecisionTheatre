@@ -71,8 +71,8 @@ const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; descri
   { id: 'site', label: 'Site', icon: <FiTarget size={14} />, description: 'Site catchments' },
 ];
 
-// Padding for the dial
-const PADDING = { top: 80, right: 80, bottom: 140, left: 80 };
+// Base padding for the dial in single-pane mode.
+const BASE_PADDING = { top: 100, right: 100, bottom: 160, left: 100 };
 
 // Spring-like easing for needle animation
 function easeOutBack(t: number): number {
@@ -112,6 +112,7 @@ interface DialChartProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   isSiteAvailable?: boolean;
+  compact?: boolean;
 }
 
 function DialChart({
@@ -126,6 +127,7 @@ function DialChart({
   rangeMode = 'domain',
   onRangeModeChange,
   isSiteAvailable = true,
+  compact = false,
 }: DialChartProps) {
   // Determine minimum for the dial. Prefer the provided input min, but never
   // assume 0 if any of the values go negative — expand the minimum to include
@@ -239,23 +241,27 @@ function DialChart({
   const { width, height } = size;
   const centerX = width / 2;
 
+  const padding = compact
+    ? { top: 120, right: 40, bottom: 100, left: 40 }
+    : BASE_PADDING;
+
   // Calculate radius based on available space
-  const availableWidth = width - PADDING.left - PADDING.right;
-  const availableHeight = height - PADDING.top - PADDING.bottom;
-  // For a half-circle: height needed = radius (arc) + ~120px (labels below center)
+  const availableWidth = Math.max(120, width - padding.left - padding.right);
+  const availableHeight = Math.max(120, height - padding.top - padding.bottom);
+  // For a half-circle: height needed = radius (arc) + label space below center
   const maxRadiusFromWidth = availableWidth / 2;
-  const maxRadiusFromHeight = availableHeight - 120; // Reserve space for labels below
-  // Reduce scale so dial is narrower and leaves room for top labels
-  const radius = Math.min(maxRadiusFromWidth, maxRadiusFromHeight) * 0.62;
+  const labelReserve = compact ? 44 : 100;
+  const maxRadiusFromHeight = availableHeight - labelReserve;
+  const radius = Math.max(48, Math.min(maxRadiusFromWidth, maxRadiusFromHeight));
   const arcWidth = Math.max(40, radius * 0.15);
 
   // Center the dial vertically within the container
-  // The dial visual occupies: radius above center + ~100px below center
-  const spaceAbove = radius + arcWidth / 2 + 60; // arc + ticks + tick labels
-  const spaceBelow = 100; // MIN/MAX labels + legend
+  // The dial visual occupies: radius above center + reserved space below center.
+  const spaceAbove = radius + arcWidth / 2 + (compact ? 28 : 60); // arc + ticks + labels
+  const spaceBelow = compact ? 48 : 100; // MIN/MAX labels + legend
   const totalDialHeight = spaceAbove + spaceBelow;
   const verticalOffset = (availableHeight - totalDialHeight) / 2;
-  const centerY = PADDING.top + spaceAbove + verticalOffset;
+  const centerY = padding.top + spaceAbove + verticalOffset;
 
   const startAngle = -90; // or whatever your arc starts at
   const arcAngle = 180;    // semicircle gauge
@@ -616,55 +622,7 @@ function DialChart({
               ))}
 
               {/* MIN / MAX labels - positioned below the dial, much bigger */}
-              <g opacity={arcProgress}>
-                {/* MIN label and value */}
-                <text
-                  x={centerX - radius * 0.6}
-                  y={centerY + 50}
-                  textAnchor="middle"
-                  fill="#a0aec0"
-                  fontSize={28}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="700"
-                >
-                  MIN
-                </text>
-                <text
-                  x={centerX - radius * 0.6}
-                  y={centerY + 85}
-                  textAnchor="middle"
-                  fill="#f7fafc"
-                  fontSize={32}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="800"
-                >
-                  {formatValue(min)}
-                </text>
-
-                {/* MAX label and value */}
-                <text
-                  x={centerX + radius * 0.6}
-                  y={centerY + 50}
-                  textAnchor="middle"
-                  fill="#a0aec0"
-                  fontSize={28}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="700"
-                >
-                  MAX
-                </text>
-                <text
-                  x={centerX + radius * 0.6}
-                  y={centerY + 85}
-                  textAnchor="middle"
-                  fill="#f7fafc"
-                  fontSize={32}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="800"
-                >
-                  {formatValue(max)}
-                </text>
-              </g>
+             
 
               {/* Center hub */}
               <circle cx={centerX} cy={centerY} r={40} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcProgress} />

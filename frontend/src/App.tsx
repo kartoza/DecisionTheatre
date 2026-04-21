@@ -52,8 +52,8 @@ function App() {
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
-  const [chartGroup, setChartGroup] = useState<string | null>(null);
-  const [chartAxisLabelFilter, setChartAxisLabelFilter] = useState<string | null>(null);
+  const [chartGroups, setChartGroups] = useState<[string | null, string | null, string | null, string | null]>([null, null, null, null]);
+  const [chartAxisLabelFilters, setChartAxisLabelFilters] = useState<[string | null, string | null, string | null, string | null]>([null, null, null, null]);
   const { info } = useServerInfo();
 
   // Persist state changes to local storage
@@ -206,6 +206,10 @@ function App() {
     });
   }, [layoutMode]);
 
+  const handlePaneAttributeChange = useCallback((paneIndex: number, attribute: string) => {
+    handlePaneStateChange(paneIndex, { attribute });
+  }, [handlePaneStateChange]);
+
   const handleLeftChange = useCallback((scenario: Scenario) => {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
@@ -220,6 +224,30 @@ function App() {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { attribute });
   }, [indicatorPaneIndex, handlePaneStateChange]);
+
+  const handleChartGroupChange = useCallback((group: string | null) => {
+    if (indicatorPaneIndex === null) return;
+    setChartGroups((prev) => {
+      const next = [...prev] as [string | null, string | null, string | null, string | null];
+      next[indicatorPaneIndex] = group;
+      return next;
+    });
+    // Reset grouping-variable filter when changing variable type for this pane.
+    setChartAxisLabelFilters((prev) => {
+      const next = [...prev] as [string | null, string | null, string | null, string | null];
+      next[indicatorPaneIndex] = null;
+      return next;
+    });
+  }, [indicatorPaneIndex]);
+
+  const handleChartAxisLabelFilterChange = useCallback((axisLabel: string | null) => {
+    if (indicatorPaneIndex === null) return;
+    setChartAxisLabelFilters((prev) => {
+      const next = [...prev] as [string | null, string | null, string | null, string | null];
+      next[indicatorPaneIndex] = axisLabel;
+      return next;
+    });
+  }, [indicatorPaneIndex]);
 
 
   const handleIdentify = useCallback((result: IdentifyResult) => {
@@ -410,6 +438,7 @@ function App() {
             paneStates={paneStates}
             viewModes={viewModes}
             onViewModeChange={handleViewModeChange}
+            onAttributeChange={handlePaneAttributeChange}
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
@@ -434,8 +463,8 @@ function App() {
             rangeMode={rangeMode}
             onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
-            chartGroup={chartGroup}
-            chartAxisLabelFilter={chartAxisLabelFilter}
+            chartGroups={chartGroups}
+            chartAxisLabelFilters={chartAxisLabelFilters}
             mapExtent={mapExtent}
           />
         </Box>
@@ -468,10 +497,10 @@ function App() {
           onColorScaleModeChange={setColorScaleMode}
           rangeMode={rangeMode}
           onRangeModeChange={setRangeMode}
-          chartGroup={chartGroup}
-          onChartGroupChange={setChartGroup}
-          chartAxisLabelFilter={chartAxisLabelFilter}
-          onChartAxisLabelFilterChange={setChartAxisLabelFilter}
+          chartGroup={indicatorPaneIndex !== null ? chartGroups[indicatorPaneIndex] : chartGroups[0]}
+          onChartGroupChange={handleChartGroupChange}
+          chartAxisLabelFilter={indicatorPaneIndex !== null ? chartAxisLabelFilters[indicatorPaneIndex] : chartAxisLabelFilters[0]}
+          onChartAxisLabelFilterChange={handleChartAxisLabelFilterChange}
         />
       </Flex>
 

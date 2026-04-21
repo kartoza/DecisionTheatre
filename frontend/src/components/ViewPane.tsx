@@ -97,6 +97,10 @@ function ViewPane({
     referenceValue?: number;
     currentValue?: number;
   } | null>(null);
+  const [dialRangeValues, setDialRangeValues] = useState<{
+    referenceValue?: number;
+    currentValue?: number;
+  } | null>(null);
 
   useEffect(() => {
     if (viewMode !== 'dial' || !siteId || !comparison.attribute) {
@@ -159,6 +163,67 @@ function ViewPane({
     };
   }, [comparison.attribute, siteId, viewMode]);
 
+  useEffect(() => {
+    if (viewMode !== 'dial' || !comparison.attribute) {
+      setDialRangeValues(null);
+      return;
+    }
+
+    if (rangeMode === 'site') {
+      setDialRangeValues(null);
+      return;
+    }
+
+    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+      setDialRangeValues(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchAggregate = async (scenario: string): Promise<number | undefined> => {
+      const params = new URLSearchParams({
+        scenario,
+        attributes: comparison.attribute || '',
+      });
+
+      if (rangeMode === 'extent' && mapExtent?.bounds) {
+        const [minx, miny, maxx, maxy] = mapExtent.bounds;
+        params.set('minx', String(minx));
+        params.set('miny', String(miny));
+        params.set('maxx', String(maxx));
+        params.set('maxy', String(maxy));
+      }
+
+      const resp = await fetch(`/api/aggregate?${params.toString()}`);
+      if (!resp.ok) return undefined;
+      const payload = await resp.json() as Record<string, number>;
+      const value = payload[comparison.attribute || ''];
+      return typeof value === 'number' && !isNaN(value) ? value : undefined;
+    };
+
+    Promise.all([
+      fetchAggregate(comparison.leftScenario),
+      fetchAggregate(comparison.rightScenario),
+    ]).then(([referenceValue, currentValue]) => {
+      if (cancelled) return;
+      setDialRangeValues({ referenceValue, currentValue });
+    }).catch(() => {
+      if (!cancelled) setDialRangeValues(null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    viewMode,
+    rangeMode,
+    comparison.attribute,
+    comparison.leftScenario,
+    comparison.rightScenario,
+    mapExtent,
+  ]);
+
   const dialAttributeLabel = comparison.attribute
     ? attributeDetails[comparison.attribute]
       ?? comparison.attribute
@@ -177,33 +242,35 @@ function ViewPane({
     let currentValue: number | undefined;
     let targetValue: number | undefined;
 
-    // Get values from site indicators if available
-    if (siteIndicators) {
-      referenceValue = siteIndicators.reference?.[attribute];
-      currentValue = siteIndicators.current?.[attribute];
-      targetValue = siteIndicators.ideal?.[attribute];
-    } else if (dialCatchmentData) {
-      referenceValue = dialCatchmentData.referenceValue;
-      currentValue = dialCatchmentData.currentValue;
-      targetValue = dialCatchmentData.referenceValue;
-    }
-
-    // Determine min/max based on range mode
+    // Determine values and min/max based on range mode.
+    // This ensures the dial reflects full dataset, current extent, or site-only stats.
     switch (rangeMode) {
       case 'site':
-        // Use min/max from site indicators
-        if (siteIndicators) {
-          const values = [
-            siteIndicators.reference?.[attribute],
-            siteIndicators.current?.[attribute],
-            siteIndicators.ideal?.[attribute],
-          ].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+        if (mapStatistics?.siteStats) {
+          referenceValue = mapStatistics.siteStats.left?.mean;
+          currentValue = mapStatistics.siteStats.right?.mean;
+          const mins = [mapStatistics.siteStats.left?.min, mapStatistics.siteStats.right?.min]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          const maxs = [mapStatistics.siteStats.left?.max, mapStatistics.siteStats.right?.max]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (mins.length > 0) min = Math.min(...mins);
+          if (maxs.length > 0) max = Math.max(...maxs);
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+        } else if (siteIndicators) {
+          referenceValue = siteIndicators.reference?.[attribute];
+          currentValue = siteIndicators.current?.[attribute];
+          targetValue = siteIndicators.ideal?.[attribute];
+          const values = [referenceValue, currentValue, targetValue]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
-            min = Math.min(...values) * 0.9; // 10% padding
+            min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
         } else if (dialCatchmentData) {
-          const values = [dialCatchmentData.referenceValue, dialCatchmentData.currentValue]
+          referenceValue = dialCatchmentData.referenceValue;
+          currentValue = dialCatchmentData.currentValue;
+          targetValue = dialCatchmentData.referenceValue;
+          const values = [referenceValue, currentValue]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
             min = Math.min(...values) * 0.9;
@@ -212,29 +279,73 @@ function ViewPane({
         }
         break;
       case 'extent':
-        // Use min/max from current map extent statistics
+        if (dialRangeValues) {
+          referenceValue = dialRangeValues.referenceValue;
+          currentValue = dialRangeValues.currentValue;
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+        }
         if (mapStatistics?.leftStats && mapStatistics?.rightStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
           min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
           max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
         } else if (mapStatistics?.leftStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.leftStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
           min = mapStatistics.leftStats.min;
           max = mapStatistics.leftStats.max;
         } else if (mapStatistics?.rightStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.rightStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
           min = mapStatistics.rightStats.min;
           max = mapStatistics.rightStats.max;
+        } else {
+          const values = [referenceValue, currentValue].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
+            max = Math.max(...values) * 1.1;
+          }
         }
         break;
       case 'domain':
       default:
-        // Use full domain range
-        if (mapStatistics?.domainRange) {
+        if (dialRangeValues) {
+          referenceValue = dialRangeValues.referenceValue;
+          currentValue = dialRangeValues.currentValue;
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+        }
+        if (mapStatistics?.fullStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.fullStats.left?.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.fullStats.right?.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
+          const mins = [mapStatistics.fullStats.left?.min, mapStatistics.fullStats.right?.min]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          const maxs = [mapStatistics.fullStats.left?.max, mapStatistics.fullStats.right?.max]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (mins.length > 0) min = Math.min(...mins);
+          if (maxs.length > 0) max = Math.max(...maxs);
+        } else if (mapStatistics?.domainRange) {
           min = mapStatistics.domainRange.min;
           max = mapStatistics.domainRange.max;
+          const leftMean = mapStatistics.leftStats?.mean;
+          const rightMean = mapStatistics.rightStats?.mean;
+          if (referenceValue === undefined && leftMean !== undefined) referenceValue = leftMean;
+          if (currentValue === undefined && rightMean !== undefined) currentValue = rightMean;
+          if (targetValue === undefined) targetValue = referenceValue;
+        } else {
+          const values = [referenceValue, currentValue].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
+            max = Math.max(...values) * 1.1;
+          }
         }
         break;
     }
 
-    // If no siteIndicators, use map statistics for demonstration values
+    // Fallback when statistics are unavailable.
     if (!siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
       const rightMean = mapStatistics.rightStats?.mean;
@@ -254,13 +365,14 @@ function ViewPane({
     }
 
     return { min, max, referenceValue, currentValue, targetValue };
-  }, [comparison.attribute, siteIndicators, dialCatchmentData, rangeMode, mapStatistics]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
   const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
+  const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
 
   return (
@@ -332,8 +444,9 @@ function ViewPane({
         max={dialData?.max ?? 100}
         attribute={dialAttributeLabel}
         rangeMode={rangeMode}
-        onRangeModeChange={onRangeModeChange}
+        onRangeModeChange={isQuad ? undefined : onRangeModeChange}
         isSiteAvailable={!!siteId}
+        compact={compact}
       />
 
       {/* Aggregate Table layer */}
@@ -345,8 +458,8 @@ function ViewPane({
         siteGeometry={siteGeometry}
       />
 
-      {/* Pane label (shown in quad mode) */}
-      {compact && (
+      {/* Pane label (shown in quad mode except dial view) */}
+      {compact && viewMode !== 'dial' && !hidePaneLabel && (
         <Box
           position="absolute"
           top={2}
@@ -381,8 +494,8 @@ function ViewPane({
         backdropFilter="blur(8px)"
         transition="opacity 0.3s ease"
       >
-        {/* View mode buttons: hide the active view only */}
-        {VIEW_MODES.map((mode) => {
+        {/* In quad mode, only allow focusing a pane from inside the pane. */}
+        {!isQuad && VIEW_MODES.map((mode) => {
           if (mode === viewMode) return null;
           const config = VIEW_MODE_CONFIG[mode];
           return (

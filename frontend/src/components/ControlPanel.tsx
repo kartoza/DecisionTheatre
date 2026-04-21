@@ -18,7 +18,7 @@ import {
 import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -382,6 +382,7 @@ function ControlPanel({
   const { details: attributeDetails } = useAttributeDetails();
   const { canMap } = useAttributeCanMap();
   const { canGraph } = useAttributeCanGraph();
+  const { chartTypes } = useAttributeChartTypes();
   const { groupingVariables } = useAttributeGroupingVariables();
   const { variableTypes } = useAttributeVariableTypes();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
@@ -425,6 +426,10 @@ function ControlPanel({
     const filtered = Object.keys(filterMap).length > 0
       ? columns.filter((col) => {
           if (!filterMap[col]) return false;
+          if (viewMode === 'dial') {
+            const chartType = (chartTypes[col] || '').toLowerCase();
+            if (!chartType.includes('dial')) return false;
+          }
           if (viewMode === 'chart' && chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) {
             return false;
           }
@@ -438,7 +443,7 @@ function ControlPanel({
       value: col,
       label: attributeDetails[col] || col,
     }));
-  }, [viewMode, canGraph, canMap, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
+  }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;

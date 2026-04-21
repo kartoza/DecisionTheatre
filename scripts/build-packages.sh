@@ -204,7 +204,7 @@ build_windows() {
     setup_windows_webview2_headers
 
     CGO_ENABLED=1 CC="$cc" CXX="$cxx" GOOS=windows GOARCH="$arch" \
-        go build -ldflags "$LDFLAGS" -o "$DIST_DIR/${BINARY_NAME}.exe" "$PROJECT_ROOT"
+        go build -ldflags "$LDFLAGS -H windowsgui" -o "$DIST_DIR/${BINARY_NAME}.exe" "$PROJECT_ROOT"
 
     # Create zip
     local zipname="${BINARY_NAME}-windows-${arch}-v${VERSION}.zip"

@@ -1,5 +1,6 @@
-import { Box } from '@chakra-ui/react';
+import { Box, Button, HStack, IconButton, Tooltip } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { FiActivity, FiBarChart2, FiGlobe, FiMap, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 
@@ -8,6 +9,7 @@ interface ContentAreaProps {
   paneStates: PaneStates;
   viewModes: ViewMode[];
   onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
+  onAttributeChange: (paneIndex: number, attribute: string) => void;
   focusedPane: number;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
@@ -34,8 +36,8 @@ interface ContentAreaProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
-  chartGroup?: string | null;
-  chartAxisLabelFilter?: string | null;
+  chartGroups?: [string | null, string | null, string | null, string | null];
+  chartAxisLabelFilters?: [string | null, string | null, string | null, string | null];
   mapExtent?: MapExtent | null;
 }
 
@@ -61,11 +63,27 @@ const paneVariants = {
   }),
 };
 
+const QUAD_VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string }> = {
+  map: { icon: <FiMap />, label: 'Map' },
+  chart: { icon: <FiBarChart2 />, label: 'Chart' },
+  dial: { icon: <FiActivity />, label: 'Dial' },
+  table: { icon: <FiTable />, label: 'Table' },
+};
+
+const QUAD_VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial', 'table'];
+
+const RANGE_MODE_CONFIG: { id: RangeMode; label: string; icon: React.ReactElement }[] = [
+  { id: 'domain', label: 'Full', icon: <FiGlobe size={14} /> },
+  { id: 'extent', label: 'Extent', icon: <FiSquare size={14} /> },
+  { id: 'site', label: 'Site', icon: <FiTarget size={14} /> },
+];
+
 function ContentArea({
   mode,
   paneStates,
   viewModes,
   onViewModeChange,
+  onAttributeChange,
   focusedPane,
   onFocusPane,
   onGoQuad,
@@ -90,11 +108,12 @@ function ContentArea({
   rangeMode,
   onRangeModeChange,
   mapStatistics,
-  chartGroup,
-  chartAxisLabelFilter,
+  chartGroups,
+  chartAxisLabelFilters,
   mapExtent,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
+  const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
 
   // In single mode, show only the focused pane
   // In quad mode, show all 4
@@ -105,6 +124,74 @@ function ContentArea({
       position="relative"
       w="100%"
       h="100%"
+      display="flex"
+      flexDirection="column"
+    >
+      {isQuad && (
+        <HStack
+          spacing={1}
+          px={2}
+          py={2}
+          bg="gray.800"
+          borderBottom="1px"
+          borderColor="gray.700"
+          justify="center"
+        >
+          {QUAD_VIEW_MODES.map((viewMode) => {
+            const config = QUAD_VIEW_MODE_CONFIG[viewMode];
+            const isActive = quadActiveMode === viewMode;
+            return (
+              <Tooltip key={viewMode} label={`Show ${config.label} in all panes`} placement="bottom">
+                <IconButton
+                  aria-label={`Show ${config.label} in all panes`}
+                  icon={config.icon}
+                  onClick={() => onViewModeChange(focusedPane, viewMode)}
+                  variant="ghost"
+                  color={isActive ? 'white' : 'gray.300'}
+                  bg={isActive ? 'cyan.500' : 'transparent'}
+                  _hover={{ bg: isActive ? 'cyan.400' : 'whiteAlpha.200' }}
+                  size="sm"
+                  borderRadius="md"
+                />
+              </Tooltip>
+            );
+          })}
+
+          {(quadActiveMode === 'dial' || quadActiveMode === 'chart') && onRangeModeChange && (
+            <HStack spacing={1} pl={2} ml={2} borderLeft="1px" borderColor="gray.600">
+              {RANGE_MODE_CONFIG.map((mode) => {
+                const isActive = rangeMode === mode.id;
+                const isDisabled = mode.id === 'site' && !siteId;
+                return (
+                  <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : `${mode.label} range`} placement="bottom">
+                    <Button
+                      size="sm"
+                      leftIcon={mode.icon as React.ReactElement}
+                      onClick={() => !isDisabled && onRangeModeChange(mode.id)}
+                      variant="ghost"
+                      bg={isActive ? 'cyan.500' : 'transparent'}
+                      color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
+                      _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
+                      fontSize="xs"
+                      fontWeight={isActive ? '600' : '400'}
+                      px={3}
+                      cursor={isDisabled ? 'not-allowed' : 'pointer'}
+                    >
+                      {mode.label}
+                    </Button>
+                  </Tooltip>
+                );
+              })}
+            </HStack>
+          )}
+        </HStack>
+      )}
+
+      <Box
+        position="relative"
+        w="100%"
+        h="100%"
+        flex={1}
       display="grid"
       gridTemplateColumns={isQuad ? '1fr 1fr' : '1fr'}
       gridTemplateRows={isQuad ? '1fr 1fr' : '1fr'}
@@ -113,7 +200,7 @@ function ContentArea({
       sx={{
         transition: 'grid-template-columns 0.6s cubic-bezier(0.16, 1, 0.3, 1), grid-template-rows 0.6s cubic-bezier(0.16, 1, 0.3, 1), gap 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
-    >
+      >
       {isQuad ? (
         <>
           {/* Pane 0 always rendered without AnimatePresence in quad */}
@@ -125,6 +212,7 @@ function ContentArea({
               layoutMode={mode}
               viewMode={viewModes[0]}
               onViewModeChange={onViewModeChange}
+              onAttributeChange={onAttributeChange}
               onFocusPane={onFocusPane}
               onGoQuad={onGoQuad}
               onIdentify={onIdentify}
@@ -145,8 +233,8 @@ function ContentArea({
               rangeMode={rangeMode}
               onRangeModeChange={onRangeModeChange}
               mapStatistics={mapStatistics}
-              chartGroup={chartGroup}
-              chartAxisLabelFilter={chartAxisLabelFilter}
+              chartGroup={chartGroups?.[0] ?? null}
+              chartAxisLabelFilter={chartAxisLabelFilters?.[0] ?? null}
               mapExtent={mapExtent}
             />
           </Box>
@@ -168,6 +256,7 @@ function ContentArea({
                   layoutMode={mode}
                   viewMode={viewModes[i]}
                   onViewModeChange={onViewModeChange}
+                  onAttributeChange={onAttributeChange}
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   onIdentify={onIdentify}
@@ -188,8 +277,9 @@ function ContentArea({
                   rangeMode={rangeMode}
                   onRangeModeChange={onRangeModeChange}
                   mapStatistics={mapStatistics}
+                  chartGroup={chartGroups?.[i] ?? null}
                   mapExtent={mapExtent}
-                  chartAxisLabelFilter={chartAxisLabelFilter}
+                  chartAxisLabelFilter={chartAxisLabelFilters?.[i] ?? null}
                 />
               </motion.div>
             ))}
@@ -209,6 +299,7 @@ function ContentArea({
             layoutMode={mode}
             viewMode={viewModes[visibleIndices[0]]}
             onViewModeChange={onViewModeChange}
+            onAttributeChange={onAttributeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
             onIdentify={onIdentify}
@@ -232,12 +323,13 @@ function ContentArea({
             rangeMode={rangeMode}
             onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
-            chartGroup={chartGroup}
-            chartAxisLabelFilter={chartAxisLabelFilter}
+            chartGroup={chartGroups?.[visibleIndices[0]] ?? null}
+            chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}
             mapExtent={mapExtent}
           />
         </Box>
       )}
+      </Box>
     </Box>
   );
 }
