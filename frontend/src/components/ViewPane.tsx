@@ -235,6 +235,7 @@ function ViewPane({
   const dialData = useMemo(() => {
     const attribute = comparison.attribute;
     if (!attribute) return null;
+    const allowMapStatisticsFallback = layoutMode !== 'quad';
 
     let min = 0;
     let max = 100;
@@ -246,17 +247,8 @@ function ViewPane({
     // This ensures the dial reflects full dataset, current extent, or site-only stats.
     switch (rangeMode) {
       case 'site':
-        if (mapStatistics?.siteStats) {
-          referenceValue = mapStatistics.siteStats.left?.mean;
-          currentValue = mapStatistics.siteStats.right?.mean;
-          const mins = [mapStatistics.siteStats.left?.min, mapStatistics.siteStats.right?.min]
-            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
-          const maxs = [mapStatistics.siteStats.left?.max, mapStatistics.siteStats.right?.max]
-            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
-          if (mins.length > 0) min = Math.min(...mins);
-          if (maxs.length > 0) max = Math.max(...maxs);
-          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
-        } else if (siteIndicators) {
+        // Prefer per-attribute sources first so each quad pane reflects its own factor.
+        if (siteIndicators) {
           referenceValue = siteIndicators.reference?.[attribute];
           currentValue = siteIndicators.current?.[attribute];
           targetValue = siteIndicators.ideal?.[attribute];
@@ -276,6 +268,16 @@ function ViewPane({
             min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
+        } else if (allowMapStatisticsFallback && mapStatistics?.siteStats) {
+          referenceValue = mapStatistics.siteStats.left?.mean;
+          currentValue = mapStatistics.siteStats.right?.mean;
+          const mins = [mapStatistics.siteStats.left?.min, mapStatistics.siteStats.right?.min]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          const maxs = [mapStatistics.siteStats.left?.max, mapStatistics.siteStats.right?.max]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (mins.length > 0) min = Math.min(...mins);
+          if (maxs.length > 0) max = Math.max(...maxs);
+          targetValue = referenceValue;
         }
         break;
       case 'extent':
@@ -284,19 +286,19 @@ function ViewPane({
           currentValue = dialRangeValues.currentValue;
           targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
         }
-        if (mapStatistics?.leftStats && mapStatistics?.rightStats) {
+        if (allowMapStatisticsFallback && mapStatistics?.leftStats && mapStatistics?.rightStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
           if (targetValue === undefined) targetValue = referenceValue;
           min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
           max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
-        } else if (mapStatistics?.leftStats) {
+        } else if (allowMapStatisticsFallback && mapStatistics?.leftStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.leftStats.mean;
           if (targetValue === undefined) targetValue = referenceValue;
           min = mapStatistics.leftStats.min;
           max = mapStatistics.leftStats.max;
-        } else if (mapStatistics?.rightStats) {
+        } else if (allowMapStatisticsFallback && mapStatistics?.rightStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.rightStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
           if (targetValue === undefined) targetValue = referenceValue;
@@ -317,7 +319,7 @@ function ViewPane({
           currentValue = dialRangeValues.currentValue;
           targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
         }
-        if (mapStatistics?.fullStats) {
+        if (allowMapStatisticsFallback && mapStatistics?.fullStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.fullStats.left?.mean;
           if (currentValue === undefined) currentValue = mapStatistics.fullStats.right?.mean;
           if (targetValue === undefined) targetValue = referenceValue;
@@ -327,7 +329,7 @@ function ViewPane({
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (mins.length > 0) min = Math.min(...mins);
           if (maxs.length > 0) max = Math.max(...maxs);
-        } else if (mapStatistics?.domainRange) {
+        } else if (allowMapStatisticsFallback && mapStatistics?.domainRange) {
           min = mapStatistics.domainRange.min;
           max = mapStatistics.domainRange.max;
           const leftMean = mapStatistics.leftStats?.mean;
@@ -346,7 +348,7 @@ function ViewPane({
     }
 
     // Fallback when statistics are unavailable.
-    if (!siteIndicators && !dialCatchmentData && mapStatistics) {
+    if (allowMapStatisticsFallback && !siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
       const rightMean = mapStatistics.rightStats?.mean;
 
@@ -365,7 +367,7 @@ function ViewPane({
     }
 
     return { min, max, referenceValue, currentValue, targetValue };
-  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
