@@ -41,8 +41,8 @@ export type ViewMode = 'map' | 'chart' | 'dial' | 'table';
 /** Range mode for dial chart min/max values */
 export type RangeMode = 'domain' | 'extent' | 'site';
 
-/** Per-pane state array (always 4 entries, indexed 0-3) */
-export type PaneStates = [ComparisonState, ComparisonState, ComparisonState, ComparisonState];
+/** Per-pane state array (minimum one entry) */
+export type PaneStates = ComparisonState[];
 
 const STORAGE_KEY = 'dt-pane-states';
 const STORAGE_LAYOUT_KEY = 'dt-layout-mode';
@@ -60,7 +60,7 @@ export function loadPaneStates(): PaneStates {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length === 4) return parsed as PaneStates;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as PaneStates;
     }
   } catch { /* use defaults */ }
   return structuredClone(DEFAULT_PANE_STATES);
@@ -87,7 +87,7 @@ export function loadFocusedPane(): number {
     const raw = localStorage.getItem(STORAGE_FOCUSED_KEY);
     if (raw !== null) {
       const n = parseInt(raw, 10);
-      if (n >= 0 && n <= 3) return n;
+      if (n >= 0) return n;
     }
   } catch { /* default */ }
   return 0;

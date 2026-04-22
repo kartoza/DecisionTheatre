@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
-import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable } from 'react-icons/fi';
+import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
@@ -12,12 +12,15 @@ import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 interface ViewPaneProps {
   comparison: ComparisonState;
   compact?: boolean;
+  paneCount?: number;
   paneIndex: number;
   layoutMode: LayoutMode;
   viewMode: ViewMode;
   onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
+  canRemove?: boolean;
+  onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
   onMapExtentChange?: (extent: MapExtent) => void;
@@ -60,12 +63,15 @@ const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: stri
 function ViewPane({
   comparison,
   compact = false,
+  paneCount = 1,
   paneIndex,
   layoutMode,
   viewMode,
   onViewModeChange,
   onFocusPane,
   onGoQuad,
+  canRemove = false,
+  onRemovePane,
   onIdentify,
   identifyResult,
   onMapExtentChange,
@@ -374,6 +380,7 @@ function ViewPane({
   const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
+  const denseDialLayout = isQuad && paneCount > 4;
   const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
 
@@ -449,6 +456,8 @@ function ViewPane({
         onRangeModeChange={isQuad ? undefined : onRangeModeChange}
         isSiteAvailable={!!siteId}
         compact={compact}
+        denseLayout={denseDialLayout}
+        paneCount={paneCount}
       />
 
       {/* Aggregate Table layer */}
@@ -518,18 +527,34 @@ function ViewPane({
 
         {/* Layout toggle — context-dependent */}
         {isQuad ? (
-          <Tooltip label="Focus this pane" placement="top">
-            <IconButton
-              aria-label="Focus pane"
-              icon={<FiMaximize />}
-              onClick={() => onFocusPane(paneIndex)}
-              variant="ghost"
-              color="white"
-              _hover={{ bg: 'whiteAlpha.300' }}
-              size={btnSize}
-              borderRadius="md"
-            />
-          </Tooltip>
+          <>
+            <Tooltip label="Focus this pane" placement="top">
+              <IconButton
+                aria-label="Focus pane"
+                icon={<FiMaximize />}
+                onClick={() => onFocusPane(paneIndex)}
+                variant="ghost"
+                color="white"
+                _hover={{ bg: 'whiteAlpha.300' }}
+                size={btnSize}
+                borderRadius="md"
+              />
+            </Tooltip>
+            {canRemove && onRemovePane && (
+              <Tooltip label="Remove pane" placement="top">
+                <IconButton
+                  aria-label="Remove pane"
+                  icon={<FiTrash2 />}
+                  onClick={() => onRemovePane(paneIndex)}
+                  variant="ghost"
+                  color="white"
+                  _hover={{ bg: 'whiteAlpha.300' }}
+                  size={btnSize}
+                  borderRadius="md"
+                />
+              </Tooltip>
+            )}
+          </>
         ) : (
           <Tooltip label="Quad view" placement="top">
             <IconButton

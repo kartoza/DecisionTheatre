@@ -1,7 +1,8 @@
 import { Box, Button, HStack, IconButton, Tooltip } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiActivity, FiBarChart2, FiGlobe, FiMap, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
+import { FiActivity, FiBarChart2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
+import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 
 interface ContentAreaProps {
@@ -13,6 +14,8 @@ interface ContentAreaProps {
   focusedPane: number;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
+  onAddPane: () => void;
+  onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
   onMapExtentChange?: (extent: MapExtent) => void;
@@ -36,8 +39,8 @@ interface ContentAreaProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
-  chartGroups?: [string | null, string | null, string | null, string | null];
-  chartAxisLabelFilters?: [string | null, string | null, string | null, string | null];
+  chartGroups?: (string | null)[];
+  chartAxisLabelFilters?: (string | null)[];
   mapExtent?: MapExtent | null;
 }
 
@@ -56,7 +59,7 @@ const paneVariants = {
     opacity: 0,
     scale: 0.92,
     transition: {
-      delay: (3 - i) * 0.06,
+      delay: 0,
       duration: 0.3,
       ease: [0.4, 0, 1, 1],
     },
@@ -87,6 +90,8 @@ function ContentArea({
   focusedPane,
   onFocusPane,
   onGoQuad,
+  onAddPane,
+  onRemovePane,
   onIdentify,
   identifyResult,
   onMapExtentChange,
@@ -113,11 +118,12 @@ function ContentArea({
   mapExtent,
 }: ContentAreaProps) {
   const isQuad = mode === 'quad';
+  const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
 
-  // In single mode, show only the focused pane
-  // In quad mode, show all 4
-  const visibleIndices = isQuad ? [0, 1, 2, 3] : [focusedPane];
+  const visibleIndices = isQuad
+    ? paneStates.map((_, index) => index)
+    : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
 
   return (
     <Box
@@ -184,6 +190,20 @@ function ContentArea({
               })}
             </HStack>
           )}
+
+          <Tooltip label="Add pane" placement="bottom">
+            <IconButton
+              aria-label="Add pane"
+              icon={<FiPlus />}
+              onClick={onAddPane}
+              variant="ghost"
+              color="gray.200"
+              _hover={{ bg: 'whiteAlpha.200' }}
+              size="sm"
+              borderRadius="md"
+              ml={2}
+            />
+          </Tooltip>
         </HStack>
       )}
 
@@ -192,54 +212,22 @@ function ContentArea({
         w="100%"
         h="100%"
         flex={1}
-      display="grid"
-      gridTemplateColumns={isQuad ? '1fr 1fr' : '1fr'}
-      gridTemplateRows={isQuad ? '1fr 1fr' : '1fr'}
-      gap={isQuad ? '2px' : 0}
-      bg={isQuad ? 'gray.700' : 'transparent'}
-      sx={{
-        transition: 'grid-template-columns 0.6s cubic-bezier(0.16, 1, 0.3, 1), grid-template-rows 0.6s cubic-bezier(0.16, 1, 0.3, 1), gap 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
-      }}
+        display="grid"
+        gridTemplateColumns={isQuad ? 'repeat(2, minmax(0, 1fr))' : '1fr'}
+        gridTemplateRows={isQuad ? undefined : '1fr'}
+        gridAutoRows={isQuad ? 'calc((100% - 2px) / 2)' : undefined}
+        alignContent={isQuad ? 'start' : undefined}
+        gap={isQuad ? '2px' : 0}
+        bg={isQuad ? 'gray.700' : 'transparent'}
+        overflowY={isQuad ? 'auto' : 'hidden'}
+        overflowX="hidden"
+        sx={{
+          transition: 'grid-template-columns 0.6s cubic-bezier(0.16, 1, 0.3, 1), gap 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
       >
       {isQuad ? (
-        <>
-          {/* Pane 0 always rendered without AnimatePresence in quad */}
-          <Box position="relative" overflow="hidden">
-            <ViewPane
-              comparison={paneStates[0]}
-              compact
-              paneIndex={0}
-              layoutMode={mode}
-              viewMode={viewModes[0]}
-              onViewModeChange={onViewModeChange}
-              onAttributeChange={onAttributeChange}
-              onFocusPane={onFocusPane}
-              onGoQuad={onGoQuad}
-              onIdentify={onIdentify}
-              identifyResult={identifyResult}
-              siteId={siteId}
-              siteBounds={siteBounds}
-              isBoundaryEditMode={isBoundaryEditMode}
-              siteGeometry={siteGeometry}
-              onBoundaryUpdate={onBoundaryUpdate}
-              isSwiperEnabled={isSwiperEnabled}
-              onSwiperEnabledChange={onSwiperEnabledChange}
-              colorScaleMode={colorScaleMode}
-              is3DMode={is3DMode}
-              on3DModeChange={on3DModeChange}
-              swiperPosition={swiperPosition}
-              onSwiperPositionChange={onSwiperPositionChange}
-              siteIndicators={siteIndicators}
-              rangeMode={rangeMode}
-              onRangeModeChange={onRangeModeChange}
-              mapStatistics={mapStatistics}
-              chartGroup={chartGroups?.[0] ?? null}
-              chartAxisLabelFilter={chartAxisLabelFilters?.[0] ?? null}
-              mapExtent={mapExtent}
-            />
-          </Box>
-          <AnimatePresence>
-            {[1, 2, 3].map((i) => (
+        <AnimatePresence>
+            {visibleIndices.map((i) => (
               <motion.div
                 key={`pane-${i}`}
                 custom={i}
@@ -247,11 +235,12 @@ function ContentArea({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                style={{ position: 'relative', overflow: 'hidden' }}
+                style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
               >
                 <ViewPane
                   comparison={paneStates[i]}
                   compact
+                  paneCount={paneStates.length}
                   paneIndex={i}
                   layoutMode={mode}
                   viewMode={viewModes[i]}
@@ -259,6 +248,8 @@ function ContentArea({
                   onAttributeChange={onAttributeChange}
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
+                  canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
+                  onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
                   identifyResult={identifyResult}
                   siteId={siteId}
@@ -283,8 +274,7 @@ function ContentArea({
                 />
               </motion.div>
             ))}
-          </AnimatePresence>
-        </>
+        </AnimatePresence>
       ) : (
         <Box
           position="relative"
@@ -295,6 +285,7 @@ function ContentArea({
           <ViewPane
             comparison={paneStates[visibleIndices[0]]}
             compact={false}
+            paneCount={paneStates.length}
             paneIndex={visibleIndices[0]}
             layoutMode={mode}
             viewMode={viewModes[visibleIndices[0]]}

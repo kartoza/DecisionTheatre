@@ -113,6 +113,8 @@ interface DialChartProps {
   onRangeModeChange?: (mode: RangeMode) => void;
   isSiteAvailable?: boolean;
   compact?: boolean;
+  denseLayout?: boolean;
+  paneCount?: number;
 }
 
 function DialChart({
@@ -128,7 +130,10 @@ function DialChart({
   onRangeModeChange,
   isSiteAvailable = true,
   compact = false,
+  denseLayout = false,
+  paneCount = 1,
 }: DialChartProps) {
+  const veryDenseLayout = compact && paneCount > 5;
   // Determine minimum for the dial. Prefer the provided input min, but never
   // assume 0 if any of the values go negative — expand the minimum to include
   // negative current/reference/target values so the needle and ticks render correctly.
@@ -242,7 +247,9 @@ function DialChart({
   const centerX = width / 2;
 
   const padding = compact
-    ? { top: 120, right: 40, bottom: 100, left: 40 }
+    ? (denseLayout
+      ? { top: 140, right: 40, bottom: 100, left: 40 }
+      : { top: 140, right: 40, bottom: 100, left: 40 })
     : BASE_PADDING;
 
   // Calculate radius based on available space
@@ -250,15 +257,15 @@ function DialChart({
   const availableHeight = Math.max(120, height - padding.top - padding.bottom);
   // For a half-circle: height needed = radius (arc) + label space below center
   const maxRadiusFromWidth = availableWidth / 2;
-  const labelReserve = compact ? 44 : 100;
+  const labelReserve = compact ? (denseLayout ? 28 : 44) : 100;
   const maxRadiusFromHeight = availableHeight - labelReserve;
   const radius = Math.max(48, Math.min(maxRadiusFromWidth, maxRadiusFromHeight));
   const arcWidth = Math.max(40, radius * 0.15);
 
   // Center the dial vertically within the container
   // The dial visual occupies: radius above center + reserved space below center.
-  const spaceAbove = radius + arcWidth / 2 + (compact ? 28 : 60); // arc + ticks + labels
-  const spaceBelow = compact ? 48 : 100; // MIN/MAX labels + legend
+  const spaceAbove = radius + arcWidth / 2 + (compact ? (denseLayout ? 18 : 28) : 60); // arc + ticks + labels
+  const spaceBelow = compact ? (denseLayout ? 34 : 48) : 100; // legend and bottom padding
   const totalDialHeight = spaceAbove + spaceBelow;
   const verticalOffset = (availableHeight - totalDialHeight) / 2;
   const centerY = padding.top + spaceAbove + verticalOffset;
@@ -460,6 +467,19 @@ function DialChart({
     };
   }, [targetRenderValue, min, max, radius, arcWidth, centerX, centerY]);
 
+  const legendCurrentLabel = `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`;
+  const legendTargetLabel = `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`;
+  const legendYOffset = compact ? (denseLayout ? 72 : 100) : 100;
+  const legendY = centerY + legendYOffset;
+  const compactLegendGroupWidth = denseLayout ? 360 : 400;
+  const compactLegendStartX = centerX - compactLegendGroupWidth / 2;
+  const legendCurrentX = compact
+    ? Math.max(8, compactLegendStartX)
+    : centerX - 160;
+  const legendTargetX = compact
+    ? Math.max(legendCurrentX + (denseLayout ? 188 : 210), compactLegendStartX + (denseLayout ? 188 : 210))
+    : centerX + 60;
+
   return (
     <Box
       ref={containerRef}
@@ -659,7 +679,7 @@ function DialChart({
                     y={centerY - radius * 0.4}
                     textAnchor="middle"
                     fill="white"
-                    fontSize={Math.max(48, radius * 0.25)}
+                    fontSize={veryDenseLayout ? Math.max(28, radius * 0.17) : Math.max(48, radius * 0.25)}
                     fontFamily="Inter, system-ui, sans-serif"
                     fontWeight="bold"
                     style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.8))' }}
@@ -685,10 +705,10 @@ function DialChart({
               {attribute && (
                 <text
                   x={centerX}
-                  y={50}
+                  y={veryDenseLayout ? 24 : 50}
                   textAnchor="middle"
                   fill="#f7fafc"
-                  fontSize={20}
+                  fontSize={veryDenseLayout ? 15 : 20}
                   fontFamily="Inter, system-ui, sans-serif"
                   fontWeight="700"
                   opacity={arcProgress}
@@ -698,22 +718,22 @@ function DialChart({
               )}
 
               {/* Legend */}
-              <g transform={`translate(${centerX - 380}, ${centerY + 100})`} opacity={needleProgress}>
+              <g opacity={needleProgress}>
                 {/* Current */}
-                <g transform="translate(220, 0)">
+                <g transform={`translate(${legendCurrentX}, ${legendY})`}>
                   <rect x={0} y={-8} width={35} height={16} rx={3} fill={SCENARIO_COLORS.current} />
                   <polygon points="35,-8 48,0 35,8" fill={SCENARIO_COLORS.current} />
-                  <text x={56} y={5} fill="#e2e8f0" fontSize={14} fontFamily="Inter, system-ui, sans-serif" fontWeight="700">
-                    Current: {currentValue !== undefined ? formatValue(currentValue) : 'N/A'}
+                  <text x={56} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="700">
+                    {legendCurrentLabel}
                   </text>
                 </g>
 
                 {/* Target */}
-                <g transform="translate(440, 0)">
+                <g transform={`translate(${legendTargetX}, ${legendY})`}>
                   <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.future} strokeWidth={4} strokeDasharray="8,6" />
                   <polygon points="30,-5 42,0 30,5" fill={SCENARIO_COLORS.future} />
-                  <text x={50} y={5} fill="#e2e8f0" fontSize={14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
-                    Target: {targetValue !== undefined ? formatValue(targetValue) : 'N/A'}
+                  <text x={50} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
+                    {legendTargetLabel}
                   </text>
                 </g>
               </g>
