@@ -5,7 +5,11 @@
 # Inputs (in data/ directory):
 #   - catchments.gpkg  : Geopackage with catchment geometries
 #   - current.csv      : Current scenario attribute data
+#   - current_lower.csv: Current scenario lower-bound attribute data
+#   - current_upper.csv: Current scenario upper-bound attribute data
 #   - reference.csv    : Reference scenario attribute data
+#   - reference_lower.csv: Reference scenario lower-bound attribute data
+#   - reference_upper.csv: Reference scenario upper-bound attribute data
 #   - medata.csv       : Column metadata
 #
 # Output:
@@ -20,7 +24,7 @@ OUTPUT="$DATA_DIR/datapack.gpkg"
 echo "Building datapack from $DATA_DIR..."
 
 # Check inputs exist
-for f in catchments.gpkg current.csv reference.csv; do
+for f in catchments.gpkg current.csv current_lower.csv current_upper.csv reference.csv reference_lower.csv reference_upper.csv; do
     if [ ! -f "$DATA_DIR/$f" ]; then
         echo "Error: Missing $DATA_DIR/$f"
         exit 1
@@ -44,6 +48,26 @@ echo "Importing reference.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_reference_raw" \
     "$DATA_DIR/reference.csv"
+
+echo "Importing current_lower.csv..."
+ogr2ogr -f GPKG -update "$OUTPUT" \
+    -nln "scenario_current_lower_raw" \
+    "$DATA_DIR/current_lower.csv"
+
+echo "Importing current_upper.csv..."
+ogr2ogr -f GPKG -update "$OUTPUT" \
+    -nln "scenario_current_upper_raw" \
+    "$DATA_DIR/current_upper.csv"
+
+echo "Importing reference_lower.csv..."
+ogr2ogr -f GPKG -update "$OUTPUT" \
+    -nln "scenario_reference_lower_raw" \
+    "$DATA_DIR/reference_lower.csv"
+
+echo "Importing reference_upper.csv..."
+ogr2ogr -f GPKG -update "$OUTPUT" \
+    -nln "scenario_reference_upper_raw" \
+    "$DATA_DIR/reference_upper.csv"
 
 # Import metadata if it exists
 if [ -f "$DATA_DIR/medata.csv" ]; then
@@ -121,126 +145,17 @@ def convert_table_types(raw_table, target_table):
 
 convert_table_types("scenario_current_raw", "scenario_current")
 convert_table_types("scenario_reference_raw", "scenario_reference")
+convert_table_types("scenario_current_lower_raw", "scenario_current_lower")
+convert_table_types("scenario_current_upper_raw", "scenario_current_upper")
+convert_table_types("scenario_reference_lower_raw", "scenario_reference_lower")
+convert_table_types("scenario_reference_upper_raw", "scenario_reference_upper")
 
 conn.close()
 print("  Done converting column types")
 TYPEPY
 
-# Normalize column names to ensure both tables have identical structure
-# The input CSVs may have different naming conventions (dots vs dashes/spaces)
-# We normalize to dots (.) as the separator character
-echo "Normalizing column names..."
-python3 - "$OUTPUT" <<'NORMPY'
-import sqlite3
-import sys
-import re
-
-gpkg_path = sys.argv[1]
-conn = sqlite3.connect(gpkg_path)
-cur = conn.cursor()
-
-def normalize_column_name(name):
-    """Normalize column name: replace dashes, spaces, apostrophes, etc. with dots."""
-    # Rename the main catchID column to 'catchment_id'
-    if name == 'catchID':
-        return 'catchment_id'
-    # Drop duplicate sp_current.catchID and sp_reference$catchID columns (they have same data as catchID)
-    if name in ('sp_current.catchID', 'sp_reference$catchID', 'sp_reference.catchID'):
-        return None  # Signal to drop this column
-
-    # Replace ' - ' with '.'
-    # Replace '-' with '.'
-    # Replace ' ' with '.'
-    result = name.replace(' - ', '.')
-    result = result.replace('-', '.')
-    result = result.replace(' ', '.')
-    # Also replace '$' with '.' for the sp_reference$catchID column
-    result = result.replace('$', '.')
-    # Handle apostrophe differences: 's vs .s (e.g., "Salt's" vs "Salt.s")
-    # Normalize ' to . and also handle unicode apostrophes
-    result = result.replace("'s", '.s')
-    result = result.replace("'", '.')
-    # Handle forward slashes
-    result = result.replace('/', '.')
-    # Handle + at end (Suids+)
-    result = result.replace('+', '.')
-    # Normalize multiple dots to a single dot (current.csv uses ... vs reference.csv uses .)
-    # This handles cases like "browser.frugivores...closed" vs "browser.frugivores.closed"
-    import re
-    result = re.sub(r'\.{2,}', '.', result)
-    return result
-
-def rename_columns(table_name):
-    """Rename columns in a table to use normalized names. Drops columns where normalize returns None."""
-    cur.execute(f"PRAGMA table_info({table_name})")
-    columns = [(row[1], row[2]) for row in cur.fetchall()]  # (name, type)
-
-    renames = []
-    drops = []
-    for col_name, col_type in columns:
-        new_name = normalize_column_name(col_name)
-        if new_name is None:
-            drops.append(col_name)
-        elif new_name != col_name:
-            renames.append((col_name, new_name))
-
-    if not renames and not drops:
-        print(f"  {table_name}: No columns need changes")
-        return
-
-    # SQLite doesn't support ALTER TABLE RENAME COLUMN in older versions
-    # We need to recreate the table with new column names
-    print(f"  {table_name}: Renaming {len(renames)} columns, dropping {len(drops)} columns...")
-
-    # Build column mapping (excluding dropped columns)
-    col_map = {old: new for old, new in renames}
-    new_columns = []
-    select_parts = []
-    for col_name, col_type in columns:
-        if col_name in drops:
-            continue  # Skip dropped columns
-        new_name = col_map.get(col_name, col_name)
-        new_columns.append(f'"{new_name}" {col_type}')
-        select_parts.append(f'"{col_name}" as "{new_name}"')
-
-    # Create new table, copy data, drop old, rename new
-    cur.execute(f"CREATE TABLE {table_name}_new ({', '.join(new_columns)})")
-    cur.execute(f"INSERT INTO {table_name}_new SELECT {', '.join(select_parts)} FROM {table_name}")
-    cur.execute(f"DROP TABLE {table_name}")
-    cur.execute(f"ALTER TABLE {table_name}_new RENAME TO {table_name}")
-    conn.commit()
-
-    for old, new in renames[:5]:  # Show first 5
-        print(f"    {old} -> {new}")
-    if len(renames) > 5:
-        print(f"    ... and {len(renames) - 5} more")
-
-rename_columns("scenario_current")
-rename_columns("scenario_reference")
-
-# Verify both tables now have matching column names
-cur.execute("PRAGMA table_info(scenario_current)")
-current_cols = sorted([row[1] for row in cur.fetchall()])
-
-cur.execute("PRAGMA table_info(scenario_reference)")
-reference_cols = sorted([row[1] for row in cur.fetchall()])
-
-# Check for mismatches
-if current_cols == reference_cols:
-    print(f"  Verified: Both tables have {len(current_cols)} matching columns")
-else:
-    current_set = set(current_cols)
-    reference_set = set(reference_cols)
-    only_current = current_set - reference_set
-    only_reference = reference_set - current_set
-    if only_current:
-        print(f"  WARNING: Columns only in scenario_current: {list(only_current)[:5]}")
-    if only_reference:
-        print(f"  WARNING: Columns only in scenario_reference: {list(only_reference)[:5]}")
-
-conn.close()
-print("  Done normalizing column names")
-NORMPY
+# Keep original CSV column names exactly as imported.
+# No normalization or renaming is applied.
 
 # Create index on catchID columns for fast joins
 # First, convert catchID to integer for proper indexing
@@ -259,14 +174,30 @@ DROP TRIGGER IF EXISTS trigger_delete_feature_count_catchments_lev12;
 EOF
 
 sqlite3 "$OUTPUT" <<EOF
--- Add an integer catchment_id column for proper indexing
+-- Add an integer catchment_id_int column for proper indexing
 ALTER TABLE scenario_current ADD COLUMN catchment_id_int INTEGER;
-UPDATE scenario_current SET catchment_id_int = CAST(catchment_id AS INTEGER);
+UPDATE scenario_current SET catchment_id_int = CAST(catchID AS INTEGER);
 CREATE INDEX IF NOT EXISTS idx_current_catchment_id_int ON scenario_current(catchment_id_int);
 
 ALTER TABLE scenario_reference ADD COLUMN catchment_id_int INTEGER;
-UPDATE scenario_reference SET catchment_id_int = CAST(catchment_id AS INTEGER);
+UPDATE scenario_reference SET catchment_id_int = CAST(catchID AS INTEGER);
 CREATE INDEX IF NOT EXISTS idx_reference_catchment_id_int ON scenario_reference(catchment_id_int);
+
+ALTER TABLE scenario_current_lower ADD COLUMN catchment_id_int INTEGER;
+UPDATE scenario_current_lower SET catchment_id_int = CAST(catchID AS INTEGER);
+CREATE INDEX IF NOT EXISTS idx_current_lower_catchment_id_int ON scenario_current_lower(catchment_id_int);
+
+ALTER TABLE scenario_current_upper ADD COLUMN catchment_id_int INTEGER;
+UPDATE scenario_current_upper SET catchment_id_int = CAST(catchID AS INTEGER);
+CREATE INDEX IF NOT EXISTS idx_current_upper_catchment_id_int ON scenario_current_upper(catchment_id_int);
+
+ALTER TABLE scenario_reference_lower ADD COLUMN catchment_id_int INTEGER;
+UPDATE scenario_reference_lower SET catchment_id_int = CAST(catchID AS INTEGER);
+CREATE INDEX IF NOT EXISTS idx_reference_lower_catchment_id_int ON scenario_reference_lower(catchment_id_int);
+
+ALTER TABLE scenario_reference_upper ADD COLUMN catchment_id_int INTEGER;
+UPDATE scenario_reference_upper SET catchment_id_int = CAST(catchID AS INTEGER);
+CREATE INDEX IF NOT EXISTS idx_reference_upper_catchment_id_int ON scenario_reference_upper(catchment_id_int);
 
 -- Also create an integer index on HYBAS_ID in catchments_lev12
 ALTER TABLE catchments_lev12 ADD COLUMN HYBAS_ID_int INTEGER;
@@ -458,29 +389,21 @@ COLUMNS=$(sqlite3 "$OUTPUT" "PRAGMA table_info(scenario_current)" | \
 NUM_COLS=$(echo "$COLUMNS" | wc -l)
 echo "  Computing min/max for $NUM_COLS attribute columns in a single pass..."
 
-# Build a single SQL query that computes min/max for ALL columns at once
-# This does ONE table scan instead of 924 separate queries
-MIN_EXPRS=""
-MAX_EXPRS=""
-COL_DEFS=""
-
-for col in $COLUMNS; do
-    if [ -n "$MIN_EXPRS" ]; then
-        MIN_EXPRS="$MIN_EXPRS, "
-        MAX_EXPRS="$MAX_EXPRS, "
-        COL_DEFS="$COL_DEFS, "
-    fi
-    MIN_EXPRS="${MIN_EXPRS}MIN(CAST(\"$col\" AS REAL)) as \"$col\""
-    MAX_EXPRS="${MAX_EXPRS}MAX(CAST(\"$col\" AS REAL)) as \"$col\""
-    COL_DEFS="${COL_DEFS}\"$col\" REAL"
-done
+# Build SQL fragments while preserving full column names (including spaces).
+# This avoids shell word-splitting bugs when headers contain spaces.
+COL_DEFS=$(echo "$COLUMNS" | while IFS= read -r col; do
+    [ -n "$col" ] || continue
+    echo "\"$col\" REAL"
+done | paste -sd',')
 
 # Build MIN/MAX expressions (columns are already REAL type with NULL for NA values)
-MIN_SELECT=$(echo "$COLUMNS" | while read col; do
+MIN_SELECT=$(echo "$COLUMNS" | while IFS= read -r col; do
+    [ -n "$col" ] || continue
     echo "MIN(\"$col\") as \"$col\""
 done | paste -sd',')
 
-MAX_SELECT=$(echo "$COLUMNS" | while read col; do
+MAX_SELECT=$(echo "$COLUMNS" | while IFS= read -r col; do
+    [ -n "$col" ] || continue
     echo "MAX(\"$col\") as \"$col\""
 done | paste -sd',')
 

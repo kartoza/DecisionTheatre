@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { getSiteCatchments, useAttributeAxisLabels, useAttributeChartTypes, useAttributeVariableTypes, useColumns, useAttributeCanGraph } from '../hooks/useApi';
-import type { SiteIndicators, MapStatistics, RangeMode, Scenario, ZoneStats } from '../types';
+import { getSiteCatchments, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels } from '../hooks/useApi';
+import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats } from '../types';
 
 // Kartoza color scheme: orange, blue, green
 const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
 const SERIES_LABELS = ['Reference', 'Current', 'Target'];
-// Lighter pastel variants used for the group scatter overlay dots
-const GROUP_SCATTER_COLORS = ['#ffccbc', '#b3e5fc', '#c8e6c9'];
 
-const PADDING = { top: 50, right: 60, bottom: 100, left: 80 };
+const PADDING = { top: 50, right: 60, bottom: 140, left: 80 };
 
 function easeOutExpo(t: number): number {
   return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
@@ -21,11 +19,13 @@ interface ChartViewProps {
   attribute?: string;
   siteIndicators?: SiteIndicators | null;
   siteId?: string | null;
+  mapExtent?: MapExtent | null;
   rangeMode?: RangeMode;
   mapStatistics?: MapStatistics | null;
   leftScenario?: Scenario;
   rightScenario?: Scenario;
   chartGroup?: string | null;
+  chartAxisLabelFilter?: string | null;
 }
 
 /** Returns the mean from whichever stats bucket (left or right) matches the target scenario. */
@@ -44,6 +44,116 @@ function statForScenario(
 function formatVal(val: number): string {
   if (Math.abs(val) >= 10000) return val.toExponential(1);
   return parseFloat(val.toPrecision(3)).toString();
+}
+
+function composeYAxisLabel(axisLabel?: string, units?: string): string {
+  const label = (axisLabel ?? '').trim();
+  const unit = (units ?? '').trim();
+  if (label && unit) return `${label} (${unit})`;
+  return label || unit;
+}
+
+function resolveGroupingVariableForColumn(column: string, groupingVariables: Record<string, string>): string {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const group = groupingVariables[key];
+    if (group && group.trim().length > 0) return group;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, group] of Object.entries(groupingVariables)) {
+    if (normalizeColumnKey(key) === normalizedColumn && group.trim().length > 0) return group;
+  }
+
+  return '';
+}
+
+function resolveVariableTypeForColumn(column: string, variableTypes: Record<string, string>): string {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const variableType = variableTypes[key];
+    if (variableType && variableType.trim().length > 0) return variableType;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, variableType] of Object.entries(variableTypes)) {
+    if (normalizeColumnKey(key) === normalizedColumn && variableType.trim().length > 0) return variableType;
+  }
+
+  return '';
+}
+
+function normalizeColumnKey(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/_/g, '.')
+    .replace(/ - /g, '.')
+    .replace(/-/g, '.')
+    .replace(/\s+/g, '.')
+    .replace(/\$/g, '.')
+    .replace(/'s/g, '.s')
+    .replace(/'/g, '.')
+    .replace(/\//g, '.')
+    .replace(/\+/g, '.')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^\.|\.$/g, '')
+    .toLowerCase();
+
+  return normalized
+    .replace(/\.functional\.group\./g, '.fg.')
+    .replace(/\.species\./g, '.sp.')
+    .replace(/\.{2,}/g, '.');
+}
+
+function resolveMapValueForColumn(
+  values: Record<string, number> | null | undefined,
+  column: string,
+): number | undefined {
+  if (!values) return undefined;
+
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const value = values[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, value] of Object.entries(values)) {
+    if (normalizeColumnKey(key) === normalizedColumn && typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 /** Resolve a value for a given attribute column from site/catchment/map data. */
@@ -73,10 +183,10 @@ function resolveValue(
       // Use site-specific values when available; return undefined (not 0) for absent columns
       // so group scatter points are omitted rather than plotted at zero.
       if (siteIndicators) {
-        const val = siteIndicators[scenario]?.[column];
+        const val = resolveMapValueForColumn(siteIndicators[scenario], column);
         return typeof val === 'number' ? val : undefined;
       }
-      return catchmentData?.[scenario]?.[column];
+      return resolveMapValueForColumn(catchmentData?.[scenario] ?? null, column);
   }
 }
 
@@ -85,11 +195,13 @@ function ChartView({
   attribute,
   siteIndicators,
   siteId,
+  mapExtent,
   rangeMode = 'site',
   mapStatistics,
   leftScenario,
   rightScenario,
   chartGroup,
+  chartAxisLabelFilter,
 }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 500 });
@@ -99,20 +211,42 @@ function ChartView({
   const controls = useAnimation();
 
   const { axisLabels } = useAttributeAxisLabels();
-  const { chartTypes } = useAttributeChartTypes();
-  const { columns } = useColumns();
+  const { units } = useAttributeUnits();
   const { variableTypes } = useAttributeVariableTypes();
-  const { canGraph } = useAttributeCanGraph();
+  const { columns } = useColumns();
+  const { groupingVariables } = useAttributeGroupingVariables();
+  const { xAxisLabels } = useAttributeXAxisLabels();
+
+  const filteredChartColumns = useMemo(() => {
+    const candidates = rangeMode === 'site'
+      ? Array.from(new Set([
+        ...columns,
+        ...Object.keys(variableTypes),
+        ...Object.keys(groupingVariables),
+      ]))
+      : columns;
+
+    return candidates.filter((col) => {
+      if (chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
+      if (chartAxisLabelFilter && resolveGroupingVariableForColumn(col, groupingVariables) !== chartAxisLabelFilter) return false;
+      return true;
+    });
+  }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables]);
 
   // Fallback catchment data when no siteIndicators
   const [catchmentData, setCatchmentData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
   } | null>(null);
+  const [groupedRangeData, setGroupedRangeData] = useState<{
+    reference: Record<string, number>;
+    current: Record<string, number>;
+  } | null>(null);
+  const [groupedRangeLoading, setGroupedRangeLoading] = useState(false);
 
   useEffect(() => {
-    if (!visible || !attribute) return;
-    if (siteIndicators || !siteId || rangeMode !== 'site') {
+    if (!visible) return;
+    if (!siteId || rangeMode !== 'site') {
       setCatchmentData(null);
       return;
     }
@@ -123,35 +257,148 @@ function ChartView({
       .then((catchments) => {
         if (cancelled || !catchments || catchments.length === 0) return;
 
-        let refSum = 0;
-        let curSum = 0;
-        let totalArea = 0;
+        const refSums: Record<string, number> = {};
+        const curSums: Record<string, number> = {};
+        const refAreas: Record<string, number> = {};
+        const curAreas: Record<string, number> = {};
 
         for (const catchment of catchments) {
           const fractionCovered = catchment.aoiFraction ?? 1.0;
           const validArea = catchment.areaKm2 * fractionCovered;
           if (!Number.isFinite(validArea) || validArea <= 0) continue;
 
-          const refVal = catchment.reference?.[attribute];
-          const curVal = catchment.current?.[attribute];
-          if (typeof refVal === 'number') refSum += refVal * validArea;
-          if (typeof curVal === 'number') curSum += curVal * validArea;
-          totalArea += validArea;
+          if (catchment.reference) {
+            for (const [col, value] of Object.entries(catchment.reference)) {
+              if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+              refSums[col] = (refSums[col] ?? 0) + value * validArea;
+              refAreas[col] = (refAreas[col] ?? 0) + validArea;
+            }
+          }
+
+          if (catchment.current) {
+            for (const [col, value] of Object.entries(catchment.current)) {
+              if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+              curSums[col] = (curSums[col] ?? 0) + value * validArea;
+              curAreas[col] = (curAreas[col] ?? 0) + validArea;
+            }
+          }
         }
 
-        if (totalArea <= 0 || cancelled) return;
+        if (cancelled) return;
+
+        const reference: Record<string, number> = {};
+        for (const [col, sum] of Object.entries(refSums)) {
+          const area = refAreas[col] ?? 0;
+          if (area > 0) reference[col] = sum / area;
+        }
+
+        const current: Record<string, number> = {};
+        for (const [col, sum] of Object.entries(curSums)) {
+          const area = curAreas[col] ?? 0;
+          if (area > 0) current[col] = sum / area;
+        }
+
+        if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) return;
 
         if (!cancelled) {
           setCatchmentData({
-            reference: { [attribute]: refSum / totalArea },
-            current: { [attribute]: curSum / totalArea },
+            reference,
+            current,
           });
         }
       })
       .catch(() => { if (!cancelled) setCatchmentData(null); });
 
     return () => { cancelled = true; };
-  }, [siteIndicators, siteId, attribute, visible, rangeMode]);
+  }, [siteIndicators, siteId, visible, rangeMode]);
+
+  useEffect(() => {
+    if (!visible || !chartGroup || !chartAxisLabelFilter) {
+      setGroupedRangeData(null);
+      setGroupedRangeLoading(false);
+      return;
+    }
+
+    if (rangeMode === 'site') {
+      setGroupedRangeData(null);
+      setGroupedRangeLoading(false);
+      return;
+    }
+
+    const groupColumns = filteredChartColumns;
+    if (groupColumns.length === 0) {
+      setGroupedRangeData(null);
+      setGroupedRangeLoading(false);
+      return;
+    }
+
+    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+      setGroupedRangeData(null);
+      setGroupedRangeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setGroupedRangeLoading(true);
+
+    const fetchAggregates = async (scenario: Scenario): Promise<Record<string, number>> => {
+      // Large groups like "functional group" can exceed practical URL/query limits
+      // when sent as one comma-separated list; request in chunks and merge.
+      const batchSize = 12;
+      const batches: string[][] = [];
+      for (let i = 0; i < groupColumns.length; i += batchSize) {
+        batches.push(groupColumns.slice(i, i + batchSize));
+      }
+
+      const merged: Record<string, number> = {};
+      for (const batch of batches) {
+        const params = new URLSearchParams({
+          scenario,
+          attributes: batch.join(','),
+        });
+
+        if (rangeMode === 'extent' && mapExtent?.bounds) {
+          const [minx, miny, maxx, maxy] = mapExtent.bounds;
+          params.set('minx', String(minx));
+          params.set('miny', String(miny));
+          params.set('maxx', String(maxx));
+          params.set('maxy', String(maxy));
+        }
+
+        const resp = await fetch(`/api/aggregate?${params.toString()}`);
+        if (!resp.ok) {
+          throw new Error(`Failed to fetch aggregate data: ${resp.status}`);
+        }
+
+        const payload = await resp.json() as Record<string, number>;
+        Object.assign(merged, payload);
+      }
+
+      return merged;
+    };
+
+    Promise.all([
+      fetchAggregates('reference'),
+      fetchAggregates('current'),
+    ]).then(([reference, current]) => {
+      if (cancelled) return;
+
+      if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) {
+        setGroupedRangeData(null);
+      } else {
+        setGroupedRangeData({ reference, current });
+      }
+      setGroupedRangeLoading(false);
+    }).catch(() => {
+      if (cancelled) return;
+      setGroupedRangeData(null);
+      setGroupedRangeLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, filteredChartColumns]);
 
   // Build summary chart data (existing behavior)
   const summaryData = useMemo(() => {
@@ -167,7 +414,7 @@ function ChartView({
     if (!hasData) return null;
 
     const xLabel = axisLabels[attribute] ?? attribute.replace(/_/g, ' ');
-    const chartType = chartTypes[attribute] ?? 'line';
+    const chartType = 'line';
 
     return {
       xLabel,
@@ -178,34 +425,143 @@ function ChartView({
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, chartTypes, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData]);
+  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData]);
 
-  // Build scatter data for all columns in the selected parent group
-  const groupData = useMemo(() => {
-    if (!chartGroup) return null;
+  // Build grouped chart data for all columns where Grouping variable matches the selected group.
+  const groupedChartData = useMemo(() => {
+    if (!chartGroup || !chartAxisLabelFilter) return null;
 
-    const groupColumns = columns.filter(
-      (col) => variableTypes[col] === chartGroup && canGraph[col],
-    );
+    const groupColumns = filteredChartColumns;
     if (groupColumns.length === 0) return null;
 
-    const points: { ref: number | null; cur: number | null; target: number | null }[] = [];
+    const points: { label: string; ref: number | null; cur: number | null; target: number | null }[] = [];
+    const labelIndex = new Map<string, number>();
 
     for (const col of groupColumns) {
-      const refVal = resolveValue(col, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
-      const curVal = resolveValue(col, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
-      const targetVal = siteIndicators?.ideal?.[col] ?? (typeof refVal === 'number' ? refVal : undefined);
+      const siteRef = resolveMapValueForColumn(siteIndicators?.reference, col);
+      const siteCur = resolveMapValueForColumn(siteIndicators?.current, col);
+      const siteTarget = resolveMapValueForColumn(siteIndicators?.ideal, col);
 
-      points.push({
-        ref: typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null,
-        cur: typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null,
-        target: typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null,
-      });
+      const refVal = rangeMode === 'site'
+        ? (typeof siteRef === 'number'
+          ? siteRef
+          : resolveMapValueForColumn(catchmentData?.reference ?? null, col))
+        : resolveMapValueForColumn(groupedRangeData?.reference ?? null, col);
+      const curVal = rangeMode === 'site'
+        ? (typeof siteCur === 'number'
+          ? siteCur
+          : resolveMapValueForColumn(catchmentData?.current ?? null, col))
+        : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
+      const targetVal = siteTarget ?? (typeof refVal === 'number' ? refVal : undefined);
+      const label = xAxisLabels[col] ?? col;
+
+      const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
+      const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
+      const normalizedTarget = typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
+
+      const existingIndex = labelIndex.get(label);
+      if (existingIndex === undefined) {
+        labelIndex.set(label, points.length);
+        points.push({
+          label,
+          ref: normalizedRef,
+          cur: normalizedCur,
+          target: normalizedTarget,
+        });
+      } else {
+        const existing = points[existingIndex];
+        if (normalizedRef !== null) {
+          existing.ref = (existing.ref ?? 0) + normalizedRef;
+        }
+        if (normalizedCur !== null) {
+          existing.cur = (existing.cur ?? 0) + normalizedCur;
+        }
+        if (normalizedTarget !== null) {
+          existing.target = (existing.target ?? 0) + normalizedTarget;
+        }
+      }
     }
 
-    const valid = points.filter((p) => p.ref !== null || p.cur !== null || p.target !== null);
+    const hideNoRefOrCur = chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Species';
+    const valid = points.filter((p) => {
+      if (hideNoRefOrCur) {
+        const refVal = p.ref ?? 0;
+        const curVal = p.cur ?? 0;
+        return !(refVal === 0 && curVal === 0);
+      }
+      return p.ref !== null || p.cur !== null || p.target !== null;
+    });
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, columns, variableTypes, canGraph, siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario]);
+  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels]);
+
+  const groupedYAxisLabel = useMemo(() => {
+    if (!chartGroup || !chartAxisLabelFilter) return '';
+    const firstColumn = filteredChartColumns[0];
+    if (!firstColumn) return '';
+    return composeYAxisLabel(axisLabels[firstColumn], units[firstColumn]);
+  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, axisLabels, units]);
+
+  useEffect(() => {
+    if (!visible || !chartGroup || !chartAxisLabelFilter) return;
+
+    const debugRows = filteredChartColumns.slice(0, 40).map((col) => {
+      const siteRef = resolveMapValueForColumn(siteIndicators?.reference, col);
+      const siteCur = resolveMapValueForColumn(siteIndicators?.current, col);
+      const siteTarget = resolveMapValueForColumn(siteIndicators?.ideal, col);
+
+      const refVal = rangeMode === 'site'
+        ? (typeof siteRef === 'number'
+          ? siteRef
+          : resolveMapValueForColumn(catchmentData?.reference ?? null, col))
+        : resolveMapValueForColumn(groupedRangeData?.reference ?? null, col);
+      const curVal = rangeMode === 'site'
+        ? (typeof siteCur === 'number'
+          ? siteCur
+          : resolveMapValueForColumn(catchmentData?.current ?? null, col))
+        : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
+
+      return {
+        column: col,
+        label: xAxisLabels[col] ?? col,
+        variableType: resolveVariableTypeForColumn(col, variableTypes),
+        groupingVariable: resolveGroupingVariableForColumn(col, groupingVariables),
+        ref: refVal ?? null,
+        cur: curVal ?? null,
+        target: siteTarget ?? null,
+      };
+    });
+
+    // Debug chart data resolution for grouped views (e.g. Fire/Season, Fire/Total).
+    console.groupCollapsed('[ChartView] Grouped chart debug');
+    console.log('selection', {
+      chartGroup,
+      chartAxisLabelFilter,
+      rangeMode,
+      filteredColumnCount: filteredChartColumns.length,
+      hasGroupedRangeData: Boolean(groupedRangeData),
+      hasCatchmentData: Boolean(catchmentData),
+      hasSiteIndicators: Boolean(siteIndicators),
+      hasGroupedChartData: Boolean(groupedChartData),
+    });
+    console.table(debugRows);
+    if (filteredChartColumns.length > 40) {
+      console.log(`truncated ${filteredChartColumns.length - 40} additional columns`);
+    }
+    console.groupEnd();
+  }, [
+    visible,
+    chartGroup,
+    chartAxisLabelFilter,
+    rangeMode,
+    filteredChartColumns,
+    groupedRangeData,
+    catchmentData,
+    siteIndicators,
+    groupedChartData,
+    xAxisLabels,
+    variableTypes,
+    groupingVariables,
+  ]);
 
   // Responsive sizing
   useEffect(() => {
@@ -235,7 +591,7 @@ function ChartView({
     animFrameRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const hasData = summaryData !== null;
+  const hasData = Boolean(chartGroup && chartAxisLabelFilter) && groupedChartData !== null;
 
   useEffect(() => {
     if (visible && hasData) {
@@ -272,7 +628,15 @@ function ChartView({
         fontSize="sm"
         bg="#1a202c"
       >
-        {visible ? (attribute ? 'Loading\u2026' : 'No attribute selected') : null}
+        {visible
+          ? (
+            chartGroup
+              ? (chartAxisLabelFilter
+                ? (groupedRangeLoading ? 'Loading\u2026' : 'No grouped chart data for this selection')
+                : 'Select a grouping variable to show chart data')
+              : 'Select a variable type to show chart data'
+          )
+          : null}
       </Box>
     );
   }
@@ -283,9 +647,246 @@ function ChartView({
 
   const yTickCount = 5;
 
+  const renderGroupedChart = () => {
+    if (!groupedChartData || !chartGroup) return null;
+
+    const allVals = groupedChartData.flatMap((p) => [p.ref, p.cur, p.target].filter((v): v is number => v !== null));
+    if (allVals.length === 0) return null;
+
+    const minRaw = Math.min(...allVals);
+    const maxRaw = Math.max(...allVals);
+    const minVal = Math.min(0, minRaw);
+    const maxVal = maxRaw === minVal ? minVal + 1 : maxRaw * (maxRaw >= 0 ? 1.1 : 0.9);
+    const range = maxVal - minVal || 1;
+    const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => minVal + (range / yTickCount) * i);
+
+    const categoryCount = groupedChartData.length;
+    const categoryW = plotW / Math.max(categoryCount, 1);
+    const groupPad = Math.min(12, categoryW * 0.15);
+    const innerW = Math.max(categoryW - groupPad * 2, 10);
+    const barGap = Math.min(6, innerW * 0.08);
+    const barW = Math.max((innerW - barGap * 2) / 3, 2);
+    const groupedChartType: string = 'line';
+
+    const yAt = (val: number) => PADDING.top + plotH - ((val - minVal) / range) * plotH;
+    const xBase = (i: number) => PADDING.left + i * categoryW + groupPad;
+    const xCenter = (i: number) => xBase(i) + innerW / 2;
+
+    return (
+      <svg
+        width={width}
+        height={svgHeight}
+        viewBox={`0 0 ${width} ${svgHeight}`}
+        style={{ display: 'block' }}
+      >
+        <rect width={width} height={svgHeight} fill="#1a202c" />
+
+        {yTicks.map((val, ti) => {
+          const y = yAt(val);
+          return (
+            <g key={`group-grid-${ti}`}>
+              <line
+                x1={PADDING.left} y1={y}
+                x2={width - PADDING.right} y2={y}
+                stroke="#2d3748" strokeWidth={1}
+              />
+              <text
+                x={PADDING.left - 8} y={y + 4}
+                textAnchor="end" fill="#718096"
+                fontSize={11} fontFamily="Inter, sans-serif"
+              >
+                {formatVal(val)}
+              </text>
+            </g>
+          );
+        })}
+
+        <line
+          x1={PADDING.left} y1={PADDING.top}
+          x2={PADDING.left} y2={PADDING.top + plotH}
+          stroke="#4a5568" strokeWidth={1}
+        />
+        <line
+          x1={PADDING.left} y1={PADDING.top + plotH}
+          x2={width - PADDING.right} y2={PADDING.top + plotH}
+          stroke="#4a5568" strokeWidth={1}
+        />
+
+        {groupedYAxisLabel && (
+          <text
+            x={20}
+            y={PADDING.top + plotH / 2}
+            transform={`rotate(-90 20 ${PADDING.top + plotH / 2})`}
+            textAnchor="middle"
+            fill="#a0aec0"
+            fontSize={12}
+            fontFamily="Inter, sans-serif"
+            fontWeight={500}
+          >
+            {groupedYAxisLabel}
+          </text>
+        )}
+
+        {groupedChartType === 'bar' ? (
+          groupedChartData.map((item, i) => {
+            const baseX = xBase(i);
+            const values = [item.ref, item.cur, item.target];
+
+            return (
+              <g key={`group-cat-${i}`}>
+                {values.map((val, si) => {
+                  if (val === null) return null;
+                  const x = baseX + si * (barW + barGap);
+                  const scaledVal = minVal + (val - minVal) * progress;
+                  const y = yAt(scaledVal);
+                  const h = Math.max((PADDING.top + plotH) - y, 0);
+
+                  return (
+                    <g key={`group-bar-${i}-${si}`}>
+                      <rect
+                        x={x}
+                        y={y}
+                        width={barW}
+                        height={h}
+                        fill={SERIES_COLORS[si]}
+                        fillOpacity={0.85}
+                        rx={2}
+                      />
+                      {progress > 0.8 && (
+                        <text
+                          x={x + barW / 2}
+                          y={y - 6}
+                          textAnchor="middle"
+                          fill={SERIES_COLORS[si]}
+                          fontSize={10}
+                          fontFamily="Inter, sans-serif"
+                          fontWeight={600}
+                        >
+                          {formatVal(val)}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+
+                <text
+                  x={xCenter(i)}
+                  y={PADDING.top + plotH + 24}
+                  transform={`rotate(-50 ${xCenter(i)} ${PADDING.top + plotH + 24})`}
+                  textAnchor="end"
+                  fill="#718096"
+                  fontSize={9}
+                  fontFamily="Inter, sans-serif"
+                >
+                  {item.label}
+                </text>
+              </g>
+            );
+          })
+        ) : (
+          <>
+            {[2, 1, 0].map((si) => {
+              const values = groupedChartData.map((item) => [item.ref, item.cur, item.target][si]);
+              const path = values
+                .map((val, i) => {
+                  if (val === null) return null;
+                  const y = yAt(minVal + (val - minVal) * progress);
+                  return `${i === 0 ? 'M' : 'L'}${xCenter(i)},${y}`;
+                })
+                .filter(Boolean)
+                .join(' ');
+
+              return path ? (
+                <path
+                  key={`group-line-${si}`}
+                  d={path}
+                  fill="none"
+                  stroke={SERIES_COLORS[si]}
+                  strokeWidth={2}
+                  strokeOpacity={0.9}
+                  strokeDasharray={si === 2 ? '5 4' : undefined}
+                />
+              ) : null;
+            })}
+
+            {groupedChartData.map((item, i) => {
+              const values = [item.ref, item.cur, item.target];
+              return (
+                <g key={`group-line-points-${i}`}>
+                  {[2, 1, 0].map((si) => {
+                    const val = values[si];
+                    if (val === null) return null;
+                    const x = xCenter(i);
+                    const y = yAt(minVal + (val - minVal) * progress);
+                    return (
+                      <g key={`group-point-${i}-${si}`}>
+                        <circle cx={x} cy={y} r={si === 2 ? 4 : 5} fill={SERIES_COLORS[si]} stroke="#1a202c" strokeWidth={1.5} />
+                        {progress > 0.8 && (
+                          <text
+                            x={x}
+                            y={y - 8 - (si === 2 ? 1 : 0)}
+                            textAnchor="middle"
+                            fill={SERIES_COLORS[si]}
+                            fontSize={10}
+                            fontFamily="Inter, sans-serif"
+                            fontWeight={600}
+                          >
+                            {formatVal(val)}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+
+                  <text
+                    x={xCenter(i)}
+                    y={PADDING.top + plotH + 24}
+                    transform={`rotate(-50 ${xCenter(i)} ${PADDING.top + plotH + 24})`}
+                    textAnchor="end"
+                    fill="#718096"
+                    fontSize={9}
+                    fontFamily="Inter, sans-serif"
+                  >
+                    {item.label}
+                  </text>
+                </g>
+              );
+            })}
+          </>
+        )}
+
+        <text
+          x={PADDING.left + plotW / 2}
+          y={svgHeight - 8}
+          textAnchor="middle" fill="#a0aec0"
+          fontSize={13} fontFamily="Inter, sans-serif" fontWeight={500}
+        >
+          {`(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`}
+        </text>
+
+        {SERIES_LABELS.map((label, i) => {
+          const legendX = PADDING.left + i * 150;
+          return (
+            <g key={`group-legend-${i}`}>
+              <circle cx={legendX + 6} cy={14} r={6} fill={SERIES_COLORS[i]} />
+              <text
+                x={legendX + 18} y={19}
+                fill="#a0aec0" fontSize={12}
+                fontFamily="Inter, sans-serif" fontWeight={500}
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
+
   const renderSummaryChart = () => {
     if (!summaryData) return null;
     const { xLabel, chartType, values } = summaryData;
+    const yLabel = attribute ? composeYAxisLabel(axisLabels[attribute], units[attribute]) : '';
     const isBar = chartType === 'bar';
     const numericVals = values.filter((v): v is number => v !== null);
     const minVal = isBar ? 0 : Math.min(...numericVals) * (Math.min(...numericVals) >= 0 ? 0.9 : 1.1);
@@ -351,6 +952,21 @@ function ChartView({
           x2={width - PADDING.right} y2={PADDING.top + plotH}
           stroke="#4a5568" strokeWidth={1}
         />
+
+        {yLabel && (
+          <text
+            x={20}
+            y={PADDING.top + plotH / 2}
+            transform={`rotate(-90 20 ${PADDING.top + plotH / 2})`}
+            textAnchor="middle"
+            fill="#a0aec0"
+            fontSize={12}
+            fontFamily="Inter, sans-serif"
+            fontWeight={500}
+          >
+            {yLabel}
+          </text>
+        )}
 
         {isBar ? (
           values.map((val, i) => {
@@ -470,83 +1086,6 @@ function ChartView({
           );
         })}
 
-        {/* Group scatter overlay */}
-        {groupData && (() => {
-          const allGroupVals = groupData.flatMap((p) =>
-            [p.ref, p.cur, p.target].filter((v): v is number => v !== null),
-          );
-          if (allGroupVals.length === 0) return null;
-          const gMin = Math.min(...allGroupVals);
-          const gMax = Math.max(...allGroupVals);
-          const gRange = gMax - gMin || 1;
-          const groupY = (val: number) =>
-            PADDING.top + plotH - ((val - gMin) / gRange) * plotH * progress;
-
-          return (
-            <g opacity={0.6}>
-              {/* Right axis label */}
-              <text
-                x={width - PADDING.right + 10}
-                y={PADDING.top}
-                fill="#718096" fontSize={10}
-                fontFamily="Inter, sans-serif"
-                textAnchor="start"
-              >
-                Group
-              </text>
-              <text
-                x={width - PADDING.right + 10}
-                y={PADDING.top + 12}
-                fill="#718096" fontSize={10}
-                fontFamily="Inter, sans-serif"
-                textAnchor="start"
-              >
-                (norm.)
-              </text>
-              {/* 0% and 100% tick marks on right axis */}
-              <line
-                x1={width - PADDING.right} y1={PADDING.top}
-                x2={width - PADDING.right + 4} y2={PADDING.top}
-                stroke="#4a5568" strokeWidth={1}
-              />
-              <text x={width - PADDING.right + 6} y={PADDING.top + 4} fill="#4a5568" fontSize={9} fontFamily="Inter, sans-serif">max</text>
-              <line
-                x1={width - PADDING.right} y1={PADDING.top + plotH}
-                x2={width - PADDING.right + 4} y2={PADDING.top + plotH}
-                stroke="#4a5568" strokeWidth={1}
-              />
-              <text x={width - PADDING.right + 6} y={PADDING.top + plotH + 4} fill="#4a5568" fontSize={9} fontFamily="Inter, sans-serif">min</text>
-
-              {(() => {
-                const means = ([
-                  groupData.map((p) => p.ref),
-                  groupData.map((p) => p.cur),
-                  groupData.map((p) => p.target),
-                ] as (number | null)[][]).map((vals) => {
-                  const nums = vals.filter((v): v is number => v !== null);
-                  return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-                });
-                return means.map((val, si) => {
-                  if (val === null) return null;
-                  const cx = isBar ? barXPos(si) + barWidth / 2 : pointX(si);
-                  const cy = groupY(val);
-                  return (
-                    <circle
-                      key={`group-summary-${si}`}
-                      cx={cx} cy={cy}
-                      r={5}
-                      fill={GROUP_SCATTER_COLORS[si]}
-                      fillOpacity={0.85}
-                      stroke={SERIES_COLORS[si]}
-                      strokeWidth={1.5}
-                      strokeOpacity={0.8}
-                    />
-                  );
-                });
-              })()}
-            </g>
-          );
-        })()}
       </svg>
     );
   };
@@ -566,7 +1105,7 @@ function ChartView({
             exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.3 } }}
             style={{ width: '100%', height: '100%' }}
           >
-            {renderSummaryChart()}
+            {chartGroup ? renderGroupedChart() : renderSummaryChart()}
           </motion.div>
         )}
       </AnimatePresence>

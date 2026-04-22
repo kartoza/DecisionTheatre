@@ -63,9 +63,13 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
 	r.HandleFunc("/metadata/axislabels", h.handleMetadataAxisLabels).Methods("GET")
+	r.HandleFunc("/metadata/xaxislabels", h.handleMetadataXAxisLabels).Methods("GET")
+	r.HandleFunc("/metadata/units", h.handleMetadataUnits).Methods("GET")
 	r.HandleFunc("/metadata/charttypes", h.handleMetadataChartTypes).Methods("GET")
+	r.HandleFunc("/metadata/groupingvariables", h.handleMetadataGroupingVariables).Methods("GET")
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
+	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
 
@@ -82,6 +86,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	// Catchment selection for site creation
 	r.HandleFunc("/sites/dissolve-catchments", h.handleDissolveCatchments).Methods("POST")
 	r.HandleFunc("/catchments/geometry/{id}", h.handleCatchmentGeometry).Methods("GET")
+	r.HandleFunc("/catchments/in-bbox", h.handleCatchmentsInBBox).Methods("POST")
 
 	// Site indicators
 	r.HandleFunc("/sites/{id}/indicators", h.handleExtractIndicators).Methods("POST")
@@ -117,15 +122,23 @@ func (h *Handler) handleMetadataColors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	columnIdx := -1
-	colorIdx := -1
+	mapPreferredColorIdx := -1
+	legacyColorIdx := -1
 	for i, header := range headers {
 		normalized := strings.TrimSpace(header)
-		switch normalized {
-		case "ColumnName":
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case "color":
-			colorIdx = i
+		case strings.EqualFold(normalized, "MappreferredColour"):
+			mapPreferredColorIdx = i
+		case strings.EqualFold(normalized, "color"):
+			legacyColorIdx = i
 		}
+	}
+
+	colorIdx := mapPreferredColorIdx
+	if colorIdx == -1 {
+		colorIdx = legacyColorIdx
 	}
 
 	if columnIdx == -1 || colorIdx == -1 {
@@ -143,7 +156,7 @@ func (h *Handler) handleMetadataColors(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		column := strings.TrimSpace(record[columnIdx])
-		color := strings.TrimSpace(record[colorIdx])
+		color := normalizeMetadataColor(strings.TrimSpace(record[colorIdx]))
 		if column == "" || color == "" {
 			continue
 		}
@@ -247,8 +260,12 @@ func (h *Handler) handleMetadataVariableTypes(w http.ResponseWriter, r *http.Req
 		switch {
 		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case strings.EqualFold(normalized, "VariableType"):
+		case strings.EqualFold(normalized, "VariableType_highest level of grouping"):
 			variableTypeIdx = i
+		case strings.EqualFold(normalized, "VariableType"):
+			if variableTypeIdx == -1 {
+				variableTypeIdx = i
+			}
 		}
 	}
 
@@ -372,7 +389,7 @@ func (h *Handler) handleMetadataCanMap(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case strings.EqualFold(normalized, "canMap"):
+		case strings.EqualFold(normalized, "canMap"), strings.EqualFold(normalized, "MapthisYN"):
 			canMapIdx = i
 		}
 	}
@@ -435,7 +452,7 @@ func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request)
 		switch {
 		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case strings.EqualFold(normalized, "canGraph"):
+		case strings.EqualFold(normalized, "canGraph"), strings.EqualFold(normalized, "graphthisYN"):
 			canGraphIdx = i
 		}
 	}
@@ -531,6 +548,130 @@ func (h *Handler) handleMetadataAxisLabels(w http.ResponseWriter, r *http.Reques
 	respondJSON(w, http.StatusOK, axisLabels)
 }
 
+// handleMetadataXAxisLabels returns a map of attribute column names to x-axis labels.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataXAxisLabels(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata x axis labels unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	xAxisLabelIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "x axis"), strings.EqualFold(normalized, "x_axis"), strings.EqualFold(normalized, "x-axis"):
+			xAxisLabelIdx = i
+		}
+	}
+
+	if columnIdx == -1 || xAxisLabelIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	xAxisLabels := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || xAxisLabelIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		xAxisLabel := strings.TrimSpace(record[xAxisLabelIdx])
+		if column == "" || xAxisLabel == "" {
+			continue
+		}
+		xAxisLabels[column] = xAxisLabel
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			xAxisLabels[normalized] = xAxisLabel
+		}
+	}
+
+	respondJSON(w, http.StatusOK, xAxisLabels)
+}
+
+// handleMetadataUnits returns a map of attribute column names to units.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataUnits(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata units unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	unitsIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "Units"):
+			unitsIdx = i
+		}
+	}
+
+	if columnIdx == -1 || unitsIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	units := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || unitsIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		unit := strings.TrimSpace(record[unitsIdx])
+		if column == "" || unit == "" {
+			continue
+		}
+		units[column] = unit
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			units[normalized] = unit
+		}
+	}
+
+	respondJSON(w, http.StatusOK, units)
+}
+
 // handleMetadataChartTypes returns a map of attribute column names to chart types.
 // It reads from metadata.csv in the data directory.
 func (h *Handler) handleMetadataChartTypes(w http.ResponseWriter, r *http.Request) {
@@ -557,10 +698,10 @@ func (h *Handler) handleMetadataChartTypes(w http.ResponseWriter, r *http.Reques
 	chartTypeIdx := -1
 	for i, header := range headers {
 		normalized := strings.TrimSpace(header)
-		switch normalized {
-		case "ColumnName":
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case "chartType":
+		case strings.EqualFold(normalized, "chartType"), strings.EqualFold(normalized, "typeofgraph"):
 			chartTypeIdx = i
 		}
 	}
@@ -591,6 +732,68 @@ func (h *Handler) handleMetadataChartTypes(w http.ResponseWriter, r *http.Reques
 	}
 
 	respondJSON(w, http.StatusOK, chartTypes)
+}
+
+// handleMetadataGroupingVariables returns a map of attribute column names to Grouping variable values.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataGroupingVariables(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata grouping variables unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	columnIdx := -1
+	groupingVariableIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "Grouping variable"):
+			groupingVariableIdx = i
+		}
+	}
+
+	if columnIdx == -1 || groupingVariableIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+
+	groupingVariables := make(map[string]string)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || groupingVariableIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		groupingVariable := strings.TrimSpace(record[groupingVariableIdx])
+		if column == "" || groupingVariable == "" {
+			continue
+		}
+		groupingVariables[column] = groupingVariable
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			groupingVariables[normalized] = groupingVariable
+		}
+	}
+
+	respondJSON(w, http.StatusOK, groupingVariables)
 }
 
 // handleMetadataGroupingValues returns a map of attribute column names to their GroupingValues.
@@ -666,6 +869,42 @@ func respondError(w http.ResponseWriter, status int, message string) {
 }
 
 var dotNormalizer = regexp.MustCompile(`\.{2,}`)
+
+func normalizeMetadataColor(raw string) string {
+	color := strings.TrimSpace(raw)
+	if color == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(color, "#") {
+		color = "#" + color
+	}
+
+	body := strings.ToUpper(strings.TrimPrefix(color, "#"))
+	if body == "" {
+		return ""
+	}
+
+	// Fix common OCR-style typos seen in metadata color values.
+	body = strings.NewReplacer(
+		"O", "0",
+		"I", "1",
+		"L", "1",
+		"S", "5",
+	).Replace(body)
+
+	if l := len(body); l != 3 && l != 4 && l != 6 && l != 8 {
+		return ""
+	}
+
+	for _, ch := range body {
+		if (ch < '0' || ch > '9') && (ch < 'A' || ch > 'F') {
+			return ""
+		}
+	}
+
+	return "#" + body
+}
 
 func normalizeMetadataColumn(name string) string {
 	if name == "catchID" {
@@ -765,6 +1004,87 @@ func (h *Handler) handleScenarioData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, data)
+}
+
+// handleAggregateData returns area-weighted means for a scenario across one or more attributes.
+// Query params:
+//
+//	scenario: scenario name (required)
+//	attributes: comma-separated list of attribute column names (required)
+//	minx,miny,maxx,maxy: optional bbox for extent aggregation
+func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusNotFound, "no geo data loaded")
+		return
+	}
+
+	q := r.URL.Query()
+	scenario := strings.TrimSpace(q.Get("scenario"))
+	if scenario == "" {
+		respondError(w, http.StatusBadRequest, "scenario query parameter is required")
+		return
+	}
+
+	rawAttrs := strings.TrimSpace(q.Get("attributes"))
+	if rawAttrs == "" {
+		respondError(w, http.StatusBadRequest, "attributes query parameter is required")
+		return
+	}
+
+	parts := strings.Split(rawAttrs, ",")
+	attributes := make([]string, 0, len(parts))
+	for _, p := range parts {
+		attr := strings.TrimSpace(p)
+		if attr != "" {
+			attributes = append(attributes, attr)
+		}
+	}
+	if len(attributes) == 0 {
+		respondError(w, http.StatusBadRequest, "no valid attributes provided")
+		return
+	}
+
+	var bbox *[4]float64
+	hasMinX := q.Get("minx") != ""
+	hasMinY := q.Get("miny") != ""
+	hasMaxX := q.Get("maxx") != ""
+	hasMaxY := q.Get("maxy") != ""
+	if hasMinX || hasMinY || hasMaxX || hasMaxY {
+		if !(hasMinX && hasMinY && hasMaxX && hasMaxY) {
+			respondError(w, http.StatusBadRequest, "minx,miny,maxx,maxy must all be provided together")
+			return
+		}
+
+		minx, err := strconv.ParseFloat(q.Get("minx"), 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid minx parameter")
+			return
+		}
+		miny, err := strconv.ParseFloat(q.Get("miny"), 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid miny parameter")
+			return
+		}
+		maxx, err := strconv.ParseFloat(q.Get("maxx"), 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid maxx parameter")
+			return
+		}
+		maxy, err := strconv.ParseFloat(q.Get("maxy"), 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid maxy parameter")
+			return
+		}
+		bbox = &[4]float64{minx, miny, maxx, maxy}
+	}
+
+	agg, err := h.gpkgStore.GetScenarioAverages(scenario, attributes, bbox)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, agg)
 }
 
 // handleComparisonData returns comparison data for two scenarios
@@ -999,6 +1319,21 @@ type DissolveCatchmentsResponse struct {
 	Area        float64            `json:"area"`
 }
 
+type CatchmentsInBBoxRequest struct {
+	MinX  float64 `json:"minX"`
+	MinY  float64 `json:"minY"`
+	MaxX  float64 `json:"maxX"`
+	MaxY  float64 `json:"maxY"`
+	Limit int     `json:"limit"`
+}
+
+type CatchmentsInBBoxResponse struct {
+	Type         string                   `json:"type"`
+	Features     []geodata.GeoJSONFeature `json:"features"`
+	CatchmentIDs []string                 `json:"catchmentIds"`
+	Truncated    bool                     `json:"truncated"`
+}
+
 // handleDissolveCatchments creates a dissolved boundary from selected catchments
 func (h *Handler) handleDissolveCatchments(w http.ResponseWriter, r *http.Request) {
 	if h.gpkgStore == nil {
@@ -1137,6 +1472,53 @@ func (h *Handler) handleCatchmentGeometry(w http.ResponseWriter, r *http.Request
 	}
 
 	respondJSON(w, http.StatusOK, features[0])
+}
+
+// handleCatchmentsInBBox returns catchment features intersecting a map bounding box.
+func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	var req CatchmentsInBBoxRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.MinX > req.MaxX || req.MinY > req.MaxY {
+		respondError(w, http.StatusBadRequest, "invalid bounding box")
+		return
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 5000
+	}
+	if limit > 20000 {
+		limit = 20000
+	}
+
+	features, err := h.gpkgStore.GetCatchmentsByBBox(req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	ids := make([]string, 0, len(features))
+	for _, feature := range features {
+		ids = append(ids, strconv.FormatInt(feature.ID, 10))
+	}
+
+	response := CatchmentsInBBoxResponse{
+		Type:         "FeatureCollection",
+		Features:     features,
+		CatchmentIDs: ids,
+		Truncated:    len(features) >= limit,
+	}
+
+	respondJSON(w, http.StatusOK, response)
 }
 
 // ============================================================================

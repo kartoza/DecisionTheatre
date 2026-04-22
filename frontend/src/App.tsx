@@ -13,6 +13,7 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import { patchSite, useServerInfo } from './hooks/useApi';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
+  DEFAULT_PANE_STATES,
   loadPaneStates,
   savePaneStates,
   loadLayoutMode,
@@ -32,7 +33,7 @@ function App() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
-  const [viewModes, setViewModes] = useState<ViewMode[]>(['map', 'map', 'map', 'map']);
+  const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
   const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
     // Auto-open filter panel for the focused pane when starting in single mode
     const mode = loadLayoutMode();
@@ -52,8 +53,36 @@ function App() {
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
-  const [chartGroup, setChartGroup] = useState<string | null>(null);
+  const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
+  const [chartAxisLabelFilters, setChartAxisLabelFilters] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
   const { info } = useServerInfo();
+  const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
+
+  useEffect(() => {
+    setViewModes((prev) => {
+      if (prev.length === paneStates.length) return prev;
+      if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
+      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => prev[focusedPane] ?? 'map')];
+    });
+
+    setChartGroups((prev) => {
+      if (prev.length === paneStates.length) return prev;
+      if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
+      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => null)];
+    });
+
+    setChartAxisLabelFilters((prev) => {
+      if (prev.length === paneStates.length) return prev;
+      if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
+      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => null)];
+    });
+
+    setFocusedPane((prev) => Math.min(prev, Math.max(0, paneStates.length - 1)));
+    setIndicatorPaneIndex((prev) => {
+      if (prev === null) return prev;
+      return Math.min(prev, Math.max(0, paneStates.length - 1));
+    });
+  }, [focusedPane, paneStates.length]);
 
   // Persist state changes to local storage
   useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
@@ -184,6 +213,59 @@ function App() {
     setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
   }, [focusedPane]);
 
+  const handleAddPane = useCallback(() => {
+    setPaneStates((prev) => {
+      const source = prev[focusedPane] ?? prev[0] ?? { leftScenario: 'reference', rightScenario: 'current', attribute: '' };
+      const nextIndex = prev.length;
+      setFocusedPane(nextIndex);
+      setIndicatorPaneIndex(null);
+      return [...prev, { ...source }];
+    });
+  }, [focusedPane]);
+
+  const handleRemovePane = useCallback((paneIndex: number) => {
+    setPaneStates((prev) => {
+      if (prev.length <= minimumQuadPaneCount || paneIndex < minimumQuadPaneCount || paneIndex >= prev.length) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== paneIndex);
+    });
+
+    setViewModes((prev) => {
+      if (prev.length <= minimumQuadPaneCount || paneIndex < minimumQuadPaneCount || paneIndex >= prev.length) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== paneIndex);
+    });
+
+    setChartGroups((prev) => {
+      if (prev.length <= minimumQuadPaneCount || paneIndex < minimumQuadPaneCount || paneIndex >= prev.length) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== paneIndex);
+    });
+
+    setChartAxisLabelFilters((prev) => {
+      if (prev.length <= minimumQuadPaneCount || paneIndex < minimumQuadPaneCount || paneIndex >= prev.length) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== paneIndex);
+    });
+
+    setFocusedPane((prev) => {
+      if (prev > paneIndex) return prev - 1;
+      if (prev === paneIndex) return Math.max(0, paneIndex - 1);
+      return prev;
+    });
+
+    setIndicatorPaneIndex((prev) => {
+      if (prev === null) return null;
+      if (prev > paneIndex) return prev - 1;
+      if (prev === paneIndex) return null;
+      return prev;
+    });
+  }, [minimumQuadPaneCount]);
+
   // Update a specific pane's comparison state
   const handlePaneStateChange = useCallback((paneIndex: number, partial: Partial<ComparisonState>) => {
     setPaneStates((prev) => {
@@ -205,6 +287,10 @@ function App() {
     });
   }, [layoutMode]);
 
+  const handlePaneAttributeChange = useCallback((paneIndex: number, attribute: string) => {
+    handlePaneStateChange(paneIndex, { attribute });
+  }, [handlePaneStateChange]);
+
   const handleLeftChange = useCallback((scenario: Scenario) => {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
@@ -219,6 +305,30 @@ function App() {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { attribute });
   }, [indicatorPaneIndex, handlePaneStateChange]);
+
+  const handleChartGroupChange = useCallback((group: string | null) => {
+    if (indicatorPaneIndex === null) return;
+    setChartGroups((prev) => {
+      const next = [...prev];
+      next[indicatorPaneIndex] = group;
+      return next;
+    });
+    // Reset grouping-variable filter when changing variable type for this pane.
+    setChartAxisLabelFilters((prev) => {
+      const next = [...prev];
+      next[indicatorPaneIndex] = null;
+      return next;
+    });
+  }, [indicatorPaneIndex]);
+
+  const handleChartAxisLabelFilterChange = useCallback((axisLabel: string | null) => {
+    if (indicatorPaneIndex === null) return;
+    setChartAxisLabelFilters((prev) => {
+      const next = [...prev];
+      next[indicatorPaneIndex] = axisLabel;
+      return next;
+    });
+  }, [indicatorPaneIndex]);
 
 
   const handleIdentify = useCallback((result: IdentifyResult) => {
@@ -409,9 +519,12 @@ function App() {
             paneStates={paneStates}
             viewModes={viewModes}
             onViewModeChange={handleViewModeChange}
+            onAttributeChange={handlePaneAttributeChange}
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
+            onAddPane={handleAddPane}
+            onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
             onMapExtentChange={handleMapExtentChange}
@@ -433,7 +546,9 @@ function App() {
             rangeMode={rangeMode}
             onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
-            chartGroup={chartGroup}
+            chartGroups={chartGroups}
+            chartAxisLabelFilters={chartAxisLabelFilters}
+            mapExtent={mapExtent}
           />
         </Box>
 
@@ -446,8 +561,6 @@ function App() {
           onAttributeChange={handleAttributeChange}
           paneIndex={indicatorPaneIndex}
           viewMode={indicatorPaneIndex !== null ? viewModes[indicatorPaneIndex] : viewModes[0]}
-          identifyResult={identifyResult}
-          onClearIdentify={() => setIdentifyResult(null)}
           isExploreMode={isExploreMode}
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
@@ -467,8 +580,10 @@ function App() {
           onColorScaleModeChange={setColorScaleMode}
           rangeMode={rangeMode}
           onRangeModeChange={setRangeMode}
-          chartGroup={chartGroup}
-          onChartGroupChange={setChartGroup}
+          chartGroup={indicatorPaneIndex !== null ? chartGroups[indicatorPaneIndex] : chartGroups[0]}
+          onChartGroupChange={handleChartGroupChange}
+          chartAxisLabelFilter={indicatorPaneIndex !== null ? chartAxisLabelFilters[indicatorPaneIndex] : chartAxisLabelFilters[0]}
+          onChartAxisLabelFilterChange={handleChartAxisLabelFilterChange}
         />
       </Flex>
 

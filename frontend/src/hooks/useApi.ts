@@ -211,6 +211,38 @@ export function useAttributeAxisLabels() {
   return { axisLabels, loading };
 }
 
+export function useAttributeXAxisLabels() {
+  const [xAxisLabels, setXAxisLabels] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/xaxislabels`)
+      .then((data) => {
+        setXAxisLabels(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { xAxisLabels, loading };
+}
+
+export function useAttributeUnits() {
+  const [units, setUnits] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/units`)
+      .then((data) => {
+        setUnits(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { units, loading };
+}
+
 export function useAttributeCanGraph() {
   const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -241,6 +273,22 @@ export function useAttributeChartTypes() {
   }, []);
 
   return { chartTypes, loading };
+}
+
+export function useAttributeGroupingVariables() {
+  const [groupingVariables, setGroupingVariables] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvariables`)
+      .then((data) => {
+        setGroupingVariables(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { groupingVariables, loading };
 }
 
 export function useAttributeGroupingValues() {

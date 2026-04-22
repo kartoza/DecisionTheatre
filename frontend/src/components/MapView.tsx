@@ -3,8 +3,6 @@ import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@cha
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import { booleanWithin, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
-import * as turf from '@turf/turf';
-import type { Feature as GeoJSONFeature, Geometry as GeoJSONGeometry } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -74,9 +72,51 @@ const MIN_CATCHMENT_ZOOM = 7;
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-const MAX_FILL_OPACITY = 0.9;
+const MAX_FILL_OPACITY = 0.82;
+const CHOROPLETH_BASE_FILL_OPACITY = 0.68;
+const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
+const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
+const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
+const CHOROPLETH_EDGE_BLEND_OPACITY = 0.12;
+const CATCHMENTS_OUTLINES_LAYER_ID = 'Catchments Outlines';
+const CATCHMENTS_OUTLINES_SOFT_OPACITY = 0.03;
+const catchmentsOutlineOpacityRef = new WeakMap<maplibregl.Map, unknown>();
 
 let mapViewInstanceCounter = 0;
+
+function isNAValue(value: unknown): boolean {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'n/a' || normalized === 'na' || normalized === 'nan';
+  }
+  if (typeof value === 'number') {
+    return Number.isNaN(value);
+  }
+  return false;
+}
+
+function formatIdentifyValue(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value.toFixed(2);
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  return '-';
+}
+
+function getNumericIdentifyValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getComparisonTrend(leftValue: number | null, rightValue: number | null): 'up' | 'down' | 'neutral' {
+  if (leftValue === null || rightValue === null) return 'neutral';
+  const threshold = 0.05; // 5% threshold to match indicator trend behavior
+  const change = (rightValue - leftValue) / Math.abs(leftValue || 1);
+  if (change > threshold) return 'up';
+  if (change < -threshold) return 'down';
+  return 'neutral';
+}
 
 type PolygonalGeometry = GeoJSON.Polygon | GeoJSON.MultiPolygon;
 
@@ -420,7 +460,7 @@ function buildFillColorExpression(
   max: number,
   baseColor?: string | null
 ): maplibregl.ExpressionSpecification | string {
-  // When a metadata base color is provided, blend from black (low values)
+  // When a metadata base color is provided, blend from white (low values)
   // to the base color (high values) instead of using opacity.
   if (baseColor) {
     const rgb = hexToRgb(baseColor);
@@ -436,7 +476,7 @@ function buildFillColorExpression(
       ['linear'],
       ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
       0,
-      '#000000',
+      '#FFFFFF',
       1,
       baseColor,
     ] as maplibregl.ExpressionSpecification;
@@ -472,7 +512,7 @@ function buildOpacityColorExpression(
   max: number,
   baseColor: string
 ): maplibregl.ExpressionSpecification | string {
-  // Blend color from black (low values) to the metadata base color
+  // Blend color from white (low values) to the metadata base color
   // (high values). Opacity will be handled separately by layer paint.
   const rgb = hexToRgb(baseColor);
   if (!rgb) return baseColor;
@@ -487,7 +527,7 @@ function buildOpacityColorExpression(
     ['linear'],
     ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
     0,
-    '#000000',
+    '#FFFFFF',
     1,
     baseColor,
   ] as maplibregl.ExpressionSpecification;
@@ -511,6 +551,25 @@ function buildExtrusionExpression(
     ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
     MAX_EXTRUSION_HEIGHT,
   ] as maplibregl.ExpressionSpecification;
+}
+
+function setCatchmentOutlinesSoftness(map: maplibregl.Map, soften: boolean) {
+  if (!map.getLayer(CATCHMENTS_OUTLINES_LAYER_ID)) return;
+
+  if (soften) {
+    if (!catchmentsOutlineOpacityRef.has(map)) {
+      catchmentsOutlineOpacityRef.set(map, map.getPaintProperty(CATCHMENTS_OUTLINES_LAYER_ID, 'line-opacity'));
+    }
+    map.setPaintProperty(CATCHMENTS_OUTLINES_LAYER_ID, 'line-opacity', CATCHMENTS_OUTLINES_SOFT_OPACITY);
+    return;
+  }
+
+  if (!catchmentsOutlineOpacityRef.has(map)) return;
+  const originalOpacity = catchmentsOutlineOpacityRef.get(map);
+  if (originalOpacity !== undefined) {
+    map.setPaintProperty(CATCHMENTS_OUTLINES_LAYER_ID, 'line-opacity', originalOpacity as maplibregl.ExpressionSpecification | number);
+  }
+  catchmentsOutlineOpacityRef.delete(map);
 }
 
 // Layer IDs for site boundary
@@ -551,6 +610,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Identify mode state
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
 
+  // Choropleth layer visibility state
+  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  const isChoroplethEnabledRef = useRef(isChoroplethEnabled);
+  isChoroplethEnabledRef.current = isChoroplethEnabled;
+
   // Maps ready state - triggers re-render when maps finish loading
   const [areMapsReady, setAreMapsReady] = useState(false);
 
@@ -565,6 +629,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   const attributeColorsRef = useRef(attributeColors);
   attributeColorsRef.current = attributeColors;
+  const attributeDetailsRef = useRef(attributeDetails);
+  attributeDetailsRef.current = attributeDetails;
 
   // Store identify mode and callback in refs for event handlers
   const isIdentifyModeRef = useRef(isIdentifyMode);
@@ -589,6 +655,32 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const siteCatchmentIdsRef = useRef<Set<string> | null>(null);
   const boundaryGeometryRef = useRef<GeoJSON.Geometry | null>(siteGeometry ?? null);
   boundaryGeometryRef.current = siteGeometry ?? null;
+  const identifyOverlayRef = useRef<HTMLDivElement | null>(null);
+  const identifyOverlayLngLatRef = useRef<[number, number] | null>(null);
+
+  const removeIdentifyOverlay = useCallback((clearIdentify: boolean) => {
+    if (identifyOverlayRef.current) {
+      identifyOverlayRef.current.remove();
+      identifyOverlayRef.current = null;
+    }
+    identifyOverlayLngLatRef.current = null;
+
+    if (clearIdentify) {
+      onIdentifyRef.current?.(null);
+    }
+  }, []);
+
+  const updateIdentifyOverlayPosition = useCallback(() => {
+    const overlay = identifyOverlayRef.current;
+    const lngLat = identifyOverlayLngLatRef.current;
+    const leftMap = leftMapRef.current;
+
+    if (!overlay || !lngLat || !leftMap) return;
+
+    const projected = leftMap.project({ lng: lngLat[0], lat: lngLat[1] });
+    overlay.style.left = `${projected.x}px`;
+    overlay.style.top = `${projected.y}px`;
+  }, []);
 
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
@@ -602,6 +694,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (!leftMap || !rightMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
+
+    if (!isChoroplethEnabledRef.current) {
+      removeChoroplethLayers(leftMap, 'left');
+      removeChoroplethLayers(rightMap, 'right');
+      extentZoneStatsRef.current = null;
+      if (onStatisticsChangeRef.current) {
+        onStatisticsChangeRef.current({
+          domainRange: null,
+          leftStats: null,
+          rightStats: null,
+          fullStats: fullZoneStatsRef.current,
+          siteStats: siteZoneStatsRef.current,
+        });
+      }
+      return;
+    }
 
     // Clear existing choropleth layers if no attribute selected
     if (!c.attribute) {
@@ -1096,8 +1204,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!map.style) return;
 
     const layerId = `choropleth-${side}`;
+    const edgeBlendLayerId = `${layerId}-edge-blend`;
     const sourceId = `choropleth-source-${side}`;
 
+    if (map.getLayer(edgeBlendLayerId)) {
+      map.removeLayer(edgeBlendLayerId);
+    }
     if (map.getLayer(layerId)) {
       map.removeLayer(layerId);
     }
@@ -1107,6 +1219,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (map.getSource(sourceId)) {
       map.removeSource(sourceId);
     }
+
+    setCatchmentOutlinesSoftness(map, false);
   }
 
   /**
@@ -1124,6 +1238,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   ) {
     const layerId = `choropleth-${side}`;
     const layer3dId = `${layerId}-3d`;
+    const edgeBlendLayerId = `${layerId}-edge-blend`;
     const sourceId = `choropleth-source-${side}`;
 
     try {
@@ -1139,7 +1254,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         });
       }
 
+      setCatchmentOutlinesSoftness(map, true);
+
       if (extruded) {
+        if (map.getLayer(edgeBlendLayerId)) {
+          map.removeLayer(edgeBlendLayerId);
+        }
         if (map.getLayer(layerId)) {
           map.removeLayer(layerId);
         }
@@ -1185,9 +1305,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             source: sourceId,
             paint: {
               'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
+              // Keep boundaries soft so adjacent catchments blend visually.
+              'fill-outline-color': CHOROPLETH_OUTLINE_COLOR,
               'fill-opacity': useOpacityScale
                 ? buildFillOpacityExpression(MAX_FILL_OPACITY)
-                : 0.75,
+                : CHOROPLETH_BASE_FILL_OPACITY,
             },
           });
         } else {
@@ -1196,13 +1318,37 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             'fill-color',
             buildFillColorExpression(attribute, min, max, attributeColor),
           );
+          map.setPaintProperty(layerId, 'fill-outline-color', CHOROPLETH_OUTLINE_COLOR);
           map.setPaintProperty(
             layerId,
             'fill-opacity',
             useOpacityScale
               ? buildFillOpacityExpression(MAX_FILL_OPACITY)
-              : 0.75,
+              : CHOROPLETH_BASE_FILL_OPACITY,
           );
+        }
+
+        const edgeColorExpression = useOpacityScale && attributeColor
+          ? buildOpacityColorExpression(attribute, min, max, attributeColor)
+          : buildFillColorExpression(attribute, min, max, attributeColor);
+
+        if (!map.getLayer(edgeBlendLayerId)) {
+          map.addLayer({
+            id: edgeBlendLayerId,
+            type: 'line',
+            source: sourceId,
+            paint: {
+              'line-color': edgeColorExpression,
+              'line-width': CHOROPLETH_EDGE_BLEND_WIDTH,
+              'line-blur': CHOROPLETH_EDGE_BLEND_BLUR,
+              'line-opacity': CHOROPLETH_EDGE_BLEND_OPACITY,
+            },
+          });
+        } else {
+          map.setPaintProperty(edgeBlendLayerId, 'line-color', edgeColorExpression);
+          map.setPaintProperty(edgeBlendLayerId, 'line-width', CHOROPLETH_EDGE_BLEND_WIDTH);
+          map.setPaintProperty(edgeBlendLayerId, 'line-blur', CHOROPLETH_EDGE_BLEND_BLUR);
+          map.setPaintProperty(edgeBlendLayerId, 'line-opacity', CHOROPLETH_EDGE_BLEND_OPACITY);
         }
       }
 
@@ -1255,6 +1401,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Toggle identify mode
   const toggleIdentifyMode = useCallback(() => {
     setIsIdentifyMode(prev => !prev);
+  }, []);
+
+  const toggleChoropleth = useCallback(() => {
+    setIsChoroplethEnabled((prev) => !prev);
   }, []);
 
   // Toggle split-screen swiper on/off
@@ -1412,10 +1562,255 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       .then((data) => {
         if (data && onIdentifyRef.current) {
           onIdentifyRef.current({ catchmentID: catchIdStr, data });
+
+          const currentComparison = comparisonRef.current;
+          const leftScenario = currentComparison.leftScenario;
+          const rightScenario = currentComparison.rightScenario;
+          const leftLabel = SCENARIOS.find((entry) => entry.id === leftScenario)?.label || leftScenario;
+          const rightLabel = SCENARIOS.find((entry) => entry.id === rightScenario)?.label || rightScenario;
+          const details = attributeDetailsRef.current;
+
+          const scenarioData = data as Record<string, Record<string, unknown>>;
+          const allAttributes = new Set<string>();
+          for (const values of Object.values(scenarioData)) {
+            for (const attr of Object.keys(values)) {
+              allAttributes.add(attr);
+            }
+          }
+
+          const rows = Array.from(allAttributes)
+            .sort()
+            .map((attr) => {
+              const leftValue = scenarioData[leftScenario]?.[attr];
+              const rightValue = scenarioData[rightScenario]?.[attr];
+
+              if (isNAValue(leftValue) || isNAValue(rightValue)) {
+                return null;
+              }
+
+              const leftNumeric = getNumericIdentifyValue(leftValue);
+              const rightNumeric = getNumericIdentifyValue(rightValue);
+              const trend = getComparisonTrend(leftNumeric, rightNumeric);
+              const delta = leftNumeric === null || rightNumeric === null
+                ? null
+                : rightNumeric - leftNumeric;
+              const referenceMagnitude = leftNumeric === null ? 1 : Math.abs(leftNumeric) || 1;
+              const trendRatio = delta === null ? 0 : Math.min(1, Math.abs(delta) / referenceMagnitude);
+              const trendWidthPx = delta === null ? 0 : Math.max(2, trendRatio * 26);
+
+              return {
+                label: details[attr] ?? attr,
+                left: formatIdentifyValue(leftValue),
+                right: formatIdentifyValue(rightValue),
+                trend,
+                delta,
+                trendWidthPx,
+              };
+            })
+            .filter((row): row is { label: string; left: string; right: string; trend: 'up' | 'down' | 'neutral'; delta: number | null; trendWidthPx: number } => row !== null);
+
+          const popupContainer = document.createElement('div');
+          popupContainer.style.position = 'absolute';
+          popupContainer.style.zIndex = '20';
+          popupContainer.style.transform = 'translate(-50%, calc(-100% - 12px))';
+          popupContainer.style.minWidth = '280px';
+          popupContainer.style.maxHeight = '300px';
+          popupContainer.style.overflowY = 'auto';
+          popupContainer.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          popupContainer.style.background = '#1A202C';
+          popupContainer.style.color = '#E2E8F0';
+          popupContainer.style.padding = '8px';
+          popupContainer.style.borderRadius = '8px';
+
+          const header = document.createElement('div');
+          header.style.display = 'flex';
+          header.style.alignItems = 'center';
+          header.style.justifyContent = 'space-between';
+          header.style.marginBottom = '8px';
+
+          const title = document.createElement('div');
+          title.style.fontWeight = '700';
+          title.style.color = '#F7FAFC';
+          title.textContent = `Catchment ${catchIdStr}`;
+
+          const closeButton = document.createElement('button');
+          closeButton.type = 'button';
+          closeButton.textContent = 'x';
+          closeButton.style.background = 'transparent';
+          closeButton.style.border = '1px solid #4A5568';
+          closeButton.style.color = '#E2E8F0';
+          closeButton.style.borderRadius = '4px';
+          closeButton.style.width = '22px';
+          closeButton.style.height = '22px';
+          closeButton.style.cursor = 'pointer';
+          closeButton.style.lineHeight = '18px';
+          closeButton.style.fontWeight = '700';
+
+          header.appendChild(title);
+          header.appendChild(closeButton);
+          popupContainer.appendChild(header);
+
+          const table = document.createElement('table');
+          table.style.width = '100%';
+          table.style.borderCollapse = 'collapse';
+          table.style.fontSize = '12px';
+
+          const headerRow = document.createElement('tr');
+          const attrHead = document.createElement('th');
+          attrHead.textContent = 'Attribute';
+          attrHead.style.textAlign = 'left';
+          attrHead.style.padding = '4px 6px';
+          attrHead.style.color = '#CBD5E0';
+
+          const leftHead = document.createElement('th');
+          leftHead.textContent = leftLabel;
+          leftHead.style.textAlign = 'right';
+          leftHead.style.padding = '4px 6px';
+          leftHead.style.color = '#CBD5E0';
+
+          const rightHead = document.createElement('th');
+          rightHead.textContent = rightLabel;
+          rightHead.style.textAlign = 'right';
+          rightHead.style.padding = '4px 6px';
+          rightHead.style.color = '#CBD5E0';
+
+          const trendHead = document.createElement('th');
+          trendHead.textContent = 'Trend';
+          trendHead.style.textAlign = 'left';
+          trendHead.style.padding = '4px 6px';
+          trendHead.style.color = '#CBD5E0';
+
+          headerRow.appendChild(attrHead);
+          headerRow.appendChild(leftHead);
+          headerRow.appendChild(rightHead);
+          headerRow.appendChild(trendHead);
+          table.appendChild(headerRow);
+
+          for (const row of rows) {
+            const tr = document.createElement('tr');
+
+            const attrCell = document.createElement('td');
+            attrCell.textContent = row.label;
+            attrCell.style.padding = '3px 6px';
+            attrCell.style.borderTop = '1px solid #4A5568';
+
+            const leftCell = document.createElement('td');
+            leftCell.textContent = row.left;
+            leftCell.style.padding = '3px 6px';
+            leftCell.style.textAlign = 'right';
+            leftCell.style.borderTop = '1px solid #4A5568';
+
+            const rightCell = document.createElement('td');
+            rightCell.textContent = row.right;
+            rightCell.style.padding = '3px 6px';
+            rightCell.style.textAlign = 'right';
+            rightCell.style.borderTop = '1px solid #4A5568';
+
+            const trendCell = document.createElement('td');
+            trendCell.style.padding = '3px 6px';
+            trendCell.style.borderTop = '1px solid #4A5568';
+            trendCell.style.minWidth = '72px';
+
+            const trendChart = document.createElement('div');
+            trendChart.style.position = 'relative';
+            trendChart.style.width = '68px';
+            trendChart.style.height = '12px';
+
+            const referenceLine = document.createElement('div');
+            referenceLine.style.position = 'absolute';
+            referenceLine.style.left = '50%';
+            referenceLine.style.top = '1px';
+            referenceLine.style.bottom = '1px';
+            referenceLine.style.width = '2px';
+            referenceLine.style.transform = 'translateX(-1px)';
+            referenceLine.style.borderRadius = '9999px';
+            referenceLine.style.background = '#A0AEC0';
+            trendChart.appendChild(referenceLine);
+
+            if (row.delta === null) {
+              const naDot = document.createElement('div');
+              naDot.style.position = 'absolute';
+              naDot.style.left = '50%';
+              naDot.style.top = '4px';
+              naDot.style.width = '4px';
+              naDot.style.height = '4px';
+              naDot.style.transform = 'translateX(-2px)';
+              naDot.style.borderRadius = '9999px';
+              naDot.style.background = '#718096';
+              trendChart.appendChild(naDot);
+            } else if (row.delta === 0) {
+              const neutralDot = document.createElement('div');
+              neutralDot.style.position = 'absolute';
+              neutralDot.style.left = '50%';
+              neutralDot.style.top = '4px';
+              neutralDot.style.width = '4px';
+              neutralDot.style.height = '4px';
+              neutralDot.style.transform = 'translateX(-2px)';
+              neutralDot.style.borderRadius = '9999px';
+              neutralDot.style.background = '#A0AEC0';
+              trendChart.appendChild(neutralDot);
+            } else {
+              const deltaBar = document.createElement('div');
+              deltaBar.style.position = 'absolute';
+              deltaBar.style.top = '5px';
+              deltaBar.style.height = '2px';
+              deltaBar.style.width = `${row.trendWidthPx}px`;
+              deltaBar.style.borderRadius = '9999px';
+              deltaBar.style.background = row.trend === 'up' ? '#FC8181' : '#63B3ED';
+              deltaBar.style.left = row.delta > 0
+                ? 'calc(50% + 1px)'
+                : `calc(50% - ${row.trendWidthPx + 1}px)`;
+              trendChart.appendChild(deltaBar);
+            }
+
+            trendCell.appendChild(trendChart);
+
+            tr.appendChild(attrCell);
+            tr.appendChild(leftCell);
+            tr.appendChild(rightCell);
+            tr.appendChild(trendCell);
+            table.appendChild(tr);
+          }
+
+          if (rows.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.fontSize = '12px';
+            empty.style.color = '#A0AEC0';
+            empty.textContent = 'No comparable values available.';
+            popupContainer.appendChild(empty);
+          } else {
+            popupContainer.appendChild(table);
+          }
+
+          const pointer = document.createElement('div');
+          pointer.style.position = 'absolute';
+          pointer.style.left = '50%';
+          pointer.style.bottom = '-8px';
+          pointer.style.width = '12px';
+          pointer.style.height = '12px';
+          pointer.style.transform = 'translateX(-50%) rotate(45deg)';
+          pointer.style.background = '#1A202C';
+          popupContainer.appendChild(pointer);
+
+          removeIdentifyOverlay(false);
+
+          const mapContainer = mapContainerRef.current;
+          if (!mapContainer) {
+            return;
+          }
+
+          identifyOverlayRef.current = popupContainer;
+          identifyOverlayLngLatRef.current = [e.lngLat.lng, e.lngLat.lat];
+          mapContainer.appendChild(popupContainer);
+          updateIdentifyOverlayPosition();
+
+          closeButton.onclick = () => {
+            removeIdentifyOverlay(true);
+          };
         }
       })
       .catch((err) => console.error('Identify error:', err));
-  }, []);
+  }, [removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
   // Initialize the two maps and the compare slider
   useEffect(() => {
@@ -1674,7 +2069,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       syncing = false;
     }
 
-    leftMap.on('move', () => syncMaps(leftMap, rightMap));
+    leftMap.on('move', () => {
+      syncMaps(leftMap, rightMap);
+      updateIdentifyOverlayPosition();
+    });
     rightMap.on('move', () => syncMaps(rightMap, leftMap));
 
     // Identify click handlers - pass side info for correct layer querying
@@ -1687,14 +2085,21 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Report map extent changes
       if (onMapExtentChangeRef.current) {
         const center = leftMap.getCenter();
+        const bounds = leftMap.getBounds();
         onMapExtentChangeRef.current({
           center: [center.lng, center.lat],
           zoom: leftMap.getZoom(),
+          bounds: [
+            bounds.getWest(),
+            bounds.getSouth(),
+            bounds.getEast(),
+            bounds.getNorth(),
+          ],
         });
       }
     });
     leftMap.on('zoomend', () => debouncedApplyColors());
-    leftMap.on('zoom', () => console.log('[MapView] zoom:', leftMap.getZoom()));
+    // leftMap.on('zoom', () => console.log('[MapView] zoom:', leftMap.getZoom()));
 
     // When maps are loaded, mark ready, resize, and apply initial colours.
     // setAreMapsReady is called only once BOTH maps have loaded so the boundary
@@ -1803,6 +2208,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         resizeFrameRef.current = requestAnimationFrame(() => {
           resizeFrameRef.current = null;
           updateMapSizes();
+          updateIdentifyOverlayPosition();
         });
       }
 
@@ -1828,6 +2234,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             updateMapSizes();
             leftMap.resize();
             rightMap.resize();
+            updateIdentifyOverlayPosition();
           });
         }
       }, 80);
@@ -1853,6 +2260,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // trying to access destroyed map instances
       leftMapRef.current = null;
       rightMapRef.current = null;
+      removeIdentifyOverlay(false);
       leftMap.remove();
       rightMap.remove();
       leftClipContainerRef.current = null;
@@ -1867,7 +2275,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightClipContainer.remove();
       leftClipContainer.remove();
     };
-  }, [debouncedApplyColors, handleIdentifyClick]);
+  }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
   // Resize maps when layout changes or container size updates
   useEffect(() => {
@@ -2048,6 +2456,30 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     leftMap.resize();
     rightMap.resize();
   }, [swiperPosition, isSwiperEnabled]);
+
+  useEffect(() => {
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+
+    if (isChoroplethEnabled) {
+      applyColorsRef.current();
+      return;
+    }
+
+    removeChoroplethLayers(leftMap, 'left');
+    removeChoroplethLayers(rightMap, 'right');
+    extentZoneStatsRef.current = null;
+    if (onStatisticsChangeRef.current) {
+      onStatisticsChangeRef.current({
+        domainRange: null,
+        leftStats: null,
+        rightStats: null,
+        fullStats: fullZoneStatsRef.current,
+        siteStats: siteZoneStatsRef.current,
+      });
+    }
+  }, [isChoroplethEnabled]);
 
   // Update labels and colours when comparison changes
   useEffect(() => {
@@ -2570,7 +3002,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               ? (existingIds.includes(catchmentId) ? existingIds : [...existingIds, catchmentId])
               : existingIds.filter(id => id !== catchmentId);
             // Also clear cached per-catchment data so AggregateTable re-fetches with the new IDs
-            const { catchments: _c, catchmentIndicators: _ci, catchmentData: _cd, ...rest } = existing as Record<string, unknown>;
+            const {
+              catchments: _c,
+              catchmentIndicators: _ci,
+              catchmentData: _cd,
+              ...rest
+            } = existing as typeof existing & {
+              catchments?: unknown;
+              catchmentIndicators?: unknown;
+              catchmentData?: unknown;
+            };
             sites[siteIndex] = { ...rest, catchmentIds: newIds } as typeof existing;
             saveLocalSites(sites);
           }
@@ -3253,6 +3694,23 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             />
           </Tooltip>
 
+          <Tooltip label={isChoroplethEnabled ? "Hide choropleth" : "Show choropleth"} placement="right">
+            <IconButton
+              aria-label="Toggle choropleth layer"
+              icon={<FiMap />}
+              size="sm"
+              colorScheme={isChoroplethEnabled ? "blue" : "gray"}
+              variant="solid"
+              bg={isChoroplethEnabled ? colors.blue : "white"}
+              color={isChoroplethEnabled ? "white" : "gray.700"}
+              onClick={toggleChoropleth}
+              boxShadow="md"
+              _hover={{
+                bg: isChoroplethEnabled ? "blue.600" : "gray.100"
+              }}
+            />
+          </Tooltip>
+
           {/* Identify button */}
           {!isQuad && (
             <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
@@ -3301,7 +3759,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
                 variant="solid"
                 bg="white"
                 color="gray.700"
-                onClick={zoomToSite}
+                onClick={() => {
+                  void zoomToSite();
+                }}
                 boxShadow="md"
                 _hover={{
                   bg: "gray.100"

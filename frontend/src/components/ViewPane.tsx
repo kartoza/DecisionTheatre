@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
-import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable } from 'react-icons/fi';
+import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
@@ -12,12 +12,15 @@ import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 interface ViewPaneProps {
   comparison: ComparisonState;
   compact?: boolean;
+  paneCount?: number;
   paneIndex: number;
   layoutMode: LayoutMode;
   viewMode: ViewMode;
   onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
+  canRemove?: boolean;
+  onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
   onMapExtentChange?: (extent: MapExtent) => void;
@@ -42,6 +45,8 @@ interface ViewPaneProps {
   onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroup?: string | null;
+  chartAxisLabelFilter?: string | null;
+  mapExtent?: MapExtent | null;
 }
 
 // View mode cycle order
@@ -58,12 +63,15 @@ const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: stri
 function ViewPane({
   comparison,
   compact = false,
+  paneCount = 1,
   paneIndex,
   layoutMode,
   viewMode,
   onViewModeChange,
   onFocusPane,
   onGoQuad,
+  canRemove = false,
+  onRemovePane,
   onIdentify,
   identifyResult,
   onMapExtentChange,
@@ -86,10 +94,16 @@ function ViewPane({
   onRangeModeChange,
   mapStatistics,
   chartGroup,
+  chartAxisLabelFilter,
+  mapExtent,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const [dialCatchmentData, setDialCatchmentData] = useState<{
+    referenceValue?: number;
+    currentValue?: number;
+  } | null>(null);
+  const [dialRangeValues, setDialRangeValues] = useState<{
     referenceValue?: number;
     currentValue?: number;
   } | null>(null);
@@ -155,6 +169,67 @@ function ViewPane({
     };
   }, [comparison.attribute, siteId, viewMode]);
 
+  useEffect(() => {
+    if (viewMode !== 'dial' || !comparison.attribute) {
+      setDialRangeValues(null);
+      return;
+    }
+
+    if (rangeMode === 'site') {
+      setDialRangeValues(null);
+      return;
+    }
+
+    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+      setDialRangeValues(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchAggregate = async (scenario: string): Promise<number | undefined> => {
+      const params = new URLSearchParams({
+        scenario,
+        attributes: comparison.attribute || '',
+      });
+
+      if (rangeMode === 'extent' && mapExtent?.bounds) {
+        const [minx, miny, maxx, maxy] = mapExtent.bounds;
+        params.set('minx', String(minx));
+        params.set('miny', String(miny));
+        params.set('maxx', String(maxx));
+        params.set('maxy', String(maxy));
+      }
+
+      const resp = await fetch(`/api/aggregate?${params.toString()}`);
+      if (!resp.ok) return undefined;
+      const payload = await resp.json() as Record<string, number>;
+      const value = payload[comparison.attribute || ''];
+      return typeof value === 'number' && !isNaN(value) ? value : undefined;
+    };
+
+    Promise.all([
+      fetchAggregate(comparison.leftScenario),
+      fetchAggregate(comparison.rightScenario),
+    ]).then(([referenceValue, currentValue]) => {
+      if (cancelled) return;
+      setDialRangeValues({ referenceValue, currentValue });
+    }).catch(() => {
+      if (!cancelled) setDialRangeValues(null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    viewMode,
+    rangeMode,
+    comparison.attribute,
+    comparison.leftScenario,
+    comparison.rightScenario,
+    mapExtent,
+  ]);
+
   const dialAttributeLabel = comparison.attribute
     ? attributeDetails[comparison.attribute]
       ?? comparison.attribute
@@ -166,6 +241,7 @@ function ViewPane({
   const dialData = useMemo(() => {
     const attribute = comparison.attribute;
     if (!attribute) return null;
+    const allowMapStatisticsFallback = layoutMode !== 'quad';
 
     let min = 0;
     let max = 100;
@@ -173,65 +249,112 @@ function ViewPane({
     let currentValue: number | undefined;
     let targetValue: number | undefined;
 
-    // Get values from site indicators if available
-    if (siteIndicators) {
-      referenceValue = siteIndicators.reference?.[attribute];
-      currentValue = siteIndicators.current?.[attribute];
-      targetValue = siteIndicators.ideal?.[attribute];
-    } else if (dialCatchmentData) {
-      referenceValue = dialCatchmentData.referenceValue;
-      currentValue = dialCatchmentData.currentValue;
-      targetValue = dialCatchmentData.referenceValue;
-    }
-
-    // Determine min/max based on range mode
+    // Determine values and min/max based on range mode.
+    // This ensures the dial reflects full dataset, current extent, or site-only stats.
     switch (rangeMode) {
       case 'site':
-        // Use min/max from site indicators
+        // Prefer per-attribute sources first so each quad pane reflects its own factor.
         if (siteIndicators) {
-          const values = [
-            siteIndicators.reference?.[attribute],
-            siteIndicators.current?.[attribute],
-            siteIndicators.ideal?.[attribute],
-          ].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          referenceValue = siteIndicators.reference?.[attribute];
+          currentValue = siteIndicators.current?.[attribute];
+          targetValue = siteIndicators.ideal?.[attribute];
+          const values = [referenceValue, currentValue, targetValue]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
-            min = Math.min(...values) * 0.9; // 10% padding
+            min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
         } else if (dialCatchmentData) {
-          const values = [dialCatchmentData.referenceValue, dialCatchmentData.currentValue]
+          referenceValue = dialCatchmentData.referenceValue;
+          currentValue = dialCatchmentData.currentValue;
+          targetValue = dialCatchmentData.referenceValue;
+          const values = [referenceValue, currentValue]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
+            max = Math.max(...values) * 1.1;
+          }
+        } else if (allowMapStatisticsFallback && mapStatistics?.siteStats) {
+          referenceValue = mapStatistics.siteStats.left?.mean;
+          currentValue = mapStatistics.siteStats.right?.mean;
+          const mins = [mapStatistics.siteStats.left?.min, mapStatistics.siteStats.right?.min]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          const maxs = [mapStatistics.siteStats.left?.max, mapStatistics.siteStats.right?.max]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (mins.length > 0) min = Math.min(...mins);
+          if (maxs.length > 0) max = Math.max(...maxs);
+          targetValue = referenceValue;
+        }
+        break;
+      case 'extent':
+        if (dialRangeValues) {
+          referenceValue = dialRangeValues.referenceValue;
+          currentValue = dialRangeValues.currentValue;
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+        }
+        if (allowMapStatisticsFallback && mapStatistics?.leftStats && mapStatistics?.rightStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
+          min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
+          max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
+        } else if (allowMapStatisticsFallback && mapStatistics?.leftStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.leftStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
+          min = mapStatistics.leftStats.min;
+          max = mapStatistics.leftStats.max;
+        } else if (allowMapStatisticsFallback && mapStatistics?.rightStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.rightStats.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
+          min = mapStatistics.rightStats.min;
+          max = mapStatistics.rightStats.max;
+        } else {
+          const values = [referenceValue, currentValue].filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
             min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
         }
         break;
-      case 'extent':
-        // Use min/max from current map extent statistics
-        if (mapStatistics?.leftStats && mapStatistics?.rightStats) {
-          min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
-          max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
-        } else if (mapStatistics?.leftStats) {
-          min = mapStatistics.leftStats.min;
-          max = mapStatistics.leftStats.max;
-        } else if (mapStatistics?.rightStats) {
-          min = mapStatistics.rightStats.min;
-          max = mapStatistics.rightStats.max;
-        }
-        break;
       case 'domain':
       default:
-        // Use full domain range
-        if (mapStatistics?.domainRange) {
+        if (dialRangeValues) {
+          referenceValue = dialRangeValues.referenceValue;
+          currentValue = dialRangeValues.currentValue;
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+        }
+        if (allowMapStatisticsFallback && mapStatistics?.fullStats) {
+          if (referenceValue === undefined) referenceValue = mapStatistics.fullStats.left?.mean;
+          if (currentValue === undefined) currentValue = mapStatistics.fullStats.right?.mean;
+          if (targetValue === undefined) targetValue = referenceValue;
+          const mins = [mapStatistics.fullStats.left?.min, mapStatistics.fullStats.right?.min]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          const maxs = [mapStatistics.fullStats.left?.max, mapStatistics.fullStats.right?.max]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (mins.length > 0) min = Math.min(...mins);
+          if (maxs.length > 0) max = Math.max(...maxs);
+        } else if (allowMapStatisticsFallback && mapStatistics?.domainRange) {
           min = mapStatistics.domainRange.min;
           max = mapStatistics.domainRange.max;
+          const leftMean = mapStatistics.leftStats?.mean;
+          const rightMean = mapStatistics.rightStats?.mean;
+          if (referenceValue === undefined && leftMean !== undefined) referenceValue = leftMean;
+          if (currentValue === undefined && rightMean !== undefined) currentValue = rightMean;
+          if (targetValue === undefined) targetValue = referenceValue;
+        } else {
+          const values = [referenceValue, currentValue].filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
+            max = Math.max(...values) * 1.1;
+          }
         }
         break;
     }
 
-    // If no siteIndicators, use map statistics for demonstration values
-    if (!siteIndicators && !dialCatchmentData && mapStatistics) {
+    // Fallback when statistics are unavailable.
+    if (allowMapStatisticsFallback && !siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
       const rightMean = mapStatistics.rightStats?.mean;
 
@@ -250,13 +373,15 @@ function ViewPane({
     }
 
     return { min, max, referenceValue, currentValue, targetValue };
-  }, [comparison.attribute, siteIndicators, dialCatchmentData, rangeMode, mapStatistics]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
   const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
+  const denseDialLayout = isQuad && paneCount > 4;
+  const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
 
   return (
@@ -314,6 +439,8 @@ function ViewPane({
         leftScenario={comparison.leftScenario}
         rightScenario={comparison.rightScenario}
         chartGroup={chartGroup}
+        chartAxisLabelFilter={chartAxisLabelFilter}
+        mapExtent={mapExtent}
       />
 
       {/* Dial Chart layer */}
@@ -326,8 +453,11 @@ function ViewPane({
         max={dialData?.max ?? 100}
         attribute={dialAttributeLabel}
         rangeMode={rangeMode}
-        onRangeModeChange={onRangeModeChange}
+        onRangeModeChange={isQuad ? undefined : onRangeModeChange}
         isSiteAvailable={!!siteId}
+        compact={compact}
+        denseLayout={denseDialLayout}
+        paneCount={paneCount}
       />
 
       {/* Aggregate Table layer */}
@@ -339,8 +469,8 @@ function ViewPane({
         siteGeometry={siteGeometry}
       />
 
-      {/* Pane label (shown in quad mode) */}
-      {compact && (
+      {/* Pane label (shown in quad mode except dial view) */}
+      {compact && viewMode !== 'dial' && !hidePaneLabel && (
         <Box
           position="absolute"
           top={2}
@@ -375,8 +505,8 @@ function ViewPane({
         backdropFilter="blur(8px)"
         transition="opacity 0.3s ease"
       >
-        {/* View mode buttons: hide the active view only */}
-        {VIEW_MODES.map((mode) => {
+        {/* In quad mode, only allow focusing a pane from inside the pane. */}
+        {!isQuad && VIEW_MODES.map((mode) => {
           if (mode === viewMode) return null;
           const config = VIEW_MODE_CONFIG[mode];
           return (
@@ -397,18 +527,34 @@ function ViewPane({
 
         {/* Layout toggle — context-dependent */}
         {isQuad ? (
-          <Tooltip label="Focus this pane" placement="top">
-            <IconButton
-              aria-label="Focus pane"
-              icon={<FiMaximize />}
-              onClick={() => onFocusPane(paneIndex)}
-              variant="ghost"
-              color="white"
-              _hover={{ bg: 'whiteAlpha.300' }}
-              size={btnSize}
-              borderRadius="md"
-            />
-          </Tooltip>
+          <>
+            <Tooltip label="Focus this pane" placement="top">
+              <IconButton
+                aria-label="Focus pane"
+                icon={<FiMaximize />}
+                onClick={() => onFocusPane(paneIndex)}
+                variant="ghost"
+                color="white"
+                _hover={{ bg: 'whiteAlpha.300' }}
+                size={btnSize}
+                borderRadius="md"
+              />
+            </Tooltip>
+            {canRemove && onRemovePane && (
+              <Tooltip label="Remove pane" placement="top">
+                <IconButton
+                  aria-label="Remove pane"
+                  icon={<FiTrash2 />}
+                  onClick={() => onRemovePane(paneIndex)}
+                  variant="ghost"
+                  color="white"
+                  _hover={{ bg: 'whiteAlpha.300' }}
+                  size={btnSize}
+                  borderRadius="md"
+                />
+              </Tooltip>
+            )}
+          </>
         ) : (
           <Tooltip label="Quad view" placement="top">
             <IconButton

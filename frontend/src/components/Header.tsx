@@ -12,6 +12,7 @@ import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2 }
 import { useServerInfo } from '../hooks/useApi';
 import type { AppPage } from '../types';
 import rewildLogo from '../assets/rewild_logo_white.png';
+import fefaLogo from '../assets/JM_FEFA_Logo_Dark_RGB_72dpi_aw.png';
 import { colors } from '../styles/colors';
 
 interface HeaderProps {
@@ -45,7 +46,10 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
     >
       <HStack spacing={3}>
         <img 
-        style={{width: "150px"}}
+        style={{width: "100px"}}
+        src={fefaLogo} alt="FEFA Logo" />
+        <img 
+        style={{width: "100px"}}
         src={rewildLogo} alt="Rewild Capital Logo" />
         {info?.version && (
           <Badge
