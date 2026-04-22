@@ -41,9 +41,18 @@ function statForScenario(
   return undefined;
 }
 
+const LARGE_NUMBER_FORMATTER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+const STANDARD_NUMBER_FORMATTER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
+const SMALL_NUMBER_FORMATTER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
+
 function formatVal(val: number): string {
-  if (Math.abs(val) >= 10000) return val.toExponential(1);
-  return parseFloat(val.toPrecision(3)).toString();
+  if (!Number.isFinite(val)) return '';
+
+  const abs = Math.abs(val);
+  if (abs >= 1000) return LARGE_NUMBER_FORMATTER.format(val);
+  if (abs >= 1) return STANDARD_NUMBER_FORMATTER.format(val);
+  if (abs === 0) return '0';
+  return SMALL_NUMBER_FORMATTER.format(val);
 }
 
 function composeYAxisLabel(axisLabel?: string, units?: string): string {
