@@ -90,7 +90,7 @@ func (s *GpkgStore) loadColumns() error {
 			continue
 		}
 		// Skip internal/ID columns - keep only data attributes
-		if name == "catchment_id" || name == "fid" || name == "ogc_fid" ||
+		if name == "catchment_id" || name == "catchID" || name == "fid" || name == "ogc_fid" ||
 			name == "catchment_id_int" {
 			continue
 		}
@@ -122,6 +122,39 @@ func resolveScenarioTable(scenario string) string {
 		return "scenario_reference"
 	}
 	return "scenario_current"
+}
+
+func normalizeCatchmentID(id string) string {
+	return strings.TrimSuffix(id, ".0")
+}
+
+func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			continue
+		}
+		columns[name] = struct{}{}
+	}
+
+	candidates := []string{"catchment_id", "catchID", "catchment_id_int"}
+	for _, candidate := range candidates {
+		if _, ok := columns[candidate]; ok {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("no catchment id column found in %s", tableName)
 }
 
 // GetScenarioData returns data for a scenario and attribute as a map of catchment ID to value
@@ -962,6 +995,11 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 
 	for _, scenario := range scenarios {
 		tableName := "scenario_" + scenario
+		idColumn, err := s.resolveScenarioIDColumn(tableName)
+		if err != nil {
+			log.Printf("Failed to resolve ID column for %s: %v", tableName, err)
+			continue
+		}
 
 		// Build SELECT query for all columns
 		quotedCols := make([]string, len(columns))
@@ -970,10 +1008,10 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		}
 
 		query := fmt.Sprintf(`
-			SELECT catchment_id, %s
+			SELECT CAST(%s AS TEXT), %s
 			FROM %s
-			WHERE catchment_id IN (%s)
-		`, strings.Join(quotedCols, ", "), tableName, strings.Join(placeholders, ","))
+			WHERE CAST(%s AS TEXT) IN (%s)
+		`, idColumn, strings.Join(quotedCols, ", "), tableName, idColumn, strings.Join(placeholders, ","))
 
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
@@ -996,6 +1034,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 			if err := rows.Scan(scanArgs...); err != nil {
 				continue
 			}
+			normalizedID := normalizeCatchmentID(catchmentID)
 
 			attrs := make(map[string]float64)
 			for i, col := range columns {
@@ -1003,7 +1042,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 					attrs[col] = values[i].Float64
 				}
 			}
-			scenarioData[scenario][catchmentID] = attrs
+			scenarioData[scenario][normalizedID] = attrs
 		}
 		rows.Close()
 	}
@@ -1027,9 +1066,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 				continue
 			}
 
-			// Normalize catchment ID by removing ".0" suffix if present
-			// This handles the case where HYBAS_ID is REAL and gets ".0" appended
-			normalizedID := strings.TrimSuffix(catchmentID, ".0")
+			normalizedID := normalizeCatchmentID(catchmentID)
 
 			ci := CatchmentIndicators{
 				ID:        normalizedID,
