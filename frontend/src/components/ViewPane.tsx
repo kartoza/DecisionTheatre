@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Box, HStack, IconButton, Tooltip, useColorModeValue } from '@chakra-ui/react';
+import { Box, Flex, HStack, IconButton, Text, Tooltip, useColorModeValue } from '@chakra-ui/react';
 import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
@@ -380,6 +380,7 @@ function ViewPane({
   const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
+  const showDialFactorPrompt = isQuad && viewMode === 'dial' && !comparison.attribute;
   const denseDialLayout = isQuad && paneCount > 4;
   const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
@@ -445,7 +446,7 @@ function ViewPane({
 
       {/* Dial Chart layer */}
       <DialChart
-        visible={viewMode === 'dial'}
+        visible={viewMode === 'dial' && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
         targetValue={dialData?.targetValue}
@@ -459,6 +460,32 @@ function ViewPane({
         denseLayout={denseDialLayout}
         paneCount={paneCount}
       />
+
+      {/* Quad dial empty state for panes with no selected factor */}
+      {showDialFactorPrompt && (
+        <Flex
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          zIndex={4}
+          align="center"
+          justify="center"
+          textAlign="center"
+          bg="rgba(26, 32, 44, 0.92)"
+          px={6}
+        >
+          <Box maxW="300px">
+            <Text color="white" fontSize={compact ? 'sm' : 'md'} fontWeight="600" mb={2}>
+              Select a factor for this pane
+            </Text>
+            <Text color="gray.300" fontSize={compact ? 'xs' : 'sm'}>
+              Choose a factor to view dial chart data.
+            </Text>
+          </Box>
+        </Flex>
+      )}
 
       {/* Aggregate Table layer */}
       <AggregateTable

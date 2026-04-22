@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanWithin, bbox as turfBbox, featureCollection, union, difference, area as turfArea } from '@turf/turf';
+import { booleanWithin, bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -248,6 +248,72 @@ function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | 
     max,
     mean: sum / values.length,
     count: values.length,
+  };
+}
+
+/**
+ * Compute AOI-weighted statistics for site aggregation.
+ *
+ * Mean is weighted by the valid catchment area that falls inside the AOI:
+ * valid_i = area_i * frac_i, where frac_i = overlap_i / area_i.
+ */
+function computeAOIWeightedZoneStats(
+  data: ChoroplethData,
+  attribute: string,
+  boundaryGeometry: GeoJSON.Geometry,
+): ZoneStats | null {
+  if (!data.features || data.features.length === 0) return null;
+
+  const boundaryFeature = geometryToPolygonFeature(boundaryGeometry);
+  if (!boundaryFeature) return null;
+
+  let min = Infinity;
+  let max = -Infinity;
+  let totalValidArea = 0;
+  let weightedSum = 0;
+  let count = 0;
+
+  for (const feature of data.features) {
+    const metricValue = feature.properties?.[attribute];
+    if (typeof metricValue !== 'number' || Number.isNaN(metricValue)) continue;
+
+    const catchmentGeometry = feature.geometry as GeoJSON.Geometry | null;
+    const catchmentFeature = geometryToPolygonFeature(catchmentGeometry);
+    if (!catchmentFeature) continue;
+
+    let catchmentArea = 0;
+    let overlapArea = 0;
+    try {
+      catchmentArea = turfArea(catchmentFeature.geometry);
+      if (catchmentArea <= 0) continue;
+
+      const overlap = intersect(featureCollection([catchmentFeature, boundaryFeature]));
+      if (!overlap?.geometry) continue;
+      overlapArea = turfArea(overlap.geometry);
+      if (overlapArea <= 0) continue;
+    } catch {
+      continue;
+    }
+
+    const frac = Math.max(0, Math.min(1, overlapArea / catchmentArea));
+    const validArea = catchmentArea * frac;
+    if (validArea <= 0) continue;
+
+    if (metricValue < min) min = metricValue;
+    if (metricValue > max) max = metricValue;
+
+    totalValidArea += validArea;
+    weightedSum += metricValue * validArea;
+    count += 1;
+  }
+
+  if (count === 0 || totalValidArea <= 0 || !Number.isFinite(weightedSum)) return null;
+
+  return {
+    min,
+    max,
+    mean: weightedSum / totalValidArea,
+    count,
   };
 }
 
@@ -1163,8 +1229,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const rightFiltered = filterDatasetByCatchmentIds(rightData, statsCatchmentIds);
 
         const siteDomainRange = computeDomainRangeFromDatasets([leftFiltered, rightFiltered], c.attribute);
-        const leftSiteStats = leftFiltered ? computeZoneStats(leftFiltered, c.attribute) : null;
-        const rightSiteStats = rightFiltered ? computeZoneStats(rightFiltered, c.attribute) : null;
+
+        console.log(`SITE DOMAINRANGE for ${siteId}:`, siteDomainRange);
+
+        const leftSiteStats = leftFiltered
+          ? (boundaryGeometry
+              ? computeAOIWeightedZoneStats(leftFiltered, c.attribute, boundaryGeometry) ?? computeZoneStats(leftFiltered, c.attribute)
+              : computeZoneStats(leftFiltered, c.attribute))
+          : null;
+        const rightSiteStats = rightFiltered
+          ? (boundaryGeometry
+              ? computeAOIWeightedZoneStats(rightFiltered, c.attribute, boundaryGeometry) ?? computeZoneStats(rightFiltered, c.attribute)
+              : computeZoneStats(rightFiltered, c.attribute))
+          : null;
 
         siteDomainRangeRef.current = siteDomainRange;
         siteZoneStatsRef.current = { left: leftSiteStats, right: rightSiteStats };
