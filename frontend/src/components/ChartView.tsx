@@ -266,46 +266,52 @@ function ChartView({
       .then((catchments) => {
         if (cancelled || !catchments || catchments.length === 0) return;
 
-        const refSums: Record<string, number> = {};
-        const curSums: Record<string, number> = {};
-        const refAreas: Record<string, number> = {};
-        const curAreas: Record<string, number> = {};
+        const weightedCatchments: Array<{
+          validArea: number;
+          reference?: Record<string, number>;
+          current?: Record<string, number>;
+        }> = [];
 
         for (const catchment of catchments) {
           const fractionCovered = catchment.aoiFraction ?? 1.0;
           const validArea = catchment.areaKm2 * fractionCovered;
           if (!Number.isFinite(validArea) || validArea <= 0) continue;
 
-          if (catchment.reference) {
-            for (const [col, value] of Object.entries(catchment.reference)) {
+          weightedCatchments.push({
+            validArea,
+            reference: catchment.reference,
+            current: catchment.current,
+          });
+        }
+
+        const totalArea = weightedCatchments.reduce((sum, entry) => sum + entry.validArea, 0);
+        if (!(totalArea > 0)) {
+          if (!cancelled) setCatchmentData(null);
+          return;
+        }
+
+        const reference: Record<string, number> = {};
+        const current: Record<string, number> = {};
+
+        for (const entry of weightedCatchments) {
+          const weight = entry.validArea / totalArea;
+
+          if (entry.reference) {
+            for (const [col, value] of Object.entries(entry.reference)) {
               if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-              refSums[col] = (refSums[col] ?? 0) + value * validArea;
-              refAreas[col] = (refAreas[col] ?? 0) + validArea;
+              reference[col] = (reference[col] ?? 0) + value * weight;
             }
           }
 
-          if (catchment.current) {
-            for (const [col, value] of Object.entries(catchment.current)) {
+          if (entry.current) {
+            for (const [col, value] of Object.entries(entry.current)) {
               if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-              curSums[col] = (curSums[col] ?? 0) + value * validArea;
-              curAreas[col] = (curAreas[col] ?? 0) + validArea;
+              current[col] = (current[col] ?? 0) + value * weight;
             }
           }
         }
 
         if (cancelled) return;
-
-        const reference: Record<string, number> = {};
-        for (const [col, sum] of Object.entries(refSums)) {
-          const area = refAreas[col] ?? 0;
-          if (area > 0) reference[col] = sum / area;
-        }
-
-        const current: Record<string, number> = {};
-        for (const [col, sum] of Object.entries(curSums)) {
-          const area = curAreas[col] ?? 0;
-          if (area > 0) current[col] = sum / area;
-        }
 
         if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) return;
 

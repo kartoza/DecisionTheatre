@@ -122,9 +122,11 @@ function ViewPane({
           return;
         }
 
-        let totalArea = 0;
-        let referenceSum = 0;
-        let currentSum = 0;
+        const weightedCatchments: Array<{
+          validArea: number;
+          referenceValue?: number;
+          currentValue?: number;
+        }> = [];
 
         for (const catchment of catchments) {
           const fractionCovered = catchment.aoiFraction ?? 1.0;
@@ -134,24 +136,37 @@ function ViewPane({
           const referenceValue = catchment.reference?.[comparison.attribute];
           const currentValue = catchment.current?.[comparison.attribute];
 
-          if (typeof referenceValue === 'number') {
-            referenceSum += referenceValue * validArea;
-          }
-          if (typeof currentValue === 'number') {
-            currentSum += currentValue * validArea;
-          }
-
-          totalArea += validArea;
+          weightedCatchments.push({
+            validArea,
+            referenceValue: typeof referenceValue === 'number' && !isNaN(referenceValue) ? referenceValue : undefined,
+            currentValue: typeof currentValue === 'number' && !isNaN(currentValue) ? currentValue : undefined,
+          });
         }
+
+        const totalArea = weightedCatchments.reduce((sum, entry) => sum + entry.validArea, 0);
 
         if (totalArea <= 0) {
           if (!cancelled) setDialCatchmentData(null);
           return;
         }
 
+        let referenceWeightedSum = 0;
+        let currentWeightedSum = 0;
+
+        for (const entry of weightedCatchments) {
+          const weight = entry.validArea / totalArea;
+
+          if (entry.referenceValue !== undefined) {
+            referenceWeightedSum += entry.referenceValue * weight;
+          }
+          if (entry.currentValue !== undefined) {
+            currentWeightedSum += entry.currentValue * weight;
+          }
+        }
+
         const nextData = {
-          referenceValue: referenceSum / totalArea,
-          currentValue: currentSum / totalArea,
+          referenceValue: referenceWeightedSum,
+          currentValue: currentWeightedSum,
         };
 
         if (!cancelled) {
