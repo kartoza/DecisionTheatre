@@ -13,6 +13,7 @@ import { FiCheck, FiRotateCcw, FiSquare, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
 import { colors } from '../styles/colors';
+import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 
 const MotionBox = motion(Box);
 
@@ -64,6 +65,7 @@ function SiteCreationMap({
 }: SiteCreationMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const viewportBoundsRef = useRef<maplibregl.LngLatBoundsLike | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
   const [drawnPoints, setDrawnPoints] = useState<[number, number][]>([]);
   const [selectedCatchments, setSelectedCatchments] = useState<Map<string, GeoJSON.Feature>>(new Map());
@@ -171,11 +173,25 @@ function SiteCreationMap({
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+    const applyViewportLimits = () => {
+      const bounds = viewportBoundsRef.current;
+      if (!bounds) return;
+      applyZoomOutClipToBounds(map, bounds);
+    };
+
+    void (async () => {
+      const bounds = await fetchCatchmentBounds() ?? await fetchTileBounds();
+      if (!bounds) return;
+      viewportBoundsRef.current = bounds;
+      applyViewportLimits();
+    })();
+
     map.on('load', () => {
       // Force tile re-evaluation — resize() alone doesn't always trigger
       // maplibre to re-request tiles for a newly-sized viewport.
       map.resize();
       map.jumpTo({ center: map.getCenter(), zoom: map.getZoom() });
+      applyViewportLimits();
       mapRef.current = map;
       setIsMapReady(true);
 

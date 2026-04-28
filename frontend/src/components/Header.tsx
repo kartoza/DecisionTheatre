@@ -23,6 +23,8 @@ interface HeaderProps {
   siteTitle?: string | null;
   onEditBoundary?: () => void;
   isBoundaryEditMode?: boolean;
+  onToggleTargetModal?: () => void;
+  isTargetModalOpen?: boolean;
 }
 
 function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, onEditBoundary, isBoundaryEditMode }: HeaderProps) {

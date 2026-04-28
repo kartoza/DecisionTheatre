@@ -322,7 +322,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<'reference' | 'current' | 'ideal'>('ideal');
+  const [editingScope, setEditingScope] = useState<'current' | 'reference' | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [editBoundsExpanded, setEditBoundsExpanded] = useState(false);
   const [editUpperValue, setEditUpperValue] = useState<string>('');
@@ -647,9 +647,9 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     }
   }, [site, localIndicators, onSiteUpdated, toast]);
 
-  const handleStartEdit = useCallback((key: string, field: 'reference' | 'current' | 'ideal', value: number | null, upper?: number | null) => {
+  const handleStartEdit = useCallback((key: string, scope: 'current' | 'reference', value: number | null, upper?: number | null) => {
     setEditingKey(key);
-    setEditingField(field);
+    setEditingScope(scope);
     const lower = value ?? 0;
     const hi = upper ?? lower;
     setEditBoundsExpanded(lower !== hi);
@@ -659,13 +659,14 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
 
   const handleCancelEdit = useCallback(() => {
     setEditingKey(null);
+    setEditingScope(null);
     setEditValue('');
     setEditUpperValue('');
     setEditBoundsExpanded(false);
   }, []);
 
   const handleConfirmEdit = useCallback(() => {
-    if (!editingKey || !localIndicators) return;
+    if (!editingKey || !editingScope || !localIndicators) return;
 
     const lower = parseFloat(editValue);
     const upper = parseFloat(editUpperValue || editValue);
@@ -674,63 +675,47 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
       return;
     }
 
-    if (editingField === 'reference') {
-      const mid = (lower + upper) / 2;
-      setLocalIndicators(prev => {
-        if (!prev) return prev;
+    const mid = (lower + upper) / 2;
+    setLocalIndicators(prev => {
+      if (!prev) return prev;
+      if (editingScope === 'reference') {
         return {
           ...prev,
           reference: { ...(prev.reference ?? {}), [editingKey]: mid },
           referenceLower: { ...(prev.referenceLower ?? {}), [editingKey]: lower },
           referenceUpper: { ...(prev.referenceUpper ?? {}), [editingKey]: upper },
         };
-      });
-    } else if (editingField === 'current') {
-      const mid = (lower + upper) / 2;
-      setLocalIndicators(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          current: { ...(prev.current ?? {}), [editingKey]: mid },
-          currentLower: { ...(prev.currentLower ?? {}), [editingKey]: lower },
-          currentUpper: { ...(prev.currentUpper ?? {}), [editingKey]: upper },
-        };
-      });
-    } else {
-      const mid = (lower + upper) / 2;
-      setLocalIndicators(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          ideal: { ...prev.ideal, [editingKey]: mid },
-          idealLower: { ...(prev.idealLower ?? {}), [editingKey]: lower },
-          idealUpper: { ...(prev.idealUpper ?? {}), [editingKey]: upper },
-        };
-      });
-    }
+      }
+      return {
+        ...prev,
+        current: { ...(prev.current ?? {}), [editingKey]: mid },
+        currentLower: { ...(prev.currentLower ?? {}), [editingKey]: lower },
+        currentUpper: { ...(prev.currentUpper ?? {}), [editingKey]: upper },
+      };
+    });
     setHasChanges(true);
     setEditingKey(null);
+    setEditingScope(null);
     setEditValue('');
     setEditUpperValue('');
     setEditBoundsExpanded(false);
-  }, [editingKey, editingField, editValue, editUpperValue, localIndicators, toast]);
+  }, [editingKey, editingScope, editValue, editUpperValue, localIndicators, toast]);
 
   const availableIndicatorKeys = useMemo(() => {
     if (!localIndicators) return [] as string[];
-
-    const allowedInputs = Object.keys(userInputs || {}).length > 0
-      ? new Set(Object.entries(userInputs).filter(([, allowed]) => allowed).map(([key]) => key))
-      : null;
 
     const allKeys = new Set<string>();
     Object.keys(localIndicators.reference || {}).forEach(k => allKeys.add(k));
     Object.keys(localIndicators.current || {}).forEach(k => allKeys.add(k));
     Object.keys(localIndicators.ideal || {}).forEach(k => allKeys.add(k));
+    Object.keys(attributeDetails || {}).forEach(k => allKeys.add(k));
+    Object.keys(variableTypes || {}).forEach(k => allKeys.add(k));
+    Object.keys(userInputs || {}).forEach(k => allKeys.add(k));
 
     return Array.from(allKeys)
-      .filter(key => !allowedInputs || allowedInputs.has(key))
+      .filter(key => key.trim() !== '' && key.toLowerCase() !== 'catchid')
       .sort();
-  }, [localIndicators, userInputs]);
+  }, [localIndicators, attributeDetails, variableTypes, userInputs]);
 
   const indicatorGroups = useMemo(() => {
     const groups = new Map<string, { key: string; label: string }[]>();
@@ -798,11 +783,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const summaryStats = useMemo(() => {
     if (!localIndicators) return null;
 
-    const allowedInputs = Object.keys(userInputs || {}).length > 0
-      ? new Set(Object.entries(userInputs).filter(([, allowed]) => allowed).map(([key]) => key))
-      : null;
-    const keys = Object.keys(localIndicators.current || {})
-      .filter(key => !allowedInputs || allowedInputs.has(key));
+    const keys = availableIndicatorKeys;
     let improved = 0;
     let degraded = 0;
     let unchanged = 0;
@@ -818,7 +799,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     });
 
     return { total: keys.length, improved, degraded, unchanged };
-  }, [localIndicators, userInputs]);
+  }, [localIndicators, availableIndicatorKeys]);
 
   if (isLoading && !localIndicators) {
     return (
@@ -1001,7 +982,6 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200">Trend</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" w="100px">Edit</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -1012,7 +992,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                   <Fragment key={group.groupName}>
                     <Tr>
                       <Td
-                        colSpan={6}
+                        colSpan={5}
                         bg="whiteAlpha.50"
                         borderColor="whiteAlpha.200"
                         py={2}
@@ -1041,7 +1021,11 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                     </Tr>
                     {!isCollapsed && group.rows.map((row, index) => {
                     const trend = getTrend(row.current, row.reference);
-                    const isEditing = editingKey === row.key;
+                    const isEditingCurrent = editingKey === row.key && editingScope === 'current';
+                    const isEditingReference = editingKey === row.key && editingScope === 'reference';
+                    const currentEditable = userInputs[row.key] === true;
+                    const currentIsNa = row.current === null;
+                    const referenceIsNa = row.reference === null;
                     const boundsSet = row.idealLower !== row.idealUpper;
                     const boundsSetRef = row.referenceLower !== null && row.referenceUpper !== null && row.referenceLower !== row.referenceUpper;
                     const boundsSetCur = row.currentLower !== null && row.currentUpper !== null && row.currentLower !== row.currentUpper;
@@ -1063,7 +1047,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           </VStack>
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>
-                          {isEditing && editingField === 'reference' ? (
+                          {isEditingReference ? (
                             <VStack spacing={1} align="stretch">
                               {editBoundsExpanded ? (
                                 <>
@@ -1125,15 +1109,31 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                   </Tooltip>
                                 </HStack>
                               )}
+                              <HStack spacing={1} justify="flex-end">
+                                <IconButton
+                                  aria-label="Confirm"
+                                  icon={<FiCheck />}
+                                  size="xs"
+                                  colorScheme="green"
+                                  onClick={handleConfirmEdit}
+                                />
+                                <IconButton
+                                  aria-label="Cancel"
+                                  icon={<FiX />}
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={handleCancelEdit}
+                                />
+                              </HStack>
                             </VStack>
                           ) : (
-                            <HStack spacing={1} justify="flex-end">
+                            <HStack spacing={2} justify="flex-end">
                               <Text color="orange.300" fontFamily="mono">
                                 {boundsSetRef
                                   ? `${formatValue(row.referenceLower)} – ${formatValue(row.referenceUpper)}`
                                   : formatValue(row.reference)}
                               </Text>
-                              {(row.reference === null || row.reference === 0) && !isEditing && (
+                              {referenceIsNa && (
                                 <IconButton
                                   aria-label="Edit reference"
                                   icon={<FiEdit2 />}
@@ -1146,7 +1146,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           )}
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>
-                          {isEditing && editingField === 'current' ? (
+                          {isEditingCurrent ? (
                             <VStack spacing={1} align="stretch">
                               {editBoundsExpanded ? (
                                 <>
@@ -1208,15 +1208,31 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                   </Tooltip>
                                 </HStack>
                               )}
+                              <HStack spacing={1} justify="flex-end">
+                                <IconButton
+                                  aria-label="Confirm"
+                                  icon={<FiCheck />}
+                                  size="xs"
+                                  colorScheme="green"
+                                  onClick={handleConfirmEdit}
+                                />
+                                <IconButton
+                                  aria-label="Cancel"
+                                  icon={<FiX />}
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={handleCancelEdit}
+                                />
+                              </HStack>
                             </VStack>
                           ) : (
-                            <HStack spacing={1} justify="flex-end">
+                            <HStack justify="flex-end" spacing={2}>
                               <Text color="cyan.300" fontFamily="mono">
                                 {boundsSetCur
                                   ? `${formatValue(row.currentLower)} – ${formatValue(row.currentUpper)}`
                                   : formatValue(row.current)}
                               </Text>
-                              {(row.current === null || row.current === 0) && !isEditing && (
+                              {(currentEditable || currentIsNa) && (
                                 <IconButton
                                   aria-label="Edit current"
                                   icon={<FiEdit2 />}
@@ -1243,108 +1259,15 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           </HStack>
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>
-                          {isEditing && editingField === 'ideal' ? (
-                            <VStack spacing={1} align="stretch">
-                              {editBoundsExpanded ? (
-                                <>
-                                  <HStack spacing={1} justify="flex-end">
-                                    <Text fontSize="xs" color="gray.500" minW="10px">lo</Text>
-                                    <NumberInput size="sm" value={editValue} onChange={(v) => setEditValue(v)} step={0.01} precision={2}>
-                                      <NumberInputField
-                                        bg="whiteAlpha.200"
-                                        border="none"
-                                        textAlign="right"
-                                        w="130px"
-                                        autoFocus
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') handleConfirmEdit();
-                                          if (e.key === 'Escape') handleCancelEdit();
-                                        }}
-                                      />
-                                    </NumberInput>
-                                  </HStack>
-                                  <HStack spacing={1} justify="flex-end">
-                                    <Text fontSize="xs" color="gray.500" minW="10px">hi</Text>
-                                    <NumberInput size="sm" value={editUpperValue} onChange={(v) => setEditUpperValue(v)} step={0.01} precision={2}>
-                                      <NumberInputField
-                                        bg="whiteAlpha.200"
-                                        border="none"
-                                        textAlign="right"
-                                        w="130px"
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') handleConfirmEdit();
-                                          if (e.key === 'Escape') handleCancelEdit();
-                                        }}
-                                      />
-                                    </NumberInput>
-                                  </HStack>
-                                </>
-                              ) : (
-                                <HStack spacing={1} justify="flex-end">
-                                  <NumberInput size="sm" value={editValue} onChange={(v) => { setEditValue(v); setEditUpperValue(v); }} step={0.01} precision={2}>
-                                    <NumberInputField
-                                      bg="whiteAlpha.200"
-                                      border="none"
-                                      textAlign="right"
-                                      w="130px"
-                                      autoFocus
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter') handleConfirmEdit();
-                                        if (e.key === 'Escape') handleCancelEdit();
-                                      }}
-                                    />
-                                  </NumberInput>
-                                  <Tooltip label="Set separate lower/upper bounds">
-                                    <IconButton
-                                      aria-label="Expand bounds"
-                                      icon={<FiChevronDown />}
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => { setEditUpperValue(editValue); setEditBoundsExpanded(true); }}
-                                    />
-                                  </Tooltip>
-                                </HStack>
-                              )}
-                            </VStack>
-                          ) : (
-                            <Text
-                              color={idealChanged ? 'green.300' : 'gray.300'}
-                              fontFamily="mono"
-                              fontWeight={idealChanged ? 'bold' : 'normal'}
-                            >
-                              {boundsSet
-                                ? `${formatValue(row.idealLower)} – ${formatValue(row.idealUpper)}`
-                                : formatValue(row.idealLower)}
-                            </Text>
-                          )}
-                        </Td>
-                        <Td borderColor="whiteAlpha.100">
-                          {isEditing ? (
-                            <HStack spacing={1}>
-                              <IconButton
-                                aria-label="Confirm"
-                                icon={<FiCheck />}
-                                size="xs"
-                                colorScheme="green"
-                                onClick={handleConfirmEdit}
-                              />
-                              <IconButton
-                                aria-label="Cancel"
-                                icon={<FiX />}
-                                size="xs"
-                                variant="ghost"
-                                onClick={handleCancelEdit}
-                              />
-                            </HStack>
-                          ) : (
-                            <IconButton
-                              aria-label="Edit"
-                              icon={<FiEdit2 />}
-                              size="xs"
-                              variant="ghost"
-                              onClick={() => handleStartEdit(row.key, 'ideal', row.idealLower, row.idealUpper)}
-                            />
-                          )}
+                          <Text
+                            color={idealChanged ? 'green.300' : 'gray.300'}
+                            fontFamily="mono"
+                            fontWeight={idealChanged ? 'bold' : 'normal'}
+                          >
+                            {boundsSet
+                              ? `${formatValue(row.idealLower)} – ${formatValue(row.idealUpper)}`
+                              : formatValue(row.idealLower)}
+                          </Text>
                         </Td>
                       </MotionTr>
                     );

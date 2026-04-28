@@ -1,3 +1,4 @@
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Box, Flex, useDisclosure } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
@@ -96,6 +97,16 @@ function App() {
   const siteAutoSaveTimerRef = useRef<number | null>(null);
   const isLoadingSiteRef = useRef(false); // Prevent saving while loading
   const boundaryUpdateRequestSeqRef = useRef(0);
+
+    // Target values popup state (lifted from ContentArea)
+  const { isOpen: isTargetModalOpen, onOpen: onOpenTargetModal, onClose: onCloseTargetModal } = useDisclosure();
+  const handleToggleTargetModal = () => {
+    if (isTargetModalOpen) {
+      onCloseTargetModal();
+    } else {
+      onOpenTargetModal();
+    }
+  };
 
   useEffect(() => {
     // Don't save if no site is open, we're loading a site, or on create-site page
@@ -385,6 +396,23 @@ function App() {
     }
   }, [currentSiteId]);
 
+  const handleSiteIndicatorsChange = useCallback(async (indicators: Site['indicators']) => {
+    if (!currentSiteId || !indicators) return;
+
+    setCurrentSite((prev) => {
+      if (!prev || prev.id !== currentSiteId) return prev;
+      return { ...prev, indicators };
+    });
+
+    try {
+      const updatedSite = await patchSite(currentSiteId, { indicators });
+      setCurrentSite(updatedSite);
+    } catch (err) {
+      console.error('Failed to update site indicators:', err);
+      throw err;
+    }
+  }, [currentSiteId]);
+
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
   // Show setup guide when tiles aren't loaded
@@ -504,6 +532,8 @@ function App() {
         siteTitle={currentSite?.title}
         onEditBoundary={currentSite && viewModes[focusedPane] === 'map' ? handleToggleBoundaryEdit : undefined}
         isBoundaryEditMode={isBoundaryEditMode}
+        onToggleTargetModal={handleToggleTargetModal}
+        isTargetModalOpen={isTargetModalOpen}
       />
 
       <Flex flex={1} overflow="hidden" position="relative">
@@ -549,6 +579,10 @@ function App() {
             chartGroups={chartGroups}
             chartAxisLabelFilters={chartAxisLabelFilters}
             mapExtent={mapExtent}
+            onSiteIndicatorsChange={handleSiteIndicatorsChange}
+            isTargetModalOpen={isTargetModalOpen}
+            onOpenTargetModal={onOpenTargetModal}
+            onCloseTargetModal={onCloseTargetModal}
           />
         </Box>
 

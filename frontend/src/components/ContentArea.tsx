@@ -1,9 +1,11 @@
-import { Box, Button, HStack, IconButton, Tooltip } from '@chakra-ui/react';
+import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Tooltip, VStack, useDisclosure, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiActivity, FiBarChart2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
+import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
+import { useAttributeDetails, useAttributeTargetInputs } from '../hooks/useApi';
+import { useMemo, useState } from 'react';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -42,6 +44,11 @@ interface ContentAreaProps {
   chartGroups?: (string | null)[];
   chartAxisLabelFilters?: (string | null)[];
   mapExtent?: MapExtent | null;
+  onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  // For target modal control from parent
+  isTargetModalOpen?: boolean;
+  onOpenTargetModal?: () => void;
+  onCloseTargetModal?: () => void;
 }
 
 const paneVariants = {
@@ -116,10 +123,89 @@ function ContentArea({
   chartGroups,
   chartAxisLabelFilters,
   mapExtent,
+  onSiteIndicatorsChange,
+  isTargetModalOpen,
+  onOpenTargetModal,
+  onCloseTargetModal,
 }: ContentAreaProps) {
+  const toast = useToast();
+  const { details: attributeDetails } = useAttributeDetails();
+  const { targetInputs } = useAttributeTargetInputs();
+  const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
+
+  const editableTargetKeys = useMemo(() => {
+    const availableKeys = new Set<string>();
+    Object.keys(siteIndicators?.ideal ?? {}).forEach((k) => availableKeys.add(k));
+    Object.keys(siteIndicators?.reference ?? {}).forEach((k) => availableKeys.add(k));
+    Object.keys(siteIndicators?.current ?? {}).forEach((k) => availableKeys.add(k));
+
+    const keys = Object.entries(targetInputs)
+      .filter(([, allowed]) => allowed)
+      .map(([key]) => key)
+      .filter((key) => availableKeys.has(key));
+    return keys
+      .filter((key, idx, arr) => arr.indexOf(key) === idx)
+      .sort((a, b) => {
+        const aLabel = attributeDetails[a] ?? a;
+        const bLabel = attributeDetails[b] ?? b;
+        return aLabel.localeCompare(bLabel);
+      });
+  }, [attributeDetails, siteIndicators, targetInputs]);
+
+  const openTargetModal = () => {
+    const nextDrafts: Record<string, string> = {};
+    for (const key of editableTargetKeys) {
+      const value = siteIndicators?.ideal?.[key];
+      nextDrafts[key] = typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+    }
+    setTargetDraftValues(nextDrafts);
+    if (typeof onOpenTargetModal === 'function') onOpenTargetModal();
+  };
+
+  const saveTargetValues = async () => {
+    if (!siteIndicators || !onSiteIndicatorsChange) {
+      onCloseTargetModal();
+      return;
+    }
+
+    const nextIdeal = { ...(siteIndicators.ideal ?? {}) };
+    const nextIdealLower = { ...(siteIndicators.idealLower ?? {}) };
+    const nextIdealUpper = { ...(siteIndicators.idealUpper ?? {}) };
+
+    for (const key of editableTargetKeys) {
+      const raw = (targetDraftValues[key] ?? '').trim();
+      if (raw === '') continue;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        toast({
+          title: 'Invalid target value',
+          description: `Please enter a valid number for ${attributeDetails[key] ?? key}.`,
+          status: 'error',
+          duration: 2500,
+        });
+        return;
+      }
+      nextIdeal[key] = parsed;
+      nextIdealLower[key] = parsed;
+      nextIdealUpper[key] = parsed;
+    }
+
+    try {
+      await onSiteIndicatorsChange({
+        ...siteIndicators,
+        ideal: nextIdeal,
+        idealLower: nextIdealLower,
+        idealUpper: nextIdealUpper,
+      });
+      onCloseTargetModal();
+      toast({ title: 'Target values updated', status: 'success', duration: 2000 });
+    } catch {
+      toast({ title: 'Failed to update target values', status: 'error', duration: 2500 });
+    }
+  };
 
   const visibleIndices = isQuad
     ? paneStates.map((_, index) => index)
@@ -204,6 +290,22 @@ function ContentArea({
               ml={2}
             />
           </Tooltip>
+
+          {siteIndicators && editableTargetKeys.length > 0 && (
+            <Tooltip label="Edit target values" placement="bottom">
+              <Button
+                size="sm"
+                leftIcon={<FiEdit2 size={14} />}
+                onClick={openTargetModal}
+                variant="ghost"
+                color="gray.200"
+                _hover={{ bg: 'whiteAlpha.200' }}
+                ml={2}
+              >
+                Targets
+              </Button>
+            </Tooltip>
+          )}
         </HStack>
       )}
 
@@ -321,6 +423,38 @@ function ContentArea({
         </Box>
       )}
       </Box>
+
+      <Modal isOpen={isTargetModalOpen} onClose={onCloseTargetModal} size="xl" scrollBehavior="inside">
+        <ModalOverlay />
+        <ModalContent bg="gray.800" color="white">
+          <ModalHeader>Edit Target Values</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <VStack spacing={3} align="stretch">
+              {editableTargetKeys.map((key) => (
+                <FormControl key={key}>
+                  <FormLabel fontSize="sm" color="gray.200" mb={1}>
+                    {attributeDetails[key] ?? key}
+                  </FormLabel>
+                  <Input
+                    value={targetDraftValues[key] ?? ''}
+                    onChange={(e) =>
+                      setTargetDraftValues((prev) => ({ ...prev, [key]: e.target.value }))
+                    }
+                    placeholder="Enter target value"
+                    bg="whiteAlpha.100"
+                    borderColor="whiteAlpha.300"
+                  />
+                </FormControl>
+              ))}
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={onCloseTargetModal}>Cancel</Button>
+            <Button colorScheme="cyan" onClick={saveTargetValues}>Save</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </Box>
   );
 }

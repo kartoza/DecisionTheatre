@@ -179,6 +179,22 @@ export function useAttributeUserInputs() {
   return { userInputs, loading };
 }
 
+export function useAttributeTargetInputs() {
+  const [targetInputs, setTargetInputs] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/targetinputs`)
+      .then((data) => {
+        setTargetInputs(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { targetInputs, loading };
+}
+
 export function useAttributeCanMap() {
   const [canMap, setCanMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);

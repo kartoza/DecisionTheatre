@@ -10,6 +10,7 @@ import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
+import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -658,6 +659,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   const rightMapRef = useRef<maplibregl.Map | null>(null);
+  const viewportBoundsRef = useRef<maplibregl.LngLatBoundsLike | null>(null);
   const leftClipContainerRef = useRef<HTMLDivElement | null>(null);
   const compareContainerRef = useRef<HTMLDivElement | null>(null);
   const sliderRef = useRef<HTMLDivElement | null>(null);
@@ -2129,6 +2131,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     });
     rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
 
+    const applyViewportLimits = () => {
+      const bounds = viewportBoundsRef.current;
+      if (!bounds) return;
+      applyZoomOutClipToBounds(leftMap, bounds);
+      applyZoomOutClipToBounds(rightMap, bounds);
+    };
+
+    void (async () => {
+      const bounds = await fetchCatchmentBounds() ?? await fetchTileBounds();
+      if (!bounds) return;
+      viewportBoundsRef.current = bounds;
+      applyViewportLimits();
+    })();
+
     // Initial sizing of map containers
     updateMapSizes();
 
@@ -2190,6 +2206,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       updateMapSizes();
       map.resize();
       map.jumpTo({ center: map.getCenter(), zoom: map.getZoom() });
+      const bounds = viewportBoundsRef.current;
+      if (bounds) {
+        applyZoomOutClipToBounds(map, bounds);
+      }
     }
 
     leftMap.on('load', () => {
@@ -2378,6 +2398,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
       leftMap.resize();
       rightMap.resize();
+
+      const bounds = viewportBoundsRef.current;
+      if (bounds) {
+        applyZoomOutClipToBounds(leftMap, bounds);
+        applyZoomOutClipToBounds(rightMap, bounds);
+      }
 
       if (isQuad && siteId) {
         reapplyBoundaryLayers();

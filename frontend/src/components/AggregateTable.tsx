@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from 'react';
-import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner } from '@chakra-ui/react';
+import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner, Button } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
@@ -29,11 +29,19 @@ function AggregateTable({
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isTableVisible, setIsTableVisible] = useState(false);
   const { details: attributeDetails } = useAttributeDetails();
 
   const attributeLabel = attributeDetails[attribute] ?? attribute;
 
-  // Fetch catchment data when visible and siteId is available
+  // Reset table visibility whenever the panel is closed.
+  useEffect(() => {
+    if (!visible) {
+      setIsTableVisible(false);
+    }
+  }, [visible]);
+
+  // Fetch catchment data when panel is visible and siteId is available.
   useEffect(() => {
     if (!visible || !siteId) {
       return;
@@ -142,15 +150,25 @@ function AggregateTable({
                     Area-weighted average for selected factor
                   </Text>
                 </VStack>
-                <Badge
-                  colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
-                  fontSize="md"
-                  px={4}
-                  py={2}
-                  borderRadius="full"
-                >
-                  {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
-                </Badge>
+                <HStack spacing={3}>
+                  <Badge
+                    colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
+                    fontSize="md"
+                    px={4}
+                    py={2}
+                    borderRadius="full"
+                  >
+                    {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    colorScheme="cyan"
+                    variant={isTableVisible ? 'outline' : 'solid'}
+                    onClick={() => setIsTableVisible((prev) => !prev)}
+                  >
+                    {isTableVisible ? 'Hide Table' : 'Show Table'}
+                  </Button>
+                </HStack>
               </HStack>
 
               {/* Factor being calculated */}
@@ -172,7 +190,23 @@ function AggregateTable({
               </Box>
             </VStack>
 
-            {loading ? (
+            {!isTableVisible ? (
+              <Box
+                bg="whiteAlpha.50"
+                borderRadius="xl"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                p={10}
+                textAlign="center"
+              >
+                <Text color="gray.400" fontSize="lg" mb={2}>
+                  Aggregate table hidden
+                </Text>
+                <Text color="gray.500" fontSize="sm">
+                  Use the Show Table button to view the full calculation breakdown
+                </Text>
+              </Box>
+            ) : loading ? (
               /* Loading state */
               <Box
                 bg="whiteAlpha.50"
@@ -207,81 +241,98 @@ function AggregateTable({
                 </Text>
               </Box>
             ) : (
-            <>
-            {/* Main calculation table */}
-            <Box
-              bg="whiteAlpha.50"
-              borderRadius="xl"
-              border="1px solid"
-              borderColor="whiteAlpha.200"
-              overflow="hidden"
-              mb={6}
-            >
-              <Table variant="simple" size="sm">
-                <Thead>
-                  <Tr bg="whiteAlpha.100">
-                    <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
-                    <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Weight</Th>
-                    <Th color="cyan.300" borderColor="whiteAlpha.200" isNumeric>Weighted Value</Th>
-                  </Tr>
-                </Thead>
-                <Tbody>
-                  {calculations.rows.map((row, idx) => (
-                    <motion.tr
-                      key={row.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.05, duration: 0.3 }}
-                      style={{ background: idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}
-                    >
-                      <Td color="white" borderColor="whiteAlpha.100" fontWeight="600">
-                        {row.id}
-                      </Td>
-                      <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                        {formatNumber(row.area, 1)}
-                      </Td>
-                      <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                        <HStack justify="flex-end" spacing={2}>
-                          <Box
-                            w={`${row.fractionCovered * 40}px`}
-                            h="8px"
-                            bg="purple.400"
-                            borderRadius="full"
-                            opacity={0.7}
-                          />
-                          <Text>{(row.fractionCovered * 100).toFixed(0)}%</Text>
-                        </HStack>
-                      </Td>
-                      <Td color="orange.300" borderColor="whiteAlpha.100" isNumeric fontWeight="500">
-                        {formatNumber(row.value, 3)}
-                      </Td>
-                      <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                        {formatNumber(row.validArea, 1)}
-                      </Td>
-                      <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                        <HStack justify="flex-end" spacing={2}>
-                          <Box
-                            w={`${row.weight * 60}px`}
-                            h="8px"
-                            bg="cyan.400"
-                            borderRadius="full"
-                            opacity={0.7}
-                          />
-                          <Text>{(row.weight * 100).toFixed(1)}%</Text>
-                        </HStack>
-                      </Td>
-                      <Td color="cyan.300" borderColor="whiteAlpha.100" isNumeric fontWeight="600">
-                        {formatNumber(row.weightedValue, 4)}
-                      </Td>
-                    </motion.tr>
-                  ))}
-                </Tbody>
-              </Table>
-            </Box>
+              <>
+                {/* Main calculation table */}
+                <Box
+                  bg="whiteAlpha.50"
+                  borderRadius="xl"
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  overflow="hidden"
+                  mb={6}
+                >
+                  <Table variant="simple" size="sm">
+                    <Thead>
+                      <Tr bg="whiteAlpha.100">
+                        <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
+                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
+                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
+                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
+                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
+                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Weight</Th>
+                        <Th color="cyan.300" borderColor="whiteAlpha.200" isNumeric>Weighted Value</Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {calculations.rows.map((row, idx) => (
+                        <motion.tr
+                          key={row.id}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.05, duration: 0.3 }}
+                          style={{ background: idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}
+                        >
+                          <Td color="white" borderColor="whiteAlpha.100" fontWeight="600">
+                            {row.id}
+                          </Td>
+                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                            {formatNumber(row.area, 1)}
+                          </Td>
+                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                            <HStack justify="flex-end" spacing={2}>
+                              <Box
+                                w={`${row.fractionCovered * 40}px`}
+                                h="8px"
+                                bg="purple.400"
+                                borderRadius="full"
+                                opacity={0.7}
+                              />
+                              <Text>{(row.fractionCovered * 100).toFixed(0)}%</Text>
+                            </HStack>
+                          </Td>
+                          <Td color="orange.300" borderColor="whiteAlpha.100" isNumeric fontWeight="500">
+                            {formatNumber(row.value, 3)}
+                          </Td>
+                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                            {formatNumber(row.validArea, 1)}
+                          </Td>
+                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                            <HStack justify="flex-end" spacing={2}>
+                              <Box
+                                w={`${row.weight * 60}px`}
+                                h="8px"
+                                bg="cyan.400"
+                                borderRadius="full"
+                                opacity={0.7}
+                              />
+                              <Text>{(row.weight * 100).toFixed(1)}%</Text>
+                            </HStack>
+                          </Td>
+                          <Td color="cyan.300" borderColor="whiteAlpha.100" isNumeric fontWeight="600">
+                            {formatNumber(row.weightedValue, 4)}
+                          </Td>
+                        </motion.tr>
+                      ))}
+                    </Tbody>
+                  </Table>
+                </Box>
+
+                {/* Formula explanation */}
+                <Box
+                  mt={6}
+                  p={4}
+                  bg="whiteAlpha.50"
+                  borderRadius="lg"
+                  border="1px solid"
+                  borderColor="whiteAlpha.100"
+                >
+                  <Text color="gray.500" fontSize="xs" textAlign="center">
+                    <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
+                    Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
+                  </Text>
+                </Box>
+              </>
+            )}
 
             {/* Summary section */}
             <HStack spacing={4} justify="center">
@@ -360,23 +411,6 @@ function AggregateTable({
                 </VStack>
               </Box>
             </HStack>
-
-            {/* Formula explanation */}
-            <Box
-              mt={6}
-              p={4}
-              bg="whiteAlpha.50"
-              borderRadius="lg"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-            >
-              <Text color="gray.500" fontSize="xs" textAlign="center">
-                <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
-                Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
-              </Text>
-            </Box>
-            </>
-            )}
           </motion.div>
         )}
       </AnimatePresence>

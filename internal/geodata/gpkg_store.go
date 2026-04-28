@@ -1179,6 +1179,26 @@ func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit in
 	return features, nil
 }
 
+// GetCatchmentsBounds returns the envelope of all catchment geometries.
+func (s *GpkgStore) GetCatchmentsBounds() ([4]float64, error) {
+	var bounds [4]float64
+
+	const query = `
+		SELECT MIN(minx), MIN(miny), MAX(maxx), MAX(maxy)
+		FROM rtree_catchments_lev12_geom
+	`
+
+	if err := s.db.QueryRow(query).Scan(&bounds[0], &bounds[1], &bounds[2], &bounds[3]); err != nil {
+		return bounds, fmt.Errorf("failed to query catchments bounds: %w", err)
+	}
+
+	if !(bounds[0] < bounds[2] && bounds[1] < bounds[3]) {
+		return bounds, fmt.Errorf("invalid catchments bounds")
+	}
+
+	return bounds, nil
+}
+
 // UnionGeometries performs a union of two GeoJSON geometries using polyclip
 // Returns the resulting geometry, area, and any error
 func (s *GpkgStore) UnionGeometries(geom1, geom2 json.RawMessage) (json.RawMessage, float64, error) {

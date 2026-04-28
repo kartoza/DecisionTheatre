@@ -60,6 +60,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/details", h.handleMetadataDetails).Methods("GET")
 	r.HandleFunc("/metadata/variabletypes", h.handleMetadataVariableTypes).Methods("GET")
 	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
+	r.HandleFunc("/metadata/targetinputs", h.handleMetadataTargetInputs).Methods("GET")
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
 	r.HandleFunc("/metadata/axislabels", h.handleMetadataAxisLabels).Methods("GET")
@@ -85,6 +86,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 
 	// Catchment selection for site creation
 	r.HandleFunc("/sites/dissolve-catchments", h.handleDissolveCatchments).Methods("POST")
+	r.HandleFunc("/catchments/bounds", h.handleCatchmentsBounds).Methods("GET")
 	r.HandleFunc("/catchments/geometry/{id}", h.handleCatchmentGeometry).Methods("GET")
 	r.HandleFunc("/catchments/in-bbox", h.handleCatchmentsInBBox).Methods("POST")
 
@@ -326,7 +328,76 @@ func (h *Handler) handleMetadataInputs(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
+		case strings.EqualFold(normalized, "CurrentInputsAllowed"):
+			inputIdx = i
 		case strings.EqualFold(normalized, "userInput"):
+			// Backward compatibility with older metadata files.
+			inputIdx = i
+		}
+	}
+
+	if columnIdx == -1 || inputIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	inputs := make(map[string]bool)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) || inputIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		flag := strings.TrimSpace(record[inputIdx])
+		if column == "" || flag == "" {
+			continue
+		}
+		allowed := flag == "1" || strings.EqualFold(flag, "true")
+		inputs[column] = allowed
+		if normalized := normalizeMetadataColumn(column); normalized != "" {
+			inputs[normalized] = allowed
+		}
+	}
+
+	respondJSON(w, http.StatusOK, inputs)
+}
+
+// handleMetadataTargetInputs returns a map of attribute column names to target input flags.
+// It reads from metadata.csv in the data directory.
+func (h *Handler) handleMetadataTargetInputs(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata target inputs unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]bool{})
+		return
+	}
+
+	columnIdx := -1
+	inputIdx := -1
+	for i, header := range headers {
+		normalized := strings.TrimSpace(header)
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
+			columnIdx = i
+		case strings.EqualFold(normalized, "TargetInputsAllowed"):
+			inputIdx = i
+		case strings.EqualFold(normalized, "targetInput"):
+			// Backward compatibility with older metadata files.
 			inputIdx = i
 		}
 	}
@@ -1472,6 +1543,27 @@ func (h *Handler) handleCatchmentGeometry(w http.ResponseWriter, r *http.Request
 	}
 
 	respondJSON(w, http.StatusOK, features[0])
+}
+
+// handleCatchmentsBounds returns the global bounding box for all catchments.
+func (h *Handler) handleCatchmentsBounds(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	bounds, err := h.gpkgStore.GetCatchmentsBounds()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]float64{
+		"minX": bounds[0],
+		"minY": bounds[1],
+		"maxX": bounds[2],
+		"maxY": bounds[3],
+	})
 }
 
 // handleCatchmentsInBBox returns catchment features intersecting a map bounding box.
