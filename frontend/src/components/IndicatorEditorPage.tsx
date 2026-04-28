@@ -77,7 +77,8 @@ function formatValue(value: number | null | undefined): string {
   if (value === 0) return '0';
   if (Math.abs(value) >= 1000000) return (value / 1000000).toFixed(2) + 'M';
   if (Math.abs(value) >= 1000) return (value / 1000).toFixed(2) + 'K';
-  if (Math.abs(value) < 0.01) return value.toExponential(2);
+  // Always use fixed-point for small numbers
+  if (Math.abs(value) < 0.01) return value.toFixed(4);
   return value.toFixed(2);
 }
 
@@ -712,8 +713,9 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     Object.keys(variableTypes || {}).forEach(k => allKeys.add(k));
     Object.keys(userInputs || {}).forEach(k => allKeys.add(k));
 
+    // Exclude catchment_id and similar variants
     return Array.from(allKeys)
-      .filter(key => key.trim() !== '' && key.toLowerCase() !== 'catchid')
+      .filter(key => key.trim() !== '' && key.toLowerCase() !== 'catchid' && key.toLowerCase() !== 'catchment_id')
       .sort();
   }, [localIndicators, attributeDetails, variableTypes, userInputs]);
 
