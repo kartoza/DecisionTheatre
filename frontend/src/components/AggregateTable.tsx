@@ -137,280 +137,283 @@ function AggregateTable({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            style={{ width: '100%', height: '100%', padding: '24px', overflow: 'auto' }}
+            style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {/* Header */}
-            <VStack spacing={4} align="stretch" mb={6}>
-              <HStack justify="space-between" align="center">
-                <VStack align="start" spacing={1}>
-                  <Text fontSize="2xl" fontWeight="bold" color="white">
-                    Site Aggregate Calculation
-                  </Text>
-                  <Text fontSize="md" color="gray.400">
-                    Area-weighted average for selected factor
-                  </Text>
-                </VStack>
-                <HStack spacing={3}>
-                  <Badge
-                    colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
-                    fontSize="md"
-                    px={4}
-                    py={2}
-                    borderRadius="full"
-                  >
-                    {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
-                  </Badge>
-                  <Button
-                    size="sm"
-                    colorScheme="cyan"
-                    variant={isTableVisible ? 'outline' : 'solid'}
-                    onClick={() => setIsTableVisible((prev) => !prev)}
-                  >
-                    {isTableVisible ? 'Hide Table' : 'Show Table'}
-                  </Button>
+            {/* Fixed top section: header + summary cards */}
+            <Box px={6} pt={6} pb={4} flexShrink={0}>
+              {/* Header */}
+              <VStack spacing={4} align="stretch" mb={6}>
+                <HStack justify="space-between" align="center">
+                  <VStack align="start" spacing={1}>
+                    <Text fontSize="2xl" fontWeight="bold" color="white">
+                      Site Aggregate Calculation
+                    </Text>
+                    <Text fontSize="md" color="gray.400">
+                      Area-weighted average for selected factor
+                    </Text>
+                  </VStack>
+                  <HStack spacing={3}>
+                    <Badge
+                      colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
+                      fontSize="md"
+                      px={4}
+                      py={2}
+                      borderRadius="full"
+                    >
+                      {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      colorScheme="cyan"
+                      variant={isTableVisible ? 'outline' : 'solid'}
+                      onClick={() => setIsTableVisible((prev) => !prev)}
+                    >
+                      {isTableVisible ? 'Hide Table' : 'Show Table'}
+                    </Button>
+                  </HStack>
                 </HStack>
+
+                {/* Factor being calculated */}
+                <Box
+                  bg="whiteAlpha.100"
+                  borderRadius="lg"
+                  p={4}
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                >
+                  <HStack justify="space-between">
+                    <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
+                      Selected Factor
+                    </Text>
+                    <Text color="cyan.300" fontSize="lg" fontWeight="bold">
+                      {attributeLabel}
+                    </Text>
+                  </HStack>
+                </Box>
+              </VStack>
+
+              {/* Summary cards */}
+              <HStack spacing={4} justify="center">
+                {/* Total Area */}
+                <Box
+                  bg="whiteAlpha.100"
+                  borderRadius="xl"
+                  p={6}
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  flex={1}
+                  maxW="300px"
+                >
+                  <VStack spacing={2}>
+                    <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
+                      Total Valid Area
+                    </Text>
+                    <Text color="white" fontSize="3xl" fontWeight="bold">
+                      {formatNumber(calculations.totalArea, 1)}
+                    </Text>
+                    <Text color="gray.500" fontSize="sm">
+                      hectares
+                    </Text>
+                  </VStack>
+                </Box>
+
+                {/* Site Average - Highlighted */}
+                <Box
+                  bg="linear-gradient(135deg, rgba(0, 188, 212, 0.2), rgba(156, 39, 176, 0.2))"
+                  borderRadius="xl"
+                  p={6}
+                  border="2px solid"
+                  borderColor="cyan.400"
+                  flex={1}
+                  maxW="400px"
+                  boxShadow="0 0 30px rgba(0, 188, 212, 0.3)"
+                >
+                  <VStack spacing={2}>
+                    <Text color="cyan.300" fontSize="sm" fontWeight="700" textTransform="uppercase" letterSpacing="wider">
+                      Site Average
+                    </Text>
+                    <Text
+                      color="white"
+                      fontSize="5xl"
+                      fontWeight="bold"
+                      textShadow="0 0 20px rgba(0, 188, 212, 0.5)"
+                    >
+                      {formatNumber(calculations.siteAverage, 3)}
+                    </Text>
+                    <Text color="gray.400" fontSize="sm">
+                      {attributeLabel}
+                    </Text>
+                  </VStack>
+                </Box>
+
+                {/* Catchment Count */}
+                <Box
+                  bg="whiteAlpha.100"
+                  borderRadius="xl"
+                  p={6}
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  flex={1}
+                  maxW="300px"
+                >
+                  <VStack spacing={2}>
+                    <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
+                      Catchments
+                    </Text>
+                    <Text color="white" fontSize="3xl" fontWeight="bold">
+                      {calculations.rows.length}
+                    </Text>
+                    <Text color="gray.500" fontSize="sm">
+                      in site boundary
+                    </Text>
+                  </VStack>
+                </Box>
               </HStack>
+            </Box>
 
-              {/* Factor being calculated */}
-              <Box
-                bg="whiteAlpha.100"
-                borderRadius="lg"
-                p={4}
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-              >
-                <HStack justify="space-between">
-                  <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                    Selected Factor
-                  </Text>
-                  <Text color="cyan.300" fontSize="lg" fontWeight="bold">
-                    {attributeLabel}
-                  </Text>
-                </HStack>
-              </Box>
-            </VStack>
-
-            {!isTableVisible ? (
-              <Box
-                bg="whiteAlpha.50"
-                borderRadius="xl"
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-                p={10}
-                textAlign="center"
-              >
-                <Text color="gray.400" fontSize="lg" mb={2}>
-                  Aggregate table hidden
-                </Text>
-                <Text color="gray.500" fontSize="sm">
-                  Use the Show Table button to view the full calculation breakdown
-                </Text>
-              </Box>
-            ) : loading ? (
-              /* Loading state */
-              <Box
-                bg="whiteAlpha.50"
-                borderRadius="xl"
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-                p={12}
-                textAlign="center"
-              >
-                <VStack spacing={4}>
-                  <Spinner size="xl" color="cyan.400" thickness="4px" />
-                  <Text color="gray.400" fontSize="lg">
-                    Loading catchment data...
-                  </Text>
-                </VStack>
-              </Box>
-            ) : !calculations.hasData ? (
-              /* No data message */
-              <Box
-                bg="whiteAlpha.50"
-                borderRadius="xl"
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-                p={12}
-                textAlign="center"
-              >
-                <Text color="gray.400" fontSize="lg" mb={2}>
-                  No catchment data available
-                </Text>
-                <Text color="gray.500" fontSize="sm">
-                  Create a site with catchments to see the aggregate calculation breakdown
-                </Text>
-              </Box>
-            ) : (
-              <>
-                {/* Main calculation table */}
+            {/* Scrollable bottom section: table */}
+            <Box flex={1} overflow="auto" px={6} pb={6}>
+              {!isTableVisible ? (
                 <Box
                   bg="whiteAlpha.50"
                   borderRadius="xl"
                   border="1px solid"
                   borderColor="whiteAlpha.200"
-                  overflow="hidden"
-                  mb={6}
+                  p={10}
+                  textAlign="center"
                 >
-                  <Table variant="simple" size="sm">
-                    <Thead>
-                      <Tr bg="whiteAlpha.100">
-                        <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
-                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
-                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
-                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
-                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
-                        <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Weight</Th>
-                        <Th color="cyan.300" borderColor="whiteAlpha.200" isNumeric>Weighted Value</Th>
-                      </Tr>
-                    </Thead>
-                    <Tbody>
-                      {calculations.rows.map((row, idx) => (
-                        <motion.tr
-                          key={row.id}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: idx * 0.05, duration: 0.3 }}
-                          style={{ background: idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}
-                        >
-                          <Td color="white" borderColor="whiteAlpha.100" fontWeight="600">
-                            {row.id}
-                          </Td>
-                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                            {formatNumber(row.area, 1)}
-                          </Td>
-                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                            <HStack justify="flex-end" spacing={2}>
-                              <Box
-                                w={`${row.fractionCovered * 40}px`}
-                                h="8px"
-                                bg="purple.400"
-                                borderRadius="full"
-                                opacity={0.7}
-                              />
-                              <Text>{(row.fractionCovered * 100).toFixed(0)}%</Text>
-                            </HStack>
-                          </Td>
-                          <Td color="orange.300" borderColor="whiteAlpha.100" isNumeric fontWeight="500">
-                            {formatNumber(row.value, 3)}
-                          </Td>
-                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                            {formatNumber(row.validArea, 1)}
-                          </Td>
-                          <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
-                            <HStack justify="flex-end" spacing={2}>
-                              <Box
-                                w={`${row.weight * 60}px`}
-                                h="8px"
-                                bg="cyan.400"
-                                borderRadius="full"
-                                opacity={0.7}
-                              />
-                              <Text>{(row.weight * 100).toFixed(1)}%</Text>
-                            </HStack>
-                          </Td>
-                          <Td color="cyan.300" borderColor="whiteAlpha.100" isNumeric fontWeight="600">
-                            {formatNumber(row.weightedValue, 4)}
-                          </Td>
-                        </motion.tr>
-                      ))}
-                    </Tbody>
-                  </Table>
+                  <Text color="gray.400" fontSize="lg" mb={2}>
+                    Aggregate table hidden
+                  </Text>
+                  <Text color="gray.500" fontSize="sm">
+                    Use the Show Table button to view the full calculation breakdown
+                  </Text>
                 </Box>
-
-                {/* Formula explanation */}
+              ) : loading ? (
                 <Box
-                  mt={6}
-                  p={4}
                   bg="whiteAlpha.50"
-                  borderRadius="lg"
+                  borderRadius="xl"
                   border="1px solid"
-                  borderColor="whiteAlpha.100"
+                  borderColor="whiteAlpha.200"
+                  p={12}
+                  textAlign="center"
                 >
-                  <Text color="gray.500" fontSize="xs" textAlign="center">
-                    <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
-                    Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
+                  <VStack spacing={4}>
+                    <Spinner size="xl" color="cyan.400" thickness="4px" />
+                    <Text color="gray.400" fontSize="lg">
+                      Loading catchment data...
+                    </Text>
+                  </VStack>
+                </Box>
+              ) : !calculations.hasData ? (
+                <Box
+                  bg="whiteAlpha.50"
+                  borderRadius="xl"
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  p={12}
+                  textAlign="center"
+                >
+                  <Text color="gray.400" fontSize="lg" mb={2}>
+                    No catchment data available
+                  </Text>
+                  <Text color="gray.500" fontSize="sm">
+                    Create a site with catchments to see the aggregate calculation breakdown
                   </Text>
                 </Box>
-              </>
-            )}
-
-            {/* Summary section */}
-            <HStack spacing={4} justify="center">
-              {/* Total Area */}
-              <Box
-                bg="whiteAlpha.100"
-                borderRadius="xl"
-                p={6}
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-                flex={1}
-                maxW="300px"
-              >
-                <VStack spacing={2}>
-                  <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                    Total Valid Area
-                  </Text>
-                  <Text color="white" fontSize="3xl" fontWeight="bold">
-                    {formatNumber(calculations.totalArea, 1)}
-                  </Text>
-                  <Text color="gray.500" fontSize="sm">
-                    hectares
-                  </Text>
-                </VStack>
-              </Box>
-
-              {/* Site Average - Highlighted */}
-              <Box
-                bg="linear-gradient(135deg, rgba(0, 188, 212, 0.2), rgba(156, 39, 176, 0.2))"
-                borderRadius="xl"
-                p={6}
-                border="2px solid"
-                borderColor="cyan.400"
-                flex={1}
-                maxW="400px"
-                boxShadow="0 0 30px rgba(0, 188, 212, 0.3)"
-              >
-                <VStack spacing={2}>
-                  <Text color="cyan.300" fontSize="sm" fontWeight="700" textTransform="uppercase" letterSpacing="wider">
-                    Site Average
-                  </Text>
-                  <Text
-                    color="white"
-                    fontSize="5xl"
-                    fontWeight="bold"
-                    textShadow="0 0 20px rgba(0, 188, 212, 0.5)"
+              ) : (
+                <>
+                  {/* Main calculation table */}
+                  <Box
+                    bg="whiteAlpha.50"
+                    borderRadius="xl"
+                    border="1px solid"
+                    borderColor="whiteAlpha.200"
+                    overflow="hidden"
+                    mb={6}
                   >
-                    {formatNumber(calculations.siteAverage, 3)}
-                  </Text>
-                  <Text color="gray.400" fontSize="sm">
-                    {attributeLabel}
-                  </Text>
-                </VStack>
-              </Box>
+                    <Table variant="simple" size="sm">
+                      <Thead>
+                        <Tr bg="whiteAlpha.100">
+                          <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Weight</Th>
+                          <Th color="cyan.300" borderColor="whiteAlpha.200" isNumeric>Weighted Value</Th>
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {calculations.rows.map((row, idx) => (
+                          <motion.tr
+                            key={row.id}
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: idx * 0.05, duration: 0.3 }}
+                            style={{ background: idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}
+                          >
+                            <Td color="white" borderColor="whiteAlpha.100" fontWeight="600">
+                              {row.id}
+                            </Td>
+                            <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                              {formatNumber(row.area, 1)}
+                            </Td>
+                            <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                              <HStack justify="flex-end" spacing={2}>
+                                <Box
+                                  w={`${row.fractionCovered * 40}px`}
+                                  h="8px"
+                                  bg="purple.400"
+                                  borderRadius="full"
+                                  opacity={0.7}
+                                />
+                                <Text>{(row.fractionCovered * 100).toFixed(0)}%</Text>
+                              </HStack>
+                            </Td>
+                            <Td color="orange.300" borderColor="whiteAlpha.100" isNumeric fontWeight="500">
+                              {formatNumber(row.value, 3)}
+                            </Td>
+                            <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                              {formatNumber(row.validArea, 1)}
+                            </Td>
+                            <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
+                              <HStack justify="flex-end" spacing={2}>
+                                <Box
+                                  w={`${row.weight * 60}px`}
+                                  h="8px"
+                                  bg="cyan.400"
+                                  borderRadius="full"
+                                  opacity={0.7}
+                                />
+                                <Text>{(row.weight * 100).toFixed(1)}%</Text>
+                              </HStack>
+                            </Td>
+                            <Td color="cyan.300" borderColor="whiteAlpha.100" isNumeric fontWeight="600">
+                              {formatNumber(row.weightedValue, 4)}
+                            </Td>
+                          </motion.tr>
+                        ))}
+                      </Tbody>
+                    </Table>
+                  </Box>
 
-              {/* Catchment Count */}
-              <Box
-                bg="whiteAlpha.100"
-                borderRadius="xl"
-                p={6}
-                border="1px solid"
-                borderColor="whiteAlpha.200"
-                flex={1}
-                maxW="300px"
-              >
-                <VStack spacing={2}>
-                  <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                    Catchments
-                  </Text>
-                  <Text color="white" fontSize="3xl" fontWeight="bold">
-                    {calculations.rows.length}
-                  </Text>
-                  <Text color="gray.500" fontSize="sm">
-                    in site boundary
-                  </Text>
-                </VStack>
-              </Box>
-            </HStack>
+                  {/* Formula explanation */}
+                  <Box
+                    p={4}
+                    bg="whiteAlpha.50"
+                    borderRadius="lg"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                  >
+                    <Text color="gray.500" fontSize="xs" textAlign="center">
+                      <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
+                      Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
+                    </Text>
+                  </Box>
+                </>
+              )}
+            </Box>
           </motion.div>
         )}
       </AnimatePresence>

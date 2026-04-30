@@ -11,7 +11,9 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
-import { patchSite, useServerInfo } from './hooks/useApi';
+import { patchSite, useServerInfo, getSiteCatchments } from './hooks/useApi';
+import { getAppRuntime } from './types/runtime';
+import { applyAOIWeightedIndicators } from './utils/indicators';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
@@ -56,14 +58,16 @@ function App() {
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
   const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
   const [chartAxisLabelFilters, setChartAxisLabelFilters] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
+  const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
+  const extractingIndicatorsRef = useRef(false);
 
   useEffect(() => {
     setViewModes((prev) => {
       if (prev.length === paneStates.length) return prev;
       if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
-      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => prev[focusedPane] ?? 'map')];
+      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => prev[Math.min(focusedPane, prev.length - 1)] ?? 'map')];
     });
 
     setChartGroups((prev) => {
@@ -92,6 +96,69 @@ function App() {
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
   useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
+
+  // Auto-extract indicators when a site is opened that has catchments but no indicators yet
+  useEffect(() => {
+    const site = currentSite;
+    if (!site || site.indicators || !site.catchmentIds?.length || extractingIndicatorsRef.current) {
+      return;
+    }
+
+    extractingIndicatorsRef.current = true;
+    setIsExtractingIndicators(true);
+
+    const runtime = getAppRuntime();
+    const { thumbnail, ...siteWithoutThumbnail } = site;
+    const jsonData = runtime === 'browser'
+      ? { runtime: 'browser', site: siteWithoutThumbnail }
+      : { runtime: 'webview', site: {} };
+
+    fetch(`/api/sites/${site.id}/indicators`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(jsonData),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Failed to extract indicators');
+        const updatedSiteFromApi: Site = await response.json();
+        const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
+
+        if (updatedSite.indicators) {
+          try {
+            const catchments = await getSiteCatchments(site.id);
+            if (catchments.length > 0) {
+              updatedSite.indicators = applyAOIWeightedIndicators(updatedSite.indicators, catchments);
+            }
+          } catch (err) {
+            console.warn('Failed to apply AOI-weighted recalculation during auto-extraction:', err);
+          }
+        }
+
+        if (runtime === 'browser') {
+          try {
+            const raw = window.localStorage.getItem('dt-sites');
+            const parsed = raw ? JSON.parse(raw) : [];
+            const storedSites: Site[] = Array.isArray(parsed) ? parsed : [];
+            const updatedSites = storedSites.some((s) => s.id === updatedSite.id)
+              ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
+              : [...storedSites, updatedSite];
+            window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
+          } catch (err) {
+            console.warn('Failed to persist auto-extracted indicators to localStorage:', err);
+          }
+        }
+
+        setCurrentSite((prev) => (prev?.id === site.id ? updatedSite : prev));
+      })
+      .catch((err) => {
+        console.error('Auto-extraction of site indicators failed:', err);
+      })
+      .finally(() => {
+        extractingIndicatorsRef.current = false;
+        setIsExtractingIndicators(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSite?.id, currentSite?.catchmentIds, currentSite?.indicators]);
 
   // Auto-save site state when user interacts with the map (debounced)
   const siteAutoSaveTimerRef = useRef<number | null>(null);
@@ -580,6 +647,7 @@ function App() {
             chartAxisLabelFilters={chartAxisLabelFilters}
             mapExtent={mapExtent}
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
+            isExtractingIndicators={isExtractingIndicators}
             isTargetModalOpen={isTargetModalOpen}
             onOpenTargetModal={onOpenTargetModal}
             onCloseTargetModal={onCloseTargetModal}

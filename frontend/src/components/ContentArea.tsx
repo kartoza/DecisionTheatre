@@ -1,4 +1,4 @@
-import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Tooltip, VStack, useDisclosure, useToast } from '@chakra-ui/react';
+import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Spinner, Tooltip, VStack, useDisclosure, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
@@ -45,6 +45,7 @@ interface ContentAreaProps {
   chartAxisLabelFilters?: (string | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  isExtractingIndicators?: boolean;
   // For target modal control from parent
   isTargetModalOpen?: boolean;
   onOpenTargetModal?: () => void;
@@ -124,6 +125,7 @@ function ContentArea({
   chartAxisLabelFilters,
   mapExtent,
   onSiteIndicatorsChange,
+  isExtractingIndicators,
   isTargetModalOpen,
   onOpenTargetModal,
   onCloseTargetModal,
@@ -290,6 +292,13 @@ function ContentArea({
               ml={2}
             />
           </Tooltip>
+
+          {isExtractingIndicators && !siteIndicators && (
+            <HStack spacing={2} ml={2} color="gray.400">
+              <Spinner size="xs" color="cyan.400" />
+              <Box fontSize="sm">Extracting indicators…</Box>
+            </HStack>
+          )}
 
           {siteIndicators && editableTargetKeys.length > 0 && (
             <Tooltip label="Edit target values" placement="bottom">
