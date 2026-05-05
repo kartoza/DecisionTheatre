@@ -22,10 +22,11 @@ import (
 
 // Handler provides HTTP API endpoints
 type Handler struct {
-	tileStore *tiles.MBTilesStore
-	gpkgStore *geodata.GpkgStore
-	siteStore *sites.Store
-	cfg       config.Config
+	tileStore    *tiles.MBTilesStore
+	gpkgStore    *geodata.GpkgStore
+	siteStore    *sites.Store
+	whiskerStore *geodata.WhiskerStore
+	cfg          config.Config
 }
 
 // NewHandler creates a new API handler
@@ -33,13 +34,15 @@ func NewHandler(
 	tileStore *tiles.MBTilesStore,
 	gpkgStore *geodata.GpkgStore,
 	siteStore *sites.Store,
+	whiskerStore *geodata.WhiskerStore,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
-		tileStore: tileStore,
-		gpkgStore: gpkgStore,
-		siteStore: siteStore,
-		cfg:       cfg,
+		tileStore:    tileStore,
+		gpkgStore:    gpkgStore,
+		siteStore:    siteStore,
+		whiskerStore: whiskerStore,
+		cfg:          cfg,
 	}
 }
 
@@ -95,6 +98,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
 	r.HandleFunc("/sites/{id}/indicators/reset", h.handleResetIdealIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET", "POST")
+	r.HandleFunc("/sites/{id}/whiskers", h.handleSiteWhiskers).Methods("GET", "POST")
 
 	// Site boundary editing (union/difference with catchments)
 	r.HandleFunc("/sites/{id}/boundary/union/{catchmentId}", h.handleBoundaryUnion).Methods("POST")
@@ -643,6 +647,7 @@ func (h *Handler) handleMetadataXAxisLabels(w http.ResponseWriter, r *http.Reque
 
 	columnIdx := -1
 	xAxisLabelIdx := -1
+	detailedNameIdx := -1
 	for i, header := range headers {
 		normalized := strings.TrimSpace(header)
 		switch {
@@ -650,6 +655,8 @@ func (h *Handler) handleMetadataXAxisLabels(w http.ResponseWriter, r *http.Reque
 			columnIdx = i
 		case strings.EqualFold(normalized, "x axis"), strings.EqualFold(normalized, "x_axis"), strings.EqualFold(normalized, "x-axis"):
 			xAxisLabelIdx = i
+		case strings.EqualFold(normalized, "Detailed name"), strings.EqualFold(normalized, "Detailed_name"):
+			detailedNameIdx = i
 		}
 	}
 
@@ -669,6 +676,9 @@ func (h *Handler) handleMetadataXAxisLabels(w http.ResponseWriter, r *http.Reque
 		}
 		column := strings.TrimSpace(record[columnIdx])
 		xAxisLabel := strings.TrimSpace(record[xAxisLabelIdx])
+		if xAxisLabel == "" && detailedNameIdx >= 0 && detailedNameIdx < len(record) {
+			xAxisLabel = strings.TrimSpace(record[detailedNameIdx])
+		}
 		if column == "" || xAxisLabel == "" {
 			continue
 		}
@@ -1974,6 +1984,84 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, catchmentData)
+}
+
+// handleSiteWhiskers returns area-weighted upper/lower whisker bounds for a site's catchments.
+// It supports both webview (GET, site looked up from store) and browser runtime (POST with site in body).
+func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+	if h.whiskerStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "whisker store not available")
+		return
+	}
+
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	var site *sites.Site
+	var err error
+
+	if r.Method == http.MethodPost {
+		var req ExtractIndicatorsRequest
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if req.Runtime == "browser" {
+			if len(req.Site) == 0 {
+				respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
+				return
+			}
+			siteJSON, marshalErr := json.Marshal(req.Site)
+			if marshalErr != nil {
+				respondError(w, http.StatusBadRequest, "invalid site data in request body")
+				return
+			}
+			site = &sites.Site{}
+			if err = json.Unmarshal(siteJSON, site); err != nil {
+				respondError(w, http.StatusBadRequest, "invalid site data in request body")
+				return
+			}
+		} else {
+			if h.siteStore == nil {
+				respondError(w, http.StatusInternalServerError, "site store not initialized")
+				return
+			}
+			site, err = h.siteStore.Get(id)
+			if err != nil {
+				respondError(w, http.StatusNotFound, err.Error())
+				return
+			}
+		}
+	} else {
+		if h.siteStore == nil {
+			respondError(w, http.StatusInternalServerError, "site store not initialized")
+			return
+		}
+		site, err = h.siteStore.Get(id)
+		if err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+	}
+
+	if len(site.CatchmentIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+		return
+	}
+
+	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+		return
+	}
+
+	bounds := h.whiskerStore.ComputeBounds(catchmentData)
+	respondJSON(w, http.StatusOK, bounds)
 }
 
 // ============================================================================

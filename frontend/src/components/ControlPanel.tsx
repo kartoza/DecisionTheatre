@@ -47,6 +47,8 @@ interface ControlPanelProps {
   onChartGroupChange?: (group: string | null) => void;
   chartAxisLabelFilter?: string | null;
   onChartAxisLabelFilterChange?: (axisLabel: string | null) => void;
+  chartGraphMode?: 'line' | 'boxplot' | null;
+  onChartGraphModeChange?: (mode: 'line' | 'boxplot' | null) => void;
 }
 
 import type { ZoneStats } from '../types';
@@ -376,6 +378,8 @@ function ControlPanel({
   onChartGroupChange,
   chartAxisLabelFilter,
   onChartAxisLabelFilterChange,
+  chartGraphMode,
+  onChartGraphModeChange,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
@@ -413,6 +417,45 @@ function ControlPanel({
 
     return [...new Set(groups)].sort().map((group) => ({ value: group, label: group.replace(/_/g, ' ') }));
   }, [chartGroup, columns, canGraph, variableTypes, groupingVariables]);
+
+  const lineBoxplotToggleAvailable = useMemo(() => {
+    if (viewMode !== 'chart' || !chartGroup || !chartAxisLabelFilter) return false;
+
+    const resolveChartTypeForColumn = (column: string): string | undefined => {
+      const candidates = [
+        column,
+        column.replace(/_/g, ' '),
+        column.replace(/_/g, '.'),
+        column.replace(/\./g, '_'),
+        column.replace(/\./g, ' '),
+        column.replace(/ /g, '_'),
+        column.replace(/ /g, '.'),
+      ];
+
+      for (const key of candidates) {
+        const value = chartTypes[key];
+        if (typeof value === 'string' && value.trim().length > 0) return value;
+      }
+
+      const normalizedColumn = normalizeColumnKey(column);
+      for (const [key, value] of Object.entries(chartTypes)) {
+        if (normalizeColumnKey(key) === normalizedColumn && value.trim().length > 0) return value;
+      }
+
+      return undefined;
+    };
+
+    const groupColumns = columns.filter((col) => {
+      if (!canGraph[col]) return false;
+      if (resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
+      return resolveGroupingVariableForColumn(col, groupingVariables) === chartAxisLabelFilter;
+    });
+
+    return groupColumns.some((col) => {
+      const chartType = (resolveChartTypeForColumn(col) ?? '').toLowerCase().replace(/\s+/g, '');
+      return chartType.includes('line/boxplot');
+    });
+  }, [viewMode, chartGroup, chartAxisLabelFilter, columns, canGraph, variableTypes, groupingVariables, chartTypes]);
 
   useEffect(() => {
     if (chartAxisLabelFilter && !groupingVariableOptions.some((option) => option.value === chartAxisLabelFilter)) {
@@ -749,6 +792,36 @@ function ControlPanel({
                     focusColor="#4caf50"
                     allowClear
                   />
+
+                  {lineBoxplotToggleAvailable && (
+                    <Box mt={3}>
+                      <HStack justify="space-between" align="center" mb={2}>
+                        <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                          GRAPH STYLE
+                        </Badge>
+                      </HStack>
+                      <ButtonGroup size="xs" isAttached variant="outline">
+                        <Button
+                          onClick={() => onChartGraphModeChange?.('line')}
+                          variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? 'solid' : 'outline'}
+                          colorScheme="gray"
+                          bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.pastelLightBlue : undefined}
+                          color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.dark : undefined}
+                        >
+                          Line
+                        </Button>
+                        <Button
+                          onClick={() => onChartGraphModeChange?.('boxplot')}
+                          variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? 'solid' : 'outline'}
+                          colorScheme="gray"
+                          bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.pastelLightBlue : undefined}
+                          color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.dark : undefined}
+                        >
+                          Whisker Boxplot
+                        </Button>
+                      </ButtonGroup>
+                    </Box>
+                  )}
                 </Box>
               )}
             </Box>

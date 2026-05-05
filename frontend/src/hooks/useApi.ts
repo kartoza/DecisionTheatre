@@ -624,3 +624,107 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
   }
   return data;
 }
+
+export type WhiskerBoundsResponse = {
+  referenceUpper: Record<string, number>;
+  referenceLower: Record<string, number>;
+  currentUpper: Record<string, number>;
+  currentLower: Record<string, number>;
+};
+
+export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
+  if (isBrowserRuntime()) {
+    const localSite = loadLocalSite(siteId);
+    if (!localSite) return null;
+    const { thumbnail, ...siteWithoutThumbnail } = localSite;
+    void thumbnail;
+    try {
+      const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+      });
+      if (!response.ok) return null;
+      return await response.json() as WhiskerBoundsResponse;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`);
+    if (!response.ok) return null;
+    return await response.json() as WhiskerBoundsResponse;
+  } catch {
+    return null;
+  }
+}
+
+// Load whisker data for boxplots
+export function useWhiskerData() {
+  const [whiskerData, setWhiskerData] = useState<{
+    currentUpper: Record<string, Record<string, number>>;
+    currentLower: Record<string, Record<string, number>>;
+    referenceUpper: Record<string, Record<string, number>>;
+    referenceLower: Record<string, Record<string, number>>;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadWhiskerCSV = async (filename: string): Promise<Record<string, Record<string, number>>> => {
+      try {
+        const response = await fetch(`/data/${filename}`);
+        if (!response.ok) {
+          console.warn(`Failed to load ${filename}`);
+          return {};
+        }
+        const text = await response.text();
+        const lines = text.trim().split('\n');
+        if (lines.length < 2) return {};
+
+        const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+        const catchIdIndex = headers.findIndex(h => h.toLowerCase().includes('catchid') || h === 'catchID');
+
+        if (catchIdIndex === -1) return {};
+
+        const data: Record<string, Record<string, number>> = {};
+
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(',');
+          if (values.length !== headers.length) continue;
+
+          const catchId = values[catchIdIndex].trim();
+          if (!catchId || catchId === 'NA') continue;
+
+          data[catchId] = {};
+          for (let j = 0; j < headers.length; j++) {
+            if (j === catchIdIndex) continue;
+            const val = parseFloat(values[j]);
+            if (!isNaN(val)) {
+              data[catchId][headers[j]] = val;
+            }
+          }
+        }
+
+        return data;
+      } catch (error) {
+        console.error(`Error loading ${filename}:`, error);
+        return {};
+      }
+    };
+
+    Promise.all([
+      loadWhiskerCSV('current_upper.csv'),
+      loadWhiskerCSV('current_lower.csv'),
+      loadWhiskerCSV('reference_upper.csv'),
+      loadWhiskerCSV('reference_lower.csv'),
+    ]).then(([currentUpper, currentLower, referenceUpper, referenceLower]) => {
+      setWhiskerData({ currentUpper, currentLower, referenceUpper, referenceLower });
+      setLoading(false);
+    }).catch(() => {
+      setLoading(false);
+    });
+  }, []);
+
+  return { whiskerData, loading };
+}

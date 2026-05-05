@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box } from '@chakra-ui/react';
+import { Box, Button, HStack, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { getSiteCatchments, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels } from '../hooks/useApi';
+import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
+import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats } from '../types';
 
 // Kartoza color scheme: orange, blue, green
@@ -9,6 +10,7 @@ const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
 const SERIES_LABELS = ['Reference', 'Current', 'Target'];
 
 const PADDING = { top: 50, right: 60, bottom: 140, left: 80 };
+const BOXPLOT_PAGE_SIZE = 10;
 
 function easeOutExpo(t: number): number {
   return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
@@ -26,6 +28,7 @@ interface ChartViewProps {
   rightScenario?: Scenario;
   chartGroup?: string | null;
   chartAxisLabelFilter?: string | null;
+  chartGraphMode?: 'line' | 'boxplot' | null;
 }
 
 /** Returns the mean from whichever stats bucket (left or right) matches the target scenario. */
@@ -165,6 +168,30 @@ function resolveMapValueForColumn(
   return undefined;
 }
 
+function resolveChartTypeForColumn(column: string, chartTypes: Record<string, string>): string | undefined {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const value = chartTypes[key];
+    if (typeof value === 'string' && value.trim().length > 0) return value;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, value] of Object.entries(chartTypes)) {
+    if (normalizeColumnKey(key) === normalizedColumn && value.trim().length > 0) return value;
+  }
+
+  return undefined;
+}
+
 /** Resolve a value for a given attribute column from site/catchment/map data. */
 function resolveValue(
   column: string,
@@ -211,6 +238,7 @@ function ChartView({
   rightScenario,
   chartGroup,
   chartAxisLabelFilter,
+  chartGraphMode,
 }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 500 });
@@ -225,15 +253,23 @@ function ChartView({
   const { columns } = useColumns();
   const { groupingVariables } = useAttributeGroupingVariables();
   const { xAxisLabels } = useAttributeXAxisLabels();
-
+  const { chartTypes } = useAttributeChartTypes();
   const filteredChartColumns = useMemo(() => {
-    const candidates = rangeMode === 'site'
-      ? Array.from(new Set([
-        ...columns,
+    let candidates: string[];
+    if (rangeMode === 'site') {
+      // Keep deterministic order across backend restarts: preserve column order first,
+      // then append metadata-only keys in sorted order.
+      const columnSet = new Set(columns);
+      const extras = Array.from(new Set([
         ...Object.keys(variableTypes),
         ...Object.keys(groupingVariables),
       ]))
-      : columns;
+        .filter((k) => !columnSet.has(k))
+        .sort((a, b) => a.localeCompare(b));
+      candidates = [...columns, ...extras];
+    } else {
+      candidates = columns;
+    }
 
     return candidates.filter((col) => {
       if (chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
@@ -241,6 +277,35 @@ function ChartView({
       return true;
     });
   }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables]);
+
+  const groupedDisplayColumns = useMemo(() => {
+    if (filteredChartColumns.length === 0) return filteredChartColumns;
+
+    // Herbivores/Diet includes multiple metric families sharing the same x-axis labels
+    // (kgkm2, counts, dmi, ch4). Mixing them corrupts grouped line/boxplot rendering.
+    if (chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Diet') {
+      const familyByColumn = new Map<string, string>();
+      const familyOrder: string[] = [];
+
+      for (const col of filteredChartColumns) {
+        const parts = normalizeColumnKey(col).split('.');
+        if (parts.length >= 4 && parts[0] === 'herbs' && parts[1] === 'diet') {
+          const family = parts[2];
+          familyByColumn.set(col, family);
+          if (!familyOrder.includes(family)) familyOrder.push(family);
+        }
+      }
+
+      if (familyOrder.length > 1) {
+        const preferred = ['kgkm2', 'counts', 'dmi', 'ch4'];
+        const selectedFamily = preferred.find((f) => familyOrder.includes(f)) ?? familyOrder[0];
+        const filtered = filteredChartColumns.filter((col) => familyByColumn.get(col) === selectedFamily);
+        if (filtered.length > 0) return filtered;
+      }
+    }
+
+    return filteredChartColumns;
+  }, [filteredChartColumns, chartGroup, chartAxisLabelFilter]);
 
   // Fallback catchment data when no siteIndicators
   const [catchmentData, setCatchmentData] = useState<{
@@ -252,12 +317,27 @@ function ChartView({
     current: Record<string, number>;
   } | null>(null);
   const [groupedRangeLoading, setGroupedRangeLoading] = useState(false);
+  const [whiskerBounds, setWhiskerBounds] = useState<WhiskerBoundsResponse | null>(null);
+  const [boxplotPage, setBoxplotPage] = useState(0);
 
   useEffect(() => {
     if (!visible) return;
-    if (!siteId || rangeMode !== 'site') {
+    if (!siteId) {
       setCatchmentData(null);
+      setWhiskerBounds(null);
       return;
+    }
+
+    let whiskerCancelled = false;
+    getSiteWhiskerBounds(siteId).then((bounds) => {
+      if (!whiskerCancelled) setWhiskerBounds(bounds);
+    }).catch(() => {
+      if (!whiskerCancelled) setWhiskerBounds(null);
+    });
+
+    if (rangeMode !== 'site') {
+      setCatchmentData(null);
+      return () => { whiskerCancelled = true; };
     }
 
     let cancelled = false;
@@ -267,6 +347,7 @@ function ChartView({
         if (cancelled || !catchments || catchments.length === 0) return;
 
         const weightedCatchments: Array<{
+          id: string;
           validArea: number;
           reference?: Record<string, number>;
           current?: Record<string, number>;
@@ -278,6 +359,7 @@ function ChartView({
           if (!Number.isFinite(validArea) || validArea <= 0) continue;
 
           weightedCatchments.push({
+            id: catchment.id,
             validArea,
             reference: catchment.reference,
             current: catchment.current,
@@ -316,15 +398,16 @@ function ChartView({
         if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) return;
 
         if (!cancelled) {
-          setCatchmentData({
-            reference,
-            current,
-          });
+          setCatchmentData({ reference, current });
         }
       })
-      .catch(() => { if (!cancelled) setCatchmentData(null); });
+      .catch(() => {
+        if (!cancelled) {
+          setCatchmentData(null);
+        }
+      });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; whiskerCancelled = true; };
   }, [siteIndicators, siteId, visible, rangeMode]);
 
   useEffect(() => {
@@ -340,7 +423,7 @@ function ChartView({
       return;
     }
 
-    const groupColumns = filteredChartColumns;
+    const groupColumns = groupedDisplayColumns;
     if (groupColumns.length === 0) {
       setGroupedRangeData(null);
       setGroupedRangeLoading(false);
@@ -413,7 +496,7 @@ function ChartView({
     return () => {
       cancelled = true;
     };
-  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, filteredChartColumns]);
+  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, groupedDisplayColumns]);
 
   // Build summary chart data (existing behavior)
   const summaryData = useMemo(() => {
@@ -446,10 +529,26 @@ function ChartView({
   const groupedChartData = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return null;
 
-    const groupColumns = filteredChartColumns;
+    const groupColumns = groupedDisplayColumns;
     if (groupColumns.length === 0) return null;
 
-    const points: { label: string; ref: number | null; cur: number | null; target: number | null }[] = [];
+    const points: {
+      label: string;
+      ref: number | null;
+      cur: number | null;
+      target: number | null;
+      refUpper: number | null;
+      refLower: number | null;
+      curUpper: number | null;
+      curLower: number | null;
+      refCount: number;
+      curCount: number;
+      targetCount: number;
+      refUpperCount: number;
+      refLowerCount: number;
+      curUpperCount: number;
+      curLowerCount: number;
+    }[] = [];
     const labelIndex = new Map<string, number>();
 
     for (const col of groupColumns) {
@@ -474,6 +573,15 @@ function ChartView({
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
       const normalizedTarget = typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
 
+      const refUpperRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, col) : undefined;
+      const refLowerRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, col) : undefined;
+      const curUpperRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, col) : undefined;
+      const curLowerRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, col) : undefined;
+      const normalizedRefUpper = normalizedRef !== null && typeof refUpperRaw === 'number' && Number.isFinite(refUpperRaw) ? refUpperRaw : null;
+      const normalizedRefLower = normalizedRef !== null && typeof refLowerRaw === 'number' && Number.isFinite(refLowerRaw) ? refLowerRaw : null;
+      const normalizedCurUpper = normalizedCur !== null && typeof curUpperRaw === 'number' && Number.isFinite(curUpperRaw) ? curUpperRaw : null;
+      const normalizedCurLower = normalizedCur !== null && typeof curLowerRaw === 'number' && Number.isFinite(curLowerRaw) ? curLowerRaw : null;
+
       const existingIndex = labelIndex.get(label);
       if (existingIndex === undefined) {
         labelIndex.set(label, points.length);
@@ -482,19 +590,60 @@ function ChartView({
           ref: normalizedRef,
           cur: normalizedCur,
           target: normalizedTarget,
+          refUpper: normalizedRefUpper,
+          refLower: normalizedRefLower,
+          curUpper: normalizedCurUpper,
+          curLower: normalizedCurLower,
+          refCount: normalizedRef !== null ? 1 : 0,
+          curCount: normalizedCur !== null ? 1 : 0,
+          targetCount: normalizedTarget !== null ? 1 : 0,
+          refUpperCount: normalizedRefUpper !== null ? 1 : 0,
+          refLowerCount: normalizedRefLower !== null ? 1 : 0,
+          curUpperCount: normalizedCurUpper !== null ? 1 : 0,
+          curLowerCount: normalizedCurLower !== null ? 1 : 0,
         });
       } else {
+        // Average duplicate display labels rather than summing, which inflates values.
         const existing = points[existingIndex];
         if (normalizedRef !== null) {
           existing.ref = (existing.ref ?? 0) + normalizedRef;
+          existing.refCount += 1;
         }
         if (normalizedCur !== null) {
           existing.cur = (existing.cur ?? 0) + normalizedCur;
+          existing.curCount += 1;
         }
         if (normalizedTarget !== null) {
           existing.target = (existing.target ?? 0) + normalizedTarget;
+          existing.targetCount += 1;
+        }
+        if (normalizedRefUpper !== null) {
+          existing.refUpper = (existing.refUpper ?? 0) + normalizedRefUpper;
+          existing.refUpperCount += 1;
+        }
+        if (normalizedRefLower !== null) {
+          existing.refLower = (existing.refLower ?? 0) + normalizedRefLower;
+          existing.refLowerCount += 1;
+        }
+        if (normalizedCurUpper !== null) {
+          existing.curUpper = (existing.curUpper ?? 0) + normalizedCurUpper;
+          existing.curUpperCount += 1;
+        }
+        if (normalizedCurLower !== null) {
+          existing.curLower = (existing.curLower ?? 0) + normalizedCurLower;
+          existing.curLowerCount += 1;
         }
       }
+    }
+
+    for (const p of points) {
+      p.ref = p.refCount > 0 && p.ref !== null ? p.ref / p.refCount : null;
+      p.cur = p.curCount > 0 && p.cur !== null ? p.cur / p.curCount : null;
+      p.target = p.targetCount > 0 && p.target !== null ? p.target / p.targetCount : null;
+      p.refUpper = p.refUpperCount > 0 && p.refUpper !== null ? p.refUpper / p.refUpperCount : null;
+      p.refLower = p.refLowerCount > 0 && p.refLower !== null ? p.refLower / p.refLowerCount : null;
+      p.curUpper = p.curUpperCount > 0 && p.curUpper !== null ? p.curUpper / p.curUpperCount : null;
+      p.curLower = p.curLowerCount > 0 && p.curLower !== null ? p.curLower / p.curLowerCount : null;
     }
 
     const hideNoRefOrCur = chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Species';
@@ -505,21 +654,67 @@ function ChartView({
         return !(refVal === 0 && curVal === 0);
       }
       return p.ref !== null || p.cur !== null || p.target !== null;
-    });
+    }).map((p) => ({
+      label: p.label,
+      ref: p.ref,
+      cur: p.cur,
+      target: p.target,
+      refUpper: p.refUpper,
+      refLower: p.refLower,
+      curUpper: p.curUpper,
+      curLower: p.curLower,
+    }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
-    const firstColumn = filteredChartColumns[0];
+    const firstColumn = groupedDisplayColumns[0];
     if (!firstColumn) return '';
     return composeYAxisLabel(axisLabels[firstColumn], units[firstColumn]);
-  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, axisLabels, units]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, axisLabels, units]);
+
+  const groupedChartType = useMemo<string>(() => {
+    if (!groupedChartData || !chartGroup) return 'line';
+
+    const groupChartTypes = groupedDisplayColumns
+      .map((col) => resolveChartTypeForColumn(col, chartTypes))
+      .filter((ct): ct is string => typeof ct === 'string');
+
+    const hasBoxplotType = groupChartTypes.some((ct) => {
+      const normalized = ct.toLowerCase();
+      return normalized.includes('boxplot') || normalized.includes('box');
+    });
+
+    const canRenderBoxplot = hasBoxplotType;
+    if (chartGraphMode === 'boxplot') return canRenderBoxplot ? 'boxplot' : 'line';
+    if (chartGraphMode === 'line') return 'line';
+    return canRenderBoxplot ? 'boxplot' : 'line';
+  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, rangeMode, chartGraphMode]);
+
+  const boxplotPageCount = useMemo(() => {
+    if (groupedChartType !== 'boxplot' || !groupedChartData) return 1;
+    return Math.max(1, Math.ceil(groupedChartData.length / BOXPLOT_PAGE_SIZE));
+  }, [groupedChartType, groupedChartData]);
+
+  useEffect(() => {
+    setBoxplotPage((prev) => {
+      if (boxplotPageCount <= 1) return 0;
+      return Math.min(prev, boxplotPageCount - 1);
+    });
+  }, [boxplotPageCount]);
+
+  const pagedGroupedChartData = useMemo(() => {
+    if (!groupedChartData) return null;
+    if (groupedChartType !== 'boxplot') return groupedChartData;
+    const start = boxplotPage * BOXPLOT_PAGE_SIZE;
+    return groupedChartData.slice(start, start + BOXPLOT_PAGE_SIZE);
+  }, [groupedChartData, groupedChartType, boxplotPage]);
 
   useEffect(() => {
     if (!visible || !chartGroup || !chartAxisLabelFilter) return;
 
-    const debugRows = filteredChartColumns.slice(0, 40).map((col) => {
+    const debugRows = groupedDisplayColumns.slice(0, 40).map((col) => {
       const siteRef = resolveMapValueForColumn(siteIndicators?.reference, col);
       const siteCur = resolveMapValueForColumn(siteIndicators?.current, col);
       const siteTarget = resolveMapValueForColumn(siteIndicators?.ideal, col);
@@ -552,15 +747,15 @@ function ChartView({
       chartGroup,
       chartAxisLabelFilter,
       rangeMode,
-      filteredColumnCount: filteredChartColumns.length,
+      filteredColumnCount: groupedDisplayColumns.length,
       hasGroupedRangeData: Boolean(groupedRangeData),
       hasCatchmentData: Boolean(catchmentData),
       hasSiteIndicators: Boolean(siteIndicators),
       hasGroupedChartData: Boolean(groupedChartData),
     });
     console.table(debugRows);
-    if (filteredChartColumns.length > 40) {
-      console.log(`truncated ${filteredChartColumns.length - 40} additional columns`);
+    if (groupedDisplayColumns.length > 40) {
+      console.log(`truncated ${groupedDisplayColumns.length - 40} additional columns`);
     }
     console.groupEnd();
   }, [
@@ -568,7 +763,7 @@ function ChartView({
     chartGroup,
     chartAxisLabelFilter,
     rangeMode,
-    filteredChartColumns,
+    groupedDisplayColumns,
     groupedRangeData,
     catchmentData,
     siteIndicators,
@@ -664,8 +859,12 @@ function ChartView({
 
   const renderGroupedChart = () => {
     if (!groupedChartData || !chartGroup) return null;
+    const chartData = pagedGroupedChartData ?? groupedChartData;
 
-    const allVals = groupedChartData.flatMap((p) => [p.ref, p.cur, p.target].filter((v): v is number => v !== null));
+    const allVals = groupedChartData.flatMap((p) => [
+      p.ref, p.cur, p.target,
+      p.refUpper, p.refLower, p.curUpper, p.curLower,
+    ].filter((v): v is number => v !== null));
     if (allVals.length === 0) return null;
 
     const minRaw = Math.min(...allVals);
@@ -675,13 +874,12 @@ function ChartView({
     const range = maxVal - minVal || 1;
     const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => minVal + (range / yTickCount) * i);
 
-    const categoryCount = groupedChartData.length;
+    const categoryCount = chartData.length;
     const categoryW = plotW / Math.max(categoryCount, 1);
     const groupPad = Math.min(12, categoryW * 0.15);
     const innerW = Math.max(categoryW - groupPad * 2, 10);
     const barGap = Math.min(6, innerW * 0.08);
     const barW = Math.max((innerW - barGap * 2) / 3, 2);
-    const groupedChartType: string = 'line';
 
     const yAt = (val: number) => PADDING.top + plotH - ((val - minVal) / range) * plotH;
     const xBase = (i: number) => PADDING.left + i * categoryW + groupPad;
@@ -743,7 +941,7 @@ function ChartView({
         )}
 
         {groupedChartType === 'bar' ? (
-          groupedChartData.map((item, i) => {
+          chartData.map((item, i) => {
             const baseX = xBase(i);
             const values = [item.ref, item.cur, item.target];
 
@@ -798,10 +996,138 @@ function ChartView({
               </g>
             );
           })
+        ) : groupedChartType === 'boxplot' ? (
+          // Boxplot rendering
+          chartData.map((item, i) => {
+            const values = [item.ref, item.cur, item.target];
+            const x = xCenter(i);
+            const boxWidth = Math.min(30, innerW * 0.6);
+
+            // Render each scenario's boxplot
+            return (
+              <g key={`group-boxplot-${i}`}>
+                {[0, 1, 2].map((si) => {
+                  const val = values[si];
+                  if (val === null) return null;
+
+                  // si=0: reference, si=1: current, si=2: target (uses reference bounds)
+                  // Use area-weighted whisker bounds from CSV data; fall back to median when absent
+                  const upperWhisker = si === 1
+                    ? (item.curUpper ?? val)
+                    : (item.refUpper ?? val);
+                  const lowerWhisker = si === 1
+                    ? (item.curLower ?? val)
+                    : (item.refLower ?? val);
+
+                  const yMedian = yAt(minVal + (val - minVal) * progress);
+                  const yUpper = yAt(minVal + (upperWhisker - minVal) * progress);
+                  const yLower = yAt(minVal + (lowerWhisker - minVal) * progress);
+
+                  // Box dimensions (IQR approximation)
+                  const q1 = val - (val - lowerWhisker) * 0.5;
+                  const q3 = val + (upperWhisker - val) * 0.5;
+                  const yQ1 = yAt(minVal + (q1 - minVal) * progress);
+                  const yQ3 = yAt(minVal + (q3 - minVal) * progress);
+                  const boxHeight = Math.abs(yQ3 - yQ1);
+
+                  // Offset boxes horizontally for different scenarios
+                  const xOffset = (si - 1) * (boxWidth + 4);
+                  const boxX = x + xOffset - boxWidth / 2;
+
+                  return (
+                    <g key={`boxplot-${i}-${si}`} opacity={progress}>
+                      {/* Whisker lines */}
+                      <line
+                        x1={x + xOffset}
+                        y1={yUpper}
+                        x2={x + xOffset}
+                        y2={yQ3}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={1.5}
+                      />
+                      <line
+                        x1={x + xOffset}
+                        y1={yLower}
+                        x2={x + xOffset}
+                        y2={yQ1}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={1.5}
+                      />
+                      {/* Whisker caps */}
+                      <line
+                        x1={boxX}
+                        y1={yUpper}
+                        x2={boxX + boxWidth}
+                        y2={yUpper}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={1.5}
+                      />
+                      <line
+                        x1={boxX}
+                        y1={yLower}
+                        x2={boxX + boxWidth}
+                        y2={yLower}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={1.5}
+                      />
+                      {/* Box */}
+                      <rect
+                        x={boxX}
+                        y={yQ3}
+                        width={boxWidth}
+                        height={boxHeight}
+                        fill={SERIES_COLORS[si]}
+                        fillOpacity={0.3}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={2}
+                        rx={2}
+                      />
+                      {/* Median line */}
+                      <line
+                        x1={boxX}
+                        y1={yMedian}
+                        x2={boxX + boxWidth}
+                        y2={yMedian}
+                        stroke={SERIES_COLORS[si]}
+                        strokeWidth={3}
+                      />
+                      {/* Value label */}
+                      {progress > 0.8 && (
+                        <text
+                          x={x + xOffset}
+                          y={yMedian - 12}
+                          textAnchor="middle"
+                          fill={SERIES_COLORS[si]}
+                          fontSize={9}
+                          fontFamily="Inter, sans-serif"
+                          fontWeight={600}
+                        >
+                          {formatVal(val)}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+
+                {/* X-axis label */}
+                <text
+                  x={xCenter(i)}
+                  y={PADDING.top + plotH + 24}
+                  transform={`rotate(-50 ${xCenter(i)} ${PADDING.top + plotH + 24})`}
+                  textAnchor="end"
+                  fill="#718096"
+                  fontSize={9}
+                  fontFamily="Inter, sans-serif"
+                >
+                  {item.label}
+                </text>
+              </g>
+            );
+          })
         ) : (
           <>
             {[2, 1, 0].map((si) => {
-              const values = groupedChartData.map((item) => [item.ref, item.cur, item.target][si]);
+              const values = chartData.map((item) => [item.ref, item.cur, item.target][si]);
               const path = values
                 .map((val, i) => {
                   if (val === null) return null;
@@ -824,7 +1150,7 @@ function ChartView({
               ) : null;
             })}
 
-            {groupedChartData.map((item, i) => {
+            {chartData.map((item, i) => {
               const values = [item.ref, item.cur, item.target];
               return (
                 <g key={`group-line-points-${i}`}>
@@ -1124,6 +1450,61 @@ function ChartView({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {visible && chartGroup && groupedChartType === 'boxplot' && boxplotPageCount > 1 && (
+        <HStack
+          position="absolute"
+          left={4}
+          bottom={4}
+          zIndex={5}
+          pointerEvents="auto"
+          spacing={2}
+          bg="rgba(26, 32, 44, 0.9)"
+          border="1px solid"
+          borderColor="#2d3748"
+          borderRadius="md"
+          px={2}
+          py={1}
+        >
+          <Button
+            size="xs"
+            variant="outline"
+            colorScheme="gray"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setBoxplotPage((p) => Math.max(0, p - 1));
+            }}
+            isDisabled={boxplotPage === 0}
+          >
+            Prev
+          </Button>
+          <Text fontSize="xs" color="gray.300" minW="72px" textAlign="center">
+            Page {boxplotPage + 1} / {boxplotPageCount}
+          </Text>
+          <Button
+            size="xs"
+            variant="outline"
+            colorScheme="gray"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setBoxplotPage((p) => Math.min(boxplotPageCount - 1, p + 1));
+            }}
+            isDisabled={boxplotPage >= boxplotPageCount - 1}
+          >
+            Next
+          </Button>
+        </HStack>
+      )}
     </Box>
   );
 }
