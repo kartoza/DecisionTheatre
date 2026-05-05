@@ -269,6 +269,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
       if (thumbnail !== editSite?.thumbnail) siteData.thumbnail = thumbnail;
       if (!isEditMode) {
         siteData.geometry = geometry;
+        siteData.boundingBox = boundingBox;
         siteData.creationMethod = selectedMethod;
         siteData.catchmentIds = selectedCatchmentIds;
       }

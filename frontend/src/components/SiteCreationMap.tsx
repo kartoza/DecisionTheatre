@@ -85,8 +85,8 @@ function SiteCreationMap({
 
     try {
       const canvas = map.getCanvas();
-      // Create a smaller canvas for thumbnail (max 400px wide)
-      const maxWidth = 400;
+      // Keep auto-captured thumbnails compact to reduce site-create payload size.
+      const maxWidth = 280;
       const scale = Math.min(maxWidth / canvas.width, 1);
       const thumbnailCanvas = document.createElement('canvas');
       thumbnailCanvas.width = canvas.width * scale;
@@ -94,7 +94,7 @@ function SiteCreationMap({
       const ctx = thumbnailCanvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(canvas, 0, 0, thumbnailCanvas.width, thumbnailCanvas.height);
-        return thumbnailCanvas.toDataURL('image/jpeg', 0.85);
+        return thumbnailCanvas.toDataURL('image/jpeg', 0.72);
       }
     } catch (error) {
       console.error('Failed to capture map thumbnail:', error);

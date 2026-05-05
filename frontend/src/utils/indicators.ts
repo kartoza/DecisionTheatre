@@ -67,12 +67,13 @@ export function applyAOIWeightedIndicators(
   return {
     ...base,
     reference: Object.keys(reference).length > 0 ? reference : base.reference,
-    referenceLower: Object.keys(reference).length > 0 ? { ...reference } : base.referenceLower,
-    referenceUpper: Object.keys(reference).length > 0 ? { ...reference } : base.referenceUpper,
+    // Preserve bound maps from backend/whisker computation; only recompute means here.
+    referenceLower: base.referenceLower,
+    referenceUpper: base.referenceUpper,
     current: Object.keys(current).length > 0 ? current : base.current,
     ideal: Object.keys(reference).length > 0 ? { ...reference } : base.ideal,
-    idealLower: Object.keys(reference).length > 0 ? { ...reference } : base.idealLower,
-    idealUpper: Object.keys(reference).length > 0 ? { ...reference } : base.idealUpper,
+    idealLower: base.idealLower,
+    idealUpper: base.idealUpper,
     catchmentCount: catchments.length,
     totalAreaKm2,
     catchmentIds: catchments.map((c) => c.id),

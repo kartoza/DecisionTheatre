@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "plotly.js": "^3.5.1",
+    "react-gauge-component": "^2.0.26",
+    "react-plotly.js": "^2.6.0"
+  }
+}

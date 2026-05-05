@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, Button, HStack, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
+import Plot from 'react-plotly.js';
 import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
-import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats } from '../types';
+import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
 
 // Kartoza color scheme: orange, blue, green
 const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
@@ -11,6 +12,7 @@ const SERIES_LABELS = ['Reference', 'Current', 'Target'];
 
 const PADDING = { top: 50, right: 60, bottom: 140, left: 80 };
 const BOXPLOT_PAGE_SIZE = 10;
+const LINE_PAGE_SIZE = 15;
 
 function easeOutExpo(t: number): number {
   return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
@@ -312,6 +314,7 @@ function ChartView({
     reference: Record<string, number>;
     current: Record<string, number>;
   } | null>(null);
+  const [siteCatchments, setSiteCatchments] = useState<CatchmentIndicators[] | null>(null);
   const [groupedRangeData, setGroupedRangeData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
@@ -319,32 +322,70 @@ function ChartView({
   const [groupedRangeLoading, setGroupedRangeLoading] = useState(false);
   const [whiskerBounds, setWhiskerBounds] = useState<WhiskerBoundsResponse | null>(null);
   const [boxplotPage, setBoxplotPage] = useState(0);
+  const [linePage, setLinePage] = useState(0);
 
   useEffect(() => {
     if (!visible) return;
     if (!siteId) {
       setCatchmentData(null);
+      setSiteCatchments(null);
       setWhiskerBounds(null);
       return;
     }
 
     let whiskerCancelled = false;
-    getSiteWhiskerBounds(siteId).then((bounds) => {
-      if (!whiskerCancelled) setWhiskerBounds(bounds);
-    }).catch(() => {
+
+    const fetchWhiskersWithRetry = async () => {
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const bounds = await getSiteWhiskerBounds(siteId);
+        if (whiskerCancelled) return;
+        if (bounds) {
+          setWhiskerBounds(bounds);
+          return;
+        }
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 350 * attempt));
+        }
+      }
       if (!whiskerCancelled) setWhiskerBounds(null);
-    });
+    };
+
+    void fetchWhiskersWithRetry();
 
     if (rangeMode !== 'site') {
       setCatchmentData(null);
+      setSiteCatchments(null);
       return () => { whiskerCancelled = true; };
     }
 
     let cancelled = false;
 
-    getSiteCatchments(siteId)
+    const fetchCatchmentsWithRetry = async () => {
+      const maxAttempts = 3;
+      let last: Awaited<ReturnType<typeof getSiteCatchments>> = [];
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const data = await getSiteCatchments(siteId);
+          last = data;
+          if (Array.isArray(data) && data.length > 0) return data;
+        } catch {
+          // retry below
+        }
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+        }
+      }
+      return last;
+    };
+
+    fetchCatchmentsWithRetry()
       .then((catchments) => {
         if (cancelled || !catchments || catchments.length === 0) return;
+
+        if (!cancelled) {
+          setSiteCatchments(catchments);
+        }
 
         const weightedCatchments: Array<{
           id: string;
@@ -404,6 +445,7 @@ function ChartView({
       .catch(() => {
         if (!cancelled) {
           setCatchmentData(null);
+          setSiteCatchments(null);
         }
       });
 
@@ -439,6 +481,24 @@ function ChartView({
     let cancelled = false;
     setGroupedRangeLoading(true);
 
+    const fetchWithRetry = async (url: string): Promise<Response> => {
+      const maxAttempts = 3;
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const resp = await fetch(url);
+          if (resp.ok) return resp;
+          lastErr = new Error(`HTTP ${resp.status}`);
+        } catch (err) {
+          lastErr = err;
+        }
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+        }
+      }
+      throw lastErr ?? new Error('request failed');
+    };
+
     const fetchAggregates = async (scenario: Scenario): Promise<Record<string, number>> => {
       // Large groups like "functional group" can exceed practical URL/query limits
       // when sent as one comma-separated list; request in chunks and merge.
@@ -463,10 +523,7 @@ function ChartView({
           params.set('maxy', String(maxy));
         }
 
-        const resp = await fetch(`/api/aggregate?${params.toString()}`);
-        if (!resp.ok) {
-          throw new Error(`Failed to fetch aggregate data: ${resp.status}`);
-        }
+        const resp = await fetchWithRetry(`/api/aggregate?${params.toString()}`);
 
         const payload = await resp.json() as Record<string, number>;
         Object.assign(merged, payload);
@@ -573,10 +630,31 @@ function ChartView({
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
       const normalizedTarget = typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
 
-      const refUpperRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, col) : undefined;
-      const refLowerRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, col) : undefined;
-      const curUpperRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, col) : undefined;
-      const curLowerRaw = whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, col) : undefined;
+      const siteRefUpperRaw = rangeMode === 'site'
+        ? resolveMapValueForColumn(siteIndicators?.referenceUpper, col)
+        : undefined;
+      const siteRefLowerRaw = rangeMode === 'site'
+        ? resolveMapValueForColumn(siteIndicators?.referenceLower, col)
+        : undefined;
+      const siteCurUpperRaw = rangeMode === 'site'
+        ? resolveMapValueForColumn(siteIndicators?.currentUpper, col)
+        : undefined;
+      const siteCurLowerRaw = rangeMode === 'site'
+        ? resolveMapValueForColumn(siteIndicators?.currentLower, col)
+        : undefined;
+
+      const refUpperRaw = typeof siteRefUpperRaw === 'number'
+        ? siteRefUpperRaw
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, col) : undefined);
+      const refLowerRaw = typeof siteRefLowerRaw === 'number'
+        ? siteRefLowerRaw
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, col) : undefined);
+      const curUpperRaw = typeof siteCurUpperRaw === 'number'
+        ? siteCurUpperRaw
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, col) : undefined);
+      const curLowerRaw = typeof siteCurLowerRaw === 'number'
+        ? siteCurLowerRaw
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, col) : undefined);
       const normalizedRefUpper = normalizedRef !== null && typeof refUpperRaw === 'number' && Number.isFinite(refUpperRaw) ? refUpperRaw : null;
       const normalizedRefLower = normalizedRef !== null && typeof refLowerRaw === 'number' && Number.isFinite(refLowerRaw) ? refLowerRaw : null;
       const normalizedCurUpper = normalizedCur !== null && typeof curUpperRaw === 'number' && Number.isFinite(curUpperRaw) ? curUpperRaw : null;
@@ -665,7 +743,7 @@ function ChartView({
       curLower: p.curLower,
     }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, siteCatchments, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
@@ -697,6 +775,12 @@ function ChartView({
     return Math.max(1, Math.ceil(groupedChartData.length / BOXPLOT_PAGE_SIZE));
   }, [groupedChartType, groupedChartData]);
 
+  const linePageCount = useMemo(() => {
+    if (groupedChartType !== 'line' || !groupedChartData) return 1;
+    if (groupedChartData.length <= LINE_PAGE_SIZE) return 1;
+    return Math.max(1, Math.ceil(groupedChartData.length / LINE_PAGE_SIZE));
+  }, [groupedChartType, groupedChartData]);
+
   useEffect(() => {
     setBoxplotPage((prev) => {
       if (boxplotPageCount <= 1) return 0;
@@ -704,12 +788,89 @@ function ChartView({
     });
   }, [boxplotPageCount]);
 
+  useEffect(() => {
+    setLinePage((prev) => {
+      if (linePageCount <= 1) return 0;
+      return Math.min(prev, linePageCount - 1);
+    });
+  }, [linePageCount]);
+
   const pagedGroupedChartData = useMemo(() => {
     if (!groupedChartData) return null;
-    if (groupedChartType !== 'boxplot') return groupedChartData;
-    const start = boxplotPage * BOXPLOT_PAGE_SIZE;
-    return groupedChartData.slice(start, start + BOXPLOT_PAGE_SIZE);
-  }, [groupedChartData, groupedChartType, boxplotPage]);
+    if (groupedChartType === 'boxplot') {
+      const start = boxplotPage * BOXPLOT_PAGE_SIZE;
+      return groupedChartData.slice(start, start + BOXPLOT_PAGE_SIZE);
+    }
+    if (groupedChartType === 'line' && linePageCount > 1) {
+      const start = linePage * LINE_PAGE_SIZE;
+      return groupedChartData.slice(start, start + LINE_PAGE_SIZE);
+    }
+    return groupedChartData;
+  }, [groupedChartData, groupedChartType, boxplotPage, linePage, linePageCount]);
+
+  useEffect(() => {
+    if (!visible || groupedChartType !== 'boxplot') return;
+    const rows = (pagedGroupedChartData ?? groupedChartData ?? []).map((item) => {
+      const ref = item.ref;
+      const refLower = item.refLower ?? ref;
+      const refUpper = item.refUpper ?? ref;
+      const cur = item.cur;
+      const curLower = item.curLower ?? cur;
+      const curUpper = item.curUpper ?? cur;
+      const target = item.target;
+      const targetLower = item.refLower ?? target;
+      const targetUpper = item.refUpper ?? target;
+      return {
+        label: item.label,
+        ref,
+        refLower,
+        refUpper,
+        refCollapsed: ref !== null && refLower === ref && refUpper === ref,
+        cur,
+        curLower,
+        curUpper,
+        curCollapsed: cur !== null && curLower === cur && curUpper === cur,
+        target,
+        targetLower,
+        targetUpper,
+        targetCollapsed: target !== null && targetLower === target && targetUpper === target,
+      };
+    });
+
+    console.groupCollapsed('[ChartView] Boxplot trace debug');
+    console.log('boxplotMeta', {
+      rangeMode,
+      chartGroup,
+      chartAxisLabelFilter,
+      page: boxplotPage + 1,
+      pageCount: boxplotPageCount,
+      plottedRows: rows.length,
+      hasWhiskerBounds: Boolean(whiskerBounds),
+      hasSiteCatchments: Boolean(siteCatchments && siteCatchments.length > 0),
+      siteCatchmentCount: siteCatchments?.length ?? 0,
+      refUpperCols: whiskerBounds ? Object.keys(whiskerBounds.referenceUpper || {}).length : 0,
+      refLowerCols: whiskerBounds ? Object.keys(whiskerBounds.referenceLower || {}).length : 0,
+      curUpperCols: whiskerBounds ? Object.keys(whiskerBounds.currentUpper || {}).length : 0,
+      curLowerCols: whiskerBounds ? Object.keys(whiskerBounds.currentLower || {}).length : 0,
+    });
+    console.table(rows.slice(0, 20));
+    if (rows.length > 20) {
+      console.log(`truncated ${rows.length - 20} additional rows`);
+    }
+    console.groupEnd();
+  }, [
+    visible,
+    groupedChartType,
+    pagedGroupedChartData,
+    groupedChartData,
+    rangeMode,
+    chartGroup,
+    chartAxisLabelFilter,
+    boxplotPage,
+    boxplotPageCount,
+    whiskerBounds,
+    siteCatchments,
+  ]);
 
   useEffect(() => {
     if (!visible || !chartGroup || !chartAxisLabelFilter) return;
@@ -860,6 +1021,190 @@ function ChartView({
   const renderGroupedChart = () => {
     if (!groupedChartData || !chartGroup) return null;
     const chartData = pagedGroupedChartData ?? groupedChartData;
+
+    if (groupedChartType === 'boxplot') {
+      const seriesDefs = [
+        { key: 'ref', name: 'Reference', color: SERIES_COLORS[0] },
+        { key: 'cur', name: 'Current', color: SERIES_COLORS[1] },
+        { key: 'target', name: 'Target', color: SERIES_COLORS[2] },
+      ] as const;
+
+      const traces = seriesDefs.map((series) => {
+        const x: string[] = [];
+        const y: number[] = [];
+
+        for (const item of chartData) {
+          const val = item[series.key];
+          if (typeof val !== 'number' || !Number.isFinite(val)) continue;
+
+          const upper = series.key === 'cur'
+            ? (item.curUpper ?? val)
+            : (item.refUpper ?? val);
+          const lower = series.key === 'cur'
+            ? (item.curLower ?? val)
+            : (item.refLower ?? val);
+
+          const q1Val = val - (val - lower) * 0.5;
+          const q3Val = val + (upper - val) * 0.5;
+
+          // Provide a small per-category sample so Plotly computes a visible box
+          // consistently across versions (instead of relying on q1/median/q3 fields).
+          const samples = [lower, q1Val, val, q3Val, upper];
+          for (const sample of samples) {
+            x.push(item.label);
+            y.push(sample);
+          }
+        }
+
+        return {
+          type: 'box',
+          name: series.name,
+          x,
+          y,
+          boxpoints: false,
+          marker: { color: series.color },
+          line: { color: series.color, width: 2 },
+          fillcolor: `${series.color}33`,
+          whiskerwidth: 0.6,
+          quartilemethod: 'linear',
+        };
+      }).filter((trace) => trace.x.length > 0);
+
+      return (
+        <Box w="100%" h="100%" bg="#1a202c">
+          <Plot
+            data={traces as any[]}
+            layout={{
+              autosize: true,
+              paper_bgcolor: '#1a202c',
+              plot_bgcolor: '#1a202c',
+              font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
+              margin: { l: 70, r: 30, t: 30, b: 110 },
+              boxmode: 'group',
+              legend: { orientation: 'h', x: 0, y: 1.08 },
+              xaxis: {
+                tickangle: -50,
+                tickfont: { color: '#718096', size: 10 },
+                showgrid: false,
+                zeroline: false,
+              },
+              yaxis: {
+                title: groupedYAxisLabel,
+                gridcolor: '#2d3748',
+                zeroline: false,
+                tickfont: { color: '#718096', size: 11 },
+                titlefont: { color: '#a0aec0', size: 12 },
+              },
+              annotations: [
+                {
+                  text: `(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`,
+                  xref: 'paper',
+                  yref: 'paper',
+                  x: 0.5,
+                  y: -0.22,
+                  showarrow: false,
+                  font: { color: '#a0aec0', size: 12 },
+                },
+              ],
+            } as any}
+            config={{ responsive: true, displaylogo: false }}
+            useResizeHandler
+            style={{ width: '100%', height: '100%' }}
+          />
+        </Box>
+      );
+    }
+
+    if (groupedChartType === 'line') {
+      const x = chartData.map((item) => item.label);
+      const traces = [
+        {
+          type: 'scatter',
+          mode: 'lines+markers+text',
+          name: SERIES_LABELS[0],
+          x,
+          y: chartData.map((item) => item.ref),
+          text: chartData.map((item) => (item.ref !== null ? formatVal(item.ref) : '')),
+          textposition: 'top center',
+          marker: { color: SERIES_COLORS[0], size: 8 },
+          line: { color: SERIES_COLORS[0], width: 2 },
+          connectgaps: false,
+          textfont: { color: SERIES_COLORS[0], size: 10 },
+          cliponaxis: false,
+        },
+        {
+          type: 'scatter',
+          mode: 'lines+markers+text',
+          name: SERIES_LABELS[1],
+          x,
+          y: chartData.map((item) => item.cur),
+          text: chartData.map((item) => (item.cur !== null ? formatVal(item.cur) : '')),
+          textposition: 'top center',
+          marker: { color: SERIES_COLORS[1], size: 8 },
+          line: { color: SERIES_COLORS[1], width: 2 },
+          connectgaps: false,
+          textfont: { color: SERIES_COLORS[1], size: 10 },
+          cliponaxis: false,
+        },
+        {
+          type: 'scatter',
+          mode: 'lines+markers+text',
+          name: SERIES_LABELS[2],
+          x,
+          y: chartData.map((item) => item.target),
+          text: chartData.map((item) => (item.target !== null ? formatVal(item.target) : '')),
+          textposition: 'top center',
+          marker: { color: SERIES_COLORS[2], size: 7 },
+          line: { color: SERIES_COLORS[2], width: 2, dash: 'dash' },
+          connectgaps: false,
+          textfont: { color: SERIES_COLORS[2], size: 10 },
+          cliponaxis: false,
+        },
+      ];
+
+      return (
+        <Box w="100%" h="100%" bg="#1a202c">
+          <Plot
+            data={traces as any[]}
+            layout={{
+              autosize: true,
+              paper_bgcolor: '#1a202c',
+              plot_bgcolor: '#1a202c',
+              font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
+              margin: { l: 70, r: 30, t: 30, b: 110 },
+              legend: { orientation: 'h', x: 0, y: 1.08 },
+              xaxis: {
+                tickangle: -50,
+                tickfont: { color: '#718096', size: 10 },
+                showgrid: false,
+                zeroline: false,
+              },
+              yaxis: {
+                title: groupedYAxisLabel,
+                gridcolor: '#2d3748',
+                zeroline: false,
+                tickfont: { color: '#718096', size: 11 },
+                titlefont: { color: '#a0aec0', size: 12 },
+              },
+              annotations: [
+                {
+                  text: `(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`,
+                  xref: 'paper',
+                  yref: 'paper',
+                  x: 0.5,
+                  y: -0.22,
+                  showarrow: false,
+                  font: { color: '#a0aec0', size: 12 },
+                },
+              ],
+            } as any}
+            config={{ responsive: true, displaylogo: false }}
+            useResizeHandler
+            style={{ width: '100%', height: '100%' }}
+          />
+        </Box>
+      );
+    }
 
     const allVals = groupedChartData.flatMap((p) => [
       p.ref, p.cur, p.target,
@@ -1252,6 +1597,76 @@ function ChartView({
 
     const xTickLabels = ['Reference', 'Current', 'Target'];
 
+    if (!isBar) {
+      const traceDefs = [
+        {
+          name: SERIES_LABELS[0],
+          color: SERIES_COLORS[0],
+          y: values[0],
+        },
+        {
+          name: SERIES_LABELS[1],
+          color: SERIES_COLORS[1],
+          y: values[1],
+        },
+        {
+          name: SERIES_LABELS[2],
+          color: SERIES_COLORS[2],
+          y: values[2],
+        },
+      ];
+
+      const traces = traceDefs
+        .filter((d) => d.y !== null)
+        .map((d) => ({
+          type: 'scatter',
+          mode: 'markers+text',
+          name: d.name,
+          x: [xLabel],
+          y: [d.y],
+          text: [d.y !== null ? formatVal(d.y) : ''],
+          textposition: 'top center',
+          marker: { color: d.color, size: 11 },
+          textfont: { color: d.color, size: 11 },
+          cliponaxis: false,
+        }));
+
+      return (
+        <Box w="100%" h="100%" bg="#1a202c">
+          <Plot
+            data={traces as any[]}
+            layout={{
+              autosize: true,
+              paper_bgcolor: '#1a202c',
+              plot_bgcolor: '#1a202c',
+              font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
+              margin: { l: 70, r: 30, t: 30, b: 95 },
+              legend: { orientation: 'h', x: 0, y: 1.08 },
+              xaxis: {
+                type: 'category',
+                tickmode: 'array',
+                tickvals: [xLabel],
+                ticktext: [xLabel],
+                tickfont: { color: '#718096', size: 11 },
+                showgrid: false,
+                zeroline: false,
+              },
+              yaxis: {
+                title: yLabel,
+                gridcolor: '#2d3748',
+                zeroline: false,
+                tickfont: { color: '#718096', size: 11 },
+                titlefont: { color: '#a0aec0', size: 12 },
+              },
+            } as any}
+            config={{ responsive: true, displaylogo: false }}
+            useResizeHandler
+            style={{ width: '100%', height: '100%' }}
+          />
+        </Box>
+      );
+    }
+
     return (
       <svg
         width={width}
@@ -1500,6 +1915,61 @@ function ChartView({
               setBoxplotPage((p) => Math.min(boxplotPageCount - 1, p + 1));
             }}
             isDisabled={boxplotPage >= boxplotPageCount - 1}
+          >
+            Next
+          </Button>
+        </HStack>
+      )}
+
+      {visible && chartGroup && groupedChartType === 'line' && linePageCount > 1 && (
+        <HStack
+          position="absolute"
+          left={4}
+          bottom={4}
+          zIndex={5}
+          pointerEvents="auto"
+          spacing={2}
+          bg="rgba(26, 32, 44, 0.9)"
+          border="1px solid"
+          borderColor="#2d3748"
+          borderRadius="md"
+          px={2}
+          py={1}
+        >
+          <Button
+            size="xs"
+            variant="outline"
+            colorScheme="gray"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setLinePage((p) => Math.max(0, p - 1));
+            }}
+            isDisabled={linePage === 0}
+          >
+            Prev
+          </Button>
+          <Text fontSize="xs" color="gray.300" minW="72px" textAlign="center">
+            Page {linePage + 1} / {linePageCount}
+          </Text>
+          <Button
+            size="xs"
+            variant="outline"
+            colorScheme="gray"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setLinePage((p) => Math.min(linePageCount - 1, p + 1));
+            }}
+            isDisabled={linePage >= linePageCount - 1}
           >
             Next
           </Button>

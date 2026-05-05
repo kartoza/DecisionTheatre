@@ -589,29 +589,37 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
 
     try {
       const localSite = loadLocalSite(siteId);
-      if (!localSite) {
-        return [];
+      if (localSite) {
+        const { thumbnail, ...siteWithoutThumbnail } = localSite;
+        const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data) && data.length > 0) {
+            persistLocalCatchments(siteId, data);
+            return data;
+          }
+        }
       }
+    } catch {
+      // Fall through to GET fallback below.
+    }
 
-      const { thumbnail, ...siteWithoutThumbnail } = localSite;
-      const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
-      });
-      if (!response.ok) {
-        return [];
-      }
+    // Fallback for browser runtime when local storage is missing stale/incomplete.
+    try {
+      const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
+      if (!response.ok) return [];
       const data = await response.json();
       if (Array.isArray(data) && data.length > 0) {
         persistLocalCatchments(siteId, data);
-        return data;
       }
+      return Array.isArray(data) ? data : [];
     } catch {
       return [];
     }
-
-    return [];
   }
 
   const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
@@ -632,31 +640,183 @@ export type WhiskerBoundsResponse = {
   currentLower: Record<string, number>;
 };
 
+type WhiskerCSVData = {
+  currentUpper: Record<string, Record<string, number>>;
+  currentLower: Record<string, Record<string, number>>;
+  referenceUpper: Record<string, Record<string, number>>;
+  referenceLower: Record<string, Record<string, number>>;
+};
+
+function normalizeCatchmentId(id: string): string {
+  return String(id).trim().replace(/\.0$/, '');
+}
+
+function hasWhiskerData(bounds: WhiskerBoundsResponse | null | undefined): boolean {
+  if (!bounds) return false;
+  return Object.keys(bounds.referenceUpper || {}).length > 0
+    || Object.keys(bounds.referenceLower || {}).length > 0
+    || Object.keys(bounds.currentUpper || {}).length > 0
+    || Object.keys(bounds.currentLower || {}).length > 0;
+}
+
+async function loadWhiskerCSVFile(filename: string): Promise<Record<string, Record<string, number>>> {
+  try {
+    const response = await fetch(`/data/${filename}`);
+    if (!response.ok) return {};
+
+    const text = await response.text();
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return {};
+
+    const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+    const catchIdIndex = headers.findIndex((h) => h.toLowerCase() === 'catchid');
+    if (catchIdIndex === -1) return {};
+
+    const data: Record<string, Record<string, number>> = {};
+
+    for (let i = 1; i < lines.length; i += 1) {
+      const values = lines[i].split(',');
+      if (values.length !== headers.length) continue;
+
+      const rawId = values[catchIdIndex].trim().replace(/^"|"$/g, '');
+      const catchId = normalizeCatchmentId(rawId);
+      if (!catchId || catchId.toUpperCase() === 'NA') continue;
+
+      const row: Record<string, number> = {};
+      for (let j = 0; j < headers.length; j += 1) {
+        if (j === catchIdIndex) continue;
+        const rawVal = values[j].trim().replace(/^"|"$/g, '');
+        if (!rawVal || rawVal.toUpperCase() === 'NA') continue;
+        const num = Number(rawVal);
+        if (Number.isFinite(num)) row[headers[j]] = num;
+      }
+      data[catchId] = row;
+    }
+
+    return data;
+  } catch {
+    return {};
+  }
+}
+
+async function loadWhiskerCSVData(): Promise<WhiskerCSVData | null> {
+  const [currentUpper, currentLower, referenceUpper, referenceLower] = await Promise.all([
+    loadWhiskerCSVFile('current_upper.csv'),
+    loadWhiskerCSVFile('current_lower.csv'),
+    loadWhiskerCSVFile('reference_upper.csv'),
+    loadWhiskerCSVFile('reference_lower.csv'),
+  ]);
+
+  const hasAny = Object.keys(currentUpper).length > 0
+    || Object.keys(currentLower).length > 0
+    || Object.keys(referenceUpper).length > 0
+    || Object.keys(referenceLower).length > 0;
+
+  if (!hasAny) return null;
+  return { currentUpper, currentLower, referenceUpper, referenceLower };
+}
+
+function computeWhiskerBoundsFromCSV(
+  catchments: CatchmentIndicators[],
+  csvData: WhiskerCSVData,
+): WhiskerBoundsResponse | null {
+  if (!Array.isArray(catchments) || catchments.length === 0) return null;
+
+  let totalArea = 0;
+  const weightedCatchments = catchments
+    .map((c) => {
+      const frac = typeof c.aoiFraction === 'number' && c.aoiFraction > 0 && c.aoiFraction <= 1 ? c.aoiFraction : 1;
+      const area = c.areaKm2 * frac;
+      return { id: normalizeCatchmentId(c.id), area };
+    })
+    .filter((c) => Number.isFinite(c.area) && c.area > 0);
+
+  for (const c of weightedCatchments) totalArea += c.area;
+  if (!(totalArea > 0)) return null;
+
+  const compute = (source: Record<string, Record<string, number>>): Record<string, number> => {
+    const sums: Record<string, number> = {};
+    const weights: Record<string, number> = {};
+
+    for (const c of weightedCatchments) {
+      const row = source[c.id];
+      if (!row) continue;
+      const weight = c.area / totalArea;
+      for (const [col, val] of Object.entries(row)) {
+        if (!Number.isFinite(val)) continue;
+        sums[col] = (sums[col] ?? 0) + val * weight;
+        weights[col] = (weights[col] ?? 0) + weight;
+      }
+    }
+
+    const out: Record<string, number> = {};
+    for (const [col, sum] of Object.entries(sums)) {
+      const w = weights[col] ?? 0;
+      if (w > 0) out[col] = sum / w;
+    }
+    return out;
+  };
+
+  return {
+    referenceUpper: compute(csvData.referenceUpper),
+    referenceLower: compute(csvData.referenceLower),
+    currentUpper: compute(csvData.currentUpper),
+    currentLower: compute(csvData.currentLower),
+  };
+}
+
 export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
+  const csvFallback = async (): Promise<WhiskerBoundsResponse | null> => {
+    const catchments = await getSiteCatchments(siteId).catch(() => []);
+    if (!Array.isArray(catchments) || catchments.length === 0) return null;
+    const csvData = await loadWhiskerCSVData();
+    if (!csvData) return null;
+    const computed = computeWhiskerBoundsFromCSV(catchments, csvData);
+    return hasWhiskerData(computed) ? computed : null;
+  };
+
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(siteId);
-    if (!localSite) return null;
-    const { thumbnail, ...siteWithoutThumbnail } = localSite;
-    void thumbnail;
+    if (localSite) {
+      const { thumbnail, ...siteWithoutThumbnail } = localSite;
+      void thumbnail;
+      try {
+        const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+        });
+        if (response.ok) {
+          const data = await response.json() as WhiskerBoundsResponse;
+          if (hasWhiskerData(data)) return data;
+        }
+      } catch {
+        // fall through to GET fallback below
+      }
+    }
+
+    // Fallback for browser runtime when local storage is empty or POST fails.
     try {
-      const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
-      });
-      if (!response.ok) return null;
-      return await response.json() as WhiskerBoundsResponse;
+      const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`);
+      if (response.ok) {
+        const data = await response.json() as WhiskerBoundsResponse;
+        if (hasWhiskerData(data)) return data;
+      }
+      return await csvFallback();
     } catch {
-      return null;
+      return await csvFallback();
     }
   }
 
   try {
     const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`);
-    if (!response.ok) return null;
-    return await response.json() as WhiskerBoundsResponse;
+    if (response.ok) {
+      const data = await response.json() as WhiskerBoundsResponse;
+      if (hasWhiskerData(data)) return data;
+    }
+    return await csvFallback();
   } catch {
-    return null;
+    return await csvFallback();
   }
 }
 

@@ -1705,7 +1705,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 
 	// Compute area-weighted aggregations
-	indicators := computeAreaWeightedIndicators(catchmentData)
+	indicators := computeAreaWeightedIndicators(catchmentData, h.whiskerStore)
 	indicators.CatchmentIDs = catchmentIDs
 
 	// Update site with indicators
@@ -1729,11 +1729,17 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 
 // computeAreaWeightedIndicators calculates area-weighted indicator aggregations
 
-func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *sites.SiteIndicators {
+func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, whiskerStore *geodata.WhiskerStore) *sites.SiteIndicators {
 	indicators := &sites.SiteIndicators{
 		Reference:      make(map[string]float64),
+		ReferenceLower: make(map[string]float64),
+		ReferenceUpper: make(map[string]float64),
 		Current:        make(map[string]float64),
+		CurrentLower:   make(map[string]float64),
+		CurrentUpper:   make(map[string]float64),
 		Ideal:          make(map[string]float64),
+		IdealLower:     make(map[string]float64),
+		IdealUpper:     make(map[string]float64),
 		ExtractedAt:    time.Now().UTC().Format(time.RFC3339),
 		CatchmentCount: len(catchments),
 	}
@@ -1766,7 +1772,13 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 
 	indicators.TotalAreaKm2 = totalValidArea
 
-	// Step 3: Collect all unique metric keys
+	// Step 3: Compute whisker (upper/lower) bounds from whisker store
+	var whiskerBounds geodata.WhiskerBounds
+	if whiskerStore != nil {
+		whiskerBounds = whiskerStore.ComputeBounds(catchments)
+	}
+
+	// Step 4: Collect all unique metric keys
 	allKeys := make(map[string]bool)
 	for _, c := range catchments {
 		for k := range c.Reference {
@@ -1777,7 +1789,7 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
-	// Step 4: Compute AOI-weighted metrics
+	// Step 5: Compute AOI-weighted metrics
 	for key := range allKeys {
 		refSum := 0.0
 		curSum := 0.0
@@ -1802,6 +1814,30 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		indicators.Ideal[key] = refSum // Initialize Ideal same as Reference
 		if hadCur {
 			indicators.Current[key] = curSum
+		}
+
+		// Store whisker bounds if available
+		if whiskerBounds.ReferenceLower != nil {
+			if val, ok := whiskerBounds.ReferenceLower[key]; ok {
+				indicators.ReferenceLower[key] = val
+				indicators.IdealLower[key] = val // Initialize IdealLower same as ReferenceLower
+			}
+		}
+		if whiskerBounds.ReferenceUpper != nil {
+			if val, ok := whiskerBounds.ReferenceUpper[key]; ok {
+				indicators.ReferenceUpper[key] = val
+				indicators.IdealUpper[key] = val // Initialize IdealUpper same as ReferenceUpper
+			}
+		}
+		if whiskerBounds.CurrentLower != nil {
+			if val, ok := whiskerBounds.CurrentLower[key]; ok {
+				indicators.CurrentLower[key] = val
+			}
+		}
+		if whiskerBounds.CurrentUpper != nil {
+			if val, ok := whiskerBounds.CurrentUpper[key]; ok {
+				indicators.CurrentUpper[key] = val
+			}
 		}
 	}
 

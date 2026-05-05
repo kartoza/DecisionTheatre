@@ -291,7 +291,7 @@ func (s *Store) loadSite(filename string) (*Site, error) {
 
 // saveSite saves a site to disk
 func (s *Store) saveSite(site *Site) error {
-	data, err := json.MarshalIndent(site, "", "  ")
+	data, err := json.Marshal(site)
 	if err != nil {
 		return fmt.Errorf("failed to marshal site: %w", err)
 	}
