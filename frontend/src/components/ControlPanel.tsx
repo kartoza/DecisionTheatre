@@ -799,9 +799,6 @@ function ControlPanel({
                         <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                           GRAPH STYLE
                         </Badge>
-                        {rangeMode !== 'site' && (
-                          <Text fontSize="xs" color="gray.500">Boxplot available in Site range</Text>
-                        )}
                       </HStack>
                       <ButtonGroup size="xs" isAttached variant="outline">
                         <Button
@@ -815,7 +812,6 @@ function ControlPanel({
                         </Button>
                         <Button
                           onClick={() => onChartGraphModeChange?.('boxplot')}
-                          isDisabled={rangeMode !== 'site'}
                           variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? 'solid' : 'outline'}
                           colorScheme="gray"
                           bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.pastelLightBlue : undefined}

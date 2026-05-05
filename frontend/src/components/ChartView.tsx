@@ -255,13 +255,21 @@ function ChartView({
   const { xAxisLabels } = useAttributeXAxisLabels();
   const { chartTypes } = useAttributeChartTypes();
   const filteredChartColumns = useMemo(() => {
-    const candidates = rangeMode === 'site'
-      ? Array.from(new Set([
-        ...columns,
+    let candidates: string[];
+    if (rangeMode === 'site') {
+      // Keep deterministic order across backend restarts: preserve column order first,
+      // then append metadata-only keys in sorted order.
+      const columnSet = new Set(columns);
+      const extras = Array.from(new Set([
         ...Object.keys(variableTypes),
         ...Object.keys(groupingVariables),
       ]))
-      : columns;
+        .filter((k) => !columnSet.has(k))
+        .sort((a, b) => a.localeCompare(b));
+      candidates = [...columns, ...extras];
+    } else {
+      candidates = columns;
+    }
 
     return candidates.filter((col) => {
       if (chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
@@ -269,6 +277,35 @@ function ChartView({
       return true;
     });
   }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables]);
+
+  const groupedDisplayColumns = useMemo(() => {
+    if (filteredChartColumns.length === 0) return filteredChartColumns;
+
+    // Herbivores/Diet includes multiple metric families sharing the same x-axis labels
+    // (kgkm2, counts, dmi, ch4). Mixing them corrupts grouped line/boxplot rendering.
+    if (chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Diet') {
+      const familyByColumn = new Map<string, string>();
+      const familyOrder: string[] = [];
+
+      for (const col of filteredChartColumns) {
+        const parts = normalizeColumnKey(col).split('.');
+        if (parts.length >= 4 && parts[0] === 'herbs' && parts[1] === 'diet') {
+          const family = parts[2];
+          familyByColumn.set(col, family);
+          if (!familyOrder.includes(family)) familyOrder.push(family);
+        }
+      }
+
+      if (familyOrder.length > 1) {
+        const preferred = ['kgkm2', 'counts', 'dmi', 'ch4'];
+        const selectedFamily = preferred.find((f) => familyOrder.includes(f)) ?? familyOrder[0];
+        const filtered = filteredChartColumns.filter((col) => familyByColumn.get(col) === selectedFamily);
+        if (filtered.length > 0) return filtered;
+      }
+    }
+
+    return filteredChartColumns;
+  }, [filteredChartColumns, chartGroup, chartAxisLabelFilter]);
 
   // Fallback catchment data when no siteIndicators
   const [catchmentData, setCatchmentData] = useState<{
@@ -285,7 +322,7 @@ function ChartView({
 
   useEffect(() => {
     if (!visible) return;
-    if (!siteId || rangeMode !== 'site') {
+    if (!siteId) {
       setCatchmentData(null);
       setWhiskerBounds(null);
       return;
@@ -297,6 +334,11 @@ function ChartView({
     }).catch(() => {
       if (!whiskerCancelled) setWhiskerBounds(null);
     });
+
+    if (rangeMode !== 'site') {
+      setCatchmentData(null);
+      return () => { whiskerCancelled = true; };
+    }
 
     let cancelled = false;
 
@@ -381,7 +423,7 @@ function ChartView({
       return;
     }
 
-    const groupColumns = filteredChartColumns;
+    const groupColumns = groupedDisplayColumns;
     if (groupColumns.length === 0) {
       setGroupedRangeData(null);
       setGroupedRangeLoading(false);
@@ -454,7 +496,7 @@ function ChartView({
     return () => {
       cancelled = true;
     };
-  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, filteredChartColumns]);
+  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, groupedDisplayColumns]);
 
   // Build summary chart data (existing behavior)
   const summaryData = useMemo(() => {
@@ -487,7 +529,7 @@ function ChartView({
   const groupedChartData = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return null;
 
-    const groupColumns = filteredChartColumns;
+    const groupColumns = groupedDisplayColumns;
     if (groupColumns.length === 0) return null;
 
     const points: {
@@ -499,6 +541,13 @@ function ChartView({
       refLower: number | null;
       curUpper: number | null;
       curLower: number | null;
+      refCount: number;
+      curCount: number;
+      targetCount: number;
+      refUpperCount: number;
+      refLowerCount: number;
+      curUpperCount: number;
+      curLowerCount: number;
     }[] = [];
     const labelIndex = new Map<string, number>();
 
@@ -545,13 +594,56 @@ function ChartView({
           refLower: normalizedRefLower,
           curUpper: normalizedCurUpper,
           curLower: normalizedCurLower,
+          refCount: normalizedRef !== null ? 1 : 0,
+          curCount: normalizedCur !== null ? 1 : 0,
+          targetCount: normalizedTarget !== null ? 1 : 0,
+          refUpperCount: normalizedRefUpper !== null ? 1 : 0,
+          refLowerCount: normalizedRefLower !== null ? 1 : 0,
+          curUpperCount: normalizedCurUpper !== null ? 1 : 0,
+          curLowerCount: normalizedCurLower !== null ? 1 : 0,
         });
       } else {
-        // Do not merge/sum duplicate display labels from different column families.
-        // In groups like Herbivores/Diet this can mix incompatible metrics (e.g. biomass, counts, CH4)
-        // and produces distorted whisker plots.
-        void existingIndex;
+        // Average duplicate display labels rather than summing, which inflates values.
+        const existing = points[existingIndex];
+        if (normalizedRef !== null) {
+          existing.ref = (existing.ref ?? 0) + normalizedRef;
+          existing.refCount += 1;
+        }
+        if (normalizedCur !== null) {
+          existing.cur = (existing.cur ?? 0) + normalizedCur;
+          existing.curCount += 1;
+        }
+        if (normalizedTarget !== null) {
+          existing.target = (existing.target ?? 0) + normalizedTarget;
+          existing.targetCount += 1;
+        }
+        if (normalizedRefUpper !== null) {
+          existing.refUpper = (existing.refUpper ?? 0) + normalizedRefUpper;
+          existing.refUpperCount += 1;
+        }
+        if (normalizedRefLower !== null) {
+          existing.refLower = (existing.refLower ?? 0) + normalizedRefLower;
+          existing.refLowerCount += 1;
+        }
+        if (normalizedCurUpper !== null) {
+          existing.curUpper = (existing.curUpper ?? 0) + normalizedCurUpper;
+          existing.curUpperCount += 1;
+        }
+        if (normalizedCurLower !== null) {
+          existing.curLower = (existing.curLower ?? 0) + normalizedCurLower;
+          existing.curLowerCount += 1;
+        }
       }
+    }
+
+    for (const p of points) {
+      p.ref = p.refCount > 0 && p.ref !== null ? p.ref / p.refCount : null;
+      p.cur = p.curCount > 0 && p.cur !== null ? p.cur / p.curCount : null;
+      p.target = p.targetCount > 0 && p.target !== null ? p.target / p.targetCount : null;
+      p.refUpper = p.refUpperCount > 0 && p.refUpper !== null ? p.refUpper / p.refUpperCount : null;
+      p.refLower = p.refLowerCount > 0 && p.refLower !== null ? p.refLower / p.refLowerCount : null;
+      p.curUpper = p.curUpperCount > 0 && p.curUpper !== null ? p.curUpper / p.curUpperCount : null;
+      p.curLower = p.curLowerCount > 0 && p.curLower !== null ? p.curLower / p.curLowerCount : null;
     }
 
     const hideNoRefOrCur = chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Species';
@@ -562,21 +654,30 @@ function ChartView({
         return !(refVal === 0 && curVal === 0);
       }
       return p.ref !== null || p.cur !== null || p.target !== null;
-    });
+    }).map((p) => ({
+      label: p.label,
+      ref: p.ref,
+      cur: p.cur,
+      target: p.target,
+      refUpper: p.refUpper,
+      refLower: p.refLower,
+      curUpper: p.curUpper,
+      curLower: p.curLower,
+    }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
-    const firstColumn = filteredChartColumns[0];
+    const firstColumn = groupedDisplayColumns[0];
     if (!firstColumn) return '';
     return composeYAxisLabel(axisLabels[firstColumn], units[firstColumn]);
-  }, [chartGroup, chartAxisLabelFilter, filteredChartColumns, axisLabels, units]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, axisLabels, units]);
 
   const groupedChartType = useMemo<string>(() => {
     if (!groupedChartData || !chartGroup) return 'line';
 
-    const groupChartTypes = filteredChartColumns
+    const groupChartTypes = groupedDisplayColumns
       .map((col) => resolveChartTypeForColumn(col, chartTypes))
       .filter((ct): ct is string => typeof ct === 'string');
 
@@ -585,11 +686,11 @@ function ChartView({
       return normalized.includes('boxplot') || normalized.includes('box');
     });
 
-    const canRenderBoxplot = rangeMode === 'site' && hasBoxplotType;
+    const canRenderBoxplot = hasBoxplotType;
     if (chartGraphMode === 'boxplot') return canRenderBoxplot ? 'boxplot' : 'line';
     if (chartGraphMode === 'line') return 'line';
     return canRenderBoxplot ? 'boxplot' : 'line';
-  }, [groupedChartData, chartGroup, filteredChartColumns, chartTypes, rangeMode, chartGraphMode]);
+  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, rangeMode, chartGraphMode]);
 
   const boxplotPageCount = useMemo(() => {
     if (groupedChartType !== 'boxplot' || !groupedChartData) return 1;
@@ -613,7 +714,7 @@ function ChartView({
   useEffect(() => {
     if (!visible || !chartGroup || !chartAxisLabelFilter) return;
 
-    const debugRows = filteredChartColumns.slice(0, 40).map((col) => {
+    const debugRows = groupedDisplayColumns.slice(0, 40).map((col) => {
       const siteRef = resolveMapValueForColumn(siteIndicators?.reference, col);
       const siteCur = resolveMapValueForColumn(siteIndicators?.current, col);
       const siteTarget = resolveMapValueForColumn(siteIndicators?.ideal, col);
@@ -646,15 +747,15 @@ function ChartView({
       chartGroup,
       chartAxisLabelFilter,
       rangeMode,
-      filteredColumnCount: filteredChartColumns.length,
+      filteredColumnCount: groupedDisplayColumns.length,
       hasGroupedRangeData: Boolean(groupedRangeData),
       hasCatchmentData: Boolean(catchmentData),
       hasSiteIndicators: Boolean(siteIndicators),
       hasGroupedChartData: Boolean(groupedChartData),
     });
     console.table(debugRows);
-    if (filteredChartColumns.length > 40) {
-      console.log(`truncated ${filteredChartColumns.length - 40} additional columns`);
+    if (groupedDisplayColumns.length > 40) {
+      console.log(`truncated ${groupedDisplayColumns.length - 40} additional columns`);
     }
     console.groupEnd();
   }, [
@@ -662,7 +763,7 @@ function ChartView({
     chartGroup,
     chartAxisLabelFilter,
     rangeMode,
-    filteredChartColumns,
+    groupedDisplayColumns,
     groupedRangeData,
     catchmentData,
     siteIndicators,
