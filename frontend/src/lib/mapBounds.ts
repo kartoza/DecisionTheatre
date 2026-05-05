@@ -57,11 +57,17 @@ export async function fetchCatchmentBounds(catchmentsBoundsUrl = '/api/catchment
       return null;
     }
 
-    if (west >= east || south >= north) {
+    // Type assertion: after the type guard check, we know these are numbers
+    const finalWest = west as number;
+    const finalSouth = south as number;
+    const finalEast = east as number;
+    const finalNorth = north as number;
+
+    if (finalWest >= finalEast || finalSouth >= finalNorth) {
       return null;
     }
 
-    return [[west, south], [east, north]];
+    return [[finalWest, finalSouth], [finalEast, finalNorth]];
   } catch {
     return null;
   }

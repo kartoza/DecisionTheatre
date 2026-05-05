@@ -46,6 +46,7 @@ interface ViewPaneProps {
   mapStatistics?: MapStatistics | null;
   chartGroup?: string | null;
   chartAxisLabelFilter?: string | null;
+  chartGraphMode?: 'line' | 'boxplot' | null;
   mapExtent?: MapExtent | null;
 }
 
@@ -95,6 +96,7 @@ function ViewPane({
   mapStatistics,
   chartGroup,
   chartAxisLabelFilter,
+  chartGraphMode,
   mapExtent,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
@@ -456,6 +458,7 @@ function ViewPane({
         rightScenario={comparison.rightScenario}
         chartGroup={chartGroup}
         chartAxisLabelFilter={chartAxisLabelFilter}
+        chartGraphMode={chartGraphMode}
         mapExtent={mapExtent}
       />
 

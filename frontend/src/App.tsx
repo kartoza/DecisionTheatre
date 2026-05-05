@@ -58,6 +58,7 @@ function App() {
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
   const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
   const [chartAxisLabelFilters, setChartAxisLabelFilters] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
+  const [chartGraphModes, setChartGraphModes] = useState<('line' | 'boxplot' | null)[]>(() => loadPaneStates().map(() => null));
   const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
@@ -77,6 +78,12 @@ function App() {
     });
 
     setChartAxisLabelFilters((prev) => {
+      if (prev.length === paneStates.length) return prev;
+      if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
+      return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => null)];
+    });
+
+    setChartGraphModes((prev) => {
       if (prev.length === paneStates.length) return prev;
       if (paneStates.length < prev.length) return prev.slice(0, paneStates.length);
       return [...prev, ...Array.from({ length: paneStates.length - prev.length }, () => null)];
@@ -330,6 +337,13 @@ function App() {
       return prev.filter((_, idx) => idx !== paneIndex);
     });
 
+    setChartGraphModes((prev) => {
+      if (prev.length <= minimumQuadPaneCount || paneIndex < minimumQuadPaneCount || paneIndex >= prev.length) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== paneIndex);
+    });
+
     setFocusedPane((prev) => {
       if (prev > paneIndex) return prev - 1;
       if (prev === paneIndex) return Math.max(0, paneIndex - 1);
@@ -365,10 +379,6 @@ function App() {
     });
   }, [layoutMode]);
 
-  const handlePaneAttributeChange = useCallback((paneIndex: number, attribute: string) => {
-    handlePaneStateChange(paneIndex, { attribute });
-  }, [handlePaneStateChange]);
-
   const handleLeftChange = useCallback((scenario: Scenario) => {
     if (indicatorPaneIndex !== null)
       handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
@@ -391,6 +401,11 @@ function App() {
       next[indicatorPaneIndex] = group;
       return next;
     });
+    setChartGraphModes((prev) => {
+      const next = [...prev];
+      next[indicatorPaneIndex] = null;
+      return next;
+    });
     // Reset grouping-variable filter when changing variable type for this pane.
     setChartAxisLabelFilters((prev) => {
       const next = [...prev];
@@ -404,6 +419,15 @@ function App() {
     setChartAxisLabelFilters((prev) => {
       const next = [...prev];
       next[indicatorPaneIndex] = axisLabel;
+      return next;
+    });
+  }, [indicatorPaneIndex]);
+
+  const handleChartGraphModeChange = useCallback((mode: 'line' | 'boxplot' | null) => {
+    if (indicatorPaneIndex === null) return;
+    setChartGraphModes((prev) => {
+      const next = [...prev];
+      next[indicatorPaneIndex] = mode;
       return next;
     });
   }, [indicatorPaneIndex]);
@@ -616,7 +640,6 @@ function App() {
             paneStates={paneStates}
             viewModes={viewModes}
             onViewModeChange={handleViewModeChange}
-            onAttributeChange={handlePaneAttributeChange}
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
@@ -645,6 +668,7 @@ function App() {
             mapStatistics={mapStatistics}
             chartGroups={chartGroups}
             chartAxisLabelFilters={chartAxisLabelFilters}
+            chartGraphModes={chartGraphModes}
             mapExtent={mapExtent}
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
             isExtractingIndicators={isExtractingIndicators}
@@ -686,6 +710,8 @@ function App() {
           onChartGroupChange={handleChartGroupChange}
           chartAxisLabelFilter={indicatorPaneIndex !== null ? chartAxisLabelFilters[indicatorPaneIndex] : chartAxisLabelFilters[0]}
           onChartAxisLabelFilterChange={handleChartAxisLabelFilterChange}
+          chartGraphMode={indicatorPaneIndex !== null ? chartGraphModes[indicatorPaneIndex] : chartGraphModes[0]}
+          onChartGraphModeChange={handleChartGraphModeChange}
         />
       </Flex>
 

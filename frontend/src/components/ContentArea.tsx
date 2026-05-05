@@ -1,4 +1,4 @@
-import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Spinner, Tooltip, VStack, useDisclosure, useToast } from '@chakra-ui/react';
+import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
@@ -12,7 +12,6 @@ interface ContentAreaProps {
   paneStates: PaneStates;
   viewModes: ViewMode[];
   onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
-  onAttributeChange: (paneIndex: number, attribute: string) => void;
   focusedPane: number;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
@@ -43,6 +42,7 @@ interface ContentAreaProps {
   mapStatistics?: MapStatistics | null;
   chartGroups?: (string | null)[];
   chartAxisLabelFilters?: (string | null)[];
+  chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
   isExtractingIndicators?: boolean;
@@ -63,7 +63,7 @@ const paneVariants = {
       ease: [0.16, 1, 0.3, 1],
     },
   }),
-  exit: (i: number) => ({
+  exit: (_i: number) => ({
     opacity: 0,
     scale: 0.92,
     transition: {
@@ -94,7 +94,6 @@ function ContentArea({
   paneStates,
   viewModes,
   onViewModeChange,
-  onAttributeChange,
   focusedPane,
   onFocusPane,
   onGoQuad,
@@ -123,6 +122,7 @@ function ContentArea({
   mapStatistics,
   chartGroups,
   chartAxisLabelFilters,
+  chartGraphModes,
   mapExtent,
   onSiteIndicatorsChange,
   isExtractingIndicators,
@@ -169,7 +169,7 @@ function ContentArea({
 
   const saveTargetValues = async () => {
     if (!siteIndicators || !onSiteIndicatorsChange) {
-      onCloseTargetModal();
+      onCloseTargetModal?.();
       return;
     }
 
@@ -202,7 +202,7 @@ function ContentArea({
         idealLower: nextIdealLower,
         idealUpper: nextIdealUpper,
       });
-      onCloseTargetModal();
+      onCloseTargetModal?.();
       toast({ title: 'Target values updated', status: 'success', duration: 2000 });
     } catch {
       toast({ title: 'Failed to update target values', status: 'error', duration: 2500 });
@@ -356,7 +356,6 @@ function ContentArea({
                   layoutMode={mode}
                   viewMode={viewModes[i]}
                   onViewModeChange={onViewModeChange}
-                  onAttributeChange={onAttributeChange}
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
@@ -382,6 +381,7 @@ function ContentArea({
                   chartGroup={chartGroups?.[i] ?? null}
                   mapExtent={mapExtent}
                   chartAxisLabelFilter={chartAxisLabelFilters?.[i] ?? null}
+                  chartGraphMode={chartGraphModes?.[i] ?? null}
                 />
               </motion.div>
             ))}
@@ -401,7 +401,6 @@ function ContentArea({
             layoutMode={mode}
             viewMode={viewModes[visibleIndices[0]]}
             onViewModeChange={onViewModeChange}
-            onAttributeChange={onAttributeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
             onIdentify={onIdentify}
@@ -427,13 +426,14 @@ function ContentArea({
             mapStatistics={mapStatistics}
             chartGroup={chartGroups?.[visibleIndices[0]] ?? null}
             chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}
+            chartGraphMode={chartGraphModes?.[visibleIndices[0]] ?? null}
             mapExtent={mapExtent}
           />
         </Box>
       )}
       </Box>
 
-      <Modal isOpen={isTargetModalOpen} onClose={onCloseTargetModal} size="xl" scrollBehavior="inside">
+      <Modal isOpen={isTargetModalOpen ?? false} onClose={onCloseTargetModal ?? (() => {})} size="xl" scrollBehavior="inside">
         <ModalOverlay />
         <ModalContent bg="gray.800" color="white">
           <ModalHeader>Edit Target Values</ModalHeader>
