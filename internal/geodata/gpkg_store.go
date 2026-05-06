@@ -988,6 +988,10 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 	}
 
 	results := make([]CatchmentIndicators, 0, len(ids))
+	quotedCols := make([]string, len(columns))
+	for i, col := range columns {
+		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
+	}
 
 	// Query each scenario
 	scenarios := []string{"current", "reference"}
@@ -999,12 +1003,6 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		if err != nil {
 			log.Printf("Failed to resolve ID column for %s: %v", tableName, err)
 			continue
-		}
-
-		// Build SELECT query for all columns
-		quotedCols := make([]string, len(columns))
-		for i, col := range columns {
-			quotedCols[i] = fmt.Sprintf(`"%s"`, col)
 		}
 
 		query := fmt.Sprintf(`
@@ -1036,7 +1034,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 			}
 			normalizedID := normalizeCatchmentID(catchmentID)
 
-			attrs := make(map[string]float64)
+			attrs := make(map[string]float64, len(columns))
 			for i, col := range columns {
 				if values[i].Valid {
 					attrs[col] = values[i].Float64
@@ -1073,6 +1071,9 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 				AreaKm2:   area.Float64,
 				Reference: scenarioData["reference"][normalizedID],
 				Current:   scenarioData["current"][normalizedID],
+				// AOIFraction is currently not persisted per catchment intersection;
+				// default to full coverage so site extraction uses area weighting.
+				AOIFraction: 1.0,
 			}
 			if ci.Reference == nil {
 				ci.Reference = make(map[string]float64)

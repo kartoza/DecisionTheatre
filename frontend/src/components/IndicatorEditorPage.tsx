@@ -44,8 +44,7 @@ import {
 } from 'react-icons/fi';
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
-import { getSiteCatchments, useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
-import { applyAOIWeightedIndicators } from '../utils/indicators';
+import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
 import { colors } from '../styles/colors';
 
 const MotionTr = motion(Tr);
@@ -53,6 +52,7 @@ const MotionTr = motion(Tr);
 interface IndicatorEditorPageProps {
   site: Site;
   onNavigate: (page: AppPage) => void;
+  autoExtractionInProgress?: boolean;
   onSiteUpdated: (site: Site) => void;
 }
 
@@ -245,12 +245,18 @@ function ReferenceTrendLines({ reference, current, target }: { reference: number
   );
 }
 
-export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }: IndicatorEditorPageProps) {
+export default function IndicatorEditorPage({
+  site,
+  onNavigate,
+  autoExtractionInProgress = false,
+  onSiteUpdated,
+}: IndicatorEditorPageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingScope, setEditingScope] = useState<'current' | 'reference' | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [editMeanValue, setEditMeanValue] = useState<string>('');
   const [editBoundsExpanded, setEditBoundsExpanded] = useState(false);
   const [editUpperValue, setEditUpperValue] = useState<string>('');
   const [localIndicators, setLocalIndicators] = useState<SiteIndicators | null>(site.indicators || null);
@@ -269,6 +275,16 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const hoverBg = useColorModeValue('whiteAlpha.100', 'whiteAlpha.100');
 
   const extractIndicators = useCallback(async () => {
+    if (autoExtractionInProgress) {
+      toast({
+        title: 'Extraction already running',
+        description: 'Indicators are currently being extracted automatically for this site.',
+        status: 'info',
+        duration: 2500,
+      });
+      return;
+    }
+
     setIsLoading(true);
     const runtime = getAppRuntime();
     var jsonData = {}
@@ -298,22 +314,20 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         const updatedSiteFromApi: Site = await response.json();
         // Preserve the local thumbnail since it was excluded from the API request
         const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
-
-        if (updatedSite.indicators) {
-          try {
-            const catchments = await getSiteCatchments(site.id);
-            if (catchments.length > 0) {
-              updatedSite.indicators = applyAOIWeightedIndicators(updatedSite.indicators, catchments);
-            }
-          } catch (error) {
-            console.warn('Failed to apply AOI-weighted indicator recalculation:', error);
-          }
-        }
         if (runtime === 'browser') {
           try {
             const raw = window.localStorage.getItem('dt-sites');
             if (!raw) {
               window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
+                  <Text
+                    fontSize="xs"
+                    color={autoExtractionInProgress ? 'cyan.300' : 'green.300'}
+                    fontWeight="medium"
+                  >
+                    {autoExtractionInProgress
+                      ? 'Status: Extracting indicators automatically...'
+                      : 'Status: Indicators extracted'}
+                  </Text>
             } else {
               const parsed: unknown = JSON.parse(raw);
               if (Array.isArray(parsed)) {
@@ -350,14 +364,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     } finally {
       setIsLoading(false);
     }
-  }, [site.id, onSiteUpdated, toast]);
-
-  // Extract indicators on mount if not already present
-  useEffect(() => {
-    if (!site.indicators && site.catchmentIds && site.catchmentIds.length > 0) {
-      extractIndicators();
-    }
-  }, [site.id, extractIndicators, site.catchmentIds, site.indicators]);
+  }, [autoExtractionInProgress, site.id, onSiteUpdated, toast]);
 
   useEffect(() => {
     if (!site.indicators) return;
@@ -388,11 +395,11 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
 
     if (nextCount !== lastCatchmentCountRef.current) {
       lastCatchmentCountRef.current = nextCount;
-      if (!hasChanges && !isLoading) {
+      if (!hasChanges && !isLoading && !autoExtractionInProgress) {
         extractIndicators();
       }
     }
-  }, [site.catchmentIds, hasChanges, isLoading, extractIndicators]);
+  }, [site.catchmentIds, hasChanges, isLoading, autoExtractionInProgress, extractIndicators]);
 
   const handleSaveChanges = useCallback(async () => {
     if (!localIndicators) return;
@@ -579,15 +586,20 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     setEditingScope(scope);
     const lower = value ?? 0;
     const hi = upper ?? lower;
+    const mean = scope === 'reference'
+      ? (localIndicators?.reference?.[key] ?? ((lower + hi) / 2))
+      : (localIndicators?.current?.[key] ?? ((lower + hi) / 2));
     setEditBoundsExpanded(lower !== hi);
     setEditValue(parseFloat(lower.toFixed(2)).toString());
+    setEditMeanValue(parseFloat(mean.toFixed(2)).toString());
     setEditUpperValue(parseFloat(hi.toFixed(2)).toString());
-  }, []);
+  }, [localIndicators]);
 
   const handleCancelEdit = useCallback(() => {
     setEditingKey(null);
     setEditingScope(null);
     setEditValue('');
+    setEditMeanValue('');
     setEditUpperValue('');
     setEditBoundsExpanded(false);
   }, []);
@@ -595,27 +607,27 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
   const handleConfirmEdit = useCallback(() => {
     if (!editingKey || !editingScope || !localIndicators) return;
 
-    const lower = parseFloat(editValue);
-    const upper = parseFloat(editUpperValue || editValue);
-    if (isNaN(lower) || isNaN(upper)) {
+    const mean = parseFloat(editMeanValue);
+    const lower = editBoundsExpanded ? parseFloat(editValue) : mean;
+    const upper = editBoundsExpanded ? parseFloat(editUpperValue || editMeanValue) : mean;
+    if (isNaN(lower) || isNaN(mean) || isNaN(upper)) {
       toast({ title: 'Invalid value', status: 'error', duration: 2000 });
       return;
     }
 
-    const mid = (lower + upper) / 2;
     setLocalIndicators(prev => {
       if (!prev) return prev;
       if (editingScope === 'reference') {
         return {
           ...prev,
-          reference: { ...(prev.reference ?? {}), [editingKey]: mid },
+          reference: { ...(prev.reference ?? {}), [editingKey]: mean },
           referenceLower: { ...(prev.referenceLower ?? {}), [editingKey]: lower },
           referenceUpper: { ...(prev.referenceUpper ?? {}), [editingKey]: upper },
         };
       }
       return {
         ...prev,
-        current: { ...(prev.current ?? {}), [editingKey]: mid },
+        current: { ...(prev.current ?? {}), [editingKey]: mean },
         currentLower: { ...(prev.currentLower ?? {}), [editingKey]: lower },
         currentUpper: { ...(prev.currentUpper ?? {}), [editingKey]: upper },
       };
@@ -624,9 +636,10 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     setEditingKey(null);
     setEditingScope(null);
     setEditValue('');
+    setEditMeanValue('');
     setEditUpperValue('');
     setEditBoundsExpanded(false);
-  }, [editingKey, editingScope, editValue, editUpperValue, localIndicators, toast]);
+  }, [editingKey, editingScope, editValue, editMeanValue, editUpperValue, editBoundsExpanded, localIndicators, toast]);
 
   const availableIndicatorKeys = useMemo(() => {
     if (!localIndicators) return [] as string[];
@@ -670,6 +683,11 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         const rows = group.entries
           .filter(entry => {
             if (selectedIndicatorKey && entry.key !== selectedIndicatorKey) return false;
+            const refVal = localIndicators.reference?.[entry.key] ?? null;
+            const curVal = localIndicators.current?.[entry.key] ?? null;
+            const isEditable = userInputs[entry.key] === true;
+            if (refVal === null && curVal === null) return false;
+            if (refVal === 0 && curVal === 0 && !isEditable) return false;
             if (!searchFilter) return true;
             const displayLabel = (attributeDetails[entry.key] ?? getIndicatorLabel(entry.key)).toLowerCase();
             return displayLabel.includes(searchFilter.toLowerCase())
@@ -729,7 +747,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
     return { total: keys.length, improved, degraded, unchanged };
   }, [localIndicators, availableIndicatorKeys]);
 
-  if (isLoading && !localIndicators) {
+  if ((isLoading || autoExtractionInProgress) && !localIndicators) {
     return (
       <Flex h="100%" align="center" justify="center" bg="gray.900">
         <VStack spacing={4}>
@@ -746,6 +764,9 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
         <VStack spacing={6} textAlign="center" p={8}>
           <Icon as={FiAlertTriangle} boxSize={16} color="orange.400" />
           <Heading size="lg" color="white">No Indicators Available</Heading>
+          <Text fontSize="sm" color={autoExtractionInProgress ? 'cyan.300' : 'gray.500'} fontWeight="medium">
+            {autoExtractionInProgress ? 'Status: Extraction in progress' : 'Status: Waiting to extract'}
+          </Text>
           <Text color="gray.400" maxW="400px">
             This site doesn't have indicator data yet. Click below to extract indicators from the constituent catchments.
           </Text>
@@ -754,9 +775,10 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
             size="lg"
             leftIcon={<FiBarChart2 />}
             onClick={extractIndicators}
-            isLoading={isLoading}
+            isLoading={isLoading || autoExtractionInProgress}
+            isDisabled={autoExtractionInProgress}
           >
-            Extract Indicators
+            {autoExtractionInProgress ? 'Extracting Automatically...' : 'Extract Indicators'}
           </Button>
           <Button
             variant="ghost"
@@ -996,6 +1018,21 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                     </NumberInput>
                                   </HStack>
                                   <HStack spacing={1} justify="flex-end">
+                                    <Text fontSize="xs" color="gray.500" minW="10px">mu</Text>
+                                    <NumberInput size="sm" value={editMeanValue} onChange={(v) => setEditMeanValue(v)} step={0.01} precision={2}>
+                                      <NumberInputField
+                                        bg="whiteAlpha.200"
+                                        border="none"
+                                        textAlign="right"
+                                        w="130px"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleConfirmEdit();
+                                          if (e.key === 'Escape') handleCancelEdit();
+                                        }}
+                                      />
+                                    </NumberInput>
+                                  </HStack>
+                                  <HStack spacing={1} justify="flex-end">
                                     <Text fontSize="xs" color="gray.500" minW="10px">hi</Text>
                                     <NumberInput size="sm" value={editUpperValue} onChange={(v) => setEditUpperValue(v)} step={0.01} precision={2}>
                                       <NumberInputField
@@ -1013,7 +1050,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                 </>
                               ) : (
                                 <HStack spacing={1} justify="flex-end">
-                                  <NumberInput size="sm" value={editValue} onChange={(v) => { setEditValue(v); setEditUpperValue(v); }} step={0.01} precision={2}>
+                                  <NumberInput size="sm" value={editMeanValue} onChange={(v) => setEditMeanValue(v)} step={0.01} precision={2}>
                                     <NumberInputField
                                       bg="whiteAlpha.200"
                                       border="none"
@@ -1032,7 +1069,11 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                       icon={<FiChevronDown />}
                                       size="xs"
                                       variant="ghost"
-                                      onClick={() => { setEditUpperValue(editValue); setEditBoundsExpanded(true); }}
+                                      onClick={() => {
+                                        setEditValue(editMeanValue);
+                                        setEditUpperValue(editMeanValue);
+                                        setEditBoundsExpanded(true);
+                                      }}
                                     />
                                   </Tooltip>
                                 </HStack>
@@ -1057,10 +1098,13 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           ) : (
                             <HStack spacing={2} justify="flex-end">
                               <Text color="orange.300" fontFamily="mono">
-                                {boundsSetRef
-                                  ? `${formatValue(row.referenceLower)} – ${formatValue(row.referenceUpper)}`
-                                  : formatValue(row.reference)}
+                                {formatValue(row.reference)}
                               </Text>
+                              {boundsSetRef && (
+                                <Text color="gray.500" fontSize="xs" fontFamily="mono">
+                                  {`${formatValue(row.referenceLower)} – ${formatValue(row.referenceUpper)}`}
+                                </Text>
+                              )}
                               {referenceIsNa && (
                                 <IconButton
                                   aria-label="Edit reference"
@@ -1095,6 +1139,21 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                     </NumberInput>
                                   </HStack>
                                   <HStack spacing={1} justify="flex-end">
+                                    <Text fontSize="xs" color="gray.500" minW="10px">mu</Text>
+                                    <NumberInput size="sm" value={editMeanValue} onChange={(v) => setEditMeanValue(v)} step={0.01} precision={2}>
+                                      <NumberInputField
+                                        bg="whiteAlpha.200"
+                                        border="none"
+                                        textAlign="right"
+                                        w="130px"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleConfirmEdit();
+                                          if (e.key === 'Escape') handleCancelEdit();
+                                        }}
+                                      />
+                                    </NumberInput>
+                                  </HStack>
+                                  <HStack spacing={1} justify="flex-end">
                                     <Text fontSize="xs" color="gray.500" minW="10px">hi</Text>
                                     <NumberInput size="sm" value={editUpperValue} onChange={(v) => setEditUpperValue(v)} step={0.01} precision={2}>
                                       <NumberInputField
@@ -1112,7 +1171,7 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                 </>
                               ) : (
                                 <HStack spacing={1} justify="flex-end">
-                                  <NumberInput size="sm" value={editValue} onChange={(v) => { setEditValue(v); setEditUpperValue(v); }} step={0.01} precision={2}>
+                                  <NumberInput size="sm" value={editMeanValue} onChange={(v) => setEditMeanValue(v)} step={0.01} precision={2}>
                                     <NumberInputField
                                       bg="whiteAlpha.200"
                                       border="none"
@@ -1131,7 +1190,11 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                                       icon={<FiChevronDown />}
                                       size="xs"
                                       variant="ghost"
-                                      onClick={() => { setEditUpperValue(editValue); setEditBoundsExpanded(true); }}
+                                      onClick={() => {
+                                        setEditValue(editMeanValue);
+                                        setEditUpperValue(editMeanValue);
+                                        setEditBoundsExpanded(true);
+                                      }}
                                     />
                                   </Tooltip>
                                 </HStack>
@@ -1156,10 +1219,13 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           ) : (
                             <HStack justify="flex-end" spacing={2}>
                               <Text color="cyan.300" fontFamily="mono">
-                                {boundsSetCur
-                                  ? `${formatValue(row.currentLower)} – ${formatValue(row.currentUpper)}`
-                                  : formatValue(row.current)}
+                                {formatValue(row.current)}
                               </Text>
+                              {boundsSetCur && (
+                                <Text color="gray.500" fontSize="xs" fontFamily="mono">
+                                  {`${formatValue(row.currentLower)} – ${formatValue(row.currentUpper)}`}
+                                </Text>
+                              )}
                               {(currentEditable || currentIsNa) && (
                                 <IconButton
                                   aria-label="Edit current"
@@ -1187,15 +1253,20 @@ export default function IndicatorEditorPage({ site, onNavigate, onSiteUpdated }:
                           </HStack>
                         </Td>
                         <Td borderColor="whiteAlpha.100" isNumeric>
-                          <Text
-                            color={idealChanged ? 'green.300' : 'gray.300'}
-                            fontFamily="mono"
-                            fontWeight={idealChanged ? 'bold' : 'normal'}
-                          >
-                            {boundsSet
-                              ? `${formatValue(row.idealLower)} – ${formatValue(row.idealUpper)}`
-                              : formatValue(row.idealLower)}
-                          </Text>
+                          <VStack spacing={0} align="end">
+                            <Text
+                              color={idealChanged ? 'green.300' : 'gray.300'}
+                              fontFamily="mono"
+                              fontWeight={idealChanged ? 'bold' : 'normal'}
+                            >
+                              {formatValue(row.ideal)}
+                            </Text>
+                            {boundsSet && (
+                              <Text color="gray.500" fontSize="xs" fontFamily="mono">
+                                {`${formatValue(row.idealLower)} – ${formatValue(row.idealUpper)}`}
+                              </Text>
+                            )}
+                          </VStack>
                         </Td>
                       </MotionTr>
                     );

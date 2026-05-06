@@ -1,8 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
-import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2 } from 'react-icons/fi';
+import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2, FiGlobe } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { booleanWithin, bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea } from '@turf/turf';
+import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
@@ -35,6 +35,21 @@ interface MapViewProps {
   is3DMode?: boolean;
   on3DModeChange?: (enabled: boolean) => void;
 }
+
+// Google Maps hybrid satellite raster style (no API key required for tile access)
+const GOOGLE_BASEMAP_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    google: {
+      type: 'raster',
+      tiles: ['https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'],
+      tileSize: 256,
+      attribution: '\u00a9 Google Maps',
+      maxzoom: 21,
+    },
+  },
+  layers: [{ id: 'google-tiles', type: 'raster', source: 'google' }],
+};
 
 // Layer IDs for choropleth
 const CHOROPLETH_LAYER_LEFT = 'choropleth-left';
@@ -81,6 +96,7 @@ const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
 const CHOROPLETH_EDGE_BLEND_OPACITY = 0.12;
 const CATCHMENTS_OUTLINES_LAYER_ID = 'Catchments Outlines';
 const CATCHMENTS_OUTLINES_SOFT_OPACITY = 0.03;
+const MIN_CATCHMENT_OVERLAP_FRACTION = 0.2;
 const catchmentsOutlineOpacityRef = new WeakMap<maplibregl.Map, unknown>();
 
 let mapViewInstanceCounter = 0;
@@ -386,6 +402,9 @@ function inferCatchmentIdsFromBoundary(
   const inferredIds = new Set<string>();
   if (!boundaryGeometry) return inferredIds;
 
+  const boundaryFeature = geometryToPolygonFeature(boundaryGeometry);
+  if (!boundaryFeature) return inferredIds;
+
   for (const dataset of datasets) {
     if (!dataset?.features?.length) continue;
 
@@ -394,10 +413,21 @@ function inferCatchmentIdsFromBoundary(
       if (featureId === undefined) continue;
 
       const featureGeometry = feature.geometry as GeoJSON.Geometry | null;
-      if (!featureGeometry) continue;
+      const catchmentFeature = geometryToPolygonFeature(featureGeometry);
+      if (!catchmentFeature) continue;
 
       try {
-        if (booleanWithin(featureGeometry, boundaryGeometry)) {
+        const catchmentArea = turfArea(catchmentFeature.geometry);
+        if (!Number.isFinite(catchmentArea) || catchmentArea <= 0) continue;
+
+        const overlap = intersect(featureCollection([catchmentFeature, boundaryFeature]));
+        if (!overlap?.geometry) continue;
+
+        const overlapArea = turfArea(overlap.geometry);
+        if (!Number.isFinite(overlapArea) || overlapArea <= 0) continue;
+
+        const overlapFraction = Math.max(0, Math.min(1, overlapArea / catchmentArea));
+        if (overlapFraction >= MIN_CATCHMENT_OVERLAP_FRACTION) {
           inferredIds.add(String(featureId));
         }
       } catch {
@@ -1486,6 +1516,47 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     setIsChoroplethEnabled((prev) => !prev);
   }, []);
 
+  // Google basemap toggle state
+  const [isGoogleBasemap, setIsGoogleBasemap] = useState(false);
+  const isGoogleBasemapRef = useRef(false);
+
+  const toggleGoogleBasemap = useCallback(() => {
+    const leftMap = leftMapRef.current;
+    const rightMap = rightMapRef.current;
+    if (!leftMap || !rightMap) return;
+
+    const nextVal = !isGoogleBasemapRef.current;
+    isGoogleBasemapRef.current = nextVal;
+    setIsGoogleBasemap(nextVal);
+
+    const newStyle: maplibregl.StyleSpecification | string = nextVal
+      ? GOOGLE_BASEMAP_STYLE
+      : (window.location.origin + '/data/style.json');
+
+    const reapplyAfterStyleLoad = (map: maplibregl.Map) => {
+      const onStyleData = () => {
+        if (!map.isStyleLoaded()) return;
+        map.off('styledata', onStyleData);
+        // Viewport clipping persists through setStyle, but re-apply to be safe
+        const bounds = viewportBoundsRef.current;
+        if (bounds) applyZoomOutClipToBounds(map, bounds);
+      };
+      map.on('styledata', onStyleData);
+    };
+
+    reapplyAfterStyleLoad(leftMap);
+    reapplyAfterStyleLoad(rightMap);
+
+    leftMap.setStyle(newStyle);
+    rightMap.setStyle(newStyle);
+
+    // Re-apply boundary and choropleth layers after styles settle
+    window.setTimeout(() => {
+      reapplyBoundaryLayers();
+      applyColorsRef.current();
+    }, 400);
+  }, [reapplyBoundaryLayers]);
+
   // Toggle split-screen swiper on/off
   const toggleSwiper = useCallback(() => {
     const next = !isSwiperEnabled;
@@ -1669,6 +1740,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
               const leftNumeric = getNumericIdentifyValue(leftValue);
               const rightNumeric = getNumericIdentifyValue(rightValue);
+              if (leftNumeric === 0 && rightNumeric === 0) {
+                return null;
+              }
               const trend = getComparisonTrend(leftNumeric, rightNumeric);
               const delta = leftNumeric === null || rightNumeric === null
                 ? null
@@ -3833,6 +3907,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               />
             </Tooltip>
           )}
+
+          {/* Google basemap toggle */}
+          <Tooltip label={isGoogleBasemap ? "Switch to default basemap" : "Switch to Google satellite"} placement="right">
+            <IconButton
+              aria-label="Toggle Google basemap"
+              icon={<FiGlobe />}
+              size="sm"
+              colorScheme={isGoogleBasemap ? "blue" : "gray"}
+              variant="solid"
+              bg={isGoogleBasemap ? colors.blue : "white"}
+              color={isGoogleBasemap ? "white" : "gray.700"}
+              onClick={toggleGoogleBasemap}
+              boxShadow="md"
+              _hover={{
+                bg: isGoogleBasemap ? "blue.600" : "gray.100"
+              }}
+            />
+          </Tooltip>
 
           {/* Swiper toggle button */}
           <Tooltip label={isSwiperEnabled ? "Disable map swiper" : "Enable map swiper"} placement="right">

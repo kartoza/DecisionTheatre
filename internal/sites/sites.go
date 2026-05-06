@@ -197,7 +197,7 @@ func (s *Store) Update(id string, updates *Site) (*Site, error) {
 		return nil, err
 	}
 
-	if site.CatchmentIDs != nil && updates.CatchmentIDs != nil {
+	if updates.CatchmentIDs != nil {
 		site.CatchmentIDs = updates.CatchmentIDs
 	}
 

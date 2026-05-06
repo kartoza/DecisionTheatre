@@ -11,9 +11,8 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
-import { patchSite, useServerInfo, getSiteCatchments } from './hooks/useApi';
+import { patchSite, useServerInfo } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
-import { applyAOIWeightedIndicators } from './utils/indicators';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
@@ -104,9 +103,7 @@ function App() {
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
   useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
 
-  // Auto-extract indicators when a site is opened that has catchments but no indicators yet
-  useEffect(() => {
-    const site = currentSite;
+  const startBackgroundIndicatorExtraction = useCallback((site: Site | null) => {
     if (!site || site.indicators || !site.catchmentIds?.length || extractingIndicatorsRef.current) {
       return;
     }
@@ -129,17 +126,6 @@ function App() {
         if (!response.ok) throw new Error('Failed to extract indicators');
         const updatedSiteFromApi: Site = await response.json();
         const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
-
-        if (updatedSite.indicators) {
-          try {
-            const catchments = await getSiteCatchments(site.id);
-            if (catchments.length > 0) {
-              updatedSite.indicators = applyAOIWeightedIndicators(updatedSite.indicators, catchments);
-            }
-          } catch (err) {
-            console.warn('Failed to apply AOI-weighted recalculation during auto-extraction:', err);
-          }
-        }
 
         if (runtime === 'browser') {
           try {
@@ -164,8 +150,12 @@ function App() {
         extractingIndicatorsRef.current = false;
         setIsExtractingIndicators(false);
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSite?.id, currentSite?.catchmentIds, currentSite?.indicators]);
+  }, []);
+
+  // Auto-extract indicators when a site is opened that has catchments but no indicators yet
+  useEffect(() => {
+    startBackgroundIndicatorExtraction(currentSite);
+  }, [currentSite?.id, currentSite?.catchmentIds, currentSite?.indicators, startBackgroundIndicatorExtraction]);
 
   // Auto-save site state when user interacts with the map (debounced)
   const siteAutoSaveTimerRef = useRef<number | null>(null);
@@ -281,8 +271,9 @@ function App() {
   // Handle site created (or updated)
   const handleSiteCreated = useCallback((site: Site) => {
     setEditSite(null); // Clear edit state
+    startBackgroundIndicatorExtraction(site);
     handleOpenSite(site);
-  }, [handleOpenSite]);
+  }, [handleOpenSite, startBackgroundIndicatorExtraction]);
 
   // Switch to single pane (focus a specific pane) and show its filter panel
   const handleFocusPane = useCallback((paneIndex: number) => {
@@ -604,6 +595,7 @@ function App() {
           <IndicatorEditorPage
             site={currentSite}
             onNavigate={handleNavigate}
+            autoExtractionInProgress={isExtractingIndicators}
             onSiteUpdated={(updatedSite: Site) => setCurrentSite(updatedSite)}
           />
         </Box>

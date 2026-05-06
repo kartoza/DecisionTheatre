@@ -125,7 +125,7 @@ function DialChart({
   min: _inputMin,
   max: inputMax,
   attribute = '',
-  unit = '',
+  unit: _unit = '',
   rangeMode = 'domain',
   onRangeModeChange,
   isSiteAvailable = true,
@@ -134,6 +134,7 @@ function DialChart({
   paneCount = 1,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
+  const isQuadCompactLayout = compact && paneCount >= 4;
   // Determine minimum for the dial. Prefer the provided input min, but never
   // assume 0 if any of the values go negative — expand the minimum to include
   // negative current/reference/target values so the needle and ticks render correctly.
@@ -248,8 +249,12 @@ function DialChart({
 
   const padding = compact
     ? (denseLayout
-      ? { top: 140, right: 40, bottom: 100, left: 40 }
-      : { top: 140, right: 40, bottom: 100, left: 40 })
+      ? (isQuadCompactLayout
+        ? { top: 72, right: 24, bottom: 64, left: 24 }
+        : { top: 140, right: 40, bottom: 100, left: 40 })
+      : (isQuadCompactLayout
+        ? { top: 72, right: 24, bottom: 64, left: 24 }
+        : { top: 140, right: 40, bottom: 100, left: 40 }))
     : BASE_PADDING;
 
   // Calculate radius based on available space
@@ -257,15 +262,21 @@ function DialChart({
   const availableHeight = Math.max(120, height - padding.top - padding.bottom);
   // For a half-circle: height needed = radius (arc) + label space below center
   const maxRadiusFromWidth = availableWidth / 2;
-  const labelReserve = compact ? (denseLayout ? 28 : 44) : 100;
+  const labelReserve = compact
+    ? (isQuadCompactLayout ? (denseLayout ? 18 : 26) : (denseLayout ? 28 : 44))
+    : 100;
   const maxRadiusFromHeight = availableHeight - labelReserve;
   const radius = Math.max(48, Math.min(maxRadiusFromWidth, maxRadiusFromHeight));
   const arcWidth = Math.max(40, radius * 0.15);
 
   // Center the dial vertically within the container
   // The dial visual occupies: radius above center + reserved space below center.
-  const spaceAbove = radius + arcWidth / 2 + (compact ? (denseLayout ? 18 : 28) : 60); // arc + ticks + labels
-  const spaceBelow = compact ? (denseLayout ? 34 : 48) : 100; // legend and bottom padding
+  const spaceAbove = radius + arcWidth / 2 + (compact
+    ? (isQuadCompactLayout ? (denseLayout ? 8 : 14) : (denseLayout ? 18 : 28))
+    : 60); // arc + ticks + labels
+  const spaceBelow = compact
+    ? (isQuadCompactLayout ? (denseLayout ? 18 : 26) : (denseLayout ? 34 : 48))
+    : 100; // legend and bottom padding
   const totalDialHeight = spaceAbove + spaceBelow;
   const verticalOffset = (availableHeight - totalDialHeight) / 2;
   const centerY = padding.top + spaceAbove + verticalOffset;
@@ -467,10 +478,63 @@ function DialChart({
     };
   }, [targetRenderValue, min, max, radius, arcWidth, centerX, centerY]);
 
+  const referenceCallout = useMemo(() => {
+    if (greenCenter === null) return null;
+
+    const referenceZoneValue = min + (max - min) * greenCenter;
+    const referenceAngle = valueToAngle(referenceZoneValue, min, max);
+    const angleRad = (referenceAngle * Math.PI) / 180;
+    const anchorRadius = radius + arcWidth / 2 + 12;
+
+    // In quad compact layout there isn't enough space for a full callout without
+    // overlapping the tick-mark labels. Return a marker-only descriptor instead.
+    if (isQuadCompactLayout) {
+      const markerR = radius + arcWidth / 2 + 4;
+      return {
+        markerOnly: true as const,
+        markerX: centerX + Math.cos(angleRad) * markerR,
+        markerY: centerY - Math.sin(angleRad) * markerR,
+      };
+    }
+
+    const elbowRadius = anchorRadius + (compact ? 24 : 30);
+    const horizontalDirection = Math.cos(angleRad) >= 0 ? 1 : -1;
+    const horizontalLength = compact ? 42 : 56;
+    const textAnchor: 'start' | 'end' = horizontalDirection > 0 ? 'start' : 'end';
+
+    const startX = centerX + Math.cos(angleRad) * anchorRadius;
+    const startY = centerY - Math.sin(angleRad) * anchorRadius;
+    const elbowX = centerX + Math.cos(angleRad) * elbowRadius;
+    const elbowY = centerY - Math.sin(angleRad) * elbowRadius;
+    const endX = elbowX + horizontalDirection * horizontalLength;
+    const endY = elbowY;
+
+    return {
+      markerOnly: false as const,
+      startX,
+      startY,
+      elbowX,
+      elbowY,
+      endX,
+      endY,
+      textX: endX + horizontalDirection * 8,
+      textY: endY - 2,
+      textAnchor,
+      fontSize: compact ? 12 : 14,
+    };
+  }, [greenCenter, min, max, radius, arcWidth, centerX, centerY, compact, isQuadCompactLayout]);
+
   const legendCurrentLabel = `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`;
   const legendTargetLabel = `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`;
-  const legendYOffset = compact ? (denseLayout ? 72 : 100) : 100;
+  const legendYOffset = compact
+    ? (isQuadCompactLayout ? (denseLayout ? 50 : 62) : (denseLayout ? 72 : 100))
+    : 100;
   const legendY = centerY + legendYOffset;
+  const centerHubOuterRadius = isQuadCompactLayout ? 30 : 40;
+  const centerHubMidRadius = isQuadCompactLayout ? 22 : 30;
+  const centerHubInnerRadius = isQuadCompactLayout ? 15 : 20;
+  const centerHubCoreRadius = isQuadCompactLayout ? 7 : 10;
+  const centerCapRadius = isQuadCompactLayout ? 9 : 12;
   const compactLegendGroupWidth = denseLayout ? 360 : 400;
   const compactLegendStartX = centerX - compactLegendGroupWidth / 2;
   const legendCurrentX = compact
@@ -641,14 +705,54 @@ function DialChart({
                 </g>
               ))}
 
+              {referenceCallout && (
+                <g opacity={arcProgress}>
+                  {referenceCallout.markerOnly ? (
+                    // Compact quad: no space for a full callout — show a small tick on the arc
+                    <circle
+                      cx={referenceCallout.markerX}
+                      cy={referenceCallout.markerY}
+                      r={5}
+                      fill="#7ddc7a"
+                      stroke="#fff"
+                      strokeWidth={1.5}
+                    />
+                  ) : (
+                    <>
+                      <path
+                        d={`M ${referenceCallout.startX} ${referenceCallout.startY} L ${referenceCallout.elbowX} ${referenceCallout.elbowY} L ${referenceCallout.endX} ${referenceCallout.endY}`}
+                        fill="none"
+                        stroke="#7ddc7a"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <text
+                        x={referenceCallout.textX}
+                        y={referenceCallout.textY}
+                        textAnchor={referenceCallout.textAnchor}
+                        dominantBaseline="middle"
+                        fill="#d9f99d"
+                        fontSize={referenceCallout.fontSize}
+                        fontFamily="Inter, system-ui, sans-serif"
+                        fontWeight="700"
+                        letterSpacing="0.04em"
+                      >
+                        Reference
+                      </text>
+                    </>
+                  )}
+                </g>
+              )}
+
               {/* MIN / MAX labels - positioned below the dial, much bigger */}
              
 
               {/* Center hub */}
-              <circle cx={centerX} cy={centerY} r={40} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={30} fill="#2d3748" opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={20} fill="#4a5568" opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={10} fill="#5a6a7c" opacity={arcProgress} />
+              <circle cx={centerX} cy={centerY} r={centerHubOuterRadius} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcProgress} />
+              <circle cx={centerX} cy={centerY} r={centerHubMidRadius} fill="#2d3748" opacity={arcProgress} />
+              <circle cx={centerX} cy={centerY} r={centerHubInnerRadius} fill="#4a5568" opacity={arcProgress} />
+              <circle cx={centerX} cy={centerY} r={centerHubCoreRadius} fill="#5a6a7c" opacity={arcProgress} />
 
               {/* Needles */}
               {/* Reference arrow removed as requested */}
@@ -669,44 +773,16 @@ function DialChart({
               )}
 
               {/* Center cap */}
-              <circle cx={centerX} cy={centerY} r={12} fill="#4a5568" stroke="#718096" strokeWidth={2} opacity={needleProgress} />
+              <circle cx={centerX} cy={centerY} r={centerCapRadius} fill="#4a5568" stroke="#718096" strokeWidth={2} opacity={needleProgress} />
 
-              {/* Current value display */}
-              {currentValue !== undefined && (
-                <g opacity={needleProgress}>
-                  <text
-                    x={centerX}
-                    y={centerY - radius * 0.4}
-                    textAnchor="middle"
-                    fill="white"
-                    fontSize={veryDenseLayout ? Math.max(28, radius * 0.17) : Math.max(48, radius * 0.25)}
-                    fontFamily="Inter, system-ui, sans-serif"
-                    fontWeight="bold"
-                    style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.8))' }}
-                  >
-                    {formatValue(currentValue)}
-                  </text>
-                  {unit && (
-                    <text
-                      x={centerX}
-                      y={centerY - radius * 0.4 + 40}
-                      textAnchor="middle"
-                      fill="#a0aec0"
-                      fontSize={18}
-                      fontFamily="Inter, system-ui, sans-serif"
-                    >
-                      {unit}
-                    </text>
-                  )}
-                </g>
-              )}
+              
 
               {/* Attribute label */}
               {attribute && (
                 <text
-                  x={centerX}
+                  x={padding.left}
                   y={veryDenseLayout ? 24 : 50}
-                  textAnchor="middle"
+                  textAnchor="start"
                   fill="#f7fafc"
                   fontSize={veryDenseLayout ? 15 : 20}
                   fontFamily="Inter, system-ui, sans-serif"

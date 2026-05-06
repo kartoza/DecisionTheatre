@@ -1,4 +1,4 @@
-import { Box, Button, FormControl, FormLabel, HStack, IconButton, Input, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { Box, Button, FormControl, FormLabel, HStack, IconButton, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
@@ -161,7 +161,12 @@ function ContentArea({
     const nextDrafts: Record<string, string> = {};
     for (const key of editableTargetKeys) {
       const value = siteIndicators?.ideal?.[key];
-      nextDrafts[key] = typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        nextDrafts[key] = String(value);
+      } else {
+        const fallback = siteIndicators?.idealLower?.[key];
+        nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback) ? String(fallback) : '0';
+      }
     }
     setTargetDraftValues(nextDrafts);
     if (typeof onOpenTargetModal === 'function') onOpenTargetModal();
@@ -439,23 +444,50 @@ function ContentArea({
           <ModalHeader>Edit Target Values</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
-            <VStack spacing={3} align="stretch">
-              {editableTargetKeys.map((key) => (
-                <FormControl key={key}>
-                  <FormLabel fontSize="sm" color="gray.200" mb={1}>
-                    {attributeDetails[key] ?? key}
-                  </FormLabel>
-                  <Input
-                    value={targetDraftValues[key] ?? ''}
-                    onChange={(e) =>
-                      setTargetDraftValues((prev) => ({ ...prev, [key]: e.target.value }))
-                    }
-                    placeholder="Enter target value"
-                    bg="whiteAlpha.100"
-                    borderColor="whiteAlpha.300"
-                  />
-                </FormControl>
-              ))}
+            <VStack spacing={5} align="stretch">
+              {editableTargetKeys.map((key) => {
+                const rawMin = siteIndicators?.idealLower?.[key];
+                const rawMax = siteIndicators?.idealUpper?.[key];
+                const safeMin = typeof rawMin === 'number' && Number.isFinite(rawMin) ? rawMin : 0;
+                const safeMax = typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > safeMin ? rawMax : safeMin + 100;
+                const range = safeMax - safeMin;
+                const step = range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
+                const rawVal = targetDraftValues[key] ?? '';
+                const numVal = rawVal !== '' && Number.isFinite(Number(rawVal))
+                  ? Math.min(safeMax, Math.max(safeMin, Number(rawVal)))
+                  : safeMin;
+                return (
+                  <FormControl key={key}>
+                    <HStack justify="space-between" mb={2}>
+                      <FormLabel fontSize="sm" color="gray.200" mb={0}>
+                        {attributeDetails[key] ?? key}
+                      </FormLabel>
+                      <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
+                        {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}
+                      </Box>
+                    </HStack>
+                    <Slider
+                      value={numVal}
+                      min={safeMin}
+                      max={safeMax}
+                      step={step}
+                      colorScheme="cyan"
+                      onChange={(val) =>
+                        setTargetDraftValues((prev) => ({ ...prev, [key]: String(val) }))
+                      }
+                    >
+                      <SliderTrack bg="whiteAlpha.200">
+                        <SliderFilledTrack />
+                      </SliderTrack>
+                      <SliderThumb />
+                    </Slider>
+                    <HStack justify="space-between" mt={1}>
+                      <Box fontSize="xs" color="gray.500">{safeMin}</Box>
+                      <Box fontSize="xs" color="gray.500">{safeMax}</Box>
+                    </HStack>
+                  </FormControl>
+                );
+              })}
             </VStack>
           </ModalBody>
           <ModalFooter>

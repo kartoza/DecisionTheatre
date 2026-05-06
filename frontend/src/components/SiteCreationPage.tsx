@@ -20,6 +20,7 @@ import {
 import { keyframes } from '@emotion/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCallback, useRef, useState } from 'react';
+import { area as turfArea, featureCollection, intersect } from '@turf/turf';
 import {
   FiArrowLeft,
   FiCheck,
@@ -142,6 +143,91 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
+  const inferCatchmentIdsForGeometry = useCallback(async (
+    sourceGeometry: GeoJSON.Geometry,
+    sourceBBox?: BoundingBox | null,
+  ): Promise<{ ids: string[]; truncated: boolean }> => {
+    const bbox = sourceBBox ?? computeBoundingBox(sourceGeometry);
+    const response = await fetch('/api/catchments/in-bbox', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        minX: bbox.minX,
+        minY: bbox.minY,
+        maxX: bbox.maxX,
+        maxY: bbox.maxY,
+        limit: 20000,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to query catchments for boundary');
+    }
+
+    const data = await response.json() as {
+      features?: GeoJSON.Feature[];
+      catchmentIds?: string[];
+      truncated?: boolean;
+    };
+
+const MIN_CATCHMENT_OVERLAP_FRACTION = 0.2;
+
+    const boundaryFeatures = geometryToPolygonFeatures(sourceGeometry);
+    if (boundaryFeatures.length === 0) {
+      return { ids: [], truncated: Boolean(data.truncated) };
+    }
+
+    const candidates = Array.isArray(data.features) ? data.features : [];
+    const matchedIds = new Set<string>();
+
+    for (const feature of candidates) {
+      const catchmentGeometry = feature?.geometry;
+      if (!catchmentGeometry || !isPolygonalGeometry(catchmentGeometry)) continue;
+
+      const catchmentId = String(feature.properties?.HYBAS_ID ?? feature.id ?? '').trim();
+      if (!catchmentId) continue;
+
+      const catchmentFeature: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> = {
+        type: 'Feature',
+        properties: {},
+        geometry: catchmentGeometry,
+      };
+
+      let catchmentArea = 0;
+      try {
+        catchmentArea = turfArea(catchmentFeature.geometry);
+      } catch {
+        continue;
+      }
+      if (!Number.isFinite(catchmentArea) || catchmentArea <= 0) continue;
+
+      let satisfiesOverlapThreshold = false;
+      for (const boundaryFeature of boundaryFeatures) {
+        try {
+          const overlap = intersect(featureCollection([catchmentFeature, boundaryFeature]));
+          if (!overlap?.geometry) continue;
+
+          const overlapArea = turfArea(overlap.geometry);
+          if (!Number.isFinite(overlapArea) || overlapArea <= 0) continue;
+
+          const overlapFraction = Math.max(0, Math.min(1, overlapArea / catchmentArea));
+          if (overlapFraction >= MIN_CATCHMENT_OVERLAP_FRACTION) {
+            satisfiesOverlapThreshold = true;
+            break;
+          }
+        } catch {
+          // Ignore invalid geometry pairs and continue scanning other candidates.
+        }
+      }
+
+      if (satisfiesOverlapThreshold) {
+        matchedIds.add(catchmentId);
+      }
+    }
+
+    return { ids: Array.from(matchedIds), truncated: Boolean(data.truncated) };
+  }, []);
+
   const cardBg = useColorModeValue('rgba(255,255,255,0.05)', 'rgba(0,0,0,0.3)');
   const inputBg = useColorModeValue('rgba(255,255,255,0.08)', 'rgba(0,0,0,0.4)');
 
@@ -260,6 +346,28 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
     setIsSubmitting(true);
 
     try {
+      let catchmentIdsToPersist = selectedCatchmentIds;
+
+      if (geometry && catchmentIdsToPersist.length === 0) {
+        try {
+          const inferred = await inferCatchmentIdsForGeometry(geometry, boundingBox);
+          if (inferred.ids.length > 0) {
+            catchmentIdsToPersist = inferred.ids;
+            setSelectedCatchmentIds(inferred.ids);
+          }
+          if (inferred.truncated) {
+            toast({
+              title: 'Catchment set may be incomplete',
+              description: 'Too many intersecting catchments were found; zoom in and refine if totals look off.',
+              status: 'warning',
+              duration: 5000,
+            });
+          }
+        } catch (err) {
+          console.warn('Catchment inference failed:', err);
+        }
+      }
+
       const siteData: Record<string, unknown> = {
         title: siteTitle.trim(),
         description: siteDescription.trim(),
@@ -271,7 +379,9 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
         siteData.geometry = geometry;
         siteData.boundingBox = boundingBox;
         siteData.creationMethod = selectedMethod;
-        siteData.catchmentIds = selectedCatchmentIds;
+        siteData.catchmentIds = catchmentIdsToPersist;
+      } else if (catchmentIdsToPersist.length > 0) {
+        siteData.catchmentIds = catchmentIdsToPersist;
       }
 
       const site = isEditMode
@@ -1001,6 +1111,32 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
       </Box>
     </Box>
   );
+}
+
+type PolygonalGeometry = GeoJSON.Polygon | GeoJSON.MultiPolygon;
+
+function isPolygonalGeometry(geometry: GeoJSON.Geometry | null | undefined): geometry is PolygonalGeometry {
+  return Boolean(geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon'));
+}
+
+function geometryToPolygonFeatures(
+  geometry: GeoJSON.Geometry | null | undefined,
+): GeoJSON.Feature<PolygonalGeometry>[] {
+  if (!geometry) return [];
+
+  if (isPolygonalGeometry(geometry)) {
+    return [{ type: 'Feature', properties: {}, geometry }];
+  }
+
+  if (geometry.type === 'GeometryCollection') {
+    const flattened: GeoJSON.Feature<PolygonalGeometry>[] = [];
+    for (const child of geometry.geometries) {
+      flattened.push(...geometryToPolygonFeatures(child));
+    }
+    return flattened;
+  }
+
+  return [];
 }
 
 /**
