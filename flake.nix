@@ -66,7 +66,7 @@
           # correct hash. Set to empty string to get it:
           #   nix build .#frontend 2>&1 | grep 'got:'
           # Then paste the sha256 here.
-          npmDepsHash = "sha256-p+cI7t1qtWgRouRktG7Q7r3SyJ/81wI14IisrRGeYbw=";
+          npmDepsHash = "sha256-4Ljrrxy3NyZ8kwpzPWg1RISh2UdtQdzU67uv+v1Zchw=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -106,7 +106,22 @@
           };
 
           # Let nix fetch Go dependencies
-          vendorHash = "sha256-VBnEd59jnISjJdfThY0UrLlfciBVc6dcDZ9A+vXMVvc=";
+          # After go.mod changes, set to "" to discover the new hash via:
+          #   nix build 2>&1 | grep 'got:'
+          vendorHash = "sha256-DgjErcJvY7pvXTAtVMOiAOqODJ7DrzXINBMXJcauiCI=";
+
+          # The local replace directive (./internal/webview_go) needs the
+          # source present during the go-modules download phase.
+          overrideModAttrs = _: {
+            postConfigure = ''
+              cp -r ${./internal/webview_go} internal/webview_go
+              chmod -R u+w internal/webview_go
+            '';
+          };
+
+          # Only build the main package — internal/webview_go is a
+          # separate Go module (used via replace) not a subpackage.
+          subPackages = [ "." ];
 
           nativeBuildInputs = with pkgs; [
             gcc
@@ -136,18 +151,6 @@
             mkdir -p internal/server/static internal/server/docs_site
             cp -r ${frontend}/* internal/server/static/
             cp -r ${docs}/* internal/server/docs_site/
-
-            # webview_go hardcodes webkit2gtk-4.0 but nixpkgs ships 4.1
-            # Create compat pkg-config and library symlink
-            mkdir -p $TMPDIR/pkgconfig $TMPDIR/lib
-            sed 's/webkit2gtk-4.1/webkit2gtk-4.0/g; s/Name: webkit2gtk-4.1/Name: webkit2gtk-4.0/' \
-              ${pkgs.webkitgtk_4_1.dev}/lib/pkgconfig/webkit2gtk-4.1.pc \
-              > $TMPDIR/pkgconfig/webkit2gtk-4.0.pc
-            # Fix lib path in the .pc to point to our compat dir
-            sed -i "s|-lwebkit2gtk-4.1|-lwebkit2gtk-4.0|g" $TMPDIR/pkgconfig/webkit2gtk-4.0.pc
-            ln -sf ${pkgs.webkitgtk_4_1}/lib/libwebkit2gtk-4.1.so $TMPDIR/lib/libwebkit2gtk-4.0.so
-            export PKG_CONFIG_PATH="$TMPDIR/pkgconfig:$PKG_CONFIG_PATH"
-            export CGO_LDFLAGS="-L$TMPDIR/lib $CGO_LDFLAGS"
           '';
 
           postInstall = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
@@ -303,18 +306,6 @@
             export PATH="$GOPATH/bin:$PATH"
 
             export CGO_ENABLED=1
-
-            # webview_go hardcodes webkit2gtk-4.0 but nixpkgs ships 4.1
-            # Create compat pkg-config and library symlink
-            COMPAT_DIR="$PWD/.webkit-compat"
-            mkdir -p "$COMPAT_DIR/pkgconfig" "$COMPAT_DIR/lib"
-            sed 's/webkit2gtk-4.1/webkit2gtk-4.0/g; s/Name: webkit2gtk-4.1/Name: webkit2gtk-4.0/' \
-              ${pkgs.webkitgtk_4_1.dev}/lib/pkgconfig/webkit2gtk-4.1.pc \
-              > "$COMPAT_DIR/pkgconfig/webkit2gtk-4.0.pc"
-            sed -i "s|-lwebkit2gtk-4.1|-lwebkit2gtk-4.0|g" "$COMPAT_DIR/pkgconfig/webkit2gtk-4.0.pc"
-            ln -sf ${pkgs.webkitgtk_4_1}/lib/libwebkit2gtk-4.1.so "$COMPAT_DIR/lib/libwebkit2gtk-4.0.so"
-            export PKG_CONFIG_PATH="$COMPAT_DIR/pkgconfig:$PKG_CONFIG_PATH"
-            export CGO_LDFLAGS="-L$COMPAT_DIR/lib $CGO_LDFLAGS"
 
             alias ll='eza -la'
             alias la='eza -a'
