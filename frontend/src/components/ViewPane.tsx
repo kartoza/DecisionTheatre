@@ -8,6 +8,7 @@ import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
+import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
 interface ViewPaneProps {
   comparison: ComparisonState;
@@ -124,51 +125,17 @@ function ViewPane({
           return;
         }
 
-        const weightedCatchments: Array<{
-          validArea: number;
-          referenceValue?: number;
-          currentValue?: number;
-        }> = [];
+        const referenceValue = computeAOIWeightedAttributeValue(catchments, 'reference', comparison.attribute);
+        const currentValue = computeAOIWeightedAttributeValue(catchments, 'current', comparison.attribute);
 
-        for (const catchment of catchments) {
-          const fractionCovered = catchment.aoiFraction ?? 1.0;
-          const validArea = catchment.areaKm2 * fractionCovered;
-          if (!Number.isFinite(validArea) || validArea <= 0) continue;
-
-          const referenceValue = catchment.reference?.[comparison.attribute];
-          const currentValue = catchment.current?.[comparison.attribute];
-
-          weightedCatchments.push({
-            validArea,
-            referenceValue: typeof referenceValue === 'number' && !isNaN(referenceValue) ? referenceValue : undefined,
-            currentValue: typeof currentValue === 'number' && !isNaN(currentValue) ? currentValue : undefined,
-          });
-        }
-
-        const totalArea = weightedCatchments.reduce((sum, entry) => sum + entry.validArea, 0);
-
-        if (totalArea <= 0) {
+        if (referenceValue === undefined && currentValue === undefined) {
           if (!cancelled) setDialCatchmentData(null);
           return;
         }
 
-        let referenceWeightedSum = 0;
-        let currentWeightedSum = 0;
-
-        for (const entry of weightedCatchments) {
-          const weight = entry.validArea / totalArea;
-
-          if (entry.referenceValue !== undefined) {
-            referenceWeightedSum += entry.referenceValue * weight;
-          }
-          if (entry.currentValue !== undefined) {
-            currentWeightedSum += entry.currentValue * weight;
-          }
-        }
-
         const nextData = {
-          referenceValue: referenceWeightedSum,
-          currentValue: currentWeightedSum,
+          referenceValue,
+          currentValue,
         };
 
         if (!cancelled) {

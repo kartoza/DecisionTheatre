@@ -465,9 +465,11 @@ function ControlPanel({
 
   const factorOptions = useMemo(() => {
     const useGraphable = viewMode === 'chart' || viewMode === 'dial';
+    const isAggregateTableView = viewMode === 'table';
     const filterMap = useGraphable ? canGraph : canMap;
     const filtered = Object.keys(filterMap).length > 0
       ? columns.filter((col) => {
+          if (isAggregateTableView) return true;
           if (!filterMap[col]) return false;
           if (viewMode === 'dial') {
             const chartType = (chartTypes[col] || '').toLowerCase();

@@ -1,5 +1,59 @@
 import type { SiteIndicators } from '../types';
 
+function normalizeAreaKm2(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeAOIFraction(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 1;
+}
+
+function computeTotalValidArea(
+  catchments: Array<{ areaKm2: number; aoiFraction?: number }>,
+): number {
+  return catchments.reduce((sum, catchment) => {
+    const areaKm2 = normalizeAreaKm2(catchment.areaKm2);
+    const fraction = normalizeAOIFraction(catchment.aoiFraction);
+    return sum + (areaKm2 * fraction);
+  }, 0);
+}
+
+// AggregateTable-compatible weighting for one attribute:
+// weighted = sum((validArea / totalValidArea) * value), with missing value treated as 0.
+export function computeAOIWeightedAttributeValue(
+  catchments: Array<{
+    areaKm2: number;
+    aoiFraction?: number;
+    reference: Record<string, number>;
+    current: Record<string, number>;
+  }>,
+  scenario: 'reference' | 'current',
+  attribute: string,
+): number | undefined {
+  if (!attribute || !Array.isArray(catchments) || catchments.length === 0) return undefined;
+
+  const totalValidArea = computeTotalValidArea(catchments);
+  if (!(totalValidArea > 0)) return undefined;
+
+  let weightedSum = 0;
+
+  for (const catchment of catchments) {
+    const areaKm2 = normalizeAreaKm2(catchment.areaKm2);
+    const fraction = normalizeAOIFraction(catchment.aoiFraction);
+    const validArea = areaKm2 * fraction;
+    if (!(validArea > 0)) continue;
+
+    const values = scenario === 'reference' ? catchment.reference : catchment.current;
+    const raw = values?.[attribute];
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+    weightedSum += (validArea / totalValidArea) * value;
+  }
+
+  return weightedSum;
+}
+
 export function computeAOIWeightedScenarioValues(
   catchments: Array<{
     areaKm2: number;
@@ -9,34 +63,24 @@ export function computeAOIWeightedScenarioValues(
   }>,
   scenario: 'reference' | 'current',
 ): Record<string, number> {
-  const weightedSums = new Map<string, number>();
-  const validAreaSums = new Map<string, number>();
-
-  for (const catchment of catchments) {
-    const areaKm2 = typeof catchment.areaKm2 === 'number' && Number.isFinite(catchment.areaKm2)
-      ? catchment.areaKm2
-      : 0;
-    const fraction = typeof catchment.aoiFraction === 'number' && Number.isFinite(catchment.aoiFraction)
-      ? Math.max(0, Math.min(1, catchment.aoiFraction))
-      : 1;
-    const validArea = areaKm2 * fraction;
-    if (!(validArea > 0)) continue;
-
-    const values = scenario === 'reference' ? catchment.reference : catchment.current;
-    for (const [key, value] of Object.entries(values || {})) {
-      if (typeof value !== 'number' || Number.isNaN(value)) continue;
-      weightedSums.set(key, (weightedSums.get(key) ?? 0) + (value * validArea));
-      validAreaSums.set(key, (validAreaSums.get(key) ?? 0) + validArea);
-    }
-  }
-
   const result: Record<string, number> = {};
-  for (const [key, weightedSum] of weightedSums.entries()) {
-    const keyValidArea = validAreaSums.get(key) ?? 0;
-    if (keyValidArea > 0) {
-      result[key] = weightedSum / keyValidArea;
+  if (!Array.isArray(catchments) || catchments.length === 0) return result;
+
+  const keys = new Set<string>();
+  for (const catchment of catchments) {
+    const values = scenario === 'reference' ? catchment.reference : catchment.current;
+    for (const key of Object.keys(values || {})) {
+      keys.add(key);
     }
   }
+
+  for (const key of keys) {
+    const value = computeAOIWeightedAttributeValue(catchments, scenario, key);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      result[key] = value;
+    }
+  }
+
   return result;
 }
 
@@ -56,13 +100,7 @@ export function applyAOIWeightedIndicators(
   const current = computeAOIWeightedScenarioValues(catchments, 'current');
   if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) return base;
 
-  const totalAreaKm2 = catchments.reduce((sum, c) => {
-    const areaKm2 = typeof c.areaKm2 === 'number' && Number.isFinite(c.areaKm2) ? c.areaKm2 : 0;
-    const fraction = typeof c.aoiFraction === 'number' && Number.isFinite(c.aoiFraction)
-      ? Math.max(0, Math.min(1, c.aoiFraction))
-      : 1;
-    return sum + (areaKm2 * fraction);
-  }, 0);
+  const totalAreaKm2 = computeTotalValidArea(catchments);
 
   return {
     ...base,

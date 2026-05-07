@@ -5,6 +5,7 @@ import Plot from 'react-plotly.js';
 import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
+import { computeAOIWeightedScenarioValues } from '../utils/indicators';
 
 // Kartoza color scheme: orange, blue, green
 const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
@@ -387,52 +388,8 @@ function ChartView({
           setSiteCatchments(catchments);
         }
 
-        const weightedCatchments: Array<{
-          id: string;
-          validArea: number;
-          reference?: Record<string, number>;
-          current?: Record<string, number>;
-        }> = [];
-
-        for (const catchment of catchments) {
-          const fractionCovered = catchment.aoiFraction ?? 1.0;
-          const validArea = catchment.areaKm2 * fractionCovered;
-          if (!Number.isFinite(validArea) || validArea <= 0) continue;
-
-          weightedCatchments.push({
-            id: catchment.id,
-            validArea,
-            reference: catchment.reference,
-            current: catchment.current,
-          });
-        }
-
-        const totalArea = weightedCatchments.reduce((sum, entry) => sum + entry.validArea, 0);
-        if (!(totalArea > 0)) {
-          if (!cancelled) setCatchmentData(null);
-          return;
-        }
-
-        const reference: Record<string, number> = {};
-        const current: Record<string, number> = {};
-
-        for (const entry of weightedCatchments) {
-          const weight = entry.validArea / totalArea;
-
-          if (entry.reference) {
-            for (const [col, value] of Object.entries(entry.reference)) {
-              if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-              reference[col] = (reference[col] ?? 0) + value * weight;
-            }
-          }
-
-          if (entry.current) {
-            for (const [col, value] of Object.entries(entry.current)) {
-              if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-              current[col] = (current[col] ?? 0) + value * weight;
-            }
-          }
-        }
+        const reference = computeAOIWeightedScenarioValues(catchments, 'reference');
+        const current = computeAOIWeightedScenarioValues(catchments, 'current');
 
         if (cancelled) return;
 

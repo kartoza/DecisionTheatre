@@ -7,10 +7,11 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { getSite, getSiteCatchments, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
+import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -1232,9 +1233,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       );
 
       try {
-        const [leftData, rightData] = await Promise.all([
+        const [leftData, rightData, siteCatchments] = await Promise.all([
           fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL),
           fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL),
+          getSiteCatchments(siteId).catch(() => []),
         ]);
 
         if (cancelled) return;
@@ -1274,6 +1276,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               ? computeAOIWeightedZoneStats(rightFiltered, c.attribute, boundaryGeometry) ?? computeZoneStats(rightFiltered, c.attribute)
               : computeZoneStats(rightFiltered, c.attribute))
           : null;
+
+        // Keep min/max from map-visible site stats, but use aggregate-table weighting
+        // for the mean so all site views follow the same AOI-weighted formula.
+        if (Array.isArray(siteCatchments) && siteCatchments.length > 0) {
+          const leftAggregateScenario = c.leftScenario === 'reference' ? 'reference' : 'current';
+          const rightAggregateScenario = c.rightScenario === 'reference' ? 'reference' : 'current';
+          const weightedLeftMean = computeAOIWeightedAttributeValue(siteCatchments, leftAggregateScenario, c.attribute);
+          const weightedRightMean = computeAOIWeightedAttributeValue(siteCatchments, rightAggregateScenario, c.attribute);
+
+          if (leftSiteStats && typeof weightedLeftMean === 'number' && Number.isFinite(weightedLeftMean)) {
+            leftSiteStats.mean = weightedLeftMean;
+          }
+          if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)) {
+            rightSiteStats.mean = weightedRightMean;
+          }
+        }
 
         siteDomainRangeRef.current = siteDomainRange;
         siteZoneStatsRef.current = { left: leftSiteStats, right: rightSiteStats };

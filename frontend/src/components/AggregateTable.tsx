@@ -72,12 +72,16 @@ function AggregateTable({
     };
   }, [visible, siteId, siteGeometry]);
 
-  // Calculate all derived values from catchment data
-  // NOTE: This calculation uses the same area-weighted formula as the server-side
-  // SiteIndicators computation, ensuring DRY compliance. The formula is:
-  //   validArea = areaKm2 × aoiFraction
-  //   weight = validArea / totalValidArea
-  //   siteAverage = Σ(weight × value)
+  // Calculate all derived values from catchment data.
+  // Step 1: For each catchment, compute how much of its area is inside the site.
+  //         validArea = areaKm2 * aoiFraction (or 1.0 when aoiFraction is missing)
+  // Step 2: Sum validArea across all catchments to get totalArea.
+  // Step 3: For each catchment, compute its share of the site.
+  //         weight = validArea / totalArea
+  // Step 4: Multiply each catchment value by its weight.
+  //         weightedValue = weight * value
+  // Step 5: Add all weighted values to get the site average.
+  //         siteAverage = sum(weightedValue)
   const calculations = useMemo(() => {
     if (!catchments || catchments.length === 0 || !attribute) {
       return { rows: [], totalArea: 0, siteAverage: 0, hasData: false };

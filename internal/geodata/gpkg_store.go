@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -1071,8 +1072,8 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 				AreaKm2:   area.Float64,
 				Reference: scenarioData["reference"][normalizedID],
 				Current:   scenarioData["current"][normalizedID],
-				// AOIFraction is currently not persisted per catchment intersection;
-				// default to full coverage so site extraction uses area weighting.
+				// Default to full coverage; handlers can overwrite this with
+				// geometry-derived overlap fractions for site-based calculations.
 				AOIFraction: 1.0,
 			}
 			if ci.Reference == nil {
@@ -1086,6 +1087,168 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 	}
 
 	return results, nil
+}
+
+// ApplyAOIFractions computes overlap fractions between site geometry and catchments.
+// Fractions are written in-place to catchments as values in [0, 1].
+func (s *GpkgStore) ApplyAOIFractions(catchments []CatchmentIndicators, siteGeometry json.RawMessage) error {
+	if len(catchments) == 0 || len(siteGeometry) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(catchments))
+	for _, c := range catchments {
+		if strings.TrimSpace(c.ID) == "" {
+			continue
+		}
+		ids = append(ids, c.ID)
+	}
+
+	if len(ids) == 0 {
+		return nil
+	}
+
+	fractions, err := s.GetCatchmentAOIFractions(ids, siteGeometry)
+	if err != nil {
+		return err
+	}
+
+	for i := range catchments {
+		normalizedID := normalizeCatchmentID(catchments[i].ID)
+		if frac, ok := fractions[normalizedID]; ok {
+			catchments[i].AOIFraction = frac
+		}
+	}
+
+	return nil
+}
+
+// GetCatchmentAOIFractions returns site-overlap fractions for catchments by ID.
+func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.RawMessage) (map[string]float64, error) {
+	result := make(map[string]float64, len(ids))
+	if len(ids) == 0 || len(siteGeometry) == 0 {
+		return result, nil
+	}
+
+	sitePolygons, err := geometryRawToPolygons(siteGeometry)
+	if err != nil || len(sitePolygons) == 0 {
+		return result, nil
+	}
+
+	features, err := s.GetCatchmentsByIDs(ids)
+	if err != nil {
+		return result, err
+	}
+
+	for _, feature := range features {
+		catchmentID := normalizeCatchmentID(strconv.FormatInt(feature.ID, 10))
+		catchmentPolygons, err := geometryRawToPolygons(feature.Geometry)
+		if err != nil || len(catchmentPolygons) == 0 {
+			continue
+		}
+
+		catchmentArea := sumPolygonAreaKm2(catchmentPolygons)
+		if !isFinitePositive(catchmentArea) {
+			continue
+		}
+
+		overlapArea := intersectionAreaKm2(sitePolygons, catchmentPolygons)
+		if !isFinitePositive(overlapArea) {
+			result[catchmentID] = 0
+			continue
+		}
+
+		frac := overlapArea / catchmentArea
+		if frac < 0 {
+			frac = 0
+		} else if frac > 1 {
+			frac = 1
+		}
+		result[catchmentID] = frac
+	}
+
+	return result, nil
+}
+
+func geometryRawToPolygons(geometry json.RawMessage) ([]polyclip.Polygon, error) {
+	var parsed struct {
+		Type        string          `json:"type"`
+		Coordinates json.RawMessage `json:"coordinates"`
+	}
+	if err := json.Unmarshal(geometry, &parsed); err != nil {
+		return nil, err
+	}
+
+	switch parsed.Type {
+	case "Polygon":
+		var coords [][][]float64
+		if err := json.Unmarshal(parsed.Coordinates, &coords); err != nil {
+			return nil, err
+		}
+		poly := coordinatesToPolyclipPolygon(coords)
+		if len(poly) == 0 {
+			return nil, nil
+		}
+		return []polyclip.Polygon{poly}, nil
+	case "MultiPolygon":
+		var coords [][][][]float64
+		if err := json.Unmarshal(parsed.Coordinates, &coords); err != nil {
+			return nil, err
+		}
+		polys := make([]polyclip.Polygon, 0, len(coords))
+		for _, polygon := range coords {
+			poly := coordinatesToPolyclipPolygon(polygon)
+			if len(poly) > 0 {
+				polys = append(polys, poly)
+			}
+		}
+		return polys, nil
+	default:
+		return nil, nil
+	}
+}
+
+func coordinatesToPolyclipPolygon(rings [][][]float64) polyclip.Polygon {
+	poly := make(polyclip.Polygon, 0, len(rings))
+	for _, ring := range rings {
+		if len(ring) < 3 {
+			continue
+		}
+		contour := make(polyclip.Contour, 0, len(ring))
+		for _, pt := range ring {
+			if len(pt) < 2 {
+				continue
+			}
+			contour = append(contour, polyclip.Point{X: pt[0], Y: pt[1]})
+		}
+		if len(contour) >= 3 {
+			poly = append(poly, contour)
+		}
+	}
+	return poly
+}
+
+func sumPolygonAreaKm2(polygons []polyclip.Polygon) float64 {
+	total := 0.0
+	for _, p := range polygons {
+		total += calculatePolygonArea(p)
+	}
+	return total
+}
+
+func intersectionAreaKm2(a, b []polyclip.Polygon) float64 {
+	total := 0.0
+	for _, ap := range a {
+		for _, bp := range b {
+			inter := ap.Construct(polyclip.INTERSECTION, bp)
+			total += calculatePolygonArea(inter)
+		}
+	}
+	return total
+}
+
+func isFinitePositive(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0
 }
 
 // GetCatchmentsByIDs returns catchment geometries for the given IDs

@@ -1698,6 +1698,11 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
 		return
 	}
+	if len(site.Geometry) > 0 {
+		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+		}
+	}
 
 	if len(catchmentData) == 0 {
 		respondError(w, http.StatusNotFound, "no data found for catchments")
@@ -2018,6 +2023,11 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
 		return
 	}
+	if len(site.Geometry) > 0 {
+		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+		}
+	}
 
 	respondJSON(w, http.StatusOK, catchmentData)
 }
@@ -2094,6 +2104,11 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
 		return
+	}
+	if len(site.Geometry) > 0 {
+		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+		}
 	}
 
 	bounds := h.whiskerStore.ComputeBounds(catchmentData)
