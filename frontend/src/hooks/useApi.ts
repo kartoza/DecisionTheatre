@@ -493,6 +493,28 @@ export async function createSite(
     const sites = loadLocalSites();
     sites.push(site);
     saveLocalSites(sortSitesByCreatedAtDesc(sites));
+
+    // Preload and persist per-catchment scenario details so site aggregate
+    // views can render immediately from localStorage.
+    if (Array.isArray(site.catchmentIds) && site.catchmentIds.length > 0) {
+      try {
+        const { thumbnail, ...siteWithoutThumbnail } = site;
+        const response = await fetch(`${API_BASE}/sites/${site.id}/catchments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+        });
+        if (response.ok) {
+          const catchments = await response.json();
+          if (Array.isArray(catchments) && catchments.length > 0) {
+            persistLocalCatchments(site.id, catchments);
+          }
+        }
+      } catch {
+        // Keep site creation successful even if preloading catchments fails.
+      }
+    }
+
     return site;
   }
 

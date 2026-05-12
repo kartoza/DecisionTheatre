@@ -1327,8 +1327,109 @@ func (h *Handler) handleGetSite(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, site)
 }
 
+func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
+	start := time.Now()
+	defer func() {
+		catchmentCount := 0
+		siteID := ""
+		if site != nil {
+			catchmentCount = len(site.CatchmentIDs)
+			siteID = site.ID
+		}
+		log.Printf("[perf] populateSiteCatchmentDetails site_id=%s catchments=%d duration_ms=%d", siteID, catchmentCount, time.Since(start).Milliseconds())
+	}()
+
+	if site == nil {
+		return nil
+	}
+	if h.gpkgStore == nil {
+		return nil
+	}
+	if len(site.CatchmentIDs) == 0 {
+		site.Catchments = nil
+		return nil
+	}
+
+	indicatorsStart := time.Now()
+	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+	if err != nil {
+		return err
+	}
+	log.Printf("[perf] populateSiteCatchmentDetails step=getIndicators site_id=%s catchments=%d rows=%d duration_ms=%d", site.ID, len(site.CatchmentIDs), len(catchmentData), time.Since(indicatorsStart).Milliseconds())
+	if len(site.Geometry) > 0 {
+		aoiStart := time.Now()
+		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+			return err
+		}
+		log.Printf("[perf] populateSiteCatchmentDetails step=applyAOIFractions site_id=%s catchments=%d duration_ms=%d", site.ID, len(site.CatchmentIDs), time.Since(aoiStart).Milliseconds())
+	}
+
+	persisted := make([]sites.SiteCatchment, 0, len(catchmentData))
+	for _, c := range catchmentData {
+		persisted = append(persisted, sites.SiteCatchment{
+			ID:          c.ID,
+			AreaKm2:     c.AreaKm2,
+			AOIFraction: c.AOIFraction,
+			Reference:   c.Reference,
+			Current:     c.Current,
+		})
+	}
+
+	site.Catchments = persisted
+	return nil
+}
+
+func (h *Handler) populateSiteCatchmentDetailsDeferred(siteID string, catchmentIDs []string, geometry json.RawMessage) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] populateSiteCatchmentDetailsDeferred site_id=%s catchments=%d duration_ms=%d", siteID, len(catchmentIDs), time.Since(start).Milliseconds())
+	}()
+
+	if h.siteStore == nil || h.gpkgStore == nil || len(catchmentIDs) == 0 {
+		return
+	}
+
+	transientSite := &sites.Site{
+		ID:           siteID,
+		CatchmentIDs: append([]string(nil), catchmentIDs...),
+		Geometry:     append(json.RawMessage(nil), geometry...),
+	}
+	if err := h.populateSiteCatchmentDetails(transientSite); err != nil {
+		log.Printf("Warning: deferred site catchment enrichment failed site_id=%s err=%v", siteID, err)
+		return
+	}
+
+	if _, err := h.siteStore.Update(siteID, &sites.Site{Catchments: transientSite.Catchments}); err != nil {
+		log.Printf("Warning: deferred site catchment persistence failed site_id=%s err=%v", siteID, err)
+	}
+}
+
+func siteCatchmentsToIndicators(catchments []sites.SiteCatchment) []geodata.CatchmentIndicators {
+	if len(catchments) == 0 {
+		return nil
+	}
+
+	result := make([]geodata.CatchmentIndicators, 0, len(catchments))
+	for _, c := range catchments {
+		result = append(result, geodata.CatchmentIndicators{
+			ID:          c.ID,
+			AreaKm2:     c.AreaKm2,
+			AOIFraction: c.AOIFraction,
+			Reference:   c.Reference,
+			Current:     c.Current,
+		})
+	}
+
+	return result
+}
+
 // handleCreateSite creates a new site
 func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] handleCreateSite duration_ms=%d", time.Since(start).Milliseconds())
+	}()
+
 	if h.siteStore == nil {
 		respondError(w, http.StatusInternalServerError, "site store not initialized")
 		return
@@ -1346,6 +1447,13 @@ func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(created.CatchmentIDs) > 0 {
+		catchmentIDs := append([]string(nil), created.CatchmentIDs...)
+		geometry := append(json.RawMessage(nil), created.Geometry...)
+		log.Printf("[perf] handleCreateSite step=deferCatchmentDetails site_id=%s catchments=%d", created.ID, len(catchmentIDs))
+		go h.populateSiteCatchmentDetailsDeferred(created.ID, catchmentIDs, geometry)
+	}
+
 	respondJSON(w, http.StatusCreated, created)
 }
 
@@ -1360,6 +1468,16 @@ func (h *Handler) handleUpdateSite(w http.ResponseWriter, r *http.Request) {
 	var updates sites.Site
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(updates.CatchmentIDs) > 0 && len(updates.Geometry) == 0 && h.siteStore != nil {
+		existing, getErr := h.siteStore.Get(id)
+		if getErr == nil && existing != nil {
+			updates.Geometry = existing.Geometry
+		}
+	}
+	if err := h.populateSiteCatchmentDetails(&updates); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
 		return
 	}
 
@@ -1401,11 +1519,12 @@ type DissolveCatchmentsResponse struct {
 }
 
 type CatchmentsInBBoxRequest struct {
-	MinX  float64 `json:"minX"`
-	MinY  float64 `json:"minY"`
-	MaxX  float64 `json:"maxX"`
-	MaxY  float64 `json:"maxY"`
-	Limit int     `json:"limit"`
+	MinX            float64 `json:"minX"`
+	MinY            float64 `json:"minY"`
+	MaxX            float64 `json:"maxX"`
+	MaxY            float64 `json:"maxY"`
+	Limit           int     `json:"limit"`
+	IncludeGeometry *bool   `json:"includeGeometry,omitempty"`
 }
 
 type CatchmentsInBBoxResponse struct {
@@ -1578,6 +1697,11 @@ func (h *Handler) handleCatchmentsBounds(w http.ResponseWriter, r *http.Request)
 
 // handleCatchmentsInBBox returns catchment features intersecting a map bounding box.
 func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] handleCatchmentsInBBox duration_ms=%d", time.Since(start).Milliseconds())
+	}()
+
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
@@ -1600,6 +1724,28 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 	}
 	if limit > 20000 {
 		limit = 20000
+	}
+	includeGeometry := true
+	if req.IncludeGeometry != nil {
+		includeGeometry = *req.IncludeGeometry
+	}
+
+	if !includeGeometry {
+		ids, err := h.gpkgStore.GetCatchmentIDsByBBox(req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		response := CatchmentsInBBoxResponse{
+			Type:         "FeatureCollection",
+			Features:     []geodata.GeoJSONFeature{},
+			CatchmentIDs: ids,
+			Truncated:    len(ids) >= limit,
+		}
+
+		respondJSON(w, http.StatusOK, response)
+		return
 	}
 
 	features, err := h.gpkgStore.GetCatchmentsByBBox(req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
@@ -1954,6 +2100,11 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 
 // handleSiteCatchments returns per-catchment breakdown data for aggregate calculations
 func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] handleSiteCatchments method=%s duration_ms=%d", r.Method, time.Since(start).Milliseconds())
+	}()
+
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
@@ -2012,8 +2163,13 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(site.CatchmentIDs) == 0 {
+	if len(site.CatchmentIDs) == 0 && len(site.Catchments) == 0 {
 		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+		return
+	}
+
+	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
+		respondJSON(w, http.StatusOK, siteCatchmentsToIndicators(site.Catchments))
 		return
 	}
 
@@ -2035,6 +2191,11 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 // handleSiteWhiskers returns area-weighted upper/lower whisker bounds for a site's catchments.
 // It supports both webview (GET, site looked up from store) and browser runtime (POST with site in body).
 func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] handleSiteWhiskers method=%s duration_ms=%d", r.Method, time.Since(start).Milliseconds())
+	}()
+
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
@@ -2095,19 +2256,24 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(site.CatchmentIDs) == 0 {
+	if len(site.CatchmentIDs) == 0 && len(site.Catchments) == 0 {
 		respondError(w, http.StatusBadRequest, "site has no associated catchments")
 		return
 	}
 
-	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
-		return
-	}
-	if len(site.Geometry) > 0 {
-		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
-			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+	catchmentData := []geodata.CatchmentIndicators(nil)
+	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
+		catchmentData = siteCatchmentsToIndicators(site.Catchments)
+	} else {
+		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+			return
+		}
+		if len(site.Geometry) > 0 {
+			if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+				log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+			}
 		}
 	}
 
@@ -2260,6 +2426,10 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 	site.Geometry = newGeometry
 	site.BoundingBox = bbox
 	site.Area = newArea
+	if err := h.populateSiteCatchmentDetails(site); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
+		return
+	}
 
 	updated, err := h.siteStore.Update(siteID, site)
 	if err != nil {
@@ -2343,6 +2513,10 @@ func (h *Handler) handleBoundaryDifference(w http.ResponseWriter, r *http.Reques
 	site.Geometry = newGeometry
 	site.BoundingBox = bbox
 	site.Area = newArea
+	if err := h.populateSiteCatchmentDetails(site); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
+		return
+	}
 
 	updated, err := h.siteStore.Update(siteID, site)
 	if err != nil {

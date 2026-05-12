@@ -410,10 +410,42 @@ function AggregateTable({
                     border="1px solid"
                     borderColor="whiteAlpha.100"
                   >
-                    <Text color="gray.500" fontSize="xs" textAlign="center">
-                      <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
-                      Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
-                    </Text>
+                    <VStack align="stretch" spacing={1}>
+                      <Text color="gray.500" fontSize="xs" textAlign="center">
+                        <Text as="span" color="gray.400" fontWeight="600">Formula: </Text>
+                        Site Average = Sum of (Weight × Factor Value) where Weight = Valid Area / Total Valid Area
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Calculate all derived values from catchment data.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Step 1: For each catchment, compute how much of its area is inside the site.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        validArea = areaKm2 * aoiFraction (or 1.0 when aoiFraction is missing)
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Step 2: Sum validArea across all catchments to get totalArea.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Step 3: For each catchment, compute its share of the site.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        weight = validArea / totalArea
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Step 4: Multiply each catchment value by its weight.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        weightedValue = weight * value
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        Step 5: Add all weighted values to get the site average.
+                      </Text>
+                      <Text color="gray.500" fontSize="xs" textAlign="left">
+                        siteAverage = sum(weightedValue)
+                      </Text>
+                    </VStack>
                   </Box>
                 </>
               )}

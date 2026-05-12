@@ -30,6 +30,15 @@ type PaneState struct {
 	Attribute     string `json:"attribute"`
 }
 
+// SiteCatchment stores per-catchment details persisted with a site.
+type SiteCatchment struct {
+	ID          string             `json:"id"`
+	AreaKm2     float64            `json:"areaKm2"`
+	AOIFraction float64            `json:"aoiFraction,omitempty"`
+	Reference   map[string]float64 `json:"reference"`
+	Current     map[string]float64 `json:"current"`
+}
+
 // Site represents a saved site with its boundary and state
 type Site struct {
 	ID          string  `json:"id"`
@@ -50,6 +59,7 @@ type Site struct {
 	Area           float64            `json:"area"`               // Area in square kilometers
 	CreationMethod SiteCreationMethod `json:"creationMethod"`     // How the boundary was created
 	CatchmentIDs   []string           `json:"catchmentIds"`       // If created from catchments, store their IDs
+	Catchments     []SiteCatchment    `json:"catchments,omitempty"`
 
 	// Site indicators (aggregated from catchments)
 	Indicators *SiteIndicators `json:"indicators,omitempty"` // Aggregated indicator values
@@ -199,6 +209,9 @@ func (s *Store) Update(id string, updates *Site) (*Site, error) {
 
 	if updates.CatchmentIDs != nil {
 		site.CatchmentIDs = updates.CatchmentIDs
+	}
+	if updates.Catchments != nil {
+		site.Catchments = updates.Catchments
 	}
 
 	// Apply updates
