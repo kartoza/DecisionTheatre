@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	polyclip "github.com/ctessum/polyclip-go"
@@ -127,6 +128,40 @@ func resolveScenarioTable(scenario string) string {
 
 func normalizeCatchmentID(id string) string {
 	return strings.TrimSuffix(id, ".0")
+}
+
+func dbValueToString(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case float64:
+		if math.Trunc(t) == t {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+func parseNumericIDs(ids []string) ([]interface{}, bool) {
+	args := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		parsed, err := strconv.ParseInt(normalizeCatchmentID(strings.TrimSpace(id)), 10, 64)
+		if err != nil {
+			return nil, false
+		}
+		args = append(args, parsed)
+	}
+	return args, true
 }
 
 func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
@@ -968,6 +1003,11 @@ type CatchmentIndicators struct {
 // GetCatchmentIndicatorsByIDs returns indicator values for multiple catchments
 // Used for area-weighted aggregation in site calculations
 func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndicators, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentIndicatorsByIDs ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
+	}()
+
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -980,13 +1020,13 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		return nil, fmt.Errorf("no columns loaded")
 	}
 
-	// Build placeholders
 	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
+	textArgs := make([]interface{}, len(ids))
 	for i, id := range ids {
 		placeholders[i] = "?"
-		args[i] = id
+		textArgs[i] = normalizeCatchmentID(strings.TrimSpace(id))
 	}
+	numericArgs, numericIDs := parseNumericIDs(ids)
 
 	results := make([]CatchmentIndicators, 0, len(ids))
 	quotedCols := make([]string, len(columns))
@@ -994,11 +1034,11 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
 	}
 
-	// Query each scenario
 	scenarios := []string{"current", "reference"}
-	scenarioData := make(map[string]map[string]map[string]float64) // scenario -> catchmentID -> attribute -> value
+	scenarioData := make(map[string]map[string]map[string]float64)
 
 	for _, scenario := range scenarios {
+		scenarioStart := time.Now()
 		tableName := "scenario_" + scenario
 		idColumn, err := s.resolveScenarioIDColumn(tableName)
 		if err != nil {
@@ -1006,26 +1046,31 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 			continue
 		}
 
+		queryArgs := textArgs
+		if strings.HasSuffix(idColumn, "_int") && numericIDs {
+			queryArgs = numericArgs
+		}
+
 		query := fmt.Sprintf(`
-			SELECT CAST(%s AS TEXT), %s
+			SELECT %s, %s
 			FROM %s
-			WHERE CAST(%s AS TEXT) IN (%s)
+			WHERE %s IN (%s)
 		`, idColumn, strings.Join(quotedCols, ", "), tableName, idColumn, strings.Join(placeholders, ","))
 
-		rows, err := s.db.Query(query, args...)
+		rows, err := s.db.Query(query, queryArgs...)
 		if err != nil {
 			log.Printf("Failed to query %s: %v", tableName, err)
 			continue
 		}
 
 		scenarioData[scenario] = make(map[string]map[string]float64)
+		rowCount := 0
 
 		for rows.Next() {
-			// Scan catchment_id + all columns
 			values := make([]sql.NullFloat64, len(columns))
-			var catchmentID string
+			var catchmentIDRaw interface{}
 			scanArgs := make([]interface{}, len(columns)+1)
-			scanArgs[0] = &catchmentID
+			scanArgs[0] = &catchmentIDRaw
 			for i := range values {
 				scanArgs[i+1] = &values[i]
 			}
@@ -1033,8 +1078,8 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 			if err := rows.Scan(scanArgs...); err != nil {
 				continue
 			}
-			normalizedID := normalizeCatchmentID(catchmentID)
 
+			normalizedID := normalizeCatchmentID(dbValueToString(catchmentIDRaw))
 			attrs := make(map[string]float64, len(columns))
 			for i, col := range columns {
 				if values[i].Valid {
@@ -1042,38 +1087,48 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 				}
 			}
 			scenarioData[scenario][normalizedID] = attrs
+			rowCount++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan %s: %w", tableName, err)
 		}
 		rows.Close()
+		log.Printf("[perf] GetCatchmentIndicatorsByIDs step=scenarioQuery scenario=%s id_column=%s rows=%d duration_ms=%d", scenario, idColumn, rowCount, time.Since(scenarioStart).Milliseconds())
 	}
 
-	// Get catchment areas from geometry table
+	areaStart := time.Now()
+	areaColumn := "HYBAS_ID"
+	areaArgs := textArgs
+	if numericIDs {
+		areaColumn = "HYBAS_ID_int"
+		areaArgs = numericArgs
+	}
 	areaQuery := fmt.Sprintf(`
-		SELECT CAST(HYBAS_ID AS TEXT), SUB_AREA
+		SELECT %s, SUB_AREA
 		FROM catchments_lev12
-		WHERE HYBAS_ID IN (%s)
-	`, strings.Join(placeholders, ","))
+		WHERE %s IN (%s)
+	`, areaColumn, areaColumn, strings.Join(placeholders, ","))
 
-	areaRows, err := s.db.Query(areaQuery, args...)
+	areaRows, err := s.db.Query(areaQuery, areaArgs...)
 	if err != nil {
 		log.Printf("Failed to query areas: %v", err)
 	} else {
 		defer areaRows.Close()
+		areaRowCount := 0
 		for areaRows.Next() {
-			var catchmentID string
+			var catchmentIDRaw interface{}
 			var area sql.NullFloat64
-			if err := areaRows.Scan(&catchmentID, &area); err != nil {
+			if err := areaRows.Scan(&catchmentIDRaw, &area); err != nil {
 				continue
 			}
 
-			normalizedID := normalizeCatchmentID(catchmentID)
-
+			normalizedID := normalizeCatchmentID(dbValueToString(catchmentIDRaw))
 			ci := CatchmentIndicators{
-				ID:        normalizedID,
-				AreaKm2:   area.Float64,
-				Reference: scenarioData["reference"][normalizedID],
-				Current:   scenarioData["current"][normalizedID],
-				// Default to full coverage; handlers can overwrite this with
-				// geometry-derived overlap fractions for site-based calculations.
+				ID:          normalizedID,
+				AreaKm2:     area.Float64,
+				Reference:   scenarioData["reference"][normalizedID],
+				Current:     scenarioData["current"][normalizedID],
 				AOIFraction: 1.0,
 			}
 			if ci.Reference == nil {
@@ -1083,7 +1138,12 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 				ci.Current = make(map[string]float64)
 			}
 			results = append(results, ci)
+			areaRowCount++
 		}
+		if err := areaRows.Err(); err != nil {
+			return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+		}
+		log.Printf("[perf] GetCatchmentIndicatorsByIDs step=areaQuery id_column=%s rows=%d duration_ms=%d", areaColumn, areaRowCount, time.Since(areaStart).Milliseconds())
 	}
 
 	return results, nil
@@ -1125,21 +1185,31 @@ func (s *GpkgStore) ApplyAOIFractions(catchments []CatchmentIndicators, siteGeom
 
 // GetCatchmentAOIFractions returns site-overlap fractions for catchments by ID.
 func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.RawMessage) (map[string]float64, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentAOIFractions ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
+	}()
+
 	result := make(map[string]float64, len(ids))
 	if len(ids) == 0 || len(siteGeometry) == 0 {
 		return result, nil
 	}
 
+	parseStart := time.Now()
 	sitePolygons, err := geometryRawToPolygons(siteGeometry)
 	if err != nil || len(sitePolygons) == 0 {
 		return result, nil
 	}
+	log.Printf("[perf] GetCatchmentAOIFractions step=parseSiteGeometry polygons=%d duration_ms=%d", len(sitePolygons), time.Since(parseStart).Milliseconds())
 
+	fetchStart := time.Now()
 	features, err := s.GetCatchmentsByIDs(ids)
 	if err != nil {
 		return result, err
 	}
+	log.Printf("[perf] GetCatchmentAOIFractions step=fetchCatchments features=%d duration_ms=%d", len(features), time.Since(fetchStart).Milliseconds())
 
+	overlapStart := time.Now()
 	for _, feature := range features {
 		catchmentID := normalizeCatchmentID(strconv.FormatInt(feature.ID, 10))
 		catchmentPolygons, err := geometryRawToPolygons(feature.Geometry)
@@ -1166,6 +1236,7 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 		}
 		result[catchmentID] = frac
 	}
+	log.Printf("[perf] GetCatchmentAOIFractions step=overlapLoop features=%d matched=%d duration_ms=%d", len(features), len(result), time.Since(overlapStart).Milliseconds())
 
 	return result, nil
 }
@@ -1253,47 +1324,71 @@ func isFinitePositive(v float64) bool {
 
 // GetCatchmentsByIDs returns catchment geometries for the given IDs
 func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentsByIDs ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
+	}()
+
 	if len(ids) == 0 {
 		return nil, nil
 	}
 
-	// Build placeholders
 	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
+	textArgs := make([]interface{}, len(ids))
 	for i, id := range ids {
 		placeholders[i] = "?"
-		args[i] = id
+		textArgs[i] = normalizeCatchmentID(strings.TrimSpace(id))
+	}
+	numericArgs, numericIDs := parseNumericIDs(ids)
+	idColumn := "HYBAS_ID"
+	queryArgs := textArgs
+	if numericIDs {
+		idColumn = "HYBAS_ID_int"
+		queryArgs = numericArgs
 	}
 
+	queryStart := time.Now()
 	query := fmt.Sprintf(`
-		SELECT HYBAS_ID, geojson
+		SELECT %s, geojson
 		FROM catchments_lev12
-		WHERE HYBAS_ID IN (%s) AND geojson IS NOT NULL
-	`, strings.Join(placeholders, ","))
+		WHERE %s IN (%s) AND geojson IS NOT NULL
+	`, idColumn, idColumn, strings.Join(placeholders, ","))
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.Query(query, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query catchments: %w", err)
 	}
 	defer rows.Close()
 
 	var features []GeoJSONFeature
+	rowCount := 0
 	for rows.Next() {
-		var id float64
+		var idRaw interface{}
 		var geojsonStr string
-		if err := rows.Scan(&id, &geojsonStr); err != nil {
+		if err := rows.Scan(&idRaw, &geojsonStr); err != nil {
+			continue
+		}
+
+		normalizedID := normalizeCatchmentID(dbValueToString(idRaw))
+		numericID, err := strconv.ParseInt(normalizedID, 10, 64)
+		if err != nil {
 			continue
 		}
 
 		features = append(features, GeoJSONFeature{
 			Type:     "Feature",
-			ID:       int64(id),
+			ID:       numericID,
 			Geometry: json.RawMessage(geojsonStr),
 			Properties: map[string]interface{}{
-				"HYBAS_ID": int64(id),
+				"HYBAS_ID": numericID,
 			},
 		})
+		rowCount++
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to scan catchments: %w", err)
+	}
+	log.Printf("[perf] GetCatchmentsByIDs step=query id_column=%s rows=%d duration_ms=%d", idColumn, rowCount, time.Since(queryStart).Milliseconds())
 
 	return features, nil
 }
@@ -1301,6 +1396,11 @@ func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
 // GetCatchmentsByBBox returns catchment geometries intersecting the provided bounding box.
 // The limit is capped by the caller to avoid very large responses.
 func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit int) ([]GeoJSONFeature, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentsByBBox limit=%d duration_ms=%d", limit, time.Since(start).Milliseconds())
+	}()
+
 	if limit <= 0 {
 		limit = 5000
 	}
@@ -1341,6 +1441,43 @@ func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit in
 	}
 
 	return features, nil
+}
+
+// GetCatchmentIDsByBBox returns catchment IDs intersecting the provided bounding box.
+func (s *GpkgStore) GetCatchmentIDsByBBox(minx, miny, maxx, maxy float64, limit int) ([]string, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentIDsByBBox limit=%d duration_ms=%d", limit, time.Since(start).Milliseconds())
+	}()
+
+	if limit <= 0 {
+		limit = 5000
+	}
+
+	query := `
+		SELECT CAST(c.HYBAS_ID AS TEXT)
+		FROM rtree_catchments_lev12_geom r
+		JOIN catchments_lev12 c ON c.fid = r.id
+		WHERE r.minx <= ? AND r.maxx >= ? AND r.miny <= ? AND r.maxy >= ?
+		LIMIT ?
+	`
+
+	rows, err := s.db.Query(query, maxx, minx, maxy, miny, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query catchment IDs by bbox: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, normalizeCatchmentID(id))
+	}
+
+	return ids, nil
 }
 
 // GetCatchmentsBounds returns the envelope of all catchment geometries.
