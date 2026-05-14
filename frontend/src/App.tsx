@@ -230,6 +230,13 @@ function App() {
     }
   }, [layoutMode]);
 
+  // Listen for tour navigation events
+  useEffect(() => {
+    const handler = (e: Event) => handleNavigate((e as CustomEvent).detail as AppPage);
+    window.addEventListener('dt:navigate', handler);
+    return () => window.removeEventListener('dt:navigate', handler);
+  }, [handleNavigate]);
+
   // Open a site and go to map view
   const handleOpenSite = useCallback(async (site: Site) => {
     // Prevent auto-save while loading site state

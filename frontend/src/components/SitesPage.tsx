@@ -179,6 +179,7 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
               transition={{ duration: 0.5, delay: 0.2 }}
             >
               <Button
+                id="tour-create-site-btn"
                 size="lg"
                 bg={colors.orange}
                 color="white"

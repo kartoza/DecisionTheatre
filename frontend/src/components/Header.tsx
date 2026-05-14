@@ -119,6 +119,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
             )}
             <Tooltip label="My Sites">
               <IconButton
+                id="tour-nav-sites"
                 aria-label="Go to sites"
                 icon={<FiMapPin />}
                 onClick={() => onNavigate('sites')}
@@ -131,6 +132,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
               <>
                 <Tooltip label="Map view">
                   <IconButton
+                    id="tour-nav-map"
                     aria-label="Map view"
                     icon={<FiMap />}
                     onClick={() => onNavigate('map')}
@@ -177,6 +179,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
 
         <Tooltip label="Documentation">
           <IconButton
+            id="tour-nav-docs"
             aria-label="Toggle documentation"
             icon={<FiHelpCircle />}
             onClick={onToggleDocs}

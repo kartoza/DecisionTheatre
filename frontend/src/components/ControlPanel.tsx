@@ -587,6 +587,7 @@ function ControlPanel({
       }}
     >
       <Box
+        id="tour-control-panel"
         w={{ base: '100vw', md: `${panelWidth}px` }}
         h="100%"
         bg={bgColor}
