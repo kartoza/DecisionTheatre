@@ -207,7 +207,11 @@ function resolveValue(
   rightScenario: Scenario | undefined,
 ): number | undefined {
   if (scenario === 'ideal') {
-    return siteIndicators?.ideal?.[column] ?? resolveValue(column, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+    // In site mode use the user-set ideal; for other modes target = reference (global/extent aggregate).
+    if (rangeMode === 'site') {
+      return siteIndicators?.ideal?.[column] ?? resolveValue(column, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+    }
+    return resolveValue(column, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
   }
   const scenarioKey: Scenario = scenario;
   switch (rangeMode) {
@@ -580,7 +584,9 @@ function ChartView({
           ? siteCur
           : resolveMapValueForColumn(catchmentData?.current ?? null, col))
         : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
-      const targetVal = siteTarget ?? (typeof refVal === 'number' ? refVal : undefined);
+      const targetVal = rangeMode === 'site'
+        ? (siteTarget ?? (typeof refVal === 'number' ? refVal : undefined))
+        : (typeof refVal === 'number' ? refVal : undefined);
       const label = xAxisLabels[col] ?? col;
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
