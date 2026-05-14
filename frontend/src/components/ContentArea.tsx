@@ -4,8 +4,8 @@ import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiT
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
-import { useAttributeDetails, useAttributeTargetInputs } from '../hooks/useApi';
-import { useMemo, useState } from 'react';
+import { useAttributeDetails, useAttributeTargetInputs, useAttributeUnits } from '../hooks/useApi';
+import { useEffect, useMemo, useState } from 'react';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -133,6 +133,7 @@ function ContentArea({
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
   const { targetInputs } = useAttributeTargetInputs();
+  const { units: attributeUnits } = useAttributeUnits();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
@@ -157,7 +158,10 @@ function ContentArea({
       });
   }, [attributeDetails, siteIndicators, targetInputs]);
 
-  const openTargetModal = () => {
+  // Populate draft values from current ideal whenever the modal opens, regardless
+  // of which entry point triggered it (header "Targets" button vs internal button).
+  useEffect(() => {
+    if (!isTargetModalOpen) return;
     const nextDrafts: Record<string, string> = {};
     for (const key of editableTargetKeys) {
       const value = siteIndicators?.ideal?.[key];
@@ -169,6 +173,10 @@ function ContentArea({
       }
     }
     setTargetDraftValues(nextDrafts);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTargetModalOpen]);
+
+  const openTargetModal = () => {
     if (typeof onOpenTargetModal === 'function') onOpenTargetModal();
   };
 
@@ -179,8 +187,6 @@ function ContentArea({
     }
 
     const nextIdeal = { ...(siteIndicators.ideal ?? {}) };
-    const nextIdealLower = { ...(siteIndicators.idealLower ?? {}) };
-    const nextIdealUpper = { ...(siteIndicators.idealUpper ?? {}) };
 
     for (const key of editableTargetKeys) {
       const raw = (targetDraftValues[key] ?? '').trim();
@@ -196,16 +202,12 @@ function ContentArea({
         return;
       }
       nextIdeal[key] = parsed;
-      nextIdealLower[key] = parsed;
-      nextIdealUpper[key] = parsed;
     }
 
     try {
       await onSiteIndicatorsChange({
         ...siteIndicators,
         ideal: nextIdeal,
-        idealLower: nextIdealLower,
-        idealUpper: nextIdealUpper,
       });
       onCloseTargetModal?.();
       toast({ title: 'Target values updated', status: 'success', duration: 2000 });
@@ -446,12 +448,14 @@ function ContentArea({
           <ModalBody>
             <VStack spacing={5} align="stretch">
               {editableTargetKeys.map((key) => {
-                const rawMin = siteIndicators?.idealLower?.[key];
-                const rawMax = siteIndicators?.idealUpper?.[key];
-                const safeMin = typeof rawMin === 'number' && Number.isFinite(rawMin) ? rawMin : 0;
-                const safeMax = typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > safeMin ? rawMax : safeMin + 100;
+                const refVal = siteIndicators?.reference?.[key];
+                const safeRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
+                const unit = attributeUnits[key] ?? '';
+                const isProportion = unit === 'proportion' || unit === 'fraction';
+                const safeMin = 0;
+                const safeMax = isProportion ? 1 : safeRef + 1000;
                 const range = safeMax - safeMin;
-                const step = range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
+                const step = isProportion ? 0.01 : range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
                 const rawVal = targetDraftValues[key] ?? '';
                 const numVal = rawVal !== '' && Number.isFinite(Number(rawVal))
                   ? Math.min(safeMax, Math.max(safeMin, Number(rawVal)))
@@ -461,9 +465,10 @@ function ContentArea({
                     <HStack justify="space-between" mb={2}>
                       <FormLabel fontSize="sm" color="gray.200" mb={0}>
                         {attributeDetails[key] ?? key}
+                        {attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>({attributeUnits[key]})</Box> : null}
                       </FormLabel>
                       <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
-                        {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}
+                        {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
                       </Box>
                     </HStack>
                     <Slider
@@ -482,8 +487,8 @@ function ContentArea({
                       <SliderThumb />
                     </Slider>
                     <HStack justify="space-between" mt={1}>
-                      <Box fontSize="xs" color="gray.500">{safeMin}</Box>
-                      <Box fontSize="xs" color="gray.500">{safeMax}</Box>
+                      <Box fontSize="xs" color="gray.500">{safeMin.toFixed(2)}</Box>
+                      <Box fontSize="xs" color="gray.500">{safeMax.toFixed(2)}</Box>
                     </HStack>
                   </FormControl>
                 );

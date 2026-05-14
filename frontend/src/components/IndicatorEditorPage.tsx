@@ -459,14 +459,15 @@ export default function IndicatorEditorPage({
 
         if (response.ok) {
           const savedSite = await response.json();
-          // Use our local indicators as the source of truth — the API may return
-          // partially-populated data if the backend is older or if any fields were
-          // silently ignored.  Merge so site metadata (catchmentCount etc.) stays current.
+          // The server response is the source of truth for indicator values —
+          // the backend may have recalculated dependent fields (e.g. fire cascade
+          // after a herbivore or tree-cover edit).  Keep local values only for any
+          // fields the server did not return (older backend compatibility).
           const updatedSite: Site = {
             ...savedSite,
             indicators: {
-              ...(savedSite.indicators ?? {}),
               ...localIndicators,
+              ...(savedSite.indicators ?? {}),
             },
           };
           onSiteUpdated(updatedSite);

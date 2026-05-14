@@ -250,10 +250,10 @@ function DialChart({
   const padding = compact
     ? (denseLayout
       ? (isQuadCompactLayout
-        ? { top: 72, right: 24, bottom: 64, left: 24 }
+        ? { top: 96, right: 24, bottom: 64, left: 24 }
         : { top: 140, right: 40, bottom: 100, left: 40 })
       : (isQuadCompactLayout
-        ? { top: 72, right: 24, bottom: 64, left: 24 }
+        ? { top: 96, right: 24, bottom: 64, left: 24 }
         : { top: 140, right: 40, bottom: 100, left: 40 }))
     : BASE_PADDING;
 
@@ -272,10 +272,10 @@ function DialChart({
   // Center the dial vertically within the container
   // The dial visual occupies: radius above center + reserved space below center.
   const spaceAbove = radius + arcWidth / 2 + (compact
-    ? (isQuadCompactLayout ? (denseLayout ? 8 : 14) : (denseLayout ? 18 : 28))
+    ? (isQuadCompactLayout ? (denseLayout ? 28 : 36) : (denseLayout ? 18 : 28))
     : 60); // arc + ticks + labels
   const spaceBelow = compact
-    ? (isQuadCompactLayout ? (denseLayout ? 18 : 26) : (denseLayout ? 34 : 48))
+    ? (isQuadCompactLayout ? (denseLayout ? 14 : 18) : (denseLayout ? 34 : 48))
     : 100; // legend and bottom padding
   const totalDialHeight = spaceAbove + spaceBelow;
   const verticalOffset = (availableHeight - totalDialHeight) / 2;
@@ -527,7 +527,7 @@ function DialChart({
   const legendCurrentLabel = `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`;
   const legendTargetLabel = `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`;
   const legendYOffset = compact
-    ? (isQuadCompactLayout ? (denseLayout ? 50 : 62) : (denseLayout ? 72 : 100))
+    ? (isQuadCompactLayout ? (denseLayout ? 40 : 48) : (denseLayout ? 72 : 100))
     : 100;
   const legendY = centerY + legendYOffset;
   const centerHubOuterRadius = isQuadCompactLayout ? 30 : 40;

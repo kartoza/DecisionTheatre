@@ -1051,7 +1051,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
 
   const addBoundaryLayersIfMissing = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
-    if (!map.style) return;
+    if (!map.isStyleLoaded()) return;
 
     const normalized = normalizeBoundaryGeometry(geometry);
     const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource | undefined;
@@ -1135,7 +1135,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!geometry || !leftMap || !rightMap) return;
 
     const applyToMap = (map: maplibregl.Map) => {
-      if (map.style) {
+      if (map.isStyleLoaded()) {
         addBoundaryLayersIfMissing(map, geometry);
         return;
       }

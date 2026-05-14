@@ -22,11 +22,10 @@ import (
 
 // Handler provides HTTP API endpoints
 type Handler struct {
-	tileStore    *tiles.MBTilesStore
-	gpkgStore    *geodata.GpkgStore
-	siteStore    *sites.Store
-	whiskerStore *geodata.WhiskerStore
-	cfg          config.Config
+	tileStore *tiles.MBTilesStore
+	gpkgStore *geodata.GpkgStore
+	siteStore *sites.Store
+	cfg       config.Config
 }
 
 // NewHandler creates a new API handler
@@ -34,15 +33,13 @@ func NewHandler(
 	tileStore *tiles.MBTilesStore,
 	gpkgStore *geodata.GpkgStore,
 	siteStore *sites.Store,
-	whiskerStore *geodata.WhiskerStore,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
-		tileStore:    tileStore,
-		gpkgStore:    gpkgStore,
-		siteStore:    siteStore,
-		whiskerStore: whiskerStore,
-		cfg:          cfg,
+		tileStore: tileStore,
+		gpkgStore: gpkgStore,
+		siteStore: siteStore,
+		cfg:       cfg,
 	}
 }
 
@@ -1856,7 +1853,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 
 	// Compute area-weighted aggregations
-	indicators := computeAreaWeightedIndicators(catchmentData, h.whiskerStore)
+	indicators := computeAreaWeightedIndicators(catchmentData, h.gpkgStore)
 	indicators.CatchmentIDs = catchmentIDs
 
 	// Update site with indicators
@@ -1880,7 +1877,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 
 // computeAreaWeightedIndicators calculates area-weighted indicator aggregations
 
-func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, whiskerStore *geodata.WhiskerStore) *sites.SiteIndicators {
+func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, gpkgStore *geodata.GpkgStore) *sites.SiteIndicators {
 	indicators := &sites.SiteIndicators{
 		Reference:      make(map[string]float64),
 		ReferenceLower: make(map[string]float64),
@@ -1923,10 +1920,10 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, whi
 
 	indicators.TotalAreaKm2 = totalValidArea
 
-	// Step 3: Compute whisker (upper/lower) bounds from whisker store
+	// Step 3: Compute whisker (upper/lower) bounds from GeoPackage tables
 	var whiskerBounds geodata.WhiskerBounds
-	if whiskerStore != nil {
-		whiskerBounds = whiskerStore.ComputeBounds(catchments)
+	if gpkgStore != nil {
+		whiskerBounds = gpkgStore.ComputeWhiskerBounds(catchments)
 	}
 
 	// Step 4: Collect all unique metric keys
@@ -2008,7 +2005,10 @@ type UpdateIndicatorsRequest struct {
 	CurrentUpper   map[string]float64 `json:"currentUpper"`
 }
 
-// handleUpdateIndicators updates the indicator values for a site
+// handleUpdateIndicators updates the indicator values for a site.
+// When a TargetInputsAllowed field (lowTC_prop or herbs_tot_kgkm2) is included
+// in req.Ideal the handler runs the appropriate cascading recalculations before
+// persisting, so that derived indicators remain ecologically consistent.
 func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request) {
 	if h.siteStore == nil {
 		respondError(w, http.StatusInternalServerError, "site store not initialized")
@@ -2045,6 +2045,32 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Capture the full pre-merge ideal map so recalculations can derive
+	// scale factors (e.g. per-capita biomass for species count changes).
+	oldIdeal := make(map[string]float64, len(site.Indicators.Ideal))
+	for k, v := range site.Indicators.Ideal {
+		oldIdeal[k] = v
+	}
+
+	// Determine which primary target inputs changed.
+	targetInputCols := []string{colLowTCProp, colHerbsTot, colNPP}
+	changedTargets := make(map[string]bool)
+	for _, col := range targetInputCols {
+		if newVal, ok := req.Ideal[col]; ok && newVal != oldIdeal[col] {
+			changedTargets[col] = true
+		}
+	}
+
+	// Detect changed species counts (herbs_sp_counts_<Species>).
+	changedSpeciesCounts := make(map[string]bool)
+	for k, newVal := range req.Ideal {
+		if strings.HasPrefix(k, colHerbsSpCountsPrefix) {
+			if oldVal, exists := oldIdeal[k]; !exists || newVal != oldVal {
+				changedSpeciesCounts[k] = true
+			}
+		}
+	}
+
 	mergeMap(&site.Indicators.Ideal, req.Ideal)
 	mergeMap(&site.Indicators.IdealLower, req.IdealLower)
 	mergeMap(&site.Indicators.IdealUpper, req.IdealUpper)
@@ -2054,6 +2080,11 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	mergeMap(&site.Indicators.Current, req.Current)
 	mergeMap(&site.Indicators.CurrentLower, req.CurrentLower)
 	mergeMap(&site.Indicators.CurrentUpper, req.CurrentUpper)
+
+	// Run cascading recalculations when any target inputs changed.
+	if (len(changedTargets) > 0 || len(changedSpeciesCounts) > 0) && site.Indicators.Ideal != nil {
+		recalculateIdeal(site.Indicators.Ideal, changedTargets, oldIdeal, changedSpeciesCounts)
+	}
 
 	updated, err := h.siteStore.Update(id, site)
 	if err != nil {
@@ -2200,10 +2231,6 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
 	}
-	if h.whiskerStore == nil {
-		respondError(w, http.StatusServiceUnavailable, "whisker store not available")
-		return
-	}
 
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -2277,7 +2304,7 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	bounds := h.whiskerStore.ComputeBounds(catchmentData)
+	bounds := h.gpkgStore.ComputeWhiskerBounds(catchmentData)
 	respondJSON(w, http.StatusOK, bounds)
 }
 

@@ -187,7 +187,7 @@ function SearchableSelect({
   };
 
   return (
-    <Box position="relative">
+    <Box position="relative" mt={10}>
       <Input
         value={isOpen ? search : selectedLabel}
         onChange={(e) => setSearch(e.target.value)}
@@ -286,7 +286,7 @@ function ScenarioSelector({
       {!hideLabel && (
         <HStack mb={2}>
           <Badge
-            bg={side === 'left' ? colors.pastelLightOrange : colors.pastelLightBlue}
+            bg={side === 'left' ? colors.orange : colors.blue}
             color={colors.dark}
             variant="subtle"
             fontSize="xs"
@@ -594,7 +594,7 @@ function ControlPanel({
         borderColor={borderColor}
         overflowY="auto"
         boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
-        pt="56px" // Header height offset
+        pt="70px" // Header height offset
         position="relative"
       >
         <Box
@@ -651,7 +651,7 @@ function ControlPanel({
                 Indicator
               </Heading>
               {paneIndex !== null && (
-                <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   Pane {paneIndex + 1}
                 </Badge>
               )}
@@ -838,7 +838,7 @@ function ControlPanel({
               bg={useColorModeValue('white', 'gray.750')}
             >
               <HStack mb={2}>
-                <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   FACTOR
                 </Badge>
                 <Tooltip label="Select a data attribute to visualize on the map">

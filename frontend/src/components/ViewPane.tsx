@@ -307,7 +307,7 @@ function ViewPane({
         if (dialRangeValues) {
           referenceValue = dialRangeValues.referenceValue;
           currentValue = dialRangeValues.currentValue;
-          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          targetValue = referenceValue;
         }
         if (allowMapStatisticsFallback && mapStatistics?.fullStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.fullStats.left?.mean;
