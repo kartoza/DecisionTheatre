@@ -13,4 +13,5 @@ export const colors = {
   pastelYellow: '#e3e3a3',
   pastelGray: '#9d9d9d',
   dark: '#000000',
+  darkGray: '#2D3748'
 } as const;

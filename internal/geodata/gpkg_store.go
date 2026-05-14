@@ -1673,3 +1673,129 @@ func calculatePolygonArea(poly polyclip.Polygon) float64 {
 	kmPerDegree := 111.0
 	return totalArea * kmPerDegree * kmPerDegree * -1 // Negative because counter-clockwise
 }
+
+// ComputeWhiskerBounds returns area-weighted whisker bounds for the given catchments
+// by querying the four whisker scenario tables directly from the GeoPackage.
+// This replaces the CSV-based WhiskerStore approach which required loading 200-400 MB
+// files into memory at startup.
+func (s *GpkgStore) ComputeWhiskerBounds(catchments []CatchmentIndicators) WhiskerBounds {
+	if len(catchments) == 0 {
+		return WhiskerBounds{}
+	}
+
+	s.mu.RLock()
+	columns := s.columns
+	s.mu.RUnlock()
+	if len(columns) == 0 {
+		return WhiskerBounds{}
+	}
+
+	// Build ID lookup and total weighted area.
+	type catchInfo struct {
+		weight float64 // (AreaKm2 * AOIFraction) / totalArea
+	}
+	totalArea := 0.0
+	for _, c := range catchments {
+		frac := c.AOIFraction
+		if frac <= 0 || frac > 1 {
+			frac = 1
+		}
+		totalArea += c.AreaKm2 * frac
+	}
+	if totalArea <= 0 {
+		return WhiskerBounds{}
+	}
+	weights := make(map[string]catchInfo, len(catchments))
+	for _, c := range catchments {
+		frac := c.AOIFraction
+		if frac <= 0 || frac > 1 {
+			frac = 1
+		}
+		weights[c.ID] = catchInfo{weight: (c.AreaKm2 * frac) / totalArea}
+	}
+
+	ids := make([]string, 0, len(catchments))
+	for _, c := range catchments {
+		ids = append(ids, c.ID)
+	}
+	placeholders := make([]string, len(ids))
+	textArgs := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		textArgs[i] = id
+	}
+	numericArgs, numericIDs := parseNumericIDs(ids)
+
+	quotedCols := make([]string, len(columns))
+	for i, col := range columns {
+		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
+	}
+	phStr := strings.Join(placeholders, ",")
+	colStr := strings.Join(quotedCols, ", ")
+
+	queryTable := func(tableName string) map[string]float64 {
+		idColumn, err := s.resolveScenarioIDColumn(tableName)
+		if err != nil {
+			log.Printf("ComputeWhiskerBounds: failed to resolve ID column for %s: %v", tableName, err)
+			return nil
+		}
+		queryArgs := textArgs
+		if strings.HasSuffix(idColumn, "_int") && numericIDs {
+			queryArgs = numericArgs
+		}
+		query := fmt.Sprintf(`SELECT %s, %s FROM %s WHERE %s IN (%s)`,
+			idColumn, colStr, tableName, idColumn, phStr)
+
+		rows, err := s.db.Query(query, queryArgs...)
+		if err != nil {
+			log.Printf("ComputeWhiskerBounds: failed to query %s: %v", tableName, err)
+			return nil
+		}
+		defer rows.Close()
+
+		weightedSums := make(map[string]float64)
+		validWeights := make(map[string]float64)
+
+		for rows.Next() {
+			vals := make([]sql.NullFloat64, len(columns))
+			var idRaw interface{}
+			scanArgs := make([]interface{}, len(columns)+1)
+			scanArgs[0] = &idRaw
+			for i := range vals {
+				scanArgs[i+1] = &vals[i]
+			}
+			if err := rows.Scan(scanArgs...); err != nil {
+				continue
+			}
+			normalID := normalizeCatchmentID(dbValueToString(idRaw))
+			ci, ok := weights[normalID]
+			if !ok {
+				continue
+			}
+			for i, col := range columns {
+				if vals[i].Valid {
+					weightedSums[col] += vals[i].Float64 * ci.weight
+					validWeights[col] += ci.weight
+				}
+			}
+		}
+		if rows.Err() != nil {
+			return nil
+		}
+
+		result := make(map[string]float64, len(weightedSums))
+		for col, ws := range weightedSums {
+			if vw := validWeights[col]; vw > 0 {
+				result[col] = ws / vw
+			}
+		}
+		return result
+	}
+
+	return WhiskerBounds{
+		ReferenceLower: queryTable("scenario_reference_lower"),
+		ReferenceUpper: queryTable("scenario_reference_upper"),
+		CurrentLower:   queryTable("scenario_current_lower"),
+		CurrentUpper:   queryTable("scenario_current_upper"),
+	}
+}

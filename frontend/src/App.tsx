@@ -11,7 +11,7 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
-import { patchSite, useServerInfo } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
@@ -216,6 +216,10 @@ function App() {
     } else if (page === 'map') {
       // Regular map mode (from opening a site)
       setCurrentPage('map');
+      // In multi-pane layouts the control panel should not re-open on return.
+      if (layoutMode !== 'single') {
+        setIndicatorPaneIndex(null);
+      }
     } else {
       // Non-map pages
       setCurrentPage(page);
@@ -224,7 +228,7 @@ function App() {
         setEditSite(null);
       }
     }
-  }, []);
+  }, [layoutMode]);
 
   // Open a site and go to map view
   const handleOpenSite = useCallback(async (site: Site) => {
@@ -242,17 +246,18 @@ function App() {
     if (site.layoutMode) {
       setLayoutMode(site.layoutMode);
     }
-    // Set focused pane and always open the side panel to show indicators
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
-    setIndicatorPaneIndex(paneIdx); // Always open side panel when opening a site
+    // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
+    const effectiveLayout = site.layoutMode || layoutMode;
+    setIndicatorPaneIndex(effectiveLayout === 'single' ? paneIdx : null);
     setCurrentPage('map');
 
     // Re-enable auto-save after a short delay to allow state to settle
     setTimeout(() => {
       isLoadingSiteRef.current = false;
     }, 500);
-  }, []);
+  }, [layoutMode]);
 
   // Clone a site - navigates to create-site with site data pre-filled
   const handleCloneSite = useCallback((site: Site) => {
@@ -487,7 +492,7 @@ function App() {
     });
 
     try {
-      const updatedSite = await patchSite(currentSiteId, { indicators });
+      const updatedSite = await patchSiteIndicators(currentSiteId, indicators);
       setCurrentSite(updatedSite);
     } catch (err) {
       console.error('Failed to update site indicators:', err);

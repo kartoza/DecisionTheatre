@@ -33,10 +33,9 @@ type Server struct {
 	cfg          config.Config
 	httpServer   *http.Server
 	router       *mux.Router
-	tileStore    *tiles.MBTilesStore
-	gpkgStore    *geodata.GpkgStore
-	siteStore    *sites.Store
-	whiskerStore *geodata.WhiskerStore
+	tileStore *tiles.MBTilesStore
+	gpkgStore *geodata.GpkgStore
+	siteStore *sites.Store
 
 	// Install state — protected by installMu
 	installMu     sync.Mutex
@@ -68,9 +67,6 @@ func New(cfg config.Config) (*Server, error) {
 		s.gpkgStore = gpkgStore
 	}
 
-	// Initialize whisker bounds store (area-weighted upper/lower CSV data)
-	s.whiskerStore = geodata.NewWhiskerStore(cfg.DataDir)
-
 	// Initialize sites store
 	siteStore, err := sites.NewStore(cfg.DataDir)
 	if err != nil {
@@ -89,7 +85,7 @@ func New(cfg config.Config) (*Server, error) {
 func (s *Server) setupRoutes() {
 	// API routes
 	apiRouter := s.router.PathPrefix("/api").Subrouter()
-	apiHandler := api.NewHandler(s.tileStore, s.gpkgStore, s.siteStore, s.whiskerStore, s.cfg)
+	apiHandler := api.NewHandler(s.tileStore, s.gpkgStore, s.siteStore, s.cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
 	// Data pack management routes

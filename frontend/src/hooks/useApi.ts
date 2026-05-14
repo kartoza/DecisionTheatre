@@ -585,6 +585,35 @@ export async function patchSite(
   return response.json();
 }
 
+export async function patchSiteIndicators(
+  id: string,
+  indicators: Site['indicators']
+): Promise<Site> {
+  if (isBrowserRuntime()) {
+    return updateSite(id, { indicators });
+  }
+
+  const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ideal: indicators?.ideal,
+      idealLower: indicators?.idealLower,
+      idealUpper: indicators?.idealUpper,
+      reference: indicators?.reference,
+      referenceLower: indicators?.referenceLower,
+      referenceUpper: indicators?.referenceUpper,
+      current: indicators?.current,
+      currentLower: indicators?.currentLower,
+      currentUpper: indicators?.currentUpper,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update site indicators: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function deleteSite(id: string): Promise<void> {
   if (isBrowserRuntime()) {
     const sites = loadLocalSites();
