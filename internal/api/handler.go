@@ -2053,7 +2053,7 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Determine which primary target inputs changed.
-	targetInputCols := []string{colLowTCProp, colHerbsTot}
+	targetInputCols := []string{colLowTCProp, colHerbsTot, colNPP}
 	changedTargets := make(map[string]bool)
 	for _, col := range targetInputCols {
 		if newVal, ok := req.Ideal[col]; ok && newVal != oldIdeal[col] {

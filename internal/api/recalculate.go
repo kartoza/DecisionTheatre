@@ -7,9 +7,10 @@ import (
 
 // Target input column names — TargetInputsAllowed = 1 in metadata.csv.
 const (
-	colLowTCProp          = "lowTC_prop"
-	colPercBurned         = "percBurned"
-	colHerbsTot           = "herbs_tot_kgkm2"
+	colLowTCProp           = "lowTC_prop"
+	colPercBurned          = "percBurned"
+	colHerbsTot            = "herbs_tot_kgkm2"
+	colNPP                 = "NPP_gm2"
 	colHerbsSpCountsPrefix = "herbs_sp_counts_"
 )
 
@@ -36,6 +37,7 @@ var highTCBiomassClasses = []string{
 func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, oldIdeal map[string]float64, changedSpeciesCounts map[string]bool) {
 	treeCoverChanged := changedTargets[colLowTCProp]
 	herbivoresChanged := changedTargets[colHerbsTot]
+	nppChanged := changedTargets[colNPP]
 	speciesCountsChanged := len(changedSpeciesCounts) > 0
 
 	if treeCoverChanged {
@@ -49,8 +51,15 @@ func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, 
 		// already handles that path).
 		workflow2aSpeciesCounts(ideal, changedSpeciesCounts, oldIdeal)
 	}
+	if nppChanged && !treeCoverChanged {
+		// NPP edited directly (e.g. via IndicatorEditorPage): update grazing
+		// intensity then fall through to Workflow 4. Skip when Workflow 1
+		// already ran — it recalculates NPP itself as part of tree-cover
+		// redistribution and the grazing intensity is recomputed in Workflow 4.
+		workflow3GrassNPP(ideal)
+	}
 	// All workflows feed into fire modelling (Workflow 4).
-	if treeCoverChanged || herbivoresChanged || speciesCountsChanged {
+	if treeCoverChanged || herbivoresChanged || speciesCountsChanged || nppChanged {
 		workflow4FireCascade(ideal)
 	}
 }
@@ -148,6 +157,18 @@ func workflow2Herbivores(ideal, oldIdeal map[string]float64) {
 	}
 
 	if npp, ok := ideal["NPP_gm2"]; ok && npp > 0 {
+		ideal["grazing_intensity"] = ideal["herbs_totGRAZING_DMI_kgkm2"] / npp
+	}
+}
+
+// workflow3GrassNPP recalculates grazing intensity when NPP_gm2 is edited
+// directly (e.g. simulating rainfall or fertilisation changes).
+//
+// Developer guide Workflow 3:
+//  1. Recalculate grazing_intensity = Total DMI / New Grass NPP.
+//  2. Proceeds to Workflow 4 (called by the caller after this returns).
+func workflow3GrassNPP(ideal map[string]float64) {
+	if npp := ideal[colNPP]; npp > 0 {
 		ideal["grazing_intensity"] = ideal["herbs_totGRAZING_DMI_kgkm2"] / npp
 	}
 }
