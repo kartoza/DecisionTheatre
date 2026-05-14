@@ -601,6 +601,18 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               <Image src={rewildLogo} w={150}  objectFit="contain" />
             </Box>
           </Flex>
+
+          <Flex justify="center" pb={6}>
+            <Button
+              variant="ghost"
+              size="sm"
+              color="whiteAlpha.600"
+              _hover={{ color: 'white' }}
+              onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
+            >
+              Take the tour
+            </Button>
+          </Flex>
       </Box>
 
     </Box>

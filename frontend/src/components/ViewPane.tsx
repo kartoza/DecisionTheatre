@@ -505,6 +505,7 @@ function ViewPane({
 
       {/* Per-pane toolbar */}
       <HStack
+        id="tour-view-modes"
         position="absolute"
         bottom={compact ? 2 : 3}
         right={compact ? 2 : 3}
