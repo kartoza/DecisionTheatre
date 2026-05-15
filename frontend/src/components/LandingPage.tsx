@@ -46,18 +46,18 @@ interface LandingPageProps {
   onNavigate: (page: AppPage) => void;
 }
 
-const imageOverlayLabelStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: '25px',
-  right: '25px',
-  backgroundColor: 'rgba(255, 255, 255, 0.6)',
-  padding: '8px 12px',
-  borderTopLeftRadius: '8px',
-  borderBottomRightRadius: '8px',
-  borderTopRightRadius: '8px',
-  border: '0.25px solid #2f2e2e',
-  boxShadow: '0 4px 4px 0 rgba(0, 0, 0, 0.25)',
-};
+// const imageOverlayLabelStyle: React.CSSProperties = {
+//   position: 'absolute',
+//   top: '25px',
+//   right: '25px',
+//   backgroundColor: 'rgba(255, 255, 255, 0.6)',
+//   padding: '8px 12px',
+//   borderTopLeftRadius: '8px',
+//   borderBottomRightRadius: '8px',
+//   borderTopRightRadius: '8px',
+//   border: '0.25px solid #2f2e2e',
+//   boxShadow: '0 4px 4px 0 rgba(0, 0, 0, 0.25)',
+// };
 
 interface Partner {
   logo: string;
