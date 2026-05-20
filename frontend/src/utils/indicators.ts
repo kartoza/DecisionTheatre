@@ -28,8 +28,9 @@ export function computeAOIWeightedAttributeValue(
     aoiFraction?: number;
     reference: Record<string, number>;
     current: Record<string, number>;
+    ideal?: Record<string, number>;
   }>,
-  scenario: 'reference' | 'current',
+  scenario: 'reference' | 'current' | 'ideal',
   attribute: string,
 ): number | undefined {
   if (!attribute || !Array.isArray(catchments) || catchments.length === 0) return undefined;
@@ -45,7 +46,9 @@ export function computeAOIWeightedAttributeValue(
     const validArea = areaKm2 * fraction;
     if (!(validArea > 0)) continue;
 
-    const values = scenario === 'reference' ? catchment.reference : catchment.current;
+    const values = scenario === 'reference' ? catchment.reference
+      : scenario === 'ideal' ? (catchment.ideal ?? catchment.reference)
+      : catchment.current;
     const raw = values?.[attribute];
     const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
     weightedSum += (validArea / totalValidArea) * value;

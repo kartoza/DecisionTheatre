@@ -91,7 +91,10 @@ function AggregateTable({
     const rows = catchments.map((c) => {
       const fractionCovered = c.aoiFraction ?? 1.0; // Default to 1 if not provided
       const validArea = c.areaKm2 * fractionCovered;
-      const scenarioValues = scenario === 'reference' ? c.reference : c.current;
+      const scenarioValues =
+        scenario === 'reference' ? c.reference
+        : scenario === 'future' ? (c.ideal ?? c.reference)
+        : c.current;
       const value = scenarioValues?.[attribute] ?? 0;
 
       return {

@@ -997,6 +997,7 @@ type CatchmentIndicators struct {
 	AreaKm2     float64            `json:"areaKm2"`
 	Reference   map[string]float64 `json:"reference"`
 	Current     map[string]float64 `json:"current"`
+	Ideal       map[string]float64 `json:"ideal,omitempty"`
 	AOIFraction float64            `json:"aoiFraction,omitempty"`
 }
 

@@ -49,6 +49,7 @@ interface ViewPaneProps {
   chartAxisLabelFilter?: string | null;
   chartGraphMode?: 'line' | 'boxplot' | null;
   mapExtent?: MapExtent | null;
+  refreshKey?: number;
 }
 
 // View mode cycle order
@@ -99,6 +100,7 @@ function ViewPane({
   chartAxisLabelFilter,
   chartGraphMode,
   mapExtent,
+  refreshKey,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
@@ -410,6 +412,7 @@ function ViewPane({
           on3DModeChange={on3DModeChange}
           swiperPosition={swiperPosition}
           onSwiperPositionChange={onSwiperPositionChange}
+          refreshKey={refreshKey}
         />
       </Box>
 

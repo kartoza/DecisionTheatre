@@ -171,6 +171,30 @@ function resolveMapValueForColumn(
   return undefined;
 }
 
+function resolveAxisLabelForColumn(column: string, axisLabels: Record<string, string>): string | undefined {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const value = axisLabels[key];
+    if (typeof value === 'string' && value.trim().length > 0) return value;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, value] of Object.entries(axisLabels)) {
+    if (normalizeColumnKey(key) === normalizedColumn && value.trim().length > 0) return value;
+  }
+
+  return undefined;
+}
+
 function resolveChartTypeForColumn(column: string, chartTypes: Record<string, string>): string | undefined {
   const candidates = [
     column,
@@ -712,7 +736,10 @@ function ChartView({
     if (!chartGroup || !chartAxisLabelFilter) return '';
     const firstColumn = groupedDisplayColumns[0];
     if (!firstColumn) return '';
-    return composeYAxisLabel(axisLabels[firstColumn], units[firstColumn]);
+    return composeYAxisLabel(
+      resolveAxisLabelForColumn(firstColumn, axisLabels),
+      units[firstColumn],
+    );
   }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, axisLabels, units]);
 
   const groupedChartType = useMemo<string>(() => {
@@ -732,6 +759,14 @@ function ChartView({
     if (chartGraphMode === 'line') return 'line';
     return canRenderBoxplot ? 'boxplot' : 'line';
   }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, rangeMode, chartGraphMode]);
+
+  const canSummaryBoxplot = useMemo(() => {
+    if (!attribute) return false;
+    const ct = resolveChartTypeForColumn(attribute, chartTypes);
+    if (!ct) return false;
+    const normalized = ct.toLowerCase();
+    return normalized.includes('boxplot') || normalized.includes('box');
+  }, [attribute, chartTypes]);
 
   const boxplotPageCount = useMemo(() => {
     if (groupedChartType !== 'boxplot' || !groupedChartData) return 1;
@@ -925,7 +960,7 @@ function ChartView({
     animFrameRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const hasData = Boolean(chartGroup && chartAxisLabelFilter) && groupedChartData !== null;
+  const hasData = (Boolean(chartGroup && chartAxisLabelFilter) && groupedChartData !== null) || summaryData !== null;
 
   useEffect(() => {
     if (visible && hasData) {
@@ -968,7 +1003,7 @@ function ChartView({
               ? (chartAxisLabelFilter
                 ? (groupedRangeLoading ? 'Loading\u2026' : 'No grouped chart data for this selection')
                 : 'Select a grouping variable to show chart data')
-              : 'Select a variable type to show chart data'
+              : (attribute ? 'Loading…' : 'Select a factor to view its chart')
           )
           : null}
       </Box>
@@ -984,6 +1019,12 @@ function ChartView({
   const renderGroupedChart = () => {
     if (!groupedChartData || !chartGroup) return null;
     const chartData = pagedGroupedChartData ?? groupedChartData;
+
+    const maxLabelLen = chartData.reduce((max, item) => Math.max(max, item.label.length), 0);
+    // At -50° rotation, each char projects ~5.5px vertically; add tick area padding.
+    const plotlyBottomMargin = Math.max(110, Math.round(maxLabelLen * 5.5) + 35);
+    // Place the footer annotation proportionally inside the bottom margin.
+    const plotlyAnnotationY = -(plotlyBottomMargin / 500);
 
     if (groupedChartType === 'boxplot') {
       const seriesDefs = [
@@ -1042,7 +1083,7 @@ function ChartView({
               paper_bgcolor: '#1a202c',
               plot_bgcolor: '#1a202c',
               font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
-              margin: { l: 70, r: 30, t: 30, b: 110 },
+              margin: { l: 70, r: 30, t: 30, b: plotlyBottomMargin },
               boxmode: 'group',
               legend: { orientation: 'h', x: 0, y: 1.08 },
               xaxis: {
@@ -1052,11 +1093,10 @@ function ChartView({
                 zeroline: false,
               },
               yaxis: {
-                title: groupedYAxisLabel,
+                title: { text: groupedYAxisLabel, font: { color: '#a0aec0', size: 12 } },
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
-                titlefont: { color: '#a0aec0', size: 12 },
               },
               annotations: [
                 {
@@ -1064,7 +1104,7 @@ function ChartView({
                   xref: 'paper',
                   yref: 'paper',
                   x: 0.5,
-                  y: -0.22,
+                  y: plotlyAnnotationY,
                   showarrow: false,
                   font: { color: '#a0aec0', size: 12 },
                 },
@@ -1134,7 +1174,7 @@ function ChartView({
               paper_bgcolor: '#1a202c',
               plot_bgcolor: '#1a202c',
               font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
-              margin: { l: 70, r: 30, t: 30, b: 110 },
+              margin: { l: 70, r: 30, t: 30, b: plotlyBottomMargin },
               legend: { orientation: 'h', x: 0, y: 1.08 },
               xaxis: {
                 tickangle: -50,
@@ -1143,11 +1183,10 @@ function ChartView({
                 zeroline: false,
               },
               yaxis: {
-                title: groupedYAxisLabel,
+                title: { text: groupedYAxisLabel, font: { color: '#a0aec0', size: 12 } },
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
-                titlefont: { color: '#a0aec0', size: 12 },
               },
               annotations: [
                 {
@@ -1155,7 +1194,7 @@ function ChartView({
                   xref: 'paper',
                   yref: 'paper',
                   x: 0.5,
-                  y: -0.22,
+                  y: plotlyAnnotationY,
                   showarrow: false,
                   font: { color: '#a0aec0', size: 12 },
                 },
@@ -1535,7 +1574,107 @@ function ChartView({
   const renderSummaryChart = () => {
     if (!summaryData) return null;
     const { xLabel, chartType, values } = summaryData;
-    const yLabel = attribute ? composeYAxisLabel(axisLabels[attribute], units[attribute]) : '';
+    const yLabel = attribute ? composeYAxisLabel(resolveAxisLabelForColumn(attribute, axisLabels), units[attribute]) : '';
+
+    if (canSummaryBoxplot && chartGraphMode !== 'line') {
+      const refVal = values[0];
+      const curVal = values[1];
+      const targetVal = values[2];
+
+      const siteRefUpper = resolveMapValueForColumn(siteIndicators?.referenceUpper, attribute!);
+      const siteRefLower = resolveMapValueForColumn(siteIndicators?.referenceLower, attribute!);
+      const siteCurUpper = resolveMapValueForColumn(siteIndicators?.currentUpper, attribute!);
+      const siteCurLower = resolveMapValueForColumn(siteIndicators?.currentLower, attribute!);
+
+      const refUpperRaw = typeof siteRefUpper === 'number'
+        ? siteRefUpper
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, attribute!) : undefined);
+      const refLowerRaw = typeof siteRefLower === 'number'
+        ? siteRefLower
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, attribute!) : undefined);
+      const curUpperRaw = typeof siteCurUpper === 'number'
+        ? siteCurUpper
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, attribute!) : undefined);
+      const curLowerRaw = typeof siteCurLower === 'number'
+        ? siteCurLower
+        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, attribute!) : undefined);
+
+      const seriesDefs = [
+        { name: SERIES_LABELS[0], color: SERIES_COLORS[0], val: refVal,
+          upper: typeof refUpperRaw === 'number' ? refUpperRaw : refVal,
+          lower: typeof refLowerRaw === 'number' ? refLowerRaw : refVal },
+        { name: SERIES_LABELS[1], color: SERIES_COLORS[1], val: curVal,
+          upper: typeof curUpperRaw === 'number' ? curUpperRaw : curVal,
+          lower: typeof curLowerRaw === 'number' ? curLowerRaw : curVal },
+        { name: SERIES_LABELS[2], color: SERIES_COLORS[2], val: targetVal,
+          upper: typeof refUpperRaw === 'number' ? refUpperRaw : targetVal,
+          lower: typeof refLowerRaw === 'number' ? refLowerRaw : targetVal },
+      ];
+
+      const traces = seriesDefs.flatMap((series) => {
+        if (series.val === null) return [];
+        const val = series.val as number;
+        const upper = (series.upper ?? val) as number;
+        const lower = (series.lower ?? val) as number;
+        const q1 = val - (val - lower) * 0.5;
+        const q3 = val + (upper - val) * 0.5;
+        const samples = [lower, q1, val, q3, upper];
+        return [{
+          type: 'box',
+          name: series.name,
+          x: samples.map(() => series.name),
+          y: samples,
+          boxpoints: false,
+          marker: { color: series.color },
+          line: { color: series.color, width: 2 },
+          fillcolor: `${series.color}33`,
+          whiskerwidth: 0.6,
+          quartilemethod: 'linear',
+        }];
+      });
+
+      return (
+        <Box w="100%" h="100%" bg="#1a202c">
+          <Plot
+            data={traces as any[]}
+            layout={{
+              autosize: true,
+              paper_bgcolor: '#1a202c',
+              plot_bgcolor: '#1a202c',
+              font: { color: '#a0aec0', family: 'Inter, sans-serif', size: 11 },
+              margin: { l: 70, r: 30, t: 30, b: 95 },
+              showlegend: false,
+              xaxis: {
+                tickfont: { color: '#718096', size: 11 },
+                showgrid: false,
+                zeroline: false,
+              },
+              yaxis: {
+                title: { text: yLabel, font: { color: '#a0aec0', size: 12 } },
+                gridcolor: '#2d3748',
+                zeroline: false,
+                tickfont: { color: '#718096', size: 11 },
+              },
+              annotations: [
+                {
+                  text: xLabel,
+                  xref: 'paper',
+                  yref: 'paper',
+                  x: 0.5,
+                  y: -0.18,
+                  showarrow: false,
+                  font: { color: '#a0aec0', size: 13 },
+                },
+              ],
+            } as any}
+            config={{ responsive: true, displaylogo: false }}
+            useResizeHandler
+            style={{ width: '100%', height: '100%' }}
+          />
+        </Box>
+      );
+    }
+
     const isBar = chartType === 'bar';
     const numericVals = values.filter((v): v is number => v !== null);
     const minVal = isBar ? 0 : Math.min(...numericVals) * (Math.min(...numericVals) >= 0 ? 0.9 : 1.1);
@@ -1615,11 +1754,10 @@ function ChartView({
                 zeroline: false,
               },
               yaxis: {
-                title: yLabel,
+                title: { text: yLabel, font: { color: '#a0aec0', size: 12 } },
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
-                titlefont: { color: '#a0aec0', size: 12 },
               },
             } as any}
             config={{ responsive: true, displaylogo: false }}

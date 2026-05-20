@@ -51,6 +51,7 @@ function App() {
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
   const [isBoundaryEditMode, setIsBoundaryEditMode] = useState(false);
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
+  const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
@@ -501,6 +502,7 @@ function App() {
     try {
       const updatedSite = await patchSiteIndicators(currentSiteId, indicators);
       setCurrentSite(updatedSite);
+      setMapRefreshSeq(s => s + 1);
     } catch (err) {
       console.error('Failed to update site indicators:', err);
       throw err;
@@ -679,6 +681,7 @@ function App() {
             isTargetModalOpen={isTargetModalOpen}
             onOpenTargetModal={onOpenTargetModal}
             onCloseTargetModal={onCloseTargetModal}
+            refreshKey={mapRefreshSeq}
           />
         </Box>
 

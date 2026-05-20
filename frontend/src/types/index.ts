@@ -222,6 +222,7 @@ export interface CatchmentIndicators {
   areaKm2: number;
   reference: Record<string, number>;
   current: Record<string, number>;
+  ideal?: Record<string, number>;
   aoiFraction?: number;
 }
 

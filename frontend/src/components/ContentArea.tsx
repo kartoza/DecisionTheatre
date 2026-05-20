@@ -50,6 +50,7 @@ interface ContentAreaProps {
   isTargetModalOpen?: boolean;
   onOpenTargetModal?: () => void;
   onCloseTargetModal?: () => void;
+  refreshKey?: number;
 }
 
 const paneVariants = {
@@ -129,6 +130,7 @@ function ContentArea({
   isTargetModalOpen,
   onOpenTargetModal,
   onCloseTargetModal,
+  refreshKey,
 }: ContentAreaProps) {
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
@@ -389,6 +391,7 @@ function ContentArea({
                   mapExtent={mapExtent}
                   chartAxisLabelFilter={chartAxisLabelFilters?.[i] ?? null}
                   chartGraphMode={chartGraphModes?.[i] ?? null}
+                  refreshKey={refreshKey}
                 />
               </motion.div>
             ))}
@@ -435,6 +438,7 @@ function ContentArea({
             chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}
             chartGraphMode={chartGraphModes?.[visibleIndices[0]] ?? null}
             mapExtent={mapExtent}
+            refreshKey={refreshKey}
           />
         </Box>
       )}

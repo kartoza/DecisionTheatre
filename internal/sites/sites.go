@@ -37,6 +37,7 @@ type SiteCatchment struct {
 	AOIFraction float64            `json:"aoiFraction,omitempty"`
 	Reference   map[string]float64 `json:"reference"`
 	Current     map[string]float64 `json:"current"`
+	Ideal       map[string]float64 `json:"ideal,omitempty"`
 }
 
 // Site represents a saved site with its boundary and state

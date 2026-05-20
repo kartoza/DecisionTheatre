@@ -463,6 +463,12 @@ function ControlPanel({
     }
   }, [chartAxisLabelFilter, groupingVariableOptions, onChartAxisLabelFilterChange]);
 
+  useEffect(() => {
+    if (groupingVariableOptions.length === 1 && chartGroup && chartAxisLabelFilter !== groupingVariableOptions[0].value) {
+      onChartAxisLabelFilterChange?.(groupingVariableOptions[0].value);
+    }
+  }, [groupingVariableOptions, chartGroup, chartAxisLabelFilter, onChartAxisLabelFilterChange]);
+
   const factorOptions = useMemo(() => {
     const useGraphable = viewMode === 'chart' || viewMode === 'dial';
     const isAggregateTableView = viewMode === 'table';
@@ -489,6 +495,14 @@ function ControlPanel({
       label: attributeDetails[col] || col,
     }));
   }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
+
+  const allGraphableFactorOptions = useMemo(
+    () => columns
+      .filter((col) => canMap[col])
+      .map((col) => ({ value: col, label: attributeDetails[col] || col })),
+    [columns, canMap, attributeDetails],
+  );
+
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
     : undefined;
@@ -746,6 +760,34 @@ function ControlPanel({
               bg={cardBg}
             >
               <HStack mb={2}>
+                <Badge bg={colors.pastelLightBlue} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                  INDIVIDUAL FACTOR
+                </Badge>
+                <Tooltip label="View a single factor as a chart">
+                  <Box cursor="help">
+                    <FiInfo size={14} color="gray" />
+                  </Box>
+                </Tooltip>
+              </HStack>
+
+              <SearchableSelect
+                value={!chartGroup ? (comparison.attribute ?? '') : ''}
+                onChange={(val) => {
+                  if (val) {
+                    onAttributeChange(val);
+                    onChartGroupChange?.(null);
+                    onChartAxisLabelFilterChange?.(null);
+                  }
+                }}
+                options={allGraphableFactorOptions}
+                placeholder="Select a factor to view"
+                focusColor="#2bb0ed"
+                allowClear
+              />
+
+              <Box mt={4} mb={2} borderTop="1px" borderColor={borderColor} />
+
+              <HStack mb={2}>
                 <Badge bg={colors.pastelLightOrange} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   VARIABLE TYPE
                 </Badge>
@@ -776,25 +818,29 @@ function ControlPanel({
 
               {chartGroup && (
                 <Box mt={3}>
-                  <HStack mb={2}>
-                    <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                      GROUPING VARIABLE
-                    </Badge>
-                    <Tooltip label="Select a Grouping variable filtered by the selected variable type">
-                      <Box cursor="help">
-                        <FiInfo size={14} color="gray" />
-                      </Box>
-                    </Tooltip>
-                  </HStack>
+                  {groupingVariableOptions.length !== 1 && (
+                    <>
+                      <HStack mb={2}>
+                        <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                          GROUPING VARIABLE
+                        </Badge>
+                        <Tooltip label="Select a Grouping variable filtered by the selected variable type">
+                          <Box cursor="help">
+                            <FiInfo size={14} color="gray" />
+                          </Box>
+                        </Tooltip>
+                      </HStack>
 
-                  <SearchableSelect
-                    value={chartAxisLabelFilter ?? ''}
-                    onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
-                    options={groupingVariableOptions}
-                    placeholder="No grouping variable selected"
-                    focusColor="#4caf50"
-                    allowClear
-                  />
+                      <SearchableSelect
+                        value={chartAxisLabelFilter ?? ''}
+                        onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
+                        options={groupingVariableOptions}
+                        placeholder="No grouping variable selected"
+                        focusColor="#4caf50"
+                        allowClear
+                      />
+                    </>
+                  )}
 
                   {lineBoxplotToggleAvailable && (
                     <Box mt={3}>

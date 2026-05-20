@@ -226,7 +226,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
       truncated?: boolean;
     };
 
-const MIN_CATCHMENT_OVERLAP_FRACTION = 0.05;
+const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
     const boundaryFeatures = geometryToPolygonFeatures(sourceGeometry);
     if (boundaryFeatures.length === 0) {

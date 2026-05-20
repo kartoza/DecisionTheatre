@@ -35,6 +35,8 @@ interface MapViewProps {
   onSwiperPositionChange?: (position: number) => void;
   is3DMode?: boolean;
   on3DModeChange?: (enabled: boolean) => void;
+  /** Increment to force a choropleth refresh (e.g. after indicator save). */
+  refreshKey?: number;
 }
 
 // Google Maps hybrid satellite raster style (no API key required for tile access)
@@ -525,7 +527,8 @@ export function formatNumber(n: number): string {
 async function fetchChoroplethData(
   scenario: Scenario,
   attribute: string,
-  bounds: maplibregl.LngLatBounds
+  bounds: maplibregl.LngLatBounds,
+  siteId?: string | null
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -538,6 +541,10 @@ async function fetchChoroplethData(
     maxx: ne.lng.toString(),
     maxy: ne.lat.toString(),
   });
+
+  if (siteId && scenario === 'future') {
+    params.set('siteId', siteId);
+  }
 
   try {
     const resp = await fetch(`/api/choropleth?${params}`);
@@ -683,7 +690,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey }: MapViewProps) {
   const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
@@ -852,8 +859,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
-        fetchChoroplethData(c.leftScenario, c.attribute, bounds),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds),
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds, siteId),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds, siteId),
       ]);
 
       let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
@@ -987,6 +994,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     siteDomainRangeRef.current = null;
     applyColorsRef.current();
   }, [siteId, siteGeometry]);
+
+  // Re-fetch choropleth after indicator save so ideal overrides appear on the map.
+  const isFirstRefreshKeyRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRefreshKeyRender.current) {
+      isFirstRefreshKeyRender.current = false;
+      return;
+    }
+    applyColorsRef.current();
+  }, [refreshKey]);
 
   // Compute full-dataset stats so "Full" range has stable values.
   useEffect(() => {
@@ -1234,8 +1251,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       try {
         const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL),
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, siteId),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, siteId),
           getSiteCatchments(siteId).catch(() => []),
         ]);
 
@@ -1280,8 +1297,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // Keep min/max from map-visible site stats, but use aggregate-table weighting
         // for the mean so all site views follow the same AOI-weighted formula.
         if (Array.isArray(siteCatchments) && siteCatchments.length > 0) {
-          const leftAggregateScenario = c.leftScenario === 'reference' ? 'reference' : 'current';
-          const rightAggregateScenario = c.rightScenario === 'reference' ? 'reference' : 'current';
+          const leftAggregateScenario = c.leftScenario === 'reference' ? 'reference' : c.leftScenario === 'future' ? 'ideal' : 'current';
+          const rightAggregateScenario = c.rightScenario === 'reference' ? 'reference' : c.rightScenario === 'future' ? 'ideal' : 'current';
           const weightedLeftMean = computeAOIWeightedAttributeValue(siteCatchments, leftAggregateScenario, c.attribute);
           const weightedRightMean = computeAOIWeightedAttributeValue(siteCatchments, rightAggregateScenario, c.attribute);
 

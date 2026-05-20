@@ -584,10 +584,10 @@ func (h *Handler) handleMetadataAxisLabels(w http.ResponseWriter, r *http.Reques
 	axisLabelIdx := -1
 	for i, header := range headers {
 		normalized := strings.TrimSpace(header)
-		switch normalized {
-		case "ColumnName":
+		switch {
+		case strings.EqualFold(normalized, "ColumnName"):
 			columnIdx = i
-		case "axis label":
+		case strings.EqualFold(normalized, "axis label"), strings.EqualFold(normalized, "axis_label"):
 			axisLabelIdx = i
 		}
 	}
@@ -673,6 +673,9 @@ func (h *Handler) handleMetadataXAxisLabels(w http.ResponseWriter, r *http.Reque
 		}
 		column := strings.TrimSpace(record[columnIdx])
 		xAxisLabel := strings.TrimSpace(record[xAxisLabelIdx])
+		if strings.EqualFold(xAxisLabel, "all") && detailedNameIdx >= 0 && detailedNameIdx < len(record) {
+			xAxisLabel = strings.TrimSpace(record[detailedNameIdx])
+		}
 		if xAxisLabel == "" && detailedNameIdx >= 0 && detailedNameIdx < len(record) {
 			xAxisLabel = strings.TrimSpace(record[detailedNameIdx])
 		}
@@ -1259,11 +1262,51 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For the future/target scenario with a known site, build a lookup of
+	// per-catchment ideal values so the choropleth shows user-edited targets.
+	siteID := q.Get("siteId")
+	var idealOverrides map[int64]float64
+	if scenario == "future" && siteID != "" && h.siteStore != nil {
+		if site, siteErr := h.siteStore.Get(siteID); siteErr == nil {
+			idealOverrides = make(map[int64]float64, len(site.Catchments))
+			for _, c := range site.Catchments {
+				if c.Ideal == nil {
+					continue
+				}
+				val, ok := c.Ideal[attribute]
+				if !ok {
+					continue
+				}
+				if idF, parseErr := strconv.ParseFloat(c.ID, 64); parseErr == nil {
+					idealOverrides[int64(idF)] = val
+				}
+			}
+		}
+	}
+
+	// Use reference geometry when overlaying ideal values; future without a
+	// site falls back to reference as before.
+	queryScenario := scenario
+	if scenario == "future" {
+		queryScenario = "reference"
+	}
+
 	// Query catchments
-	fc, err := h.gpkgStore.QueryCatchments(scenario, attribute, minx, miny, maxx, maxy)
+	fc, err := h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Overlay site-specific ideal values onto the GeoJSON features.
+	if len(idealOverrides) > 0 {
+		for i := range fc.Features {
+			if hybasID, ok := fc.Features[i].Properties["HYBAS_ID"].(int64); ok {
+				if idealVal, exists := idealOverrides[hybasID]; exists {
+					fc.Features[i].Properties[attribute] = idealVal
+				}
+			}
+		}
 	}
 
 	// Get domain range for consistent color scaling across scenarios
@@ -1363,12 +1406,17 @@ func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
 
 	persisted := make([]sites.SiteCatchment, 0, len(catchmentData))
 	for _, c := range catchmentData {
+		ideal := make(map[string]float64, len(c.Reference))
+		for k, v := range c.Reference {
+			ideal[k] = v
+		}
 		persisted = append(persisted, sites.SiteCatchment{
 			ID:          c.ID,
 			AreaKm2:     c.AreaKm2,
 			AOIFraction: c.AOIFraction,
 			Reference:   c.Reference,
 			Current:     c.Current,
+			Ideal:       ideal,
 		})
 	}
 
@@ -1414,6 +1462,7 @@ func siteCatchmentsToIndicators(catchments []sites.SiteCatchment) []geodata.Catc
 			AOIFraction: c.AOIFraction,
 			Reference:   c.Reference,
 			Current:     c.Current,
+			Ideal:       c.Ideal,
 		})
 	}
 
@@ -1859,6 +1908,24 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	// Update site with indicators
 	site.Indicators = indicators
 
+	// Rebuild catchments with Ideal reset to Reference, so any prior user edits are cleared.
+	freshCatchments := make([]sites.SiteCatchment, 0, len(catchmentData))
+	for _, c := range catchmentData {
+		ideal := make(map[string]float64, len(c.Reference))
+		for k, v := range c.Reference {
+			ideal[k] = v
+		}
+		freshCatchments = append(freshCatchments, sites.SiteCatchment{
+			ID:          c.ID,
+			AreaKm2:     c.AreaKm2,
+			AOIFraction: c.AOIFraction,
+			Reference:   c.Reference,
+			Current:     c.Current,
+			Ideal:       ideal,
+		})
+	}
+	site.Catchments = freshCatchments
+
 	// For browser runtime, return the site directly without storing
 	if req.Runtime == "browser" {
 		respondJSON(w, http.StatusOK, site)
@@ -2084,6 +2151,21 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	// Run cascading recalculations when any target inputs changed.
 	if (len(changedTargets) > 0 || len(changedSpeciesCounts) > 0) && site.Indicators.Ideal != nil {
 		recalculateIdeal(site.Indicators.Ideal, changedTargets, oldIdeal, changedSpeciesCounts)
+
+		// Propagate updated ideal values back to individual catchments using the
+		// reverse of the area-weighted averaging formula.
+		if len(site.Catchments) == 0 && h.gpkgStore != nil && len(site.CatchmentIDs) > 0 {
+			if popErr := h.populateSiteCatchmentDetails(site); popErr != nil {
+				log.Printf("Warning: could not populate catchments for ideal propagation site_id=%s: %v", id, popErr)
+			}
+		}
+		if len(site.Catchments) > 0 {
+			var siteRef map[string]float64
+			if site.Indicators != nil {
+				siteRef = site.Indicators.Reference
+			}
+			propagateIdealToCatchments(site.Catchments, oldIdeal, site.Indicators.Ideal, siteRef)
+		}
 	}
 
 	updated, err := h.siteStore.Update(id, site)
@@ -2118,6 +2200,15 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	site.Indicators.Ideal = make(map[string]float64)
 	for key, value := range site.Indicators.Reference {
 		site.Indicators.Ideal[key] = value
+	}
+
+	// Reset each catchment's ideal to its reference values
+	for i := range site.Catchments {
+		ideal := make(map[string]float64, len(site.Catchments[i].Reference))
+		for k, v := range site.Catchments[i].Reference {
+			ideal[k] = v
+		}
+		site.Catchments[i].Ideal = ideal
 	}
 
 	updated, err := h.siteStore.Update(id, site)

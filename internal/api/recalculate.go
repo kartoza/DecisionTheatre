@@ -3,6 +3,8 @@ package api
 import (
 	"math"
 	"strings"
+
+	"github.com/kartoza/decision-theatre/internal/sites"
 )
 
 // Target input column names — TargetInputsAllowed = 1 in metadata.csv.
@@ -64,14 +66,31 @@ func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, 
 	}
 }
 
+// agbMidpoints are the above-ground woody biomass midpoints (Mg/ha) for each
+// of the 10 tree-cover classes (low-TC classes 1–6, high-TC classes 7–10).
+// Source: DOCX Workflow 1, AGBvals.
+var agbMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
+
+// litterMidpoints are the litter biomass midpoints (g/m²) per tree-cover class.
+// Source: DOCX Workflow 1, LitterClasses.
+var litterMidpoints = [10]float64{0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60, 3.30, 4.32}
+
+// treeCoverMidpoints are the tree-cover fraction midpoints (%) per class,
+// used for meanTC. Source: DOCX Workflow 1, Treefracs.
+var treeCoverMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
+
 // workflow1TreeCover recalculates biomass metrics when lowTC_prop changes.
 //
 // Developer guide Workflow 1:
-//  1. Redistribute tree-cover biomass class proportions so they sum to 1.
-//  2. Recalculate NPP_gm2 and flamNPP_gm2 (scale with grassy/low-TC area).
-//  3. Recalculate AGBwd_Mgha, LitterBiomass_gm2, deltaSOC_Mgha
-//     (scale with tree/high-TC area).
-//  4. Proceeds to Workflow 4 (called by the caller after this returns).
+//  1. Redistribute prop_X classes equally within each zone:
+//     each low-TC class = lowTCprop/6, each high-TC class = highTCprop/4.
+//  2. Recalculate AGBwd_Mgha, LitterBiomass_gm2, and meanTC as class-midpoint
+//     weighted sums over all 10 prop classes.
+//  3. Recalculate NPP_gm2 and flamNPP_gm2 by proportional scaling with low-TC
+//     fraction (lookup table not available at runtime).
+//  4. Recalculate deltaSOC_Mgha by proportional scaling with high-TC fraction
+//     (lookup table not available at runtime).
+//  5. Proceeds to Workflow 4 (called by the caller after this returns).
 func workflow1TreeCover(ideal, oldIdeal map[string]float64) {
 	newLowTC := math.Max(0, math.Min(1, ideal[colLowTCProp]))
 	oldLowTC := oldIdeal[colLowTCProp]
@@ -81,35 +100,30 @@ func workflow1TreeCover(ideal, oldIdeal map[string]float64) {
 	ideal[colLowTCProp] = newLowTC
 	ideal["highTC_prop"] = newHighTC
 
-	// Redistribute low-TC biomass class proportions.
-	if oldLowTC > 0 {
-		f := newLowTC / oldLowTC
-		for _, k := range lowTCBiomassClasses {
-			if v, ok := ideal[k]; ok {
-				ideal[k] = v * f
-			}
-		}
-	} else {
-		for _, k := range lowTCBiomassClasses {
-			ideal[k] = 0
-		}
+	// Redistribute biomass class proportions equally within each zone.
+	for _, k := range lowTCBiomassClasses {
+		ideal[k] = newLowTC / float64(len(lowTCBiomassClasses))
+	}
+	for _, k := range highTCBiomassClasses {
+		ideal[k] = newHighTC / float64(len(highTCBiomassClasses))
 	}
 
-	// Redistribute high-TC biomass class proportions.
-	if oldHighTC > 0 {
-		f := newHighTC / oldHighTC
-		for _, k := range highTCBiomassClasses {
-			if v, ok := ideal[k]; ok {
-				ideal[k] = v * f
-			}
-		}
-	} else {
-		for _, k := range highTCBiomassClasses {
-			ideal[k] = 0
-		}
+	// Recompute AGBwd, litter biomass, and mean tree cover as weighted sums
+	// over all 10 class midpoints.
+	allClasses := append(lowTCBiomassClasses, highTCBiomassClasses...)
+	var agbwd, litter, meanTC float64
+	for i, k := range allClasses {
+		p := ideal[k]
+		agbwd += p * agbMidpoints[i]
+		litter += p * litterMidpoints[i]
+		meanTC += p * treeCoverMidpoints[i]
 	}
+	ideal["AGBwd_Mgha"] = agbwd
+	ideal["LitterBiomass_gm2"] = litter
+	ideal["meanTC"] = meanTC
 
-	// Grass NPP and flammable NPP scale with the grassy (low-TC) fraction.
+	// Grass NPP and flammable NPP scale with the grassy (low-TC) fraction
+	// (per-catchment NPP lookup table is not available at runtime).
 	if oldLowTC > 0 {
 		f := newLowTC / oldLowTC
 		scaleIdealKey(ideal, "NPP_gm2", f)
@@ -119,15 +133,12 @@ func workflow1TreeCover(ideal, oldIdeal map[string]float64) {
 		ideal["flamNPP_gm2"] = 0
 	}
 
-	// Woody biomass, litter, and delta-SOC scale with the tree (high-TC) fraction.
+	// Delta SOC scales with the tree (high-TC) fraction
+	// (per-catchment SOC lookup table is not available at runtime).
 	if oldHighTC > 0 {
 		f := newHighTC / oldHighTC
-		scaleIdealKey(ideal, "AGBwd_Mgha", f)
-		scaleIdealKey(ideal, "LitterBiomass_gm2", f)
 		scaleIdealKey(ideal, "deltaSOC_Mgha", f)
 	} else {
-		ideal["AGBwd_Mgha"] = 0
-		ideal["LitterBiomass_gm2"] = 0
 		ideal["deltaSOC_Mgha"] = 0
 	}
 }
@@ -240,13 +251,23 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 //
 // Developer guide Workflow 4 (terminal workflow):
 //  1. Fuel load = NPP + Litter - Grazing DMI (≥ 0).
-//  2. Fireline Intensity (early and late season).
-//  3. Area Burned (early and late, then combined with propEarly).
-//  4. Fuel consumption and methane emissions.
+//  2. Fireline intensity (early and late season). Late capped at 17 000;
+//     early uncapped. Late overrides to early where MAR > 1500.
+//  3. Raw area burned (Dick Williams 1989).
+//  4. Constrain to flammable area by multiplying by lowTC_prop.
+//  5. Fuel consumption per season = fuelload × percBurned / 100.
+//  6. CH4 emissions per season using MCE-derived emission factors.
+//  7. Blend early and late outputs by propEarly (default 0.45).
 func workflow4FireCascade(ideal map[string]float64) {
-	npp := ideal["NPP_gm2"]               // g/m²
-	litter := ideal["LitterBiomass_gm2"]  // g/m²
-	propEarly := ideal["propEarly"]        // fraction [0,1]
+	npp := ideal["NPP_gm2"]              // g/m²
+	litter := ideal["LitterBiomass_gm2"] // g/m²
+	lowTCProp := ideal[colLowTCProp]
+
+	// propEarly defaults to 0.45 when absent (per DOCX Step 7).
+	propEarly := ideal["propEarly"]
+	if propEarly == 0 {
+		propEarly = 0.45
+	}
 
 	// herbs_totGRAZING_DMI_kgkm2 is in kg/km²; convert to g/m² (÷ 1000).
 	grazingDMI := ideal["herbs_totGRAZING_DMI_kgkm2"] / 1000.0
@@ -255,36 +276,34 @@ func workflow4FireCascade(ideal map[string]float64) {
 	fuelload := math.Max(0, npp+litter-grazingDMI)
 	ideal["fuelload_gm2"] = fuelload
 
-	// Step 2 — Fireline intensity (kW/m), capped at 17 000.
-	// Early season: lower multiplier (less intense but larger area).
-	// Late season: higher multiplier (more intense, drier fuel).
-	intensityEarly := math.Min(17000, math.Exp(6.65747+0.0011896*fuelload))
+	// Step 2 — Fireline intensity (kW/m).
+	// Only late season is capped at 17 000; early season is uncapped.
+	// Where MAR > 1500 (high-rainfall catchments), late season intensity
+	// reverts to the early season value.
+	intensityEarly := math.Exp(6.65747 + 0.0011896*fuelload)
 	intensityLate := math.Min(17000, math.Exp(6.65747+0.0035350*fuelload))
+	if mar, ok := ideal["MAR"]; ok && mar > 1500 {
+		intensityLate = intensityEarly
+	}
 	ideal["Intensity_early_kW_m"] = intensityEarly
 	ideal["Intensity_late_kW_m"] = intensityLate
 
-	// Step 3 — Area burned (%).
+	// Step 3 — Raw area burned (%).
 	// Source: modified Dick Williams (1989) relationship.
-	percBurnedEarly := math.Max(0, 98.24-97.95*math.Exp(-0.001122*intensityEarly))
-	percBurnedLate := math.Max(0, 98.24-97.95*math.Exp(-0.001122*intensityLate))
+	areaBurnedEarly := math.Max(0, 98.24-97.95*math.Exp(-0.001122*intensityEarly))
+	areaBurnedLate := math.Max(0, 98.24-97.95*math.Exp(-0.001122*intensityLate))
+
+	// Step 4 — Constrain to flammable area (lowTC_prop).
+	percBurnedEarly := areaBurnedEarly * lowTCProp
+	percBurnedLate := areaBurnedLate * lowTCProp
 	ideal["percBurned_early"] = percBurnedEarly
 	ideal["percBurned_late"] = percBurnedLate
-	ideal[colPercBurned] = propEarly*percBurnedEarly + (1-propEarly)*percBurnedLate
 
-	// Step 4 — Combustion completeness (grass fuel type: a=1, b=0.004, I₀=100).
-	fracCEarly := combustionCompleteness(intensityEarly, 1.0, 0.004, 100)
-	fracCLate := combustionCompleteness(intensityLate, 1.0, 0.004, 100)
-
-	// Fuel available per season (proportioned by propEarly).
-	fuelEarly := fuelload * propEarly
-	fuelLate := fuelload * (1 - propEarly)
-
-	// Fuel consumed (g/m²) = combustion completeness × seasonal fuel × burn fraction.
-	fconsEarly := fracCEarly * fuelEarly * percBurnedEarly / 100
-	fconsLate := fracCLate * fuelLate * percBurnedLate / 100
-	ideal["fuelConsumption_early_gm2"] = fconsEarly
-	ideal["fuelConsumption_late_gm2"] = fconsLate
-	ideal["fuelConsumption_gm2"] = fconsEarly + fconsLate
+	// Step 5 — Fuel consumption per season (g/m²).
+	fuelConsEarly := fuelload * percBurnedEarly / 100
+	fuelConsLate := fuelload * percBurnedLate / 100
+	ideal["fuelConsumption_early_gm2"] = fuelConsEarly
+	ideal["fuelConsumption_late_gm2"] = fuelConsLate
 
 	// Methane emission factors (g CH4 / kg dry matter):
 	//   EFCH4 = 66 × (1 − MCE) − 2
@@ -293,14 +312,17 @@ func workflow4FireCascade(ideal map[string]float64) {
 	const efch4Early = 66*(1-0.92) - 2 // 3.28 g/kg
 	const efch4Late = 66*(1-0.96) - 2  // 0.64 g/kg
 
-	// CH4 from fire (kg/km²):
+	// Step 6 — CH4 per season (kg/km²):
 	//   fuelCons [g/m²] × EFCH4 [g/kg] = kg/km²
-	//   (unit identity: g/m² × g/kg × 1 kg/1000 g × 1 000 000 m²/km² = g·m⁻² × 1000 kg·km⁻²·g⁻¹·m² = kg/km²)
-	ch4Early := fconsEarly * efch4Early
-	ch4Late := fconsLate * efch4Late
+	ch4Early := fuelConsEarly * efch4Early
+	ch4Late := fuelConsLate * efch4Late
 	ideal["CH4_early_kg_km2"] = ch4Early
 	ideal["CH4_late_kg_km2"] = ch4Late
-	fireCH4 := ch4Early + ch4Late
+
+	// Step 7 — Blend early and late outputs by propEarly.
+	ideal[colPercBurned] = propEarly*percBurnedEarly + (1-propEarly)*percBurnedLate
+	ideal["fuelConsumption_gm2"] = fuelConsEarly*propEarly + fuelConsLate*(1-propEarly)
+	fireCH4 := ch4Early*propEarly + ch4Late*(1-propEarly)
 	ideal["CH4_kg_km2"] = fireCH4
 
 	// Total CH4 = fire + herbivore enteric emissions.
@@ -323,5 +345,43 @@ func combustionCompleteness(intensity, a, b, I0 float64) float64 {
 func scaleIdealKey(ideal map[string]float64, key string, factor float64) {
 	if v, ok := ideal[key]; ok {
 		ideal[key] = v * factor
+	}
+}
+
+// propagateIdealToCatchments updates each catchment's Ideal map so that the
+// area-weighted average across catchments matches the updated site-level ideal.
+//
+// Reverse of the area-weighted formula: when the site ideal for key k changes
+// by scale = newSiteIdeal[k] / oldSiteIdeal[k], every catchment's ideal for k
+// is multiplied by the same factor, which preserves the spatial distribution
+// while keeping the site average equal to newSiteIdeal[k].
+//
+// Edge cases:
+//   - Catchment Ideal is nil → initialised from its Reference map.
+//   - oldSiteIdeal[k] == 0 but siteReference[k] != 0 → distribute
+//     proportionally to per-catchment reference values.
+//   - Both zero → each catchment ideal is set to newSiteIdeal[k].
+func propagateIdealToCatchments(
+	catchments []sites.SiteCatchment,
+	oldSiteIdeal, newSiteIdeal, siteReference map[string]float64,
+) {
+	for i := range catchments {
+		if catchments[i].Ideal == nil {
+			catchments[i].Ideal = make(map[string]float64, len(catchments[i].Reference))
+			for k, v := range catchments[i].Reference {
+				catchments[i].Ideal[k] = v
+			}
+		}
+		for key, newSiteVal := range newSiteIdeal {
+			oldSiteVal := oldSiteIdeal[key]
+			switch {
+			case oldSiteVal != 0:
+				catchments[i].Ideal[key] *= newSiteVal / oldSiteVal
+			case siteReference[key] != 0:
+				catchments[i].Ideal[key] = (catchments[i].Reference[key] / siteReference[key]) * newSiteVal
+			default:
+				catchments[i].Ideal[key] = newSiteVal
+			}
+		}
 	}
 }
