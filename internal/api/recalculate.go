@@ -10,10 +10,13 @@ import (
 // Target input column names — TargetInputsAllowed = 1 in metadata.csv.
 const (
 	colLowTCProp           = "lowTC_prop"
+	colHighTCProp          = "highTC_prop"
+	colPropEarly           = "propEarly"
 	colPercBurned          = "percBurned"
 	colHerbsTot            = "herbs_tot_kgkm2"
 	colNPP                 = "NPP_gm2"
 	colHerbsSpCountsPrefix = "herbs_sp_counts_"
+	colHerbsSpKgkm2Prefix  = "herbs_sp_kgkm2_"
 )
 
 // lowTCBiomassClasses are the biomass-class proportion columns that correspond
@@ -29,6 +32,10 @@ var highTCBiomassClasses = []string{
 	"prop_X50_60Mgha", "prop_X60_70Mgha", "prop_X70_80Mgha", "prop_X80_100Mgha",
 }
 
+// allBiomassClasses is the union of low- and high-TC proportion columns, in
+// the same order as agbMidpoints / litterMidpoints / treeCoverMidpoints.
+var allBiomassClasses = append(append([]string{}, lowTCBiomassClasses...), highTCBiomassClasses...)
+
 // recalculateIdeal applies cascading ecological recalculations to the ideal
 // indicator map after the user edits one or more TargetInputsAllowed fields.
 //
@@ -36,12 +43,20 @@ var highTCBiomassClasses = []string{
 // herbs_tot_kgkm2) changed. changedSpeciesCounts lists which
 // herbs_sp_counts_<Species> keys changed. oldIdeal holds the full ideal map
 // captured before the PATCH was merged so scale factors can be computed.
-func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, oldIdeal map[string]float64, changedSpeciesCounts map[string]bool) {
+func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, oldIdeal map[string]float64, changedSpeciesCounts map[string]bool, changedSpeciesBiomass map[string]bool, propClassChanged bool) {
 	treeCoverChanged := changedTargets[colLowTCProp]
 	herbivoresChanged := changedTargets[colHerbsTot]
 	nppChanged := changedTargets[colNPP]
+	propEarlyChanged := changedTargets[colPropEarly]
 	speciesCountsChanged := len(changedSpeciesCounts) > 0
+	speciesBiomassChanged := len(changedSpeciesBiomass) > 0
 
+	if propClassChanged && !treeCoverChanged {
+		// User edited one or more prop_X*Mgha columns directly. Derive new
+		// lowTC_prop / highTC_prop from the class sums and update dependent
+		// biomass / NPP / SOC metrics without redistributing class proportions.
+		workflow0PropClasses(ideal, oldIdeal)
+	}
 	if treeCoverChanged {
 		workflow1TreeCover(ideal, oldIdeal)
 	}
@@ -52,8 +67,12 @@ func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, 
 		// Skip if herbs_tot_kgkm2 was directly edited (workflow2Herbivores
 		// already handles that path).
 		workflow2aSpeciesCounts(ideal, changedSpeciesCounts, oldIdeal)
+	} else if speciesBiomassChanged {
+		// Per-species biomass edited directly: recompute the aggregate total and
+		// cascade through fire. Only runs when no count change already covered this.
+		workflow2bSpeciesBiomass(ideal, oldIdeal)
 	}
-	if nppChanged && !treeCoverChanged {
+	if nppChanged && !treeCoverChanged && !propClassChanged {
 		// NPP edited directly (e.g. via IndicatorEditorPage): update grazing
 		// intensity then fall through to Workflow 4. Skip when Workflow 1
 		// already ran — it recalculates NPP itself as part of tree-cover
@@ -61,7 +80,10 @@ func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, 
 		workflow3GrassNPP(ideal)
 	}
 	// All workflows feed into fire modelling (Workflow 4).
-	if treeCoverChanged || herbivoresChanged || speciesCountsChanged || nppChanged {
+	// propEarlyChanged alone skips to Step 7; workflow4FireCascade reads the
+	// updated propEarly from ideal and reblends percBurned / fuelConsumption /
+	// CH4 without rerunning the upstream fuel-load equations.
+	if treeCoverChanged || herbivoresChanged || speciesCountsChanged || speciesBiomassChanged || nppChanged || propClassChanged || propEarlyChanged {
 		workflow4FireCascade(ideal)
 	}
 }
@@ -78,6 +100,56 @@ var litterMidpoints = [10]float64{0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60
 // treeCoverMidpoints are the tree-cover fraction midpoints (%) per class,
 // used for meanTC. Source: DOCX Workflow 1, Treefracs.
 var treeCoverMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
+
+// workflow0PropClasses recomputes lowTC_prop / highTC_prop from the current
+// prop_X*Mgha class values and updates dependent metrics (AGBwd, litter,
+// meanTC, NPP, flamNPP, deltaSOC) without redistributing the class proportions.
+// Called when the user edits a prop_X*Mgha column directly rather than editing
+// lowTC_prop, so workflow1TreeCover (which redistributes classes equally) must
+// not run.
+func workflow0PropClasses(ideal, oldIdeal map[string]float64) {
+	var newLowTC, newHighTC float64
+	for _, k := range lowTCBiomassClasses {
+		newLowTC += ideal[k]
+	}
+	for _, k := range highTCBiomassClasses {
+		newHighTC += ideal[k]
+	}
+
+	oldLowTC := oldIdeal[colLowTCProp]
+	oldHighTC := 1.0 - oldLowTC
+
+	ideal[colLowTCProp] = newLowTC
+	ideal["highTC_prop"] = newHighTC
+
+	// Recompute AGBwd, litter, meanTC as weighted sums over actual class values.
+	var agbwd, litter, meanTC float64
+	for i, k := range allBiomassClasses {
+		p := ideal[k]
+		agbwd += p * agbMidpoints[i]
+		litter += p * litterMidpoints[i]
+		meanTC += p * treeCoverMidpoints[i]
+	}
+	ideal["AGBwd_Mgha"] = agbwd
+	ideal["LitterBiomass_gm2"] = litter
+	ideal["meanTC"] = meanTC
+
+	if oldLowTC > 0 {
+		f := newLowTC / oldLowTC
+		scaleIdealKey(ideal, "NPP_gm2", f)
+		scaleIdealKey(ideal, "flamNPP_gm2", f)
+	} else {
+		ideal["NPP_gm2"] = 0
+		ideal["flamNPP_gm2"] = 0
+	}
+
+	if oldHighTC > 0 {
+		f := newHighTC / oldHighTC
+		scaleIdealKey(ideal, "deltaSOC_Mgha", f)
+	} else {
+		ideal["deltaSOC_Mgha"] = 0
+	}
+}
 
 // workflow1TreeCover recalculates biomass metrics when lowTC_prop changes.
 //
@@ -241,6 +313,43 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 	}
 
 	// Step 4: recompute grazing intensity.
+	if npp, ok := ideal["NPP_gm2"]; ok && npp > 0 {
+		ideal["grazing_intensity"] = ideal["herbs_totGRAZING_DMI_kgkm2"] / npp
+	}
+}
+
+// workflow2bSpeciesBiomass recomputes aggregate herbivore totals when one or
+// more herbs_sp_kgkm2_<Species> values are edited directly (without a matching
+// species-count change). It mirrors Steps 2-4 of workflow2aSpeciesCounts but
+// skips Step 1 (per-capita scaling) because the user already set the biomass.
+func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]float64) {
+	var newTotKg, newTotDMI, newTotCH4 float64
+	for k, v := range ideal {
+		switch {
+		case strings.HasPrefix(k, colHerbsSpKgkm2Prefix):
+			newTotKg += v
+		case strings.HasPrefix(k, "herbs_sp_DMI_kgkm2_"):
+			newTotDMI += v
+		case strings.HasPrefix(k, "herbs_sp_CH4_kgkm2_"):
+			newTotCH4 += v
+		}
+	}
+
+	oldTotal := oldIdeal[colHerbsTot]
+	ideal[colHerbsTot] = newTotKg
+	ideal["herbs_tot_DMI_kgkm2"] = newTotDMI
+	ideal["herbs_tot_CH4_kgkm2"] = newTotCH4
+
+	if oldTotal > 0 {
+		scale := newTotKg / oldTotal
+		for k := range ideal {
+			if strings.HasPrefix(k, "herbs_diet_") || strings.HasPrefix(k, "herbs_fg_") {
+				ideal[k] = ideal[k] * scale
+			}
+		}
+		scaleIdealKey(ideal, "herbs_totGRAZING_DMI_kgkm2", scale)
+	}
+
 	if npp, ok := ideal["NPP_gm2"]; ok && npp > 0 {
 		ideal["grazing_intensity"] = ideal["herbs_totGRAZING_DMI_kgkm2"] / npp
 	}

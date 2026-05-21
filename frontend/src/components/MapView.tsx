@@ -12,6 +12,7 @@ import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
+import ControlPanel from './ControlPanel';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -91,8 +92,8 @@ const MIN_CATCHMENT_ZOOM = 7;
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-const MAX_FILL_OPACITY = 0.82;
-const CHOROPLETH_BASE_FILL_OPACITY = 0.68;
+const MAX_FILL_OPACITY = 0.45;
+const CHOROPLETH_BASE_FILL_OPACITY = 0.45;
 const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
 const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
 const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
@@ -110,7 +111,7 @@ function isNAValue(value: unknown): boolean {
     return normalized === 'n/a' || normalized === 'na' || normalized === 'nan';
   }
   if (typeof value === 'number') {
-    return Number.isNaN(value);
+    return Number.isNaN(value);ControlPanel
   }
   return false;
 }
@@ -1258,6 +1259,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         if (cancelled) return;
 
+        // Build the authoritative ID set from siteCatchments, keeping only those with
+        // meaningful AOI overlap (aoiFraction > 0). Catchments that intersect the bounding
+        // box but lie outside the drawn boundary get aoiFraction ≈ 0 via ApplyAOIFractions
+        // on the server and should be excluded from site zone statistics.
+        let apiCatchmentIds: Set<string> | null = null;
+        if (Array.isArray(siteCatchments) && siteCatchments.length > 0) {
+          const overlapping = (siteCatchments as Array<{ id: string; aoiFraction?: number }>)
+            .filter(c => (c.aoiFraction ?? 1.0) > 0);
+          const source = overlapping.length > 0 ? overlapping : (siteCatchments as Array<{ id: string }>);
+          apiCatchmentIds = new Set(source.map(c => String(c.id)));
+        }
+
         const explicitCatchmentIds = new Set(catchmentIds);
         const liveBoundarySource = leftMapRef.current?.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
           serialize?: () => maplibregl.SourceSpecification;
@@ -1271,10 +1284,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const inferredCatchmentIds = boundaryGeometry
           ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry)
           : new Set<string>();
-        // Prefer server-authoritative explicit IDs; only infer from geometry when none are stored
-        const statsCatchmentIds = explicitCatchmentIds.size > 0
-          ? explicitCatchmentIds
-          : inferredCatchmentIds;
+        // Prefer API-provided AOI-filtered IDs, then explicit stored IDs, then geometry inference
+        const statsCatchmentIds = apiCatchmentIds
+          ?? (explicitCatchmentIds.size > 0 ? explicitCatchmentIds : inferredCatchmentIds);
         siteCatchmentIdsRef.current = statsCatchmentIds;
         const leftFiltered = filterDatasetByCatchmentIds(leftData, statsCatchmentIds);
         const rightFiltered = filterDatasetByCatchmentIds(rightData, statsCatchmentIds);
@@ -1294,8 +1306,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               : computeZoneStats(rightFiltered, c.attribute))
           : null;
 
-        // Keep min/max from map-visible site stats, but use aggregate-table weighting
-        // for the mean so all site views follow the same AOI-weighted formula.
+        // Use siteCatchments (same source as aggregate table) for mean and count,
+        // so the control panel matches what the aggregate table shows.
         if (Array.isArray(siteCatchments) && siteCatchments.length > 0) {
           const leftAggregateScenario = c.leftScenario === 'reference' ? 'reference' : c.leftScenario === 'future' ? 'ideal' : 'current';
           const rightAggregateScenario = c.rightScenario === 'reference' ? 'reference' : c.rightScenario === 'future' ? 'ideal' : 'current';
@@ -1308,6 +1320,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)) {
             rightSiteStats.mean = weightedRightMean;
           }
+
+          // Override count to match the aggregate table (same getSiteCatchments source).
+          if (leftSiteStats) leftSiteStats.count = siteCatchments.length;
+          if (rightSiteStats) rightSiteStats.count = siteCatchments.length;
         }
 
         siteDomainRangeRef.current = siteDomainRange;
@@ -1863,7 +1879,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           rightHead.style.color = '#CBD5E0';
 
           const trendHead = document.createElement('th');
-          trendHead.textContent = 'Trend';
+          trendHead.textContent = 'Departure from reference';
           trendHead.style.textAlign = 'left';
           trendHead.style.padding = '4px 6px';
           trendHead.style.color = '#CBD5E0';

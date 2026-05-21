@@ -4,7 +4,7 @@ import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiT
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
-import { useAttributeDetails, useAttributeTargetInputs, useAttributeUnits } from '../hooks/useApi';
+import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
 import { useEffect, useMemo, useState } from 'react';
 
 interface ContentAreaProps {
@@ -136,6 +136,7 @@ function ContentArea({
   const { details: attributeDetails } = useAttributeDetails();
   const { targetInputs } = useAttributeTargetInputs();
   const { units: attributeUnits } = useAttributeUnits();
+  const { targetRanges } = useAttributeTargetRanges();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
@@ -456,8 +457,9 @@ function ContentArea({
                 const safeRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
                 const unit = attributeUnits[key] ?? '';
                 const isProportion = unit === 'proportion' || unit === 'fraction';
-                const safeMin = 0;
-                const safeMax = isProportion ? 1 : safeRef + 1000;
+                const metaRange = targetRanges[key];
+                const safeMin = (metaRange?.min != null && Number.isFinite(metaRange.min)) ? metaRange.min : 0;
+                const safeMax = (metaRange?.max != null && Number.isFinite(metaRange.max)) ? metaRange.max : isProportion ? 1 : safeRef + 1000;
                 const range = safeMax - safeMin;
                 const step = isProportion ? 0.01 : range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
                 const rawVal = targetDraftValues[key] ?? '';
@@ -470,6 +472,7 @@ function ContentArea({
                       <FormLabel fontSize="sm" color="gray.200" mb={0}>
                         {attributeDetails[key] ?? key}
                         {attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>({attributeUnits[key]})</Box> : null}
+                        <Box fontSize="xs" color="gray.500" fontWeight="normal" mt={0.5}>{key}</Box>
                       </FormLabel>
                       <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
                         {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}

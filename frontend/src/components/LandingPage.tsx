@@ -41,6 +41,7 @@ import futurePossibilitiesImage from '../assets/future_possibilities.png';
 import ruralCommunityImage from '../assets/rural_communities.png';
 import tanzaniaImage from '../assets/MorogoroTanzania_1.png';
 import gettingStartedImage from '../assets/Getting_started.png';
+import kartozaLogo from '../assets/Kartoza horizontal logo_white.png';
 
 interface LandingPageProps {
   onNavigate: (page: AppPage) => void;
@@ -87,11 +88,11 @@ const AUTO_PLAY_MS = 4000;
 
 function PartnersCarousel() {
   const [offset, setOffset] = useState(0);
-  const [visible, setVisible] = useState(3);
+  const [visible, setVisible] = useState(5);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const update = () => setVisible(window.innerWidth < 600 ? 1 : 3);
+    const update = () => setVisible(window.innerWidth < 600 ? 1 : window.innerWidth < 900 ? 3 : 5);
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
@@ -599,6 +600,13 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               p={3}
             >
               <Image src={rewildLogo} w={150}  objectFit="contain" />
+            </Box>
+
+            <Box
+              flexShrink={0}
+              p={3}
+            >
+              <Image src={kartozaLogo} w={280}  objectFit="contain" />
             </Box>
           </Flex>
 

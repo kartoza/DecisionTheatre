@@ -931,7 +931,7 @@ export default function IndicatorEditorPage({
               <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Ecological Reference</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200">Trend</Th>
+              <Th color="gray.400" borderColor="whiteAlpha.200">Departure from reference</Th>
               <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
             </Tr>
           </Thead>

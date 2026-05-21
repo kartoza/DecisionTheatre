@@ -611,7 +611,7 @@ function ChartView({
       const targetVal = rangeMode === 'site'
         ? (siteTarget ?? (typeof refVal === 'number' ? refVal : undefined))
         : (typeof refVal === 'number' ? refVal : undefined);
-      const label = xAxisLabels[col] ?? col;
+      const label = resolveAxisLabelForColumn(col, xAxisLabels) ?? col;
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
@@ -891,7 +891,7 @@ function ChartView({
 
       return {
         column: col,
-        label: xAxisLabels[col] ?? col,
+        label: resolveAxisLabelForColumn(col, xAxisLabels) ?? col,
         variableType: resolveVariableTypeForColumn(col, variableTypes),
         groupingVariable: resolveGroupingVariableForColumn(col, groupingVariables),
         ref: refVal ?? null,

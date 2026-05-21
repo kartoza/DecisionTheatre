@@ -61,6 +61,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/variabletypes", h.handleMetadataVariableTypes).Methods("GET")
 	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
 	r.HandleFunc("/metadata/targetinputs", h.handleMetadataTargetInputs).Methods("GET")
+	r.HandleFunc("/metadata/targetranges", h.handleMetadataTargetRanges).Methods("GET")
 	r.HandleFunc("/metadata/canmap", h.handleMetadataCanMap).Methods("GET")
 	r.HandleFunc("/metadata/cangraph", h.handleMetadataCanGraph).Methods("GET")
 	r.HandleFunc("/metadata/axislabels", h.handleMetadataAxisLabels).Methods("GET")
@@ -430,6 +431,93 @@ func (h *Handler) handleMetadataTargetInputs(w http.ResponseWriter, r *http.Requ
 	}
 
 	respondJSON(w, http.StatusOK, inputs)
+}
+
+// TargetRange holds optional min/max bounds for a target input slider.
+// A nil pointer means no bound is defined in metadata.csv.
+type TargetRange struct {
+	Min *float64 `json:"min"`
+	Max *float64 `json:"max"`
+}
+
+// handleMetadataTargetRanges returns a map of column names to their Target_min
+// and Target_max values from metadata.csv. Fields with no value set will have
+// nil for that bound.
+func (h *Handler) handleMetadataTargetRanges(w http.ResponseWriter, r *http.Request) {
+	metadataPath := filepath.Join(h.cfg.DataDir, "metadata.csv")
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		log.Printf("Warning: metadata target ranges unavailable: %v", err)
+		respondJSON(w, http.StatusOK, map[string]TargetRange{})
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Warning: failed to read metadata headers: %v", err)
+		respondJSON(w, http.StatusOK, map[string]TargetRange{})
+		return
+	}
+
+	columnIdx, minIdx, maxIdx := -1, -1, -1
+	for i, header := range headers {
+		switch strings.TrimSpace(header) {
+		case "ColumnName":
+			columnIdx = i
+		case "Target_min":
+			minIdx = i
+		case "Target_max":
+			maxIdx = i
+		}
+	}
+
+	if columnIdx == -1 {
+		respondJSON(w, http.StatusOK, map[string]TargetRange{})
+		return
+	}
+
+	parseOptional := func(s string) *float64 {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil
+		}
+		return &v
+	}
+
+	ranges := make(map[string]TargetRange)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if columnIdx >= len(record) {
+			continue
+		}
+		column := strings.TrimSpace(record[columnIdx])
+		if column == "" {
+			continue
+		}
+		var tr TargetRange
+		if minIdx >= 0 && minIdx < len(record) {
+			tr.Min = parseOptional(record[minIdx])
+		}
+		if maxIdx >= 0 && maxIdx < len(record) {
+			tr.Max = parseOptional(record[maxIdx])
+		}
+		if tr.Min != nil || tr.Max != nil {
+			ranges[column] = tr
+		}
+	}
+
+	respondJSON(w, http.StatusOK, ranges)
 }
 
 // handleMetadataCanMap returns a map of attribute column names to canMap flags.
@@ -2119,8 +2207,14 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		oldIdeal[k] = v
 	}
 
+	// Section 1.2: if highTC_prop was edited directly, derive lowTC_prop from it
+	// so that workflow1TreeCover handles the cascade via the lowTC_prop path.
+	if newHighTC, ok := req.Ideal[colHighTCProp]; ok && newHighTC != oldIdeal[colHighTCProp] {
+		req.Ideal[colLowTCProp] = 1 - newHighTC
+	}
+
 	// Determine which primary target inputs changed.
-	targetInputCols := []string{colLowTCProp, colHerbsTot, colNPP}
+	targetInputCols := []string{colLowTCProp, colHerbsTot, colNPP, colPropEarly}
 	changedTargets := make(map[string]bool)
 	for _, col := range targetInputCols {
 		if newVal, ok := req.Ideal[col]; ok && newVal != oldIdeal[col] {
@@ -2138,6 +2232,30 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Detect changed per-species biomass (herbs_sp_kgkm2_<Species>).
+	// Only treated as a direct biomass edit when no species counts also changed
+	// (count changes already cascade through workflow2aSpeciesCounts).
+	changedSpeciesBiomass := make(map[string]bool)
+	if len(changedSpeciesCounts) == 0 {
+		for k, newVal := range req.Ideal {
+			if strings.HasPrefix(k, colHerbsSpKgkm2Prefix) {
+				if oldVal, exists := oldIdeal[k]; !exists || newVal != oldVal {
+					changedSpeciesBiomass[k] = true
+				}
+			}
+		}
+	}
+
+	// Detect changes to any biomass-class proportion (prop_X*Mgha).
+	// These feed into lowTC_prop / highTC_prop so workflow1 must rerun.
+	propClassChanged := false
+	for _, k := range allBiomassClasses {
+		if newVal, ok := req.Ideal[k]; ok && newVal != oldIdeal[k] {
+			propClassChanged = true
+			break
+		}
+	}
+
 	mergeMap(&site.Indicators.Ideal, req.Ideal)
 	mergeMap(&site.Indicators.IdealLower, req.IdealLower)
 	mergeMap(&site.Indicators.IdealUpper, req.IdealUpper)
@@ -2149,8 +2267,8 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	mergeMap(&site.Indicators.CurrentUpper, req.CurrentUpper)
 
 	// Run cascading recalculations when any target inputs changed.
-	if (len(changedTargets) > 0 || len(changedSpeciesCounts) > 0) && site.Indicators.Ideal != nil {
-		recalculateIdeal(site.Indicators.Ideal, changedTargets, oldIdeal, changedSpeciesCounts)
+	if (len(changedTargets) > 0 || len(changedSpeciesCounts) > 0 || len(changedSpeciesBiomass) > 0 || propClassChanged) && site.Indicators.Ideal != nil {
+		recalculateIdeal(site.Indicators.Ideal, changedTargets, oldIdeal, changedSpeciesCounts, changedSpeciesBiomass, propClassChanged)
 
 		// Propagate updated ideal values back to individual catchments using the
 		// reverse of the area-weighted averaging formula.

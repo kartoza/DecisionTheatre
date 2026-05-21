@@ -259,6 +259,27 @@ export function useAttributeUnits() {
   return { units, loading };
 }
 
+export interface TargetRange {
+  min?: number | null;
+  max?: number | null;
+}
+
+export function useAttributeTargetRanges() {
+  const [targetRanges, setTargetRanges] = useState<Record<string, TargetRange>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, TargetRange>>(`${API_BASE}/metadata/targetranges`)
+      .then((data) => {
+        setTargetRanges(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { targetRanges, loading };
+}
+
 export function useAttributeCanGraph() {
   const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
