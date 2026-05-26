@@ -34,6 +34,12 @@ var docsFS embed.FS
 // glyphCacheLimit caps the in-process glyph cache at 64 MB.
 const glyphCacheLimit = 64 * 1024 * 1024
 
+// glyphHTTPClient has a short timeout so that an unreachable CDN does not hold
+// browser connections open. MapLibre renders gracefully without glyphs when the
+// request fails fast; a hanging connection blocks all other requests to the
+// same localhost origin (HTTP/1.1 caps at 6 per host:port).
+var glyphHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 // Server holds all the components for the web application
 type Server struct {
 	cfg          config.Config
@@ -402,16 +408,28 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 		"https://api.maptiler.com/fonts/%s/%s.pbf?key=cc4PpmmWZP73LjU1nsw3",
 		fontstack, glyphRange,
 	)
-	resp, err := http.Get(upstreamURL) //nolint:noctx
+	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {
-		http.Error(w, "glyph fetch failed", http.StatusBadGateway)
+		// CDN unreachable (no internet, timeout, etc.) — return an empty 200 so
+		// MapLibre skips these glyphs and continues rendering instead of hanging.
+		log.Printf("Glyph proxy: upstream fetch failed for %s/%s: %v", fontstack, glyphRange, err)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Glyph proxy: upstream returned %d for %s/%s", resp.StatusCode, fontstack, glyphRange)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "glyph read failed", http.StatusBadGateway)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 

@@ -745,9 +745,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const [areMapsReady, setAreMapsReady] = useState(false);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
-  useEffect(() => {
-    if (areMapsReady) onReadyRef.current?.();
-  }, [areMapsReady]);
+  // Fired once when the first map fires its 'load' event — not tied to areMapsReady
+  // because on Windows the left map starts in a width:0% container and ANGLE
+  // (WebGL→Direct3D) may refuse to create a zero-size context, permanently
+  // blocking that map's 'load' event. areMapsReady stays gated on both maps
+  // for its existing choropleth/boundary guards; onReady only needs one.
+  const onReadyFiredRef = useRef(false);
 
   // 3D mode state
   const [internal3DMode, setInternal3DMode] = useState(false);
@@ -2366,9 +2369,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     }
 
+    const signalReady = () => {
+      if (!onReadyFiredRef.current) {
+        onReadyFiredRef.current = true;
+        onReadyRef.current?.();
+      }
+    };
+
     leftMap.on('load', () => {
       mapsReady.current.left = true;
       console.log(`[MapView ${mapViewIdRef.current}] left map loaded`, { isQuad: Boolean(isQuad) });
+      signalReady();
       resizeAndRefresh(leftMap);
       if (mapsReady.current.right) {
         resizeAndRefresh(rightMap);
@@ -2383,6 +2394,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     rightMap.on('load', () => {
       mapsReady.current.right = true;
       console.log(`[MapView ${mapViewIdRef.current}] right map loaded`, { isQuad: Boolean(isQuad) });
+      signalReady();
       resizeAndRefresh(rightMap);
       if (mapsReady.current.left) {
         resizeAndRefresh(leftMap);
@@ -2394,6 +2406,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         requestAnimationFrame(() => reapplyBoundaryLayers());
       }
     });
+
+    // Safety-net: if neither map fires 'load' within 15 s, dismiss the spinner
+    // anyway so the app isn't permanently unusable. This guards against rare
+    // fatal MapLibre errors (bad style, WebGL context loss) that skip 'load'.
+    const readyTimeoutId = setTimeout(signalReady, 15_000);
 
     leftMapRef.current = leftMap;
     rightMapRef.current = rightMap;
@@ -2497,7 +2514,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     slider.addEventListener('pointercancel', onSliderPointerUp);
 
     return () => {
+      clearTimeout(readyTimeoutId);
       mapsReady.current = { left: false, right: false };
+      onReadyFiredRef.current = false;
       setAreMapsReady(false);
       if (fetchTimerRef.current) {
         clearTimeout(fetchTimerRef.current);
