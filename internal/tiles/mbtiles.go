@@ -4,18 +4,40 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// lonToTileX converts a longitude to a tile X index at the given zoom level.
+func lonToTileX(lon float64, z int) int {
+	return int(math.Floor((lon + 180.0) / 360.0 * math.Pow(2, float64(z))))
+}
+
+// latToTileY converts a latitude to a tile Y index (XYZ convention) at zoom.
+func latToTileY(lat float64, z int) int {
+	latRad := lat * math.Pi / 180.0
+	return int(math.Floor((1.0 - math.Log(math.Tan(latRad)+1.0/math.Cos(latRad))/math.Pi) / 2.0 * math.Pow(2, float64(z))))
+}
+
+// tileCacheLimit caps the in-process tile cache at 512 MB. On Linux the OS
+// page cache naturally keeps hot tiles in RAM, but on Windows NTFS I/O
+// overhead means every SQLite read is expensive even for recently-read tiles.
+// Caching in Go memory eliminates the SQLite round-trip entirely after the
+// first request for each tile.
+const tileCacheLimit = 512 * 1024 * 1024
+
 // MBTilesStore manages access to MBTiles databases
 type MBTilesStore struct {
-	databases map[string]*sql.DB
-	mu        sync.RWMutex
+	databases  map[string]*sql.DB
+	mu         sync.RWMutex
+	tileCache  sync.Map // key: "name/z/x/y" → []byte
+	cacheSizeB atomic.Int64
 }
 
 // TileMetadata holds metadata from an MBTiles file
@@ -56,20 +78,24 @@ func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 
 			dbPath := filepath.Join(dir, entry.Name())
 
-			// immutable=1: hint to SQLite that the file won't change, allowing
-			// aggressive read optimisations. cache=shared lets multiple connections
-			// share the same page cache, reducing memory and improving locality.
-			db, err := sql.Open("sqlite3", dbPath+"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000")
+			// immutable=1: SQLite skips all locking and change-detection, giving
+			// faster reads for static files. _mmap_size enables memory-mapped I/O:
+			// on Windows this dramatically reduces NTFS per-read overhead because
+			// SQLite reads via virtual memory instead of ReadFile syscalls.
+			// cache=shared lets multiple connections share one page cache.
+			db, err := sql.Open("sqlite3", dbPath+
+				"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000&_mmap_size=268435456")
 			if err != nil {
 				log.Printf("Warning: Failed to open MBTiles %s: %v", name, err)
 				continue
 			}
 
-			// Allow up to 8 concurrent read connections so that simultaneous tile
-			// requests (e.g. the ~12 tiles needed at initial zoom-3 view) are
-			// served in parallel rather than serialised through one connection.
-			db.SetMaxOpenConns(8)
-			db.SetMaxIdleConns(8)
+			// Allow up to 32 concurrent read connections. Quad view can generate
+			// ~80 simultaneous tile requests (8 maps × ~10 tiles at initial zoom);
+			// a pool of 8 serialised most of them. 32 keeps the SQLite reader
+			// busy without hitting OS file-descriptor limits on typical systems.
+			db.SetMaxOpenConns(32)
+			db.SetMaxIdleConns(32)
 
 			// Verify it's a valid MBTiles database
 			var count int
@@ -92,8 +118,17 @@ func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 	return store, nil
 }
 
-// GetTile retrieves a single tile from the named MBTiles database
+// GetTile retrieves a single tile from the named MBTiles database.
+// Results are cached in process memory (up to tileCacheLimit bytes) so that
+// repeated requests — common when switching between views or zooming back to
+// a previously visited area — never hit SQLite a second time. This is the
+// primary reason map loading is faster on repeated access on Windows.
 func (s *MBTilesStore) GetTile(name string, z, x, y int) ([]byte, error) {
+	cacheKey := fmt.Sprintf("%s/%d/%d/%d", name, z, x, y)
+	if v, ok := s.tileCache.Load(cacheKey); ok {
+		return v.([]byte), nil
+	}
+
 	s.mu.RLock()
 	db, ok := s.databases[name]
 	s.mu.RUnlock()
@@ -113,6 +148,14 @@ func (s *MBTilesStore) GetTile(name string, z, x, y int) ([]byte, error) {
 
 	if err != nil {
 		return nil, fmt.Errorf("tile not found: z=%d x=%d y=%d: %w", z, x, y, err)
+	}
+
+	// Store in cache while under the size limit. LoadOrStore prevents a
+	// double-store if two goroutines fetched the same tile simultaneously.
+	if s.cacheSizeB.Load() < tileCacheLimit {
+		if _, loaded := s.tileCache.LoadOrStore(cacheKey, tileData); !loaded {
+			s.cacheSizeB.Add(int64(len(tileData)))
+		}
 	}
 
 	return tileData, nil
@@ -175,6 +218,42 @@ func (s *MBTilesStore) ListTilesets() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// WarmCache pre-loads all tiles within the given WGS84 bounding box
+// [west, south, east, north] for zoom levels 0 through maxZoom into the
+// in-process tile cache. This eliminates cold-cache SQLite I/O for the tiles
+// most likely to be requested on the first map render — particularly valuable
+// on Windows where the OS page cache is less aggressive than Linux's.
+// It is safe to call concurrently; duplicate fetches are handled by LoadOrStore.
+func (s *MBTilesStore) WarmCache(name string, bounds [4]float64, maxZoom int) {
+	west, south, east, north := bounds[0], bounds[1], bounds[2], bounds[3]
+	loaded := 0
+	for z := 0; z <= maxZoom; z++ {
+		n := int(math.Pow(2, float64(z)))
+		minX := clamp(lonToTileX(west, z), 0, n-1)
+		maxX := clamp(lonToTileX(east, z), 0, n-1)
+		minY := clamp(latToTileY(north, z), 0, n-1) // north → smaller Y
+		maxY := clamp(latToTileY(south, z), 0, n-1) // south → larger Y
+		for x := minX; x <= maxX; x++ {
+			for y := minY; y <= maxY; y++ {
+				if _, err := s.GetTile(name, z, x, y); err == nil {
+					loaded++
+				}
+			}
+		}
+	}
+	log.Printf("Tile cache warmed: %d tiles for %s z0–%d", loaded, name, maxZoom)
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // Close closes all open database connections

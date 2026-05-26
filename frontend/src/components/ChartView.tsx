@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, Button, HStack, Text } from '@chakra-ui/react';
+import { Box, Button, HStack, Spinner, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import Plot from 'react-plotly.js';
 import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
@@ -349,6 +349,11 @@ function ChartView({
     current: Record<string, number>;
   } | null>(null);
   const [groupedRangeLoading, setGroupedRangeLoading] = useState(false);
+  const [summaryRangeData, setSummaryRangeData] = useState<{
+    reference: Record<string, number>;
+    current: Record<string, number>;
+  } | null>(null);
+  const [summaryRangeLoading, setSummaryRangeLoading] = useState(false);
   const [whiskerBounds, setWhiskerBounds] = useState<WhiskerBoundsResponse | null>(null);
   const [boxplotPage, setBoxplotPage] = useState(0);
   const [linePage, setLinePage] = useState(0);
@@ -540,12 +545,65 @@ function ChartView({
     };
   }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, groupedDisplayColumns]);
 
+  // Fetch aggregate ref/cur for the single selected attribute in extent/domain mode.
+  // The grouped chart has its own equivalent (groupedRangeData); this covers the summary chart.
+  useEffect(() => {
+    if (!visible || !attribute || rangeMode === 'site') {
+      setSummaryRangeData(null);
+      setSummaryRangeLoading(false);
+      return;
+    }
+    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+      setSummaryRangeData(null);
+      setSummaryRangeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSummaryRangeLoading(true);
+
+    const fetchAggregate = async (scenario: Scenario): Promise<Record<string, number>> => {
+      const params = new URLSearchParams({ scenario, attributes: attribute });
+      if (rangeMode === 'extent' && mapExtent?.bounds) {
+        const [minx, miny, maxx, maxy] = mapExtent.bounds;
+        params.set('minx', String(minx));
+        params.set('miny', String(miny));
+        params.set('maxx', String(maxx));
+        params.set('maxy', String(maxy));
+      }
+      const resp = await fetch(`/api/aggregate?${params.toString()}`);
+      if (!resp.ok) return {};
+      return resp.json() as Promise<Record<string, number>>;
+    };
+
+    Promise.all([fetchAggregate('reference'), fetchAggregate('current')])
+      .then(([reference, current]) => {
+        if (cancelled) return;
+        setSummaryRangeData({ reference, current });
+        setSummaryRangeLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSummaryRangeData(null);
+        setSummaryRangeLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [visible, attribute, rangeMode, mapExtent]);
+
   // Build summary chart data (existing behavior)
   const summaryData = useMemo(() => {
     if (!attribute) return null;
 
-    const refVal = resolveValue(attribute, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
-    const curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+    let refVal: number | undefined;
+    let curVal: number | undefined;
+    if (rangeMode !== 'site' && summaryRangeData) {
+      refVal = resolveMapValueForColumn(summaryRangeData.reference, attribute) ?? undefined;
+      curVal = resolveMapValueForColumn(summaryRangeData.current, attribute) ?? undefined;
+    } else {
+      refVal = resolveValue(attribute, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+      curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
+    }
     const idealVal = siteIndicators?.ideal?.[attribute] ?? refVal;
 
     const hasData = [refVal, curVal, idealVal].some(
@@ -565,7 +623,7 @@ function ChartView({
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData]);
+  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData]);
 
   // Build grouped chart data for all columns where Grouping variable matches the selected group.
   const groupedChartData = useMemo(() => {
@@ -608,9 +666,7 @@ function ChartView({
           ? siteCur
           : resolveMapValueForColumn(catchmentData?.current ?? null, col))
         : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
-      const targetVal = rangeMode === 'site'
-        ? (siteTarget ?? (typeof refVal === 'number' ? refVal : undefined))
-        : (typeof refVal === 'number' ? refVal : undefined);
+      const targetVal = siteTarget ?? (typeof refVal === 'number' ? refVal : undefined);
       const label = resolveAxisLabelForColumn(col, xAxisLabels) ?? col;
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
@@ -1947,6 +2003,8 @@ function ChartView({
     );
   };
 
+  const isLoading = groupedRangeLoading || summaryRangeLoading;
+
   return (
     <Box
       ref={containerRef}
@@ -1966,6 +2024,21 @@ function ChartView({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {visible && isLoading && (
+        <Box
+          position="absolute"
+          top={0} left={0} right={0} bottom={0}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          bg="rgba(26, 32, 44, 0.6)"
+          zIndex={10}
+          backdropFilter="blur(2px)"
+        >
+          <Spinner size="xl" color="orange.400" thickness="3px" speed="0.7s" />
+        </Box>
+      )}
 
       {visible && chartGroup && groupedChartType === 'boxplot' && boxplotPageCount > 1 && (
         <HStack

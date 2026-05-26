@@ -5,13 +5,16 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -28,14 +31,36 @@ var staticFS embed.FS
 //go:embed all:docs_site/*
 var docsFS embed.FS
 
+// glyphCacheLimit caps the in-process glyph cache at 64 MB.
+const glyphCacheLimit = 64 * 1024 * 1024
+
 // Server holds all the components for the web application
 type Server struct {
 	cfg          config.Config
 	httpServer   *http.Server
 	router       *mux.Router
-	tileStore *tiles.MBTilesStore
-	gpkgStore *geodata.GpkgStore
-	siteStore *sites.Store
+	tileStore    *tiles.MBTilesStore
+	gpkgStore    *geodata.GpkgStore
+	siteStore    *sites.Store
+
+	// Cached style JSON bytes (rewritten to use local URLs). Protected by styleOnce.
+	styleOnce  sync.Once
+	styleBytes []byte
+
+	// In-process glyph cache: key = "fontstack/range", value = []byte.
+	// Glyphs fetched from the external CDN on first use are served locally
+	// for all subsequent requests, eliminating external HTTPS latency in quad view.
+	glyphCache     sync.Map
+	glyphCacheSizeB atomic.Int64
+
+	// Auxiliary tile-only HTTP servers, one per extra localhost port.
+	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
+	// servers on sequential ports gives the browser N extra 6-connection pools
+	// so that the ~80 tile requests in quad view are served in parallel instead
+	// of being forced through a narrow bottleneck — particularly important on
+	// Windows where each localhost round-trip costs more than on Linux.
+	auxServers []*http.Server
+	auxPorts   []int
 
 	// Install state — protected by installMu
 	installMu     sync.Mutex
@@ -78,6 +103,14 @@ func New(cfg config.Config) (*Server, error) {
 	// Set up routes
 	s.setupRoutes()
 
+	// Pre-warm the tile cache in the background so that low-zoom tiles are
+	// already in RAM when the first map renders. The webview takes a second or
+	// two to start, giving the goroutine a head-start on loading Africa z0-5.
+	if s.tileStore != nil {
+		go s.tileStore.WarmCache("africa",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+	}
+
 	return s, nil
 }
 
@@ -102,6 +135,10 @@ func (s *Server) setupRoutes() {
 	// Style and TileJSON endpoints
 	s.router.HandleFunc("/data/style.json", s.handleStyleJSON).Methods("GET")
 	s.router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
+
+	// Glyph proxy: serves MapLibre font glyphs locally after fetching from CDN once.
+	// Eliminates repeated external HTTPS requests from each map instance in quad view.
+	s.router.HandleFunc("/fonts/{fontstack}/{range}.pbf", s.handleGlyphProxy).Methods("GET")
 
 	// Serve site images from data/images directory
 	imagesDir := filepath.Join(s.cfg.DataDir, "images")
@@ -153,6 +190,38 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // Start begins listening for HTTP connections
+// startAuxTileServers opens up to 3 extra listeners on the ports immediately
+// following the main port. Each listener runs a minimal router that only
+// handles tile requests, giving the browser additional HTTP/1.1 connection
+// pools (6 connections per origin) so tile fetches are not serialised.
+func (s *Server) startAuxTileServers(mainPort int) {
+	for i := 1; i <= 3; i++ {
+		port := mainPort + i
+		r := mux.NewRouter()
+		if s.tileStore != nil {
+			r.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
+				s.handleTileRequest).Methods("GET")
+		}
+		srv := &http.Server{
+			Handler:     r,
+			IdleTimeout: 120 * time.Second,
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			log.Printf("Aux tile server: port %d unavailable, skipping: %v", port, err)
+			continue
+		}
+		s.auxServers = append(s.auxServers, srv)
+		s.auxPorts = append(s.auxPorts, port)
+		go func(srv *http.Server, ln net.Listener, p int) {
+			log.Printf("Aux tile server listening on port %d", p)
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Printf("Aux tile server port %d: %v", p, err)
+			}
+		}(srv, ln, port)
+	}
+}
+
 func (s *Server) Start() error {
 	s.httpServer = &http.Server{
 		Addr:        fmt.Sprintf(":%d", s.cfg.Port),
@@ -164,11 +233,13 @@ func (s *Server) Start() error {
 		IdleTimeout: 120 * time.Second,
 	}
 
+	s.startAuxTileServers(s.cfg.Port)
+
 	log.Printf("Server listening on http://localhost:%d", s.cfg.Port)
 	return s.httpServer.ListenAndServe()
 }
 
-// Stop gracefully shuts down the server
+// Stop gracefully shuts down the server and all auxiliary tile servers.
 func (s *Server) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -181,59 +252,111 @@ func (s *Server) Stop() error {
 		s.gpkgStore.Close()
 	}
 
+	for _, aux := range s.auxServers {
+		aux.Shutdown(ctx) //nolint:errcheck
+	}
+
 	return s.httpServer.Shutdown(ctx)
 }
 
-// handleStyleJSON serves the MapBox style JSON from resources, rewriting the source URL
+// baseURL returns the scheme+host for the current request.
+func baseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s", scheme, r.Host)
+}
+
+// handleStyleJSON serves the MapLibre style JSON, rewriting tile source URLs to
+// use the local server and the glyphs URL to use the local caching proxy.
+// The result is built once and cached for the lifetime of the server; all
+// subsequent requests (e.g. the 4 panes in quad view) are served from memory.
 func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
-	stylePath := filepath.Join(s.cfg.DataDir, "mbtiles", "style.json")
-	data, err := os.ReadFile(stylePath)
-	if err != nil {
+	base := baseURL(r)
+
+	var buildErr error
+	s.styleOnce.Do(func() {
+		stylePath := filepath.Join(s.cfg.DataDir, "mbtiles", "style.json")
+		data, err := os.ReadFile(stylePath)
+		if err != nil {
+			buildErr = err
+			return
+		}
+
+		var style map[string]interface{}
+		if err := json.Unmarshal(data, &style); err != nil {
+			buildErr = err
+			return
+		}
+
+		// Rewrite tile sources to point to our local TileJSON endpoint.
+		if sources, ok := style["sources"].(map[string]interface{}); ok {
+			for name, src := range sources {
+				if srcMap, ok := src.(map[string]interface{}); ok {
+					srcMap["url"] = base + "/data/tiles.json"
+					sources[name] = srcMap
+				}
+			}
+		}
+
+		// Rewrite glyphs to use the local caching proxy instead of the external
+		// CDN. In quad view this eliminates 7 duplicate external HTTPS round-trips
+		// (only the first request per glyph range ever leaves the machine).
+		style["glyphs"] = base + "/fonts/{fontstack}/{range}.pbf"
+
+		out, err := json.Marshal(style)
+		if err != nil {
+			buildErr = err
+			return
+		}
+		s.styleBytes = out
+	})
+
+	if buildErr != nil || s.styleBytes == nil {
+		// styleOnce already ran and failed, or file not found — reset so a
+		// retry is possible after a datapack install.
+		s.styleOnce = sync.Once{}
 		http.Error(w, "Style not found", http.StatusNotFound)
 		return
 	}
 
-	// Parse and rewrite the source URL to use the request's host
-	var style map[string]interface{}
-	if err := json.Unmarshal(data, &style); err != nil {
-		http.Error(w, "Invalid style JSON", http.StatusInternalServerError)
-		return
-	}
-
-	// Rewrite sources to point to our tile endpoint
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-	if sources, ok := style["sources"].(map[string]interface{}); ok {
-		for name, src := range sources {
-			if srcMap, ok := src.(map[string]interface{}); ok {
-				srcMap["url"] = baseURL + "/data/tiles.json"
-				sources[name] = srcMap
-			}
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(style)
+	w.Write(s.styleBytes)
 }
 
-// handleTileJSON serves TileJSON metadata for the catchments tileset
+// handleTileJSON serves TileJSON metadata. It returns two tile URL variants —
+// one using "localhost" and one using "127.0.0.1" — so the browser treats them
+// as separate origins and opens two independent HTTP/1.1 connection pools
+// (6 connections each = 12 total). This halves the serialisation bottleneck
+// when 80+ tile requests arrive simultaneously in quad view on Windows.
 func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+	base := baseURL(r)
+
+	// Derive the alternate hostname: localhost ↔ 127.0.0.1.
+	altBase := base
+	switch {
+	case strings.Contains(r.Host, "localhost"):
+		altBase = strings.Replace(base, "localhost", "127.0.0.1", 1)
+	case strings.Contains(r.Host, "127.0.0.1"):
+		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
 	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+
+	tileURLs := []string{base + "/tiles/africa/{z}/{x}/{y}.pbf"}
+	if altBase != base {
+		tileURLs = append(tileURLs, altBase+"/tiles/africa/{z}/{x}/{y}.pbf")
+	}
+	// Aux ports each provide an independent 6-connection HTTP/1.1 pool.
+	for _, p := range s.auxPorts {
+		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/africa/{z}/{x}/{y}.pbf", p))
+	}
 
 	tileJSON := map[string]interface{}{
 		"tilejson": "2.2.0",
 		"name":     "africa",
 		"scheme":   "xyz",
-		"tiles":    []string{baseURL + "/tiles/africa/{z}/{x}/{y}.pbf"},
+		"tiles":    tileURLs,
 		"minzoom":  2,
 		"maxzoom":  15,
 		"bounds":   []float64{-17.546539, -34.837477, 63.500977, 37.352693},
@@ -258,9 +381,57 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tileJSON)
 }
 
+// handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
+// each {fontstack}/{range} pair is fetched from the upstream MapTiler CDN and
+// stored in an in-process cache; all subsequent requests (from other map
+// instances in quad view) are served instantly from memory.
+func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	fontstack := vars["fontstack"]
+	glyphRange := vars["range"]
+	cacheKey := fontstack + "/" + glyphRange
+
+	if v, ok := s.glyphCache.Load(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(v.([]byte))
+		return
+	}
+
+	upstreamURL := fmt.Sprintf(
+		"https://api.maptiler.com/fonts/%s/%s.pbf?key=cc4PpmmWZP73LjU1nsw3",
+		fontstack, glyphRange,
+	)
+	resp, err := http.Get(upstreamURL) //nolint:noctx
+	if err != nil {
+		http.Error(w, "glyph fetch failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "glyph read failed", http.StatusBadGateway)
+		return
+	}
+
+	if s.glyphCacheSizeB.Load() < glyphCacheLimit {
+		if _, loaded := s.glyphCache.LoadOrStore(cacheKey, data); !loaded {
+			s.glyphCacheSizeB.Add(int64(len(data)))
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(data)
+}
+
 // rebuildRoutes creates a new router and re-registers all routes with the current store references.
 // This is needed after a datapack install, since the old apiHandler holds stale nil store pointers.
 func (s *Server) rebuildRoutes() {
+	// A new datapack may have a different style.json — reset the cached bytes.
+	s.styleOnce = sync.Once{}
+	s.styleBytes = nil
 	s.router = mux.NewRouter()
 	s.setupRoutes()
 	if s.httpServer != nil {

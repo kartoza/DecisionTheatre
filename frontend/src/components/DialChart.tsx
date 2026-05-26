@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, HStack, Button, Tooltip } from '@chakra-ui/react';
+import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
@@ -115,6 +115,7 @@ interface DialChartProps {
   compact?: boolean;
   denseLayout?: boolean;
   paneCount?: number;
+  isLoading?: boolean;
 }
 
 function DialChart({
@@ -132,6 +133,7 @@ function DialChart({
   compact = false,
   denseLayout = false,
   paneCount = 1,
+  isLoading = false,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -384,13 +386,6 @@ function DialChart({
 
       return (
         <g key={color + (isTarget ? '-target' : '')}>
-          {/* Glow */}
-          <path
-            d={arrowPath}
-            fill={color}
-            opacity={0.5 * needleProgress}
-            style={{ filter: 'blur(12px)' }}
-          />
           {/* Shadow */}
           <path
             d={arrowPath}
@@ -406,7 +401,6 @@ function DialChart({
             strokeWidth={2}
             strokeLinecap="round"
             opacity={needleProgress}
-            style={{ filter: `drop-shadow(0 0 10px ${color})` }}
           />
           {/* Tip highlight */}
           <circle
@@ -817,6 +811,21 @@ function DialChart({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {visible && isLoading && (
+        <Box
+          position="absolute"
+          top={0} left={0} right={0} bottom={0}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          bg="rgba(26, 32, 44, 0.6)"
+          zIndex={10}
+          backdropFilter="blur(2px)"
+        >
+          <Spinner size="xl" color="orange.400" thickness="3px" speed="0.7s" />
+        </Box>
+      )}
     </Box>
   );
 }

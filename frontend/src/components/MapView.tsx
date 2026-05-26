@@ -38,6 +38,25 @@ interface MapViewProps {
   on3DModeChange?: (enabled: boolean) => void;
   /** Increment to force a choropleth refresh (e.g. after indicator save). */
   refreshKey?: number;
+  /** Called once when both map instances have finished loading. */
+  onReady?: () => void;
+}
+
+// Module-level style cache: fetch style.json exactly once across all MapView instances.
+// In quad view this cuts 8 identical HTTP requests down to 1.
+// _cachedStyle holds the resolved object so staggered panes can use it synchronously.
+let _cachedStyle: maplibregl.StyleSpecification | null = null;
+let _stylePromise: Promise<maplibregl.StyleSpecification> | null = null;
+function warmStyleCache(url: string): void {
+  if (_stylePromise) return;
+  _stylePromise = fetch(url)
+    .then(r => r.json() as Promise<maplibregl.StyleSpecification>)
+    .then(s => { _cachedStyle = s; return s; });
+}
+function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
+  // If the resolved style is already in memory (i.e. a prior pane already fetched it),
+  // pass the object directly so MapLibre skips the HTTP request entirely.
+  return _cachedStyle ?? url;
 }
 
 // Google Maps hybrid satellite raster style (no API key required for tile access)
@@ -691,7 +710,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady }: MapViewProps) {
   const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
@@ -724,6 +743,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Maps ready state - triggers re-render when maps finish loading
   const [areMapsReady, setAreMapsReady] = useState(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  useEffect(() => {
+    if (areMapsReady) onReadyRef.current?.();
+  }, [areMapsReady]);
 
   // 3D mode state
   const [internal3DMode, setInternal3DMode] = useState(false);
@@ -2214,6 +2238,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Load style from server (mbtiles base layers)
     const styleUrl = window.location.origin + '/data/style.json';
+    // Kick off the style fetch (no-op if another pane already started it).
+    warmStyleCache(styleUrl);
+    // Use the cached object if available (staggered panes will find it ready),
+    // otherwise fall back to the URL so MapLibre fetches it normally.
+    const mapStyle = getStyleForMap(styleUrl);
 
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
@@ -2221,7 +2250,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Create left map with all interactions enabled
     const leftMap = new maplibregl.Map({
       container: leftContainer,
-      style: styleUrl,
+      style: mapStyle,
       center: [20, 0],
       zoom: 3,
       pitch: is3DModeRef.current ? 60 : 0,
@@ -2240,7 +2269,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Create right map with all interactions enabled
     const rightMap = new maplibregl.Map({
       container: rightContainer,
-      style: styleUrl,
+      style: mapStyle,
       center: [20, 0],
       zoom: 3,
       pitch: is3DModeRef.current ? 60 : 0,

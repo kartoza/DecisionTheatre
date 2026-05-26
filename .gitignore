@@ -60,3 +60,4 @@ diff.txt
 dist/
 docs/CatchmentCalculations.xlsx
 git.sh
+node_modules

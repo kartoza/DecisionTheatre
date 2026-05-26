@@ -215,6 +215,7 @@ cp "$WINDOWS_EXE" "$DIST_DIR/decision-theatre.exe"
 
 echo "==> Building MSI package with WiX..."
 "$WIX_CMD" build "$PROJECT_ROOT/packaging/windows/product.wxs" \
+    -arch x64 \
     -d Version="$MSI_VERSION" \
     -o "$MSI_FILE"
 

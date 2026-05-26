@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Box, Flex, HStack, IconButton, Text, Tooltip, useColorModeValue } from '@chakra-ui/react';
+import { Box, Flex, HStack, IconButton, Spinner, Text, Tooltip, useColorModeValue } from '@chakra-ui/react';
 import { FiBarChart2, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
 import MapView from './MapView';
 import ChartView from './ChartView';
@@ -104,26 +104,63 @@ function ViewPane({
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
+
+  // Lazy-mount MapView: only render once the pane has been in map mode at least once.
+  // This prevents full map initialization (tile loading, WebGL context) for panes that
+  // start in chart/dial/table mode, which was the main cause of slow quad-view transitions.
+  const [hasShownMap, setHasShownMap] = useState(viewMode === 'map');
+  // mapReady starts false; it becomes true once MapView fires onReady.
+  // If the pane starts in map mode, hasShownMap is true but mapReady stays
+  // false until onReady fires — the spinner shows only during that initial load.
+  const [mapReady, setMapReady] = useState(false);
+  useEffect(() => {
+    if (viewMode === 'map') {
+      setHasShownMap(prev => {
+        // Only show the spinner on the very first transition into map mode.
+        // On subsequent returns (chart → map, dial → map) MapView is still
+        // mounted and areMapsReady is already true, so onReady will never
+        // re-fire — the spinner would get stuck indefinitely.
+        if (!prev) setMapReady(false);
+        return true;
+      });
+    }
+  }, [viewMode]);
+
+  // Stagger WebGL context creation across panes so the browser/GPU isn't hit with
+  // 8 simultaneous map initializations. Pane 0 starts immediately; each subsequent
+  // pane waits an extra 250 ms, spreading the load over ~750 ms in quad view.
+  const [mapMountReady, setMapMountReady] = useState(paneIndex === 0);
+  useEffect(() => {
+    if (paneIndex === 0) { setMapMountReady(true); return; }
+    const id = setTimeout(() => setMapMountReady(true), paneIndex * 250);
+    return () => clearTimeout(id);
+  }, [paneIndex]);
+
   const [dialCatchmentData, setDialCatchmentData] = useState<{
     referenceValue?: number;
     currentValue?: number;
   } | null>(null);
+  const [dialCatchmentLoading, setDialCatchmentLoading] = useState(false);
   const [dialRangeValues, setDialRangeValues] = useState<{
     referenceValue?: number;
     currentValue?: number;
   } | null>(null);
+  const [dialRangeLoading, setDialRangeLoading] = useState(false);
 
   useEffect(() => {
     if (viewMode !== 'dial' || !siteId || !comparison.attribute) {
       setDialCatchmentData(null);
+      setDialCatchmentLoading(false);
       return;
     }
 
     let cancelled = false;
+    setDialCatchmentLoading(true);
 
     getSiteCatchments(siteId)
       .then((catchments) => {
         if (cancelled || !catchments || catchments.length === 0) {
+          if (!cancelled) setDialCatchmentLoading(false);
           return;
         }
 
@@ -131,47 +168,43 @@ function ViewPane({
         const currentValue = computeAOIWeightedAttributeValue(catchments, 'current', comparison.attribute);
 
         if (referenceValue === undefined && currentValue === undefined) {
-          if (!cancelled) setDialCatchmentData(null);
+          if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
           return;
         }
 
-        const nextData = {
-          referenceValue,
-          currentValue,
-        };
-
         if (!cancelled) {
-          setDialCatchmentData(nextData);
+          setDialCatchmentData({ referenceValue, currentValue });
+          setDialCatchmentLoading(false);
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setDialCatchmentData(null);
-        }
+        if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [comparison.attribute, siteId, viewMode]);
 
   useEffect(() => {
     if (viewMode !== 'dial' || !comparison.attribute) {
       setDialRangeValues(null);
+      setDialRangeLoading(false);
       return;
     }
 
     if (rangeMode === 'site') {
       setDialRangeValues(null);
+      setDialRangeLoading(false);
       return;
     }
 
     if (rangeMode === 'extent' && !mapExtent?.bounds) {
       setDialRangeValues(null);
+      setDialRangeLoading(false);
       return;
     }
 
     let cancelled = false;
+    setDialRangeLoading(true);
 
     const fetchAggregate = async (scenario: string): Promise<number | undefined> => {
       const params = new URLSearchParams({
@@ -200,13 +233,12 @@ function ViewPane({
     ]).then(([referenceValue, currentValue]) => {
       if (cancelled) return;
       setDialRangeValues({ referenceValue, currentValue });
+      setDialRangeLoading(false);
     }).catch(() => {
-      if (!cancelled) setDialRangeValues(null);
+      if (!cancelled) { setDialRangeValues(null); setDialRangeLoading(false); }
     });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [
     viewMode,
     rangeMode,
@@ -380,7 +412,7 @@ function ViewPane({
       border={compact ? '1px' : 'none'}
       borderColor={borderColor}
     >
-      {/* Map layer */}
+      {/* Map layer — only mounted after the pane has first entered map mode */}
       <Box
         position="absolute"
         top={0}
@@ -391,7 +423,7 @@ function ViewPane({
         transition="opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
         pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
       >
-        <MapView
+        {hasShownMap && mapMountReady && <MapView
           comparison={comparison}
           onOpenSettings={() => onFocusPane(paneIndex)}
           onIdentify={onIdentify}
@@ -413,7 +445,25 @@ function ViewPane({
           swiperPosition={swiperPosition}
           onSwiperPositionChange={onSwiperPositionChange}
           refreshKey={refreshKey}
-        />
+          onReady={() => setMapReady(true)}
+        />}
+        {viewMode === 'map' && !mapReady && (
+          <Box
+            position="absolute"
+            top={0}
+            left={0}
+            right={0}
+            bottom={0}
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            bg="rgba(26, 32, 44, 0.75)"
+            zIndex={10}
+            backdropFilter="blur(2px)"
+          >
+            <Spinner size="xl" color="orange.400" thickness="3px" speed="0.7s" />
+          </Box>
+        )}
       </Box>
 
       {/* Line Chart layer */}
@@ -447,6 +497,7 @@ function ViewPane({
         compact={compact}
         denseLayout={denseDialLayout}
         paneCount={paneCount}
+        isLoading={dialCatchmentLoading || dialRangeLoading}
       />
 
       {/* Quad dial empty state for panes with no selected factor */}
