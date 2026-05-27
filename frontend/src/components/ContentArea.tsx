@@ -4,7 +4,7 @@ import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiT
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
-import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
+import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import { useEffect, useMemo, useState } from 'react';
 
 interface ContentAreaProps {
@@ -137,6 +137,7 @@ function ContentArea({
   const { targetInputs } = useAttributeTargetInputs();
   const { units: attributeUnits } = useAttributeUnits();
   const { targetRanges } = useAttributeTargetRanges();
+  const { variableTypes } = useAttributeVariableTypes();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
@@ -151,7 +152,21 @@ function ContentArea({
     const keys = Object.entries(targetInputs)
       .filter(([, allowed]) => allowed)
       .map(([key]) => key)
-      .filter((key) => availableKeys.has(key));
+      .filter((key) => availableKeys.has(key))
+      .filter((key) => {
+        const refVal = siteIndicators?.reference?.[key];
+        const curVal = siteIndicators?.current?.[key];
+        return (typeof refVal === 'number' && Number.isFinite(refVal)) ||
+               (typeof curVal === 'number' && Number.isFinite(curVal));
+      })
+      .filter((key) => {
+        if (variableTypes[key] !== 'Herbivores') return true;
+        const refVal = siteIndicators?.reference?.[key];
+        const curVal = siteIndicators?.current?.[key];
+        const refNum = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
+        const curNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : 0;
+        return refNum > 0 || curNum > 0;
+      });
     return keys
       .filter((key, idx, arr) => arr.indexOf(key) === idx)
       .sort((a, b) => {
@@ -159,7 +174,16 @@ function ContentArea({
         const bLabel = attributeDetails[b] ?? b;
         return aLabel.localeCompare(bLabel);
       });
-  }, [attributeDetails, siteIndicators, targetInputs]);
+  }, [attributeDetails, siteIndicators, targetInputs, variableTypes]);
+
+  const targetHasBeenUpdated = useMemo(() => {
+    if (!siteIndicators?.ideal || !siteIndicators?.reference) return false;
+    return Object.entries(siteIndicators.ideal).some(([key, idealVal]) => {
+      const refVal = siteIndicators.reference[key];
+      return typeof refVal === 'number' && typeof idealVal === 'number' &&
+             Number.isFinite(refVal) && Number.isFinite(idealVal) && idealVal !== refVal;
+    });
+  }, [siteIndicators]);
 
   // Populate draft values from current ideal whenever the modal opens, regardless
   // of which entry point triggered it (header "Targets" button vs internal button).
@@ -393,6 +417,8 @@ function ContentArea({
                   chartAxisLabelFilter={chartAxisLabelFilters?.[i] ?? null}
                   chartGraphMode={chartGraphModes?.[i] ?? null}
                   refreshKey={refreshKey}
+                  targetHasBeenUpdated={targetHasBeenUpdated}
+                  editableTargetKeys={editableTargetKeys}
                 />
               </motion.div>
             ))}
