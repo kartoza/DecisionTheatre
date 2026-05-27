@@ -491,28 +491,34 @@ function DialChart({
       };
     }
 
-    const elbowRadius = anchorRadius + (compact ? 24 : 30);
-    const horizontalDirection = Math.cos(angleRad) >= 0 ? 1 : -1;
-    const horizontalLength = compact ? 42 : 56;
-    const textAnchor: 'start' | 'end' = horizontalDirection > 0 ? 'start' : 'end';
+    // Pure radial callout: line extends away from the arc center so the tip is
+    // always beyond the outer arc edge. Text then anchors outward, guaranteeing
+    // it never overlaps the arc regardless of where the reference sits.
+    const cosA = Math.cos(angleRad);
+    const sinA = Math.sin(angleRad);
+    const calloutLength = compact ? 35 : 55;
+    const endRadius = anchorRadius + calloutLength;
 
-    const startX = centerX + Math.cos(angleRad) * anchorRadius;
-    const startY = centerY - Math.sin(angleRad) * anchorRadius;
-    const elbowX = centerX + Math.cos(angleRad) * elbowRadius;
-    const elbowY = centerY - Math.sin(angleRad) * elbowRadius;
-    const endX = elbowX + horizontalDirection * horizontalLength;
-    const endY = elbowY;
+    const startX = centerX + cosA * anchorRadius;
+    const startY = centerY - sinA * anchorRadius;
+    const endX = centerX + cosA * endRadius;
+    const endY = centerY - sinA * endRadius;
+
+    // Anchor text outward from the line tip so it extends away from the arc
+    const textAnchor: 'start' | 'end' | 'middle' =
+      cosA > 0.15 ? 'start' : cosA < -0.15 ? 'end' : 'middle';
+    const textOffX = cosA > 0.15 ? 6 : cosA < -0.15 ? -6 : 0;
 
     return {
       markerOnly: false as const,
       startX,
       startY,
-      elbowX,
-      elbowY,
+      elbowX: endX,
+      elbowY: endY,
       endX,
       endY,
-      textX: endX + horizontalDirection * 8,
-      textY: endY - 2,
+      textX: endX + textOffX,
+      textY: endY - 4,
       textAnchor,
       fontSize: compact ? 12 : 14,
     };

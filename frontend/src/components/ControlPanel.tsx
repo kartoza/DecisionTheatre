@@ -154,13 +154,15 @@ function SearchableSelect({
   placeholder,
   focusColor = '#2bb0ed',
   allowClear = false,
+  containerMt = 10,
 }: {
   value: string;
   onChange: (value: string) => void;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; sublabel?: string }[];
   placeholder?: string;
   focusColor?: string;
   allowClear?: boolean;
+  containerMt?: number | string;
 }) {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -177,7 +179,9 @@ function SearchableSelect({
   const filtered = useMemo(() => {
     if (!search) return options;
     const q = search.toLowerCase();
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    return options.filter(
+      (o) => o.label.toLowerCase().includes(q) || o.sublabel?.toLowerCase().includes(q),
+    );
   }, [options, search]);
 
   const handleSelect = (val: string) => {
@@ -187,7 +191,7 @@ function SearchableSelect({
   };
 
   return (
-    <Box position="relative" mt={10}>
+    <Box position="relative" mt={containerMt}>
       <Input
         value={isOpen ? search : selectedLabel}
         onChange={(e) => setSearch(e.target.value)}
@@ -244,6 +248,18 @@ function SearchableSelect({
                 onMouseDown={() => handleSelect(opt.value)}
               >
                 {opt.label}
+                {opt.sublabel && (
+                  <Box
+                    as="span"
+                    ml={2}
+                    fontSize="xs"
+                    opacity={0.6}
+                    fontWeight="400"
+                    fontFamily="mono"
+                  >
+                    {opt.sublabel}
+                  </Box>
+                )}
               </Box>
             ))
           )}
@@ -493,6 +509,7 @@ function ControlPanel({
     return filtered.map((col) => ({
       value: col,
       label: attributeDetails[col] || col,
+      sublabel: attributeDetails[col] ? col : undefined,
     }));
   }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
 
@@ -895,20 +912,14 @@ function ControlPanel({
                 </Tooltip>
               </HStack>
 
-              <Select
-                value={comparison.attribute}
-                onChange={(e) => onAttributeChange(e.target.value)}
+              <SearchableSelect
+                value={comparison.attribute ?? ''}
+                onChange={onAttributeChange}
+                options={factorOptions}
                 placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
-                size="md"
-                bg={useColorModeValue('gray.50', 'gray.700')}
-                border="none"
-                fontWeight="500"
-                _focus={{ boxShadow: '0 0 0 2px #4caf50' }}
-              >
-                {factorOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </Select>
+                focusColor="#4caf50"
+                containerMt={2}
+              />
 
               {comparison.attribute && (
                 <Text fontSize="xs" color="gray.500" mt={2}>
