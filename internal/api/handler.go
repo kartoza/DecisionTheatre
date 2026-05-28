@@ -1324,15 +1324,17 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, gpk
 
 // UpdateIndicatorsRequest represents a request to update indicator values
 type UpdateIndicatorsRequest struct {
-	Ideal          map[string]float64 `json:"ideal"`
-	IdealLower     map[string]float64 `json:"idealLower"`
-	IdealUpper     map[string]float64 `json:"idealUpper"`
-	Reference      map[string]float64 `json:"reference"`
-	ReferenceLower map[string]float64 `json:"referenceLower"`
-	ReferenceUpper map[string]float64 `json:"referenceUpper"`
-	Current        map[string]float64 `json:"current"`
-	CurrentLower   map[string]float64 `json:"currentLower"`
-	CurrentUpper   map[string]float64 `json:"currentUpper"`
+	Runtime        string                 `json:"runtime"`
+	Site           map[string]interface{} `json:"site"`
+	Ideal          map[string]float64     `json:"ideal"`
+	IdealLower     map[string]float64     `json:"idealLower"`
+	IdealUpper     map[string]float64     `json:"idealUpper"`
+	Reference      map[string]float64     `json:"reference"`
+	ReferenceLower map[string]float64     `json:"referenceLower"`
+	ReferenceUpper map[string]float64     `json:"referenceUpper"`
+	Current        map[string]float64     `json:"current"`
+	CurrentLower   map[string]float64     `json:"currentLower"`
+	CurrentUpper   map[string]float64     `json:"currentUpper"`
 }
 
 // handleUpdateIndicators updates the indicator values for a site.
@@ -1346,20 +1348,41 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	}
 
 	id := mux.Vars(r)["id"]
-	site, err := h.siteStore.Get(id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
-	if site.Indicators == nil {
-		respondError(w, http.StatusBadRequest, "site has no indicators - extract them first")
-		return
-	}
 
 	var req UpdateIndicatorsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var site *sites.Site
+	var err error
+
+	if req.Runtime == "browser" {
+		if len(req.Site) == 0 {
+			respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
+			return
+		}
+		siteJSON, marshalErr := json.Marshal(req.Site)
+		if marshalErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+		site = &sites.Site{}
+		if err = json.Unmarshal(siteJSON, site); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+	} else {
+		site, err = h.siteStore.Get(id)
+		if err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+	}
+
+	if site.Indicators == nil {
+		respondError(w, http.StatusBadRequest, "site has no indicators - extract them first")
 		return
 	}
 
@@ -1461,6 +1484,12 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 			}
 			propagateIdealToCatchments(site.Catchments, oldIdeal, site.Indicators.Ideal, siteRef)
 		}
+	}
+
+	// For browser runtime, return the site directly without storing
+	if req.Runtime == "browser" {
+		respondJSON(w, http.StatusOK, site)
+		return
 	}
 
 	updated, err := h.siteStore.Update(id, site)

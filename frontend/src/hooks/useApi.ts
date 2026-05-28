@@ -611,6 +611,35 @@ export async function patchSiteIndicators(
   indicators: Site['indicators']
 ): Promise<Site> {
   if (isBrowserRuntime()) {
+    const localSite = loadLocalSite(id);
+    if (localSite) {
+      try {
+        const { thumbnail, ...siteWithoutThumbnail } = localSite;
+        const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            runtime: 'browser',
+            site: siteWithoutThumbnail,
+            ideal: indicators?.ideal,
+            idealLower: indicators?.idealLower,
+            idealUpper: indicators?.idealUpper,
+            reference: indicators?.reference,
+            referenceLower: indicators?.referenceLower,
+            referenceUpper: indicators?.referenceUpper,
+            current: indicators?.current,
+            currentLower: indicators?.currentLower,
+            currentUpper: indicators?.currentUpper,
+          }),
+        });
+        if (response.ok) {
+          const updatedSite: Site = await response.json();
+          return updateSite(id, { indicators: updatedSite.indicators });
+        }
+      } catch {
+        // Fall through to local-only update
+      }
+    }
     return updateSite(id, { indicators });
   }
 
