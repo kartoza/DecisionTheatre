@@ -548,7 +548,8 @@ async function fetchChoroplethData(
   scenario: Scenario,
   attribute: string,
   bounds: maplibregl.LngLatBounds,
-  siteId?: string | null
+  siteId?: string | null,
+  idealOverrides?: Map<number, number>
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -569,7 +570,20 @@ async function fetchChoroplethData(
   try {
     const resp = await fetch(`/api/choropleth?${params}`);
     if (!resp.ok) return null;
-    return await resp.json();
+    const data: ChoroplethData = await resp.json();
+
+    // In browser mode the backend store is never updated, so apply per-catchment
+    // ideal overrides client-side for the future scenario.
+    if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
+      for (const feature of data.features) {
+        const val = idealOverrides.get(feature.properties.HYBAS_ID);
+        if (val !== undefined) {
+          feature.properties[attribute] = val;
+        }
+      }
+    }
+
+    return data;
   } catch (err) {
     console.error('Failed to fetch choropleth data:', err);
     return null;
@@ -884,11 +898,29 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const extruded = is3DModeRef.current;
     const bounds = leftMap.getBounds();
 
+    // In browser mode the backend store is never updated with ideal values, so we
+    // load per-catchment ideal overrides from localStorage and apply them client-side.
+    let browserIdealOverrides: Map<number, number> | undefined;
+    if (getAppRuntime() === 'browser' && siteId &&
+        (c.leftScenario === 'future' || c.rightScenario === 'future')) {
+      const catchments = await getSiteCatchments(siteId).catch(() => []);
+      if (catchments.length > 0 && c.attribute) {
+        browserIdealOverrides = new Map();
+        for (const cat of catchments) {
+          const val = cat.ideal?.[c.attribute];
+          if (val !== undefined) {
+            const numId = Math.round(parseFloat(cat.id));
+            if (!isNaN(numId)) browserIdealOverrides.set(numId, val);
+          }
+        }
+      }
+    }
+
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
-        fetchChoroplethData(c.leftScenario, c.attribute, bounds, siteId),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds, siteId),
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides),
       ]);
 
       let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
