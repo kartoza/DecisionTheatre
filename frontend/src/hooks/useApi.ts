@@ -633,7 +633,10 @@ export async function patchSiteIndicators(
           }),
         });
         if (response.ok) {
-          const updatedSite: Site = await response.json();
+          const updatedSite = await response.json() as SiteWithCatchments;
+          if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
+            persistLocalCatchments(id, updatedSite.catchments);
+          }
           return updateSite(id, { indicators: updatedSite.indicators });
         }
       } catch {
