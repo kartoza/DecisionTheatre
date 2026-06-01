@@ -4,7 +4,7 @@ import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, 
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
@@ -40,6 +40,7 @@ interface MapViewProps {
   refreshKey?: number;
   /** Called once when both map instances have finished loading. */
   onReady?: () => void;
+  siteIndicators?: SiteIndicators | null;
 }
 
 // Module-level style cache: fetch style.json exactly once across all MapView instances.
@@ -724,7 +725,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
@@ -779,6 +780,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   attributeColorsRef.current = attributeColors;
   const attributeDetailsRef = useRef(attributeDetails);
   attributeDetailsRef.current = attributeDetails;
+  const siteIndicatorsRef = useRef(siteIndicators);
+  siteIndicatorsRef.current = siteIndicators;
 
   // Store identify mode and callback in refs for event handlers
   const isIdentifyModeRef = useRef(isIdentifyMode);
@@ -1781,6 +1784,155 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Handle identify click via MapLibre queryRenderedFeatures
   const handleIdentifyClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent, side: 'left' | 'right') => {
     if (!isIdentifyModeRef.current || !onIdentifyRef.current) return;
+
+    // Check for site boundary line click first — show site indicators popup if hit
+    const siteBoundaryLayers: string[] = [];
+    if (map.getLayer(SITE_BOUNDARY_LINE)) siteBoundaryLayers.push(SITE_BOUNDARY_LINE);
+    if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) siteBoundaryLayers.push(SITE_BOUNDARY_OFFWHITE);
+
+    if (siteBoundaryLayers.length > 0) {
+      const siteFeatures = map.queryRenderedFeatures(e.point, { layers: siteBoundaryLayers });
+      const currentSiteIndicators = siteIndicatorsRef.current;
+      if (siteFeatures.length > 0 && currentSiteIndicators) {
+        const details = attributeDetailsRef.current;
+        const allKeys = new Set<string>([
+          ...Object.keys(currentSiteIndicators.reference ?? {}),
+          ...Object.keys(currentSiteIndicators.current ?? {}),
+        ]);
+
+        const rows = Array.from(allKeys)
+          .sort()
+          .map((key) => {
+            const refVal = currentSiteIndicators.reference?.[key];
+            const curVal = currentSiteIndicators.current?.[key];
+            const refNumeric = getNumericIdentifyValue(refVal);
+            const curNumeric = getNumericIdentifyValue(curVal);
+            if (refNumeric === null && curNumeric === null) return null;
+            const trend = getComparisonTrend(refNumeric, curNumeric);
+            const delta = refNumeric === null || curNumeric === null ? null : curNumeric - refNumeric;
+            const referenceMagnitude = refNumeric === null ? 1 : Math.abs(refNumeric) || 1;
+            const trendRatio = delta === null ? 0 : Math.min(1, Math.abs(delta) / referenceMagnitude);
+            const trendWidthPx = delta === null ? 0 : Math.max(2, trendRatio * 26);
+            return {
+              label: details[key] ?? key,
+              ref: formatIdentifyValue(refVal),
+              cur: formatIdentifyValue(curVal),
+              trend,
+              delta,
+              trendWidthPx,
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+
+        const popupContainer = document.createElement('div');
+        popupContainer.style.cssText = `
+          position:absolute;z-index:20;transform:translate(-50%,calc(-100% - 12px));
+          min-width:300px;max-height:340px;overflow-y:auto;
+          font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+          background:#1A202C;color:#E2E8F0;padding:8px;border-radius:8px;
+        `.trim().replace(/\n\s+/g, '');
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:700;color:#F7FAFC;font-size:13px;';
+        title.textContent = 'Site Indicators';
+
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.textContent = 'x';
+        closeButton.style.cssText = 'background:transparent;border:1px solid #4A5568;color:#E2E8F0;border-radius:4px;width:22px;height:22px;cursor:pointer;line-height:18px;font-weight:700;';
+
+        header.appendChild(title);
+        header.appendChild(closeButton);
+        popupContainer.appendChild(header);
+
+        if (rows.length === 0) {
+          const empty = document.createElement('div');
+          empty.style.cssText = 'font-size:12px;color:#A0AEC0;';
+          empty.textContent = 'No indicator values available.';
+          popupContainer.appendChild(empty);
+        } else {
+          const table = document.createElement('table');
+          table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px;';
+
+          const headerRow = document.createElement('tr');
+          for (const [text, align] of [['Attribute', 'left'], ['Reference', 'right'], ['Current', 'right'], ['Departure from ref.', 'left']] as const) {
+            const th = document.createElement('th');
+            th.textContent = text;
+            th.style.cssText = `text-align:${align};padding:4px 6px;color:#CBD5E0;`;
+            headerRow.appendChild(th);
+          }
+          table.appendChild(headerRow);
+
+          for (const row of rows) {
+            const tr = document.createElement('tr');
+
+            const attrCell = document.createElement('td');
+            attrCell.textContent = row.label;
+            attrCell.style.cssText = 'padding:3px 6px;border-top:1px solid #4A5568;';
+
+            const refCell = document.createElement('td');
+            refCell.textContent = row.ref;
+            refCell.style.cssText = 'padding:3px 6px;text-align:right;border-top:1px solid #4A5568;';
+
+            const curCell = document.createElement('td');
+            curCell.textContent = row.cur;
+            curCell.style.cssText = 'padding:3px 6px;text-align:right;border-top:1px solid #4A5568;';
+
+            const trendCell = document.createElement('td');
+            trendCell.style.cssText = 'padding:3px 6px;border-top:1px solid #4A5568;min-width:72px;';
+
+            const trendChart = document.createElement('div');
+            trendChart.style.cssText = 'position:relative;width:68px;height:12px;';
+
+            const refLine = document.createElement('div');
+            refLine.style.cssText = 'position:absolute;left:50%;top:1px;bottom:1px;width:2px;transform:translateX(-1px);border-radius:9999px;background:#A0AEC0;';
+            trendChart.appendChild(refLine);
+
+            if (row.delta === null) {
+              const dot = document.createElement('div');
+              dot.style.cssText = 'position:absolute;left:50%;top:4px;width:4px;height:4px;transform:translateX(-2px);border-radius:9999px;background:#718096;';
+              trendChart.appendChild(dot);
+            } else if (row.delta === 0) {
+              const dot = document.createElement('div');
+              dot.style.cssText = 'position:absolute;left:50%;top:4px;width:4px;height:4px;transform:translateX(-2px);border-radius:9999px;background:#A0AEC0;';
+              trendChart.appendChild(dot);
+            } else {
+              const bar = document.createElement('div');
+              const leftPos = row.delta > 0 ? 'calc(50% + 1px)' : `calc(50% - ${row.trendWidthPx + 1}px)`;
+              bar.style.cssText = `position:absolute;top:5px;height:2px;width:${row.trendWidthPx}px;border-radius:9999px;background:${row.trend === 'up' ? '#FC8181' : '#63B3ED'};left:${leftPos};`;
+              trendChart.appendChild(bar);
+            }
+
+            trendCell.appendChild(trendChart);
+            tr.appendChild(attrCell);
+            tr.appendChild(refCell);
+            tr.appendChild(curCell);
+            tr.appendChild(trendCell);
+            table.appendChild(tr);
+          }
+          popupContainer.appendChild(table);
+        }
+
+        const pointer = document.createElement('div');
+        pointer.style.cssText = 'position:absolute;left:50%;bottom:-8px;width:12px;height:12px;transform:translateX(-50%) rotate(45deg);background:#1A202C;';
+        popupContainer.appendChild(pointer);
+
+        removeIdentifyOverlay(false);
+        const mapContainer = mapContainerRef.current;
+        if (!mapContainer) return;
+
+        identifyOverlayRef.current = popupContainer;
+        identifyOverlayLngLatRef.current = [e.lngLat.lng, e.lngLat.lat];
+        mapContainer.appendChild(popupContainer);
+        updateIdentifyOverlayPosition();
+
+        closeButton.onclick = () => { removeIdentifyOverlay(true); };
+        return;
+      }
+    }
 
     // Build list of layers to query - include choropleth layers if they exist
     const layersToQuery: string[] = [];

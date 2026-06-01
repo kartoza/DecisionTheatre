@@ -484,6 +484,7 @@ function ViewPane({
           onSwiperPositionChange={onSwiperPositionChange}
           refreshKey={refreshKey}
           onReady={() => setMapReady(true)}
+          siteIndicators={siteIndicators}
         />}
         {viewMode === 'map' && !mapReady && (
           <Box
