@@ -193,6 +193,9 @@ export function saveCurrentSite(siteId: string | null): void {
 }
 
 export function loadCurrentPage(): AppPage {
+  if (typeof window !== 'undefined' && window.__DECISION_THEATRE_WEBVIEW__ === true) {
+    return 'landing';
+  }
   try {
     const raw = localStorage.getItem(STORAGE_CURRENT_PAGE_KEY);
     if (raw === 'landing' || raw === 'about' || raw === 'sites' || raw === 'create-site' || raw === 'map' || raw === 'explore' || raw === 'indicators') {

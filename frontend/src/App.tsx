@@ -11,7 +11,7 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
-import { patchSite, patchSiteIndicators, useServerInfo } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
@@ -103,6 +103,31 @@ function App() {
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
   useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
+
+  // On startup: if a site was open when the app last closed, fetch it from the API
+  // so the map has access to geometry/bounds/indicators. Layout/pane state is already
+  // restored from localStorage above, so we only need the site object itself.
+  useEffect(() => {
+    if (!currentSiteId) return;
+    isLoadingSiteRef.current = true;
+    getSite(currentSiteId)
+      .then((site) => {
+        if (site) {
+          setCurrentSite(site);
+        } else {
+          setCurrentSiteId(null);
+          setCurrentPage('sites');
+        }
+      })
+      .catch(() => {
+        setCurrentSiteId(null);
+        setCurrentPage('sites');
+      })
+      .finally(() => {
+        isLoadingSiteRef.current = false;
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally runs only on mount
 
   const startBackgroundIndicatorExtraction = useCallback((site: Site | null) => {
     if (!site || site.indicators || !site.catchmentIds?.length || extractingIndicatorsRef.current) {

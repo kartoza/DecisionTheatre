@@ -237,7 +237,16 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     const matchedIds = new Set<string>();
 
     const overlapLoopStart = performance.now();
-    for (const feature of candidates) {
+    let lastYieldAt = performance.now();
+    for (let i = 0; i < candidates.length; i++) {
+      // Yield to the browser every ~16ms so the UI stays responsive without
+      // adding fixed overhead on fast hardware.
+      const now = performance.now();
+      if (now - lastYieldAt >= 16) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        lastYieldAt = performance.now();
+      }
+      const feature = candidates[i];
       const catchmentGeometry = feature?.geometry;
       if (!catchmentGeometry || !isPolygonalGeometry(catchmentGeometry)) continue;
 

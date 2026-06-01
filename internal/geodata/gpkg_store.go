@@ -1035,16 +1035,22 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
 	}
 
-	scenarios := []string{"current", "reference"}
-	scenarioData := make(map[string]map[string]map[string]float64)
+	// Query current and reference scenarios concurrently — independent reads.
+	type scenarioResult struct {
+		scenario string
+		data     map[string]map[string]float64
+		err      error
+	}
+	scenarioCh := make(chan scenarioResult, 2)
 
-	for _, scenario := range scenarios {
+	queryScenario := func(scenario string) {
 		scenarioStart := time.Now()
 		tableName := "scenario_" + scenario
 		idColumn, err := s.resolveScenarioIDColumn(tableName)
 		if err != nil {
 			log.Printf("Failed to resolve ID column for %s: %v", tableName, err)
-			continue
+			scenarioCh <- scenarioResult{scenario: scenario, data: nil}
+			return
 		}
 
 		queryArgs := textArgs
@@ -1061,10 +1067,12 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		rows, err := s.db.Query(query, queryArgs...)
 		if err != nil {
 			log.Printf("Failed to query %s: %v", tableName, err)
-			continue
+			scenarioCh <- scenarioResult{scenario: scenario, data: nil}
+			return
 		}
+		defer rows.Close()
 
-		scenarioData[scenario] = make(map[string]map[string]float64)
+		data := make(map[string]map[string]float64)
 		rowCount := 0
 
 		for rows.Next() {
@@ -1087,15 +1095,29 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 					attrs[col] = values[i].Float64
 				}
 			}
-			scenarioData[scenario][normalizedID] = attrs
+			data[normalizedID] = attrs
 			rowCount++
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("failed to scan %s: %w", tableName, err)
+			scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to scan %s: %w", tableName, err)}
+			return
 		}
-		rows.Close()
 		log.Printf("[perf] GetCatchmentIndicatorsByIDs step=scenarioQuery scenario=%s id_column=%s rows=%d duration_ms=%d", scenario, idColumn, rowCount, time.Since(scenarioStart).Milliseconds())
+		scenarioCh <- scenarioResult{scenario: scenario, data: data}
+	}
+
+	go queryScenario("current")
+	go queryScenario("reference")
+
+	scenarioData := make(map[string]map[string]map[string]float64)
+	for range [2]struct{}{} {
+		r := <-scenarioCh
+		if r.err != nil {
+			return nil, r.err
+		}
+		if r.data != nil {
+			scenarioData[r.scenario] = r.data
+		}
 	}
 
 	areaStart := time.Now()
@@ -1793,10 +1815,34 @@ func (s *GpkgStore) ComputeWhiskerBounds(catchments []CatchmentIndicators) Whisk
 		return result
 	}
 
-	return WhiskerBounds{
-		ReferenceLower: queryTable("scenario_reference_lower"),
-		ReferenceUpper: queryTable("scenario_reference_upper"),
-		CurrentLower:   queryTable("scenario_current_lower"),
-		CurrentUpper:   queryTable("scenario_current_upper"),
+	// Run all four table queries concurrently — they are independent reads.
+	type namedResult struct {
+		name   string
+		values map[string]float64
 	}
+	ch := make(chan namedResult, 4)
+	for _, tbl := range []string{
+		"scenario_reference_lower",
+		"scenario_reference_upper",
+		"scenario_current_lower",
+		"scenario_current_upper",
+	} {
+		tbl := tbl
+		go func() { ch <- namedResult{name: tbl, values: queryTable(tbl)} }()
+	}
+	var bounds WhiskerBounds
+	for range [4]struct{}{} {
+		r := <-ch
+		switch r.name {
+		case "scenario_reference_lower":
+			bounds.ReferenceLower = r.values
+		case "scenario_reference_upper":
+			bounds.ReferenceUpper = r.values
+		case "scenario_current_lower":
+			bounds.CurrentLower = r.values
+		case "scenario_current_upper":
+			bounds.CurrentUpper = r.values
+		}
+	}
+	return bounds
 }
