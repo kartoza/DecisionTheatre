@@ -1,0 +1,5 @@
+# Local deployment config — contains server paths and secrets
+.env
+
+# TLS certificates
+# certs/
