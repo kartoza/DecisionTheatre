@@ -285,6 +285,11 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	s.styleOnce.Do(func() {
 		stylePath := filepath.Join(s.cfg.DataDir, "mbtiles", "style.json")
 		data, err := os.ReadFile(stylePath)
+		if err != nil && s.cfg.ResourcesDir != "" {
+			// Fall back to the bundled style in the resources directory.
+			stylePath = filepath.Join(s.cfg.ResourcesDir, "mbtiles", "style.json")
+			data, err = os.ReadFile(stylePath)
+		}
 		if err != nil {
 			buildErr = err
 			return
