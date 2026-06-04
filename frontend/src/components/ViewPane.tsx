@@ -6,11 +6,12 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
+import { BsGrid3X3, BsGrid } from 'react-icons/bs';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
-import type { ComparisonState, LayoutMode, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
@@ -58,6 +59,8 @@ interface ViewPaneProps {
   refreshKey?: number;
   targetHasBeenUpdated?: boolean;
   editableTargetKeys?: string[];
+  quadColumns?: QuadColumns;
+  onQuadColumnsChange?: (cols: QuadColumns) => void;
 }
 
 // View mode cycle order
@@ -111,6 +114,8 @@ function ViewPane({
   refreshKey,
   targetHasBeenUpdated = false,
   editableTargetKeys = [],
+  quadColumns = 2,
+  onQuadColumnsChange,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
@@ -165,6 +170,18 @@ function ViewPane({
       return;
     }
 
+    // Use pre-computed aggregate indicators when available — avoids fetching 100MB+
+    // of per-catchment data just to compute a single weighted mean per attribute.
+    if (siteIndicators?.reference && siteIndicators?.current) {
+      const referenceValue = siteIndicators.reference[comparison.attribute];
+      const currentValue = siteIndicators.current[comparison.attribute];
+      if (referenceValue !== undefined || currentValue !== undefined) {
+        setDialCatchmentData({ referenceValue, currentValue });
+        setDialCatchmentLoading(false);
+        return;
+      }
+    }
+
     let cancelled = false;
     setDialCatchmentLoading(true);
 
@@ -193,7 +210,7 @@ function ViewPane({
       });
 
     return () => { cancelled = true; };
-  }, [comparison.attribute, siteId, viewMode]);
+  }, [comparison.attribute, siteId, viewMode, siteIndicators]);
 
   useEffect(() => {
     if (viewMode !== 'dial' || !comparison.attribute) {
@@ -660,6 +677,20 @@ function ViewPane({
                 borderRadius="md"
               />
             </Tooltip>
+            {paneIndex === 0 && onQuadColumnsChange && (
+              <Tooltip label={quadColumns === 2 ? '3 across' : '2 across'} placement="top">
+                <IconButton
+                  aria-label={quadColumns === 2 ? 'Switch to 3 columns' : 'Switch to 2 columns'}
+                  icon={quadColumns === 2 ? <BsGrid3X3 /> : <BsGrid />}
+                  onClick={() => onQuadColumnsChange(quadColumns === 2 ? 3 : 2)}
+                  variant="ghost"
+                  color="white"
+                  _hover={{ bg: 'whiteAlpha.300' }}
+                  size={btnSize}
+                  borderRadius="md"
+                />
+              </Tooltip>
+            )}
             {canRemove && onRemovePane && (
               <Tooltip label="Remove pane" placement="top">
                 <IconButton

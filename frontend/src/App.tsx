@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Box, Flex, useDisclosure } from '@chakra-ui/react';
+import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
 import Header from './components/Header';
@@ -13,7 +13,8 @@ import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import { patchSite, patchSiteIndicators, useServerInfo, getSite } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
+import { showTargetWarningsPopup } from './utils/warnings';
+import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
   loadPaneStates,
@@ -28,11 +29,15 @@ import {
   saveCurrentSite,
   loadRangeMode,
   saveRangeMode,
+  loadQuadColumns,
+  saveQuadColumns,
 } from './types';
 
 function App() {
+  const toast = useToast();
   const { isOpen: isDocsOpen, onToggle: onToggleDocs, onClose: onCloseDocs } = useDisclosure({ defaultIsOpen: false });
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
+  const [quadColumns, setQuadColumns] = useState<QuadColumns>(loadQuadColumns);
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
@@ -63,6 +68,8 @@ function App() {
   const { info } = useServerInfo();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const extractingIndicatorsRef = useRef(false);
+  const extractingSiteIdRef = useRef<string | null>(null);
+  const extractionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setViewModes((prev) => {
@@ -99,6 +106,7 @@ function App() {
   // Persist state changes to local storage
   useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
   useEffect(() => { saveLayoutMode(layoutMode); }, [layoutMode]);
+  useEffect(() => { saveQuadColumns(quadColumns); }, [quadColumns]);
   useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
@@ -129,31 +137,47 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Intentionally runs only on mount
 
+  const stopExtractionPolling = useCallback(() => {
+    if (extractionPollRef.current !== null) {
+      clearInterval(extractionPollRef.current);
+      extractionPollRef.current = null;
+    }
+    extractingIndicatorsRef.current = false;
+    extractingSiteIdRef.current = null;
+    setIsExtractingIndicators(false);
+  }, []);
+
   const startBackgroundIndicatorExtraction = useCallback((site: Site | null) => {
-    if (!site || site.indicators || !site.catchmentIds?.length || extractingIndicatorsRef.current) {
-      return;
+    if (!site || site.indicators || !site.catchmentIds?.length) return;
+    // Already extracting this exact site — don't double-start.
+    if (extractingIndicatorsRef.current && extractingSiteIdRef.current === site.id) return;
+
+    // Cancel any in-flight poll for a different site.
+    if (extractionPollRef.current !== null) {
+      clearInterval(extractionPollRef.current);
+      extractionPollRef.current = null;
     }
 
     extractingIndicatorsRef.current = true;
+    extractingSiteIdRef.current = site.id;
     setIsExtractingIndicators(true);
 
     const runtime = getAppRuntime();
-    const { thumbnail, ...siteWithoutThumbnail } = site;
-    const jsonData = runtime === 'browser'
-      ? { runtime: 'browser', site: siteWithoutThumbnail }
-      : { runtime: 'webview', site: {} };
+    const siteId = site.id;
+    const thumbnail = site.thumbnail;
 
-    fetch(`/api/sites/${site.id}/indicators`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(jsonData),
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('Failed to extract indicators');
-        const updatedSiteFromApi: Site = await response.json();
-        const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
-
-        if (runtime === 'browser') {
+    if (runtime === 'browser') {
+      // Browser: synchronous path — backend returns extracted site in response body.
+      const { thumbnail: _t, ...siteWithoutThumbnail } = site;
+      fetch(`/api/sites/${siteId}/indicators`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Failed to extract indicators');
+          const updatedSiteFromApi: Site = await response.json();
+          const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
           try {
             const raw = window.localStorage.getItem('dt-sites');
             const parsed = raw ? JSON.parse(raw) : [];
@@ -163,20 +187,43 @@ function App() {
               : [...storedSites, updatedSite];
             window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
           } catch (err) {
-            console.warn('Failed to persist auto-extracted indicators to localStorage:', err);
+            console.warn('Failed to persist indicators to localStorage:', err);
           }
-        }
+          setCurrentSite((prev) => (prev?.id === siteId ? updatedSite : prev));
+        })
+        .catch((err) => console.error('Browser indicator extraction failed:', err))
+        .finally(stopExtractionPolling);
+      return;
+    }
 
-        setCurrentSite((prev) => (prev?.id === site.id ? updatedSite : prev));
-      })
-      .catch((err) => {
-        console.error('Auto-extraction of site indicators failed:', err);
-      })
-      .finally(() => {
-        extractingIndicatorsRef.current = false;
-        setIsExtractingIndicators(false);
-      });
-  }, []);
+    // Webview: fire-and-forget POST, then poll GET /sites/{id}/indicators every second.
+    fetch(`/api/sites/${siteId}/indicators`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runtime: 'webview', site: {} }),
+    }).catch((err) => console.error('Failed to start extraction:', err));
+
+    let attempts = 0;
+    extractionPollRef.current = setInterval(async () => {
+      attempts += 1;
+      if (attempts > 120) { // 2-minute safety cap
+        stopExtractionPolling();
+        return;
+      }
+      try {
+        const r = await fetch(`/api/sites/${siteId}/indicators`);
+        if (r.status === 202) return; // still running
+        if (!r.ok) { stopExtractionPolling(); return; }
+        const updatedSite = await r.json() as Site;
+        if (updatedSite.indicators) {
+          stopExtractionPolling();
+          setCurrentSite((prev) => (prev?.id === siteId ? { ...updatedSite, thumbnail } : prev));
+        }
+      } catch {
+        // network hiccup — retry next tick
+      }
+    }, 1000);
+  }, [stopExtractionPolling]);
 
   // Auto-extract indicators when a site is opened that has catchments but no indicators yet
   useEffect(() => {
@@ -528,11 +575,14 @@ function App() {
       const updatedSite = await patchSiteIndicators(currentSiteId, indicators);
       setCurrentSite(updatedSite);
       setMapRefreshSeq(s => s + 1);
+
+      const warnings = updatedSite.indicators?.warnings ?? [];
+      showTargetWarningsPopup(warnings, toast);
     } catch (err) {
       console.error('Failed to update site indicators:', err);
       throw err;
     }
-  }, [currentSiteId]);
+  }, [currentSiteId, toast]);
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 
@@ -707,6 +757,8 @@ function App() {
             onOpenTargetModal={onOpenTargetModal}
             onCloseTargetModal={onCloseTargetModal}
             refreshKey={mapRefreshSeq}
+            quadColumns={quadColumns}
+            onQuadColumnsChange={setQuadColumns}
           />
         </Box>
 

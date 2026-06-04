@@ -44,9 +44,12 @@ export type RangeMode = 'domain' | 'extent' | 'site';
 /** Per-pane state array (minimum one entry) */
 export type PaneStates = ComparisonState[];
 
+export type QuadColumns = 2 | 3;
+
 const STORAGE_KEY = 'dt-pane-states';
 const STORAGE_LAYOUT_KEY = 'dt-layout-mode';
 const STORAGE_FOCUSED_KEY = 'dt-focused-pane';
+const STORAGE_QUAD_COLUMNS_KEY = 'dt-quad-columns';
 
 export const DEFAULT_PANE_STATES: PaneStates = [
   { leftScenario: 'reference', rightScenario: 'current', attribute: '' },
@@ -98,6 +101,18 @@ export function saveFocusedPane(index: number): void {
 }
 
 const STORAGE_RANGE_MODE_KEY = 'dt-range-mode';
+
+export function loadQuadColumns(): QuadColumns {
+  try {
+    const raw = localStorage.getItem(STORAGE_QUAD_COLUMNS_KEY);
+    if (raw === '2' || raw === '3') return Number(raw) as QuadColumns;
+  } catch { /* default */ }
+  return 2;
+}
+
+export function saveQuadColumns(cols: QuadColumns): void {
+  try { localStorage.setItem(STORAGE_QUAD_COLUMNS_KEY, String(cols)); } catch { /* ignore */ }
+}
 
 export function loadRangeMode(): RangeMode {
   try {
@@ -255,6 +270,7 @@ export interface SiteIndicators {
   catchmentCount: number;   // Number of catchments used
   totalAreaKm2: number;     // Total area in km²
   catchmentIds: string[];   // IDs of catchments used
+  warnings?: string[];
 }
 
 // Site represents a saved site with its boundary and map state

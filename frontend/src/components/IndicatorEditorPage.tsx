@@ -45,6 +45,7 @@ import {
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
+import { showTargetWarningsPopup } from '../utils/warnings';
 import { colors } from '../styles/colors';
 
 const MotionTr = motion(Tr);
@@ -274,7 +275,19 @@ export default function IndicatorEditorPage({
   const tableBg = useColorModeValue('gray.850', 'gray.850');
   const hoverBg = useColorModeValue('whiteAlpha.100', 'whiteAlpha.100');
 
-  const extractIndicators = useCallback(async () => {
+  const extractionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Clean up any in-flight poll when the component unmounts or site changes.
+  useEffect(() => {
+    return () => {
+      if (extractionPollRef.current !== null) {
+        clearInterval(extractionPollRef.current);
+        extractionPollRef.current = null;
+      }
+    };
+  }, [site.id]);
+
+  const extractIndicators = useCallback(() => {
     if (autoExtractionInProgress) {
       toast({
         title: 'Extraction already running',
@@ -285,86 +298,85 @@ export default function IndicatorEditorPage({
       return;
     }
 
-    setIsLoading(true);
     const runtime = getAppRuntime();
-    var jsonData = {}
+    const siteId = site.id;
+    const thumbnail = site.thumbnail;
+
     if (runtime === 'browser') {
-        // Use current in-memory site state so boundary edits are included
-        const { thumbnail, ...siteWithoutThumbnail } = site;
-        jsonData = {
-          "runtime": "browser",
-          "site": siteWithoutThumbnail,
-        };
-    }
-    else if (runtime === 'webview') {
-        jsonData = {
-          "runtime": "webview",
-          "site": {}
-        }
-    }
-    try {
-      const response = await fetch(`/api/sites/${site.id}/indicators`, {
+      // Browser: synchronous path — fire and await in background, update when done.
+      setIsLoading(true);
+      const { thumbnail: _t, ...siteWithoutThumbnail } = site;
+      fetch(`/api/sites/${siteId}/indicators`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(jsonData),
-      });
-      if (response.ok) {
-        const updatedSiteFromApi: Site = await response.json();
-        // Preserve the local thumbnail since it was excluded from the API request
-        const updatedSite: Site = { ...updatedSiteFromApi, thumbnail: site.thumbnail };
-        if (runtime === 'browser') {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+      })
+        .then(async (r) => {
+          if (!r.ok) throw new Error('Failed');
+          const updatedSiteFromApi: Site = await r.json();
+          const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
           try {
             const raw = window.localStorage.getItem('dt-sites');
-            if (!raw) {
-              window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
-                  <Text
-                    fontSize="xs"
-                    color={autoExtractionInProgress ? 'cyan.300' : 'green.300'}
-                    fontWeight="medium"
-                  >
-                    {autoExtractionInProgress
-                      ? 'Status: Extracting indicators automatically...'
-                      : 'Status: Indicators extracted'}
-                  </Text>
-            } else {
-              const parsed: unknown = JSON.parse(raw);
-              if (Array.isArray(parsed)) {
-                const storedSites = parsed as Site[];
-                const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
-                  ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
-                  : [...storedSites, updatedSite];
-                window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
-              }
+            const parsed: unknown = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) {
+              const storedSites = parsed as Site[];
+              const next = storedSites.some((s) => s.id === updatedSite.id)
+                ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
+                : [...storedSites, updatedSite];
+              window.localStorage.setItem('dt-sites', JSON.stringify(next));
             }
-          } catch (error) {
-            console.warn('Failed to persist updated site to localStorage:', error);
-          }
-        }
-        console.log("updatedSite", updatedSite)
-        setLocalIndicators(updatedSite.indicators ?? null);
-        onSiteUpdated(updatedSite);
-        toast({
-          title: 'Indicators extracted',
-          description: `Aggregated ${updatedSite.indicators?.catchmentCount || 0} catchments`,
-          status: 'success',
-          duration: 3000,
-        });
-      } else {
-        throw new Error('Failed to extract indicators');
-      }
-    } catch (error) {
-      toast({
-        title: 'Extraction failed',
-        description: 'Could not extract indicators from catchments',
-        status: 'error',
-        duration: 5000,
-      });
-    } finally {
-      setIsLoading(false);
+          } catch { /* ignore */ }
+          setLocalIndicators(updatedSite.indicators ?? null);
+          onSiteUpdated(updatedSite);
+          toast({ title: 'Indicators extracted', description: `Aggregated ${updatedSite.indicators?.catchmentCount || 0} catchments`, status: 'success', duration: 3000 });
+        })
+        .catch(() => toast({ title: 'Extraction failed', status: 'error', duration: 5000 }))
+        .finally(() => setIsLoading(false));
+      return;
     }
-  }, [autoExtractionInProgress, site.id, onSiteUpdated, toast]);
+
+    // Webview: fire POST (returns 202 immediately), then poll until indicators appear.
+    setIsLoading(true);
+
+    fetch(`/api/sites/${siteId}/indicators`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runtime: 'webview', site: {} }),
+    }).catch((err) => console.error('Failed to start extraction:', err));
+
+    if (extractionPollRef.current !== null) clearInterval(extractionPollRef.current);
+    let attempts = 0;
+    extractionPollRef.current = setInterval(async () => {
+      attempts += 1;
+      if (attempts > 120) {
+        clearInterval(extractionPollRef.current!);
+        extractionPollRef.current = null;
+        setIsLoading(false);
+        toast({ title: 'Extraction timed out', status: 'warning', duration: 5000 });
+        return;
+      }
+      try {
+        const r = await fetch(`/api/sites/${siteId}/indicators`);
+        if (r.status === 202) return;
+        if (!r.ok) {
+          clearInterval(extractionPollRef.current!);
+          extractionPollRef.current = null;
+          setIsLoading(false);
+          toast({ title: 'Extraction failed', status: 'error', duration: 5000 });
+          return;
+        }
+        const updatedSite = await r.json() as Site;
+        if (updatedSite.indicators) {
+          clearInterval(extractionPollRef.current!);
+          extractionPollRef.current = null;
+          setIsLoading(false);
+          setLocalIndicators(updatedSite.indicators);
+          onSiteUpdated({ ...updatedSite, thumbnail });
+          toast({ title: 'Indicators extracted', description: `Aggregated ${updatedSite.indicators.catchmentCount || 0} catchments`, status: 'success', duration: 3000 });
+        }
+      } catch { /* retry */ }
+    }, 1000);
+  }, [autoExtractionInProgress, site, onSiteUpdated, toast]);
 
   useEffect(() => {
     if (!site.indicators) return;
@@ -472,6 +484,10 @@ export default function IndicatorEditorPage({
           };
           onSiteUpdated(updatedSite);
           setHasChanges(false);
+
+          const warnings = savedSite?.indicators?.warnings ?? [];
+          showTargetWarningsPopup(warnings, toast);
+
           toast({
             title: 'Changes saved',
             status: 'success',
@@ -748,7 +764,7 @@ export default function IndicatorEditorPage({
     return { total: keys.length, improved, degraded, unchanged };
   }, [localIndicators, availableIndicatorKeys]);
 
-  if ((isLoading || autoExtractionInProgress) && !localIndicators) {
+  if (isLoading && !localIndicators) {
     return (
       <Flex h="100%" align="center" justify="center" bg="gray.900">
         <VStack spacing={4}>

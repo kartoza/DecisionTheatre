@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,10 +20,11 @@ import (
 
 // GpkgStore provides access to the datapack geopackage
 type GpkgStore struct {
-	db      *sql.DB
-	dataDir string
-	columns []string
-	mu      sync.RWMutex
+	db         *sql.DB
+	dataDir    string
+	columns    []string
+	mu         sync.RWMutex
+	idColCache sync.Map // tableName -> idColumnName string
 }
 
 // CatchmentFeature represents a single catchment with geometry and attributes
@@ -165,6 +167,10 @@ func parseNumericIDs(ids []string) ([]interface{}, bool) {
 }
 
 func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
+	if cached, ok := s.idColCache.Load(tableName); ok {
+		return cached.(string), nil
+	}
+
 	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return "", err
@@ -183,9 +189,12 @@ func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
 		columns[name] = struct{}{}
 	}
 
-	candidates := []string{"catchment_id", "catchID", "catchment_id_int"}
+	// Prefer indexed columns first.  All scenario tables have catchment_id_int
+	// with an index; falling back to catchID causes a full-table scan.
+	candidates := []string{"catchment_id_int", "catchment_id", "catchID"}
 	for _, candidate := range candidates {
 		if _, ok := columns[candidate]; ok {
+			s.idColCache.Store(tableName, candidate)
 			return candidate, nil
 		}
 	}
@@ -322,6 +331,11 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 
 // QueryCatchments returns catchments within a bounding box with a specific attribute
 func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] QueryCatchments scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
+	}()
+
 	// Validate scenario
 	tableName := resolveScenarioTable(scenario)
 
@@ -628,6 +642,11 @@ func (s *GpkgStore) isValidColumn(attribute string) bool {
 
 // GetDomainRange returns the min and max values for an attribute across all scenarios
 func (s *GpkgStore) GetDomainRange(attribute string) (*DomainRange, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetDomainRange attribute=%s duration_ms=%d", attribute, time.Since(start).Milliseconds())
+	}()
+
 	// Validate attribute against allowed columns to prevent SQL injection
 	if !s.isValidColumn(attribute) {
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
@@ -1075,15 +1094,17 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		data := make(map[string]map[string]float64)
 		rowCount := 0
 
-		for rows.Next() {
-			values := make([]sql.NullFloat64, len(columns))
-			var catchmentIDRaw interface{}
-			scanArgs := make([]interface{}, len(columns)+1)
-			scanArgs[0] = &catchmentIDRaw
-			for i := range values {
-				scanArgs[i+1] = &values[i]
-			}
+		// Pre-allocate scan buffers once; rows.Scan writes through the pointers
+		// on every call so the same backing memory is reused for each row.
+		values := make([]sql.NullFloat64, len(columns))
+		var catchmentIDRaw interface{}
+		scanArgs := make([]interface{}, len(columns)+1)
+		scanArgs[0] = &catchmentIDRaw
+		for i := range values {
+			scanArgs[i+1] = &values[i]
+		}
 
+		for rows.Next() {
 			if err := rows.Scan(scanArgs...); err != nil {
 				continue
 			}
@@ -1223,6 +1244,10 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 	if err != nil || len(sitePolygons) == 0 {
 		return result, nil
 	}
+	// Simplify the site polygon for intersection computation so that high-vertex
+	// uploads (e.g. 6 000-vertex Malawi boundary) don't make polyclip extremely
+	// slow per catchment.  The displayed geometry is unaffected.
+	sitePolygons = simplifyPolygonsForComputation(sitePolygons)
 	log.Printf("[perf] GetCatchmentAOIFractions step=parseSiteGeometry polygons=%d duration_ms=%d", len(sitePolygons), time.Since(parseStart).Milliseconds())
 
 	fetchStart := time.Now()
@@ -1233,33 +1258,64 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 	log.Printf("[perf] GetCatchmentAOIFractions step=fetchCatchments features=%d duration_ms=%d", len(features), time.Since(fetchStart).Milliseconds())
 
 	overlapStart := time.Now()
-	for _, feature := range features {
-		catchmentID := normalizeCatchmentID(strconv.FormatInt(feature.ID, 10))
-		catchmentPolygons, err := geometryRawToPolygons(feature.Geometry)
-		if err != nil || len(catchmentPolygons) == 0 {
-			continue
-		}
 
-		catchmentArea := sumPolygonAreaKm2(catchmentPolygons)
-		if !isFinitePositive(catchmentArea) {
-			continue
-		}
-
-		overlapArea := intersectionAreaKm2(sitePolygons, catchmentPolygons)
-		if !isFinitePositive(overlapArea) {
-			result[catchmentID] = 0
-			continue
-		}
-
-		frac := overlapArea / catchmentArea
-		if frac < 0 {
-			frac = 0
-		} else if frac > 1 {
-			frac = 1
-		}
-		result[catchmentID] = frac
+	type intersectResult struct {
+		id  string
+		frac float64
 	}
-	log.Printf("[perf] GetCatchmentAOIFractions step=overlapLoop features=%d matched=%d duration_ms=%d", len(features), len(result), time.Since(overlapStart).Milliseconds())
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	sem := make(chan struct{}, numWorkers)
+	resultCh := make(chan intersectResult, len(features))
+	var wg sync.WaitGroup
+
+	for _, feature := range features {
+		feature := feature
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("GetCatchmentAOIFractions: panic in intersection goroutine: %v", r)
+				}
+			}()
+
+			catchmentID := normalizeCatchmentID(strconv.FormatInt(feature.ID, 10))
+			catchmentPolygons, err := geometryRawToPolygons(feature.Geometry)
+			if err != nil || len(catchmentPolygons) == 0 {
+				return
+			}
+
+			catchmentArea := sumPolygonAreaKm2(catchmentPolygons)
+			if !isFinitePositive(catchmentArea) {
+				return
+			}
+
+			overlapArea := intersectionAreaKm2(sitePolygons, catchmentPolygons)
+			frac := 0.0
+			if isFinitePositive(overlapArea) {
+				frac = overlapArea / catchmentArea
+				if frac < 0 {
+					frac = 0
+				} else if frac > 1 {
+					frac = 1
+				}
+			}
+			resultCh <- intersectResult{id: catchmentID, frac: frac}
+		}()
+	}
+	wg.Wait()
+	close(resultCh)
+
+	for r := range resultCh {
+		result[r.id] = r.frac
+	}
+	log.Printf("[perf] GetCatchmentAOIFractions step=overlapLoop features=%d matched=%d workers=%d duration_ms=%d", len(features), len(result), numWorkers, time.Since(overlapStart).Milliseconds())
 
 	return result, nil
 }
@@ -1320,6 +1376,117 @@ func coordinatesToPolyclipPolygon(rings [][][]float64) polyclip.Polygon {
 		}
 	}
 	return poly
+}
+
+// rdpPolyline reduces an OPEN polyline's vertex count using the
+// Ramer-Douglas-Peucker algorithm with the given tolerance (degrees).
+// Caller must ensure len(pts) >= 2.
+func rdpPolyline(pts polyclip.Contour, tol float64) polyclip.Contour {
+	if len(pts) <= 2 {
+		return pts
+	}
+	first, last := pts[0], pts[len(pts)-1]
+	dx := last.X - first.X
+	dy := last.Y - first.Y
+	lineLen := math.Sqrt(dx*dx + dy*dy)
+
+	maxDist, maxIdx := -1.0, 0
+	for i := 1; i < len(pts)-1; i++ {
+		var dist float64
+		if lineLen < 1e-12 {
+			ddx := pts[i].X - first.X
+			ddy := pts[i].Y - first.Y
+			dist = math.Sqrt(ddx*ddx + ddy*ddy)
+		} else {
+			dist = math.Abs(dy*pts[i].X-dx*pts[i].Y+last.X*first.Y-last.Y*first.X) / lineLen
+		}
+		if dist > maxDist {
+			maxDist = dist
+			maxIdx = i
+		}
+	}
+
+	if maxDist <= tol {
+		return polyclip.Contour{first, last}
+	}
+	left := rdpPolyline(pts[:maxIdx+1], tol)
+	right := rdpPolyline(pts[maxIdx:], tol)
+	return append(left[:len(left)-1], right...)
+}
+
+// rdpSimplifyContour simplifies a polygon ring (open or closed) with RDP.
+// GeoJSON rings are explicitly closed (first == last); the duplicate endpoint
+// is stripped before simplification and re-added after so the standard
+// open-polyline algorithm works correctly.
+func rdpSimplifyContour(pts polyclip.Contour, tol float64) polyclip.Contour {
+	if len(pts) < 4 {
+		return pts
+	}
+	closed := pts[0] == pts[len(pts)-1]
+	open := pts
+	if closed {
+		open = pts[:len(pts)-1] // remove duplicate closing point
+	}
+	if len(open) < 3 {
+		return pts
+	}
+	// For a closed ring, find the best "split" vertex (farthest from any edge)
+	// by rotating the ring so that vertex becomes the first point, then run RDP.
+	if closed {
+		// Find the vertex that is farthest from its two neighbours — a good anchor.
+		anchorIdx := 0
+		maxGap := -1.0
+		n := len(open)
+		for i := 0; i < n; i++ {
+			prev := open[(i+n-1)%n]
+			next := open[(i+1)%n]
+			dx1 := open[i].X - prev.X
+			dy1 := open[i].Y - prev.Y
+			dx2 := next.X - open[i].X
+			dy2 := next.Y - open[i].Y
+			gap := math.Sqrt(dx1*dx1+dy1*dy1) + math.Sqrt(dx2*dx2+dy2*dy2)
+			if gap > maxGap {
+				maxGap = gap
+				anchorIdx = i
+			}
+		}
+		// Rotate so the anchor is first, append it again to close.
+		rotated := make(polyclip.Contour, 0, n+1)
+		rotated = append(rotated, open[anchorIdx:]...)
+		rotated = append(rotated, open[:anchorIdx]...)
+		rotated = append(rotated, rotated[0]) // close
+		simplified := rdpPolyline(rotated, tol)
+		if len(simplified) < 3 {
+			return pts
+		}
+		return simplified
+	}
+	return rdpPolyline(open, tol)
+}
+
+// simplifyPolygonsForComputation simplifies each contour of every polygon using
+// RDP at 0.001° tolerance (~110 m at the equator).  This reduces the vertex
+// count of complex site boundaries (e.g. 6 000+ vertices) before calling the
+// polyclip intersection, which is O(n×m) in vertex counts.
+func simplifyPolygonsForComputation(polygons []polyclip.Polygon) []polyclip.Polygon {
+	const tol = 0.001
+	out := make([]polyclip.Polygon, 0, len(polygons))
+	for _, poly := range polygons {
+		simplified := make(polyclip.Polygon, 0, len(poly))
+		for _, contour := range poly {
+			s := rdpSimplifyContour(contour, tol)
+			if len(s) >= 3 {
+				simplified = append(simplified, s)
+			}
+		}
+		if len(simplified) > 0 {
+			out = append(out, simplified)
+		}
+	}
+	if len(out) == 0 {
+		return polygons // fall back to originals if simplification collapsed everything
+	}
+	return out
 }
 
 func sumPolygonAreaKm2(polygons []polyclip.Polygon) float64 {
@@ -1779,14 +1946,16 @@ func (s *GpkgStore) ComputeWhiskerBounds(catchments []CatchmentIndicators) Whisk
 		weightedSums := make(map[string]float64)
 		validWeights := make(map[string]float64)
 
+		// Pre-allocate scan buffers once outside the row loop.
+		vals := make([]sql.NullFloat64, len(columns))
+		var idRaw interface{}
+		scanArgs := make([]interface{}, len(columns)+1)
+		scanArgs[0] = &idRaw
+		for i := range vals {
+			scanArgs[i+1] = &vals[i]
+		}
+
 		for rows.Next() {
-			vals := make([]sql.NullFloat64, len(columns))
-			var idRaw interface{}
-			scanArgs := make([]interface{}, len(columns)+1)
-			scanArgs[0] = &idRaw
-			for i := range vals {
-				scanArgs[i+1] = &vals[i]
-			}
 			if err := rows.Scan(scanArgs...); err != nil {
 				continue
 			}
@@ -1828,7 +1997,15 @@ func (s *GpkgStore) ComputeWhiskerBounds(catchments []CatchmentIndicators) Whisk
 		"scenario_current_upper",
 	} {
 		tbl := tbl
-		go func() { ch <- namedResult{name: tbl, values: queryTable(tbl)} }()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("ComputeWhiskerBounds: panic querying %s: %v", tbl, r)
+					ch <- namedResult{name: tbl, values: nil}
+				}
+			}()
+			ch <- namedResult{name: tbl, values: queryTable(tbl)}
+		}()
 	}
 	var bounds WhiskerBounds
 	for range [4]struct{}{} {

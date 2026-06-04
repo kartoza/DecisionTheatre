@@ -2,17 +2,15 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2, FiGlobe } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
-import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea } from '@turf/turf';
+import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
-import { computeAOIWeightedAttributeValue } from '../utils/indicators';
-import ControlPanel from './ControlPanel';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -51,8 +49,16 @@ let _stylePromise: Promise<maplibregl.StyleSpecification> | null = null;
 function warmStyleCache(url: string): void {
   if (_stylePromise) return;
   _stylePromise = fetch(url)
-    .then(r => r.json() as Promise<maplibregl.StyleSpecification>)
-    .then(s => { _cachedStyle = s; return s; });
+    .then(r => {
+      if (!r.ok) throw new Error(`style.json: ${r.status} ${r.statusText}`);
+      return r.json() as Promise<maplibregl.StyleSpecification>;
+    })
+    .then(s => { _cachedStyle = s; return s; })
+    .catch(err => {
+      // Reset so the next mount can retry (e.g. after backend starts up).
+      _stylePromise = null;
+      throw err;
+    });
 }
 function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
   // If the resolved style is already in memory (i.e. a prior pane already fetched it),
@@ -131,7 +137,7 @@ function isNAValue(value: unknown): boolean {
     return normalized === 'n/a' || normalized === 'na' || normalized === 'nan';
   }
   if (typeof value === 'number') {
-    return Number.isNaN(value);ControlPanel
+    return Number.isNaN(value);
   }
   return false;
 }
@@ -292,11 +298,64 @@ function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | 
   };
 }
 
+function simplifyBoundaryForComputation(geometry: GeoJSON.Geometry): GeoJSON.Geometry {
+  try {
+    const feat: GeoJSON.Feature = { type: 'Feature', properties: {}, geometry };
+    return turfSimplify(feat, { tolerance: 0.001, highQuality: false }).geometry;
+  } catch {
+    return geometry;
+  }
+}
+
 /**
- * Compute AOI-weighted statistics for site aggregation.
+ * Fast AOI-weighted zone stats using pre-computed per-catchment AOI fractions.
+ * Avoids polygon intersection entirely — O(n) dictionary lookup instead of
+ * O(n × polygon_complexity) turf.intersect calls that block the main thread.
  *
- * Mean is weighted by the valid catchment area that falls inside the AOI:
- * valid_i = area_i * frac_i, where frac_i = overlap_i / area_i.
+ * fractions: Map<catchmentId → { aoiFraction, areaKm2 }> from getSiteAOIFractions.
+ */
+function computeAOIWeightedZoneStatsFromFractions(
+  data: ChoroplethData,
+  attribute: string,
+  fractions: Map<string, { aoiFraction: number; areaKm2: number }>,
+): ZoneStats | null {
+  if (!data.features || data.features.length === 0 || fractions.size === 0) return null;
+
+  let min = Infinity;
+  let max = -Infinity;
+  let totalValidArea = 0;
+  let weightedSum = 0;
+  let count = 0;
+
+  for (const feature of data.features) {
+    const metricValue = feature.properties?.[attribute];
+    if (typeof metricValue !== 'number' || Number.isNaN(metricValue)) continue;
+
+    const featureId = String(feature.properties?.HYBAS_ID ?? '');
+    const f = fractions.get(featureId);
+    if (!f) continue;
+
+    const frac = Math.max(0, Math.min(1, f.aoiFraction ?? 1));
+    const validArea = f.areaKm2 * frac;
+    if (validArea <= 0) continue;
+
+    if (metricValue < min) min = metricValue;
+    if (metricValue > max) max = metricValue;
+
+    totalValidArea += validArea;
+    weightedSum += metricValue * validArea;
+    count += 1;
+  }
+
+  if (count === 0 || totalValidArea <= 0 || !Number.isFinite(weightedSum)) return null;
+  return { min, max, mean: weightedSum / totalValidArea, count };
+}
+
+/**
+ * Compute AOI-weighted statistics via polygon intersection.
+ * Only used as a fallback when pre-computed fractions are unavailable.
+ * Avoid calling this with more than ~50 features — each iteration runs
+ * a synchronous turf.intersect that blocks the JS main thread.
  */
 function computeAOIWeightedZoneStats(
   data: ChoroplethData,
@@ -305,7 +364,7 @@ function computeAOIWeightedZoneStats(
 ): ZoneStats | null {
   if (!data.features || data.features.length === 0) return null;
 
-  const boundaryFeature = geometryToPolygonFeature(boundaryGeometry);
+  const boundaryFeature = geometryToPolygonFeature(simplifyBoundaryForComputation(boundaryGeometry));
   if (!boundaryFeature) return null;
 
   let min = Infinity;
@@ -349,13 +408,7 @@ function computeAOIWeightedZoneStats(
   }
 
   if (count === 0 || totalValidArea <= 0 || !Number.isFinite(weightedSum)) return null;
-
-  return {
-    min,
-    max,
-    mean: weightedSum / totalValidArea,
-    count,
-  };
+  return { min, max, mean: weightedSum / totalValidArea, count };
 }
 
 function computeDomainRangeFromDatasets(
@@ -426,7 +479,7 @@ function inferCatchmentIdsFromBoundary(
   const inferredIds = new Set<string>();
   if (!boundaryGeometry) return inferredIds;
 
-  const boundaryFeature = geometryToPolygonFeature(boundaryGeometry);
+  const boundaryFeature = geometryToPolygonFeature(simplifyBoundaryForComputation(boundaryGeometry));
   if (!boundaryFeature) return inferredIds;
 
   for (const dataset of datasets) {
@@ -542,6 +595,28 @@ export function formatNumber(n: number): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 0, notation: 'compact' });
 }
 
+// Module-level cache for pure (no site overrides) choropleth requests.
+// Multiple panes requesting the same scenario+attribute+bbox share one in-flight
+// fetch instead of firing N identical HTTP requests simultaneously.
+const _choroplethCache = new Map<string, { promise: Promise<ChoroplethData | null>; ts: number }>();
+const CHOROPLETH_CACHE_TTL_MS = 60_000;
+
+// Module-level caches for the two expensive synchronous intersection routines.
+// inferCatchmentIdsFromBoundary / inferNearbyCatchmentIdsFromBoundary each do an
+// O(n_catchments × poly_complexity) turf.intersect loop on the main thread.
+// In quad view 12 map instances (6 panes × 2 maps) all call these independently,
+// serialising up to 24 × ~500 ms = 12 s of blocking computation.
+// Caching by siteId means only the FIRST instance computes; the rest read from
+// memory with zero blocking time.  Caches are cleared whenever the site or its
+// boundary geometry changes (see clearSiteComputationCaches below).
+const _inferredIdsSiteCache = new Map<string, Set<string>>();
+const _nearbyIdsSiteCache = new Map<string, Set<string>>();
+
+function clearSiteComputationCaches(siteId: string): void {
+  _inferredIdsSiteCache.delete(siteId);
+  _nearbyIdsSiteCache.delete(siteId);
+}
+
 /**
  * Fetch choropleth GeoJSON data for the current viewport.
  */
@@ -564,8 +639,33 @@ async function fetchChoroplethData(
     maxy: ne.lat.toString(),
   });
 
-  if (siteId && scenario === 'future') {
+  const hasSiteOverride = siteId && scenario === 'future';
+  if (hasSiteOverride) {
     params.set('siteId', siteId);
+  }
+
+  // Deduplicate concurrent requests for pure (non-site-specific) fetches.
+  const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
+  if (canCache) {
+    const key = params.toString();
+    const now = Date.now();
+    const hit = _choroplethCache.get(key);
+    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
+
+    const promise = (async (): Promise<ChoroplethData | null> => {
+      try {
+        const resp = await fetch(`/api/choropleth?${params}`);
+        if (!resp.ok) return null;
+        return await resp.json() as ChoroplethData;
+      } catch (err) {
+        console.error('Failed to fetch choropleth data:', err);
+        return null;
+      }
+    })();
+
+    promise.catch(() => _choroplethCache.delete(key));
+    _choroplethCache.set(key, { promise, ts: now });
+    return promise;
   }
 
   try {
@@ -939,7 +1039,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           boundaryGeometryRef.current
           ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
           ?? extractBoundaryGeometryFromStyleSource(leftMap.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE]);
-        const inferredIds = inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry);
+
+        // Check module-level cache first — avoids recomputing for every map instance
+        // in quad view (12 instances would otherwise each run the full turf loop).
+        // Skip entirely for large datasets — the stats block populates siteCatchmentIdsRef
+        // shortly via getSiteAOIFractions, avoiding the expensive intersection loop.
+        const cachedInferred = _inferredIdsSiteCache.get(siteId);
+        const colorTotalFeatures = (leftData?.features?.length ?? 0) + (rightData?.features?.length ?? 0);
+        const inferredIds = cachedInferred
+          ?? (colorTotalFeatures <= 50 && boundaryGeometry
+              ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry)
+              : new Set<string>());
+        if (!cachedInferred && inferredIds.size > 0) _inferredIdsSiteCache.set(siteId, inferredIds);
 
         if (inferredIds.size > 0) {
           siteCatchmentIds = inferredIds;
@@ -960,7 +1071,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
           ?? extractBoundaryGeometryFromStyleSource(leftMap.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE]);
 
-        const nearbyIds = inferNearbyCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry);
+        const cachedNearby = _nearbyIdsSiteCache.get(siteId);
+        const nearbyIds = cachedNearby ?? inferNearbyCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry);
+        if (!cachedNearby && nearbyIds.size > 0) _nearbyIdsSiteCache.set(siteId, nearbyIds);
+
         if (nearbyIds.size > 0) {
           const mergedIds = new Set<string>(siteCatchmentIds ? Array.from(siteCatchmentIds) : []);
           for (const id of nearbyIds) mergedIds.add(id);
@@ -1055,6 +1169,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     siteCatchmentIdsRef.current = null;
     siteZoneStatsRef.current = null;
     siteDomainRangeRef.current = null;
+    // Invalidate module-level caches so the new boundary is re-inferred by the
+    // first instance to run; subsequent instances will read the fresh result.
+    clearSiteComputationCaches(siteId);
     applyColorsRef.current();
   }, [siteId, siteGeometry]);
 
@@ -1316,7 +1433,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const [leftData, rightData, siteCatchments] = await Promise.all([
           fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, siteId),
           fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, siteId),
-          getSiteCatchments(siteId).catch(() => []),
+          getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
         if (cancelled) return;
@@ -1343,9 +1460,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ?? extractBoundaryGeometryFromStyleSource(serializedBoundarySource)
           ?? extractBoundaryGeometryFromStyleSource(leftMapRef.current?.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE])
           ?? siteGeometryFromApi;
-        const inferredCatchmentIds = boundaryGeometry
-          ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry)
-          : new Set<string>();
+        // Skip inferCatchmentIdsFromBoundary when API fractions or explicit IDs are available —
+        // the intersection-based fallback is only safe for small datasets (≤50 features).
+        const cachedInferredStat = _inferredIdsSiteCache.get(siteId);
+        const totalFeatures = (leftData?.features?.length ?? 0) + (rightData?.features?.length ?? 0);
+        const canInfer = !apiCatchmentIds && explicitCatchmentIds.size === 0 && totalFeatures <= 50;
+        const inferredCatchmentIds = cachedInferredStat
+          ?? (canInfer && boundaryGeometry ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry) : new Set<string>());
+        if (!cachedInferredStat && inferredCatchmentIds.size > 0) _inferredIdsSiteCache.set(siteId, inferredCatchmentIds);
         // Prefer API-provided AOI-filtered IDs, then explicit stored IDs, then geometry inference
         const statsCatchmentIds = apiCatchmentIds
           ?? (explicitCatchmentIds.size > 0 ? explicitCatchmentIds : inferredCatchmentIds);
@@ -1355,35 +1477,55 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         const siteDomainRange = computeDomainRangeFromDatasets([leftFiltered, rightFiltered], c.attribute);
 
-        console.log(`SITE DOMAINRANGE for ${siteId}:`, siteDomainRange);
+        // Build fraction lookup from slim siteCatchments for fast AOI-weighted stats.
+        // This replaces expensive per-catchment turfIntersect calls with O(1) lookups.
+        const catchmentFractionMap = new Map<string, { aoiFraction: number; areaKm2: number }>();
+        if (Array.isArray(siteCatchments)) {
+          for (const sc of siteCatchments as Array<{ id: string; aoiFraction?: number; areaKm2: number }>) {
+            catchmentFractionMap.set(String(sc.id), { aoiFraction: sc.aoiFraction ?? 1, areaKm2: sc.areaKm2 });
+          }
+        }
 
         const leftSiteStats = leftFiltered
-          ? (boundaryGeometry
-              ? computeAOIWeightedZoneStats(leftFiltered, c.attribute, boundaryGeometry) ?? computeZoneStats(leftFiltered, c.attribute)
-              : computeZoneStats(leftFiltered, c.attribute))
+          ? (catchmentFractionMap.size > 0
+              ? computeAOIWeightedZoneStatsFromFractions(leftFiltered, c.attribute, catchmentFractionMap)
+                ?? computeZoneStats(leftFiltered, c.attribute)
+              : (boundaryGeometry && (leftFiltered.features?.length ?? 0) <= 50
+                  ? computeAOIWeightedZoneStats(leftFiltered, c.attribute, boundaryGeometry)
+                    ?? computeZoneStats(leftFiltered, c.attribute)
+                  : computeZoneStats(leftFiltered, c.attribute)))
           : null;
         const rightSiteStats = rightFiltered
-          ? (boundaryGeometry
-              ? computeAOIWeightedZoneStats(rightFiltered, c.attribute, boundaryGeometry) ?? computeZoneStats(rightFiltered, c.attribute)
-              : computeZoneStats(rightFiltered, c.attribute))
+          ? (catchmentFractionMap.size > 0
+              ? computeAOIWeightedZoneStatsFromFractions(rightFiltered, c.attribute, catchmentFractionMap)
+                ?? computeZoneStats(rightFiltered, c.attribute)
+              : (boundaryGeometry && (rightFiltered.features?.length ?? 0) <= 50
+                  ? computeAOIWeightedZoneStats(rightFiltered, c.attribute, boundaryGeometry)
+                    ?? computeZoneStats(rightFiltered, c.attribute)
+                  : computeZoneStats(rightFiltered, c.attribute)))
           : null;
 
-        // Use siteCatchments (same source as aggregate table) for mean and count,
-        // so the control panel matches what the aggregate table shows.
+        // Use pre-computed aggregate indicators for the weighted mean so it matches
+        // the aggregate table without needing full per-catchment indicator data.
         if (Array.isArray(siteCatchments) && siteCatchments.length > 0) {
-          const leftAggregateScenario = c.leftScenario === 'reference' ? 'reference' : c.leftScenario === 'future' ? 'ideal' : 'current';
-          const rightAggregateScenario = c.rightScenario === 'reference' ? 'reference' : c.rightScenario === 'future' ? 'ideal' : 'current';
-          const weightedLeftMean = computeAOIWeightedAttributeValue(siteCatchments, leftAggregateScenario, c.attribute);
-          const weightedRightMean = computeAOIWeightedAttributeValue(siteCatchments, rightAggregateScenario, c.attribute);
+          const si = siteIndicatorsRef.current;
+          if (si && c.attribute) {
+            const leftScenarioKey = c.leftScenario === 'reference' ? 'reference' : c.leftScenario === 'future' ? 'ideal' : 'current';
+            const rightScenarioKey = c.rightScenario === 'reference' ? 'reference' : c.rightScenario === 'future' ? 'ideal' : 'current';
+            const leftMap = si[leftScenarioKey as keyof typeof si] as Record<string, number> | undefined;
+            const rightMap = si[rightScenarioKey as keyof typeof si] as Record<string, number> | undefined;
+            const weightedLeftMean = leftMap?.[c.attribute];
+            const weightedRightMean = rightMap?.[c.attribute];
 
-          if (leftSiteStats && typeof weightedLeftMean === 'number' && Number.isFinite(weightedLeftMean)) {
-            leftSiteStats.mean = weightedLeftMean;
-          }
-          if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)) {
-            rightSiteStats.mean = weightedRightMean;
+            if (leftSiteStats && typeof weightedLeftMean === 'number' && Number.isFinite(weightedLeftMean)) {
+              leftSiteStats.mean = weightedLeftMean;
+            }
+            if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)) {
+              rightSiteStats.mean = weightedRightMean;
+            }
           }
 
-          // Override count to match the aggregate table (same getSiteCatchments source).
+          // Override count using catchment count from slim fractions data.
           if (leftSiteStats) leftSiteStats.count = siteCatchments.length;
           if (rightSiteStats) rightSiteStats.count = siteCatchments.length;
         }
@@ -2442,6 +2584,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       zoom: 3,
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
+      fadeDuration: 0,
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,
@@ -2461,6 +2604,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       zoom: 3,
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
+      fadeDuration: 0,
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,

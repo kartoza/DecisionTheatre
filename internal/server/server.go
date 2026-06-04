@@ -63,8 +63,7 @@ type Server struct {
 	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
 	// servers on sequential ports gives the browser N extra 6-connection pools
 	// so that the ~80 tile requests in quad view are served in parallel instead
-	// of being forced through a narrow bottleneck — particularly important on
-	// Windows where each localhost round-trip costs more than on Linux.
+	// of being forced through a narrow bottleneck.
 	auxServers []*http.Server
 	auxPorts   []int
 
@@ -195,7 +194,6 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(tileData)
 }
 
-// Start begins listening for HTTP connections
 // startAuxTileServers opens up to 3 extra listeners on the ports immediately
 // following the main port. Each listener runs a minimal router that only
 // handles tile requests, giving the browser additional HTTP/1.1 connection
@@ -245,12 +243,11 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// Stop gracefully shuts down the server and all auxiliary tile servers.
+// Stop gracefully shuts down the server.
 func (s *Server) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Close stores
 	if s.tileStore != nil {
 		s.tileStore.Close()
 	}
@@ -337,11 +334,10 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(s.styleBytes)
 }
 
-// handleTileJSON serves TileJSON metadata. It returns two tile URL variants —
-// one using "localhost" and one using "127.0.0.1" — so the browser treats them
-// as separate origins and opens two independent HTTP/1.1 connection pools
-// (6 connections each = 12 total). This halves the serialisation bottleneck
-// when 80+ tile requests arrive simultaneously in quad view on Windows.
+// handleTileJSON serves TileJSON metadata. It returns multiple tile URL variants
+// (localhost ↔ 127.0.0.1 plus aux ports) so the browser treats them as separate
+// origins and opens independent HTTP/1.1 connection pools (6 each), maximising
+// parallel tile loading in quad view.
 func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
 

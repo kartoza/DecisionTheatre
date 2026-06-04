@@ -479,20 +479,32 @@ export async function listSites(): Promise<Site[]> {
   return fetchJSON<Site[]>(`${API_BASE}/sites`);
 }
 
-export async function getSite(id: string): Promise<Site | null> {
-  if (isBrowserRuntime()) {
-    const sites = loadLocalSites();
-    return sites.find((site) => site.id === id) || null;
-  }
+// Promise-level deduplication caches: concurrent callers (e.g. all 4 quad-view panes)
+// share a single in-flight request rather than firing N identical network calls.
+const CACHE_TTL_MS = 30_000;
+const _siteCache = new Map<string, { promise: Promise<Site | null>; ts: number }>();
+const _catchmentsCache = new Map<string, { promise: Promise<CatchmentIndicators[]>; ts: number }>();
 
-  const response = await fetch(`${API_BASE}/sites/${id}`);
-  if (response.status === 404) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new Error(`Failed to fetch site: ${response.statusText}`);
-  }
-  return response.json();
+export async function getSite(id: string): Promise<Site | null> {
+  const now = Date.now();
+  const hit = _siteCache.get(id);
+  if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
+
+  const promise = (async (): Promise<Site | null> => {
+    if (isBrowserRuntime()) {
+      const sites = loadLocalSites();
+      return sites.find((site) => site.id === id) || null;
+    }
+    const response = await fetch(`${API_BASE}/sites/${id}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Failed to fetch site: ${response.statusText}`);
+    return response.json();
+  })();
+
+  // Evict on error so next caller retries cleanly.
+  promise.catch(() => _siteCache.delete(id));
+  _siteCache.set(id, { promise, ts: now });
+  return promise;
 }
 
 export async function createSite(
@@ -685,56 +697,83 @@ export async function deleteSite(id: string): Promise<void> {
 
 // Get per-catchment breakdown data for a site
 export async function getSiteCatchments(siteId: string): Promise<CatchmentIndicators[]> {
-  if (isBrowserRuntime()) {
-    const localCatchments = loadLocalCatchments(siteId);
-    if (localCatchments.length > 0) {
-      return localCatchments;
-    }
+  const now = Date.now();
+  const hit = _catchmentsCache.get(siteId);
+  if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
 
-    try {
-      const localSite = loadLocalSite(siteId);
-      if (localSite) {
-        const { thumbnail, ...siteWithoutThumbnail } = localSite;
-        const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data) && data.length > 0) {
-            persistLocalCatchments(siteId, data);
-            return data;
+  const promise = (async (): Promise<CatchmentIndicators[]> => {
+    if (isBrowserRuntime()) {
+      const localCatchments = loadLocalCatchments(siteId);
+      if (localCatchments.length > 0) {
+        return localCatchments;
+      }
+
+      try {
+        const localSite = loadLocalSite(siteId);
+        if (localSite) {
+          const { thumbnail, ...siteWithoutThumbnail } = localSite;
+          const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ runtime: 'browser', site: siteWithoutThumbnail }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data) && data.length > 0) {
+              persistLocalCatchments(siteId, data);
+              return data;
+            }
           }
         }
+      } catch {
+        // Fall through to GET fallback below.
       }
-    } catch {
-      // Fall through to GET fallback below.
+
+      // Fallback for browser runtime when local storage is missing stale/incomplete.
+      try {
+        const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
+        if (!response.ok) return [];
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          persistLocalCatchments(siteId, data);
+        }
+        return Array.isArray(data) ? data : [];
+      } catch {
+        return [];
+      }
     }
 
-    // Fallback for browser runtime when local storage is missing stale/incomplete.
-    try {
-      const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
-      if (!response.ok) return [];
-      const data = await response.json();
-      if (Array.isArray(data) && data.length > 0) {
-        persistLocalCatchments(siteId, data);
-      }
-      return Array.isArray(data) ? data : [];
-    } catch {
-      return [];
+    const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
+    if (!response.ok) {
+      throw new Error(`Failed to get site catchments: ${response.statusText}`);
     }
-  }
+    const data = await response.json();
+    if (Array.isArray(data) && data.length > 0) {
+      persistLocalCatchments(siteId, data);
+    }
+    return data;
+  })();
 
-  const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`);
-  if (!response.ok) {
-    throw new Error(`Failed to get site catchments: ${response.statusText}`);
-  }
-  const data = await response.json();
-  if (Array.isArray(data) && data.length > 0) {
-    persistLocalCatchments(siteId, data);
-  }
-  return data;
+  promise.catch(() => _catchmentsCache.delete(siteId));
+  _catchmentsCache.set(siteId, { promise, ts: now });
+  return promise;
+}
+
+// Slim cache: keyed by siteId, returns only id+areaKm2+aoiFraction for MapView AOI filtering.
+const _aOIFractionsCache = new Map<string, { promise: Promise<{ id: string; areaKm2: number; aoiFraction?: number }[]>; ts: number }>();
+
+export async function getSiteAOIFractions(siteId: string): Promise<{ id: string; areaKm2: number; aoiFraction?: number }[]> {
+  const now = Date.now();
+  const hit = _aOIFractionsCache.get(siteId);
+  if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
+
+  const promise = fetch(`${API_BASE}/sites/${siteId}/catchments?slim=true`)
+    .then((r) => r.ok ? r.json() as Promise<{ id: string; areaKm2: number; aoiFraction?: number }[]> : [])
+    .catch(() => []);
+
+  promise.catch(() => _aOIFractionsCache.delete(siteId));
+  _aOIFractionsCache.set(siteId, { promise, ts: now });
+  return promise;
 }
 
 export type WhiskerBoundsResponse = {

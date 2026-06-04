@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
+import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -51,6 +51,8 @@ interface ContentAreaProps {
   onOpenTargetModal?: () => void;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
+  quadColumns?: QuadColumns;
+  onQuadColumnsChange?: (cols: QuadColumns) => void;
 }
 
 const paneVariants = {
@@ -131,6 +133,8 @@ function ContentArea({
   onOpenTargetModal,
   onCloseTargetModal,
   refreshKey,
+  quadColumns = 2,
+  onQuadColumnsChange,
 }: ContentAreaProps) {
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
@@ -358,7 +362,7 @@ function ContentArea({
         h="100%"
         flex={1}
         display="grid"
-        gridTemplateColumns={isQuad ? 'repeat(2, minmax(0, 1fr))' : '1fr'}
+        gridTemplateColumns={isQuad ? `repeat(${quadColumns}, minmax(0, 1fr))` : '1fr'}
         gridTemplateRows={isQuad ? undefined : '1fr'}
         gridAutoRows={isQuad ? 'calc((100% - 2px) / 2)' : undefined}
         alignContent={isQuad ? 'start' : undefined}
@@ -419,6 +423,8 @@ function ContentArea({
                   refreshKey={refreshKey}
                   targetHasBeenUpdated={targetHasBeenUpdated}
                   editableTargetKeys={editableTargetKeys}
+                  quadColumns={quadColumns}
+                  onQuadColumnsChange={onQuadColumnsChange}
                 />
               </motion.div>
             ))}

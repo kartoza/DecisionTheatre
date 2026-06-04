@@ -20,7 +20,7 @@ import {
 import { keyframes } from '@emotion/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCallback, useRef, useState } from 'react';
-import { area as turfArea, featureCollection, intersect } from '@turf/turf';
+import { area as turfArea, featureCollection, intersect, simplify as turfSimplify } from '@turf/turf';
 import {
   FiArrowLeft,
   FiCheck,
@@ -116,7 +116,12 @@ type Step = 'method' | 'geometry' | 'details';
 
 // Physics spring configs
 const bounceConfig = { type: 'spring' as const, stiffness: 400, damping: 25 };
-const EXACT_GEOMETRY_INFERENCE_LIMIT = 3000;
+// For sites with more candidates than this threshold we skip the expensive
+// client-side polygon intersection loop and let the backend ApplyAOIFractions
+// compute precise per-catchment overlap fractions during extraction instead.
+// Keeping it low prevents the JS main thread from blocking ("Page Unresponsive")
+// when processing large shapefiles with hundreds of catchments.
+const EXACT_GEOMETRY_INFERENCE_LIMIT = 150;
 
 function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }: SiteCreationPageProps) {
   const isEditMode = !!editSite;
@@ -142,6 +147,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
   const [isDraggingThumbnail, setIsDraggingThumbnail] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
+  const boundaryLoadedAtRef = useRef<number | null>(null);
   const toast = useToast();
 
   const logPerf = useCallback((stage: string, startedAt: number, extra?: Record<string, unknown>) => {
@@ -233,19 +239,26 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       return { ids: [], truncated: Boolean(data.truncated) };
     }
 
+    // Simplify boundary features for intersection computation only.
+    // High-vertex uploads (e.g. 6782-vertex Malawi polygon) make each
+    // turf.intersect call very slow; 0.001° tolerance reduces vertex count
+    // dramatically with negligible change to catchment membership results.
+    // The displayed boundary on the map retains full resolution.
+    const simplifiedBoundaryFeatures = boundaryFeatures.map(f => {
+      try { return turfSimplify(f, { tolerance: 0.001, highQuality: false }); }
+      catch { return f; }
+    });
+
     const candidates = Array.isArray(data.features) ? data.features : [];
     const matchedIds = new Set<string>();
 
     const overlapLoopStart = performance.now();
-    let lastYieldAt = performance.now();
     for (let i = 0; i < candidates.length; i++) {
-      // Yield to the browser every ~16ms so the UI stays responsive without
-      // adding fixed overhead on fast hardware.
-      const now = performance.now();
-      if (now - lastYieldAt >= 16) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        lastYieldAt = performance.now();
-      }
+      // Yield every iteration for the geometry-check path (<= EXACT_GEOMETRY_INFERENCE_LIMIT).
+      // This guarantees the main thread stays responsive regardless of how long
+      // individual turfIntersect calls take.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
       const feature = candidates[i];
       const catchmentGeometry = feature?.geometry;
       if (!catchmentGeometry || !isPolygonalGeometry(catchmentGeometry)) continue;
@@ -253,10 +266,22 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       const catchmentId = String(feature.properties?.HYBAS_ID ?? feature.id ?? '').trim();
       if (!catchmentId) continue;
 
+      // Simplify each catchment polygon for faster intersection — catchment
+      // boundaries can have hundreds of fine-grained river-following vertices that
+      // don't affect which catchments overlap the site boundary.
+      let simplifiedCatchmentGeom = catchmentGeometry;
+      try {
+        const simplified = turfSimplify(
+          { type: 'Feature', properties: {}, geometry: catchmentGeometry },
+          { tolerance: 0.001, highQuality: false },
+        );
+        if (simplified?.geometry) simplifiedCatchmentGeom = simplified.geometry as typeof catchmentGeometry;
+      } catch { /* keep original */ }
+
       const catchmentFeature: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> = {
         type: 'Feature',
         properties: {},
-        geometry: catchmentGeometry,
+        geometry: simplifiedCatchmentGeom as GeoJSON.Polygon | GeoJSON.MultiPolygon,
       };
 
       let catchmentArea = 0;
@@ -268,7 +293,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       if (!Number.isFinite(catchmentArea) || catchmentArea <= 0) continue;
 
       let satisfiesOverlapThreshold = false;
-      for (const boundaryFeature of boundaryFeatures) {
+      for (const boundaryFeature of simplifiedBoundaryFeatures) {
         try {
           const overlap = intersect(featureCollection([catchmentFeature, boundaryFeature]));
           if (!overlap?.geometry) continue;
@@ -384,6 +409,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
       setGeometry(extractedGeometry);
       setBoundingBox(computeBoundingBox(extractedGeometry));
+      boundaryLoadedAtRef.current = performance.now();
       setStep('geometry');
       logPerf('upload.total', uploadStart, {
         method: selectedMethod,
@@ -412,6 +438,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
   ) => {
     setGeometry(newGeometry);
     setBoundingBox(computeBoundingBox(newGeometry));
+    boundaryLoadedAtRef.current = performance.now();
     if (catchmentIds) setSelectedCatchmentIds(catchmentIds);
     if (mapThumbnail && !thumbnail) setThumbnail(mapThumbnail);
     setStep('details');
@@ -478,6 +505,15 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
         method: isEditMode ? 'update' : 'create',
         catchmentCount: catchmentIdsToPersist.length,
       });
+
+      if (getAppRuntime() === 'browser' && boundaryLoadedAtRef.current !== null) {
+        const totalMs = Math.round(performance.now() - boundaryLoadedAtRef.current);
+        console.info('[perf] site-create.fromBoundaryLoad', {
+          totalMs,
+          catchmentCount: catchmentIdsToPersist.length,
+          method: isEditMode ? 'update' : 'create',
+        });
+      }
 
       toast({
         title: isEditMode ? 'Site updated!' : 'Site created!',

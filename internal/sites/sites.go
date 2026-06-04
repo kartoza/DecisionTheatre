@@ -94,6 +94,7 @@ type SiteIndicators struct {
 	CatchmentCount int      `json:"catchmentCount"` // Number of catchments used
 	TotalAreaKm2   float64  `json:"totalAreaKm2"`   // Total area in km²
 	CatchmentIDs   []string `json:"catchmentIds"`   // IDs of catchments used
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 // Store handles site persistence

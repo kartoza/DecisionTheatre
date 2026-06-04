@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -20,13 +21,15 @@ import (
 
 // Handler provides HTTP API endpoints
 type Handler struct {
-	tileStore  *tiles.MBTilesStore
-	gpkgStore  *geodata.GpkgStore
-	siteStore  *sites.Store
-	cfg        config.Config
-	metaCache  *MetadataCache
-	lookupsMu  sync.RWMutex
-	lookups    *LookupTables
+	tileStore          *tiles.MBTilesStore
+	gpkgStore          *geodata.GpkgStore
+	siteStore          *sites.Store
+	cfg                config.Config
+	metaCache          *MetadataCache
+	lookupsMu          sync.RWMutex
+	lookups            *LookupTables
+	pendingCatchments  sync.Map // siteID → chan struct{} closed when deferred catchment goroutine finishes
+	pendingExtractions sync.Map // siteID → struct{} while async indicator extraction is running
 }
 
 // NewHandler creates a new API handler. metadata.csv is parsed synchronously
@@ -114,6 +117,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/catchments/in-bbox", h.handleCatchmentsInBBox).Methods("POST")
 
 	// Site indicators
+	r.HandleFunc("/sites/{id}/indicators", h.handleGetSiteIndicators).Methods("GET")
 	r.HandleFunc("/sites/{id}/indicators", h.handleExtractIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
 	r.HandleFunc("/sites/{id}/indicators/reset", h.handleResetIdealIndicators).Methods("POST")
@@ -422,7 +426,9 @@ func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
 		bbox = &[4]float64{minx, miny, maxx, maxy}
 	}
 
+	aggStart := time.Now()
 	agg, err := h.gpkgStore.GetScenarioAverages(scenario, attributes, bbox)
+	log.Printf("[perf] handleAggregateData scenario=%s attributes=%d hasBbox=%v duration_ms=%d", scenario, len(attributes), bbox != nil, time.Since(aggStart).Milliseconds())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -485,19 +491,22 @@ type ChoroplethResponse struct {
 // handleChoropleth returns GeoJSON catchments filtered by bbox with attribute values
 // Query params: scenario, attribute, minx, miny, maxx, maxy
 func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	q := r.URL.Query()
+	scenario := q.Get("scenario")
+	if scenario == "" {
+		scenario = "current"
+	}
+	attribute := q.Get("attribute")
+	defer func() {
+		log.Printf("[perf] handleChoropleth scenario=%s attribute=%s duration_ms=%d", scenario, attribute, time.Since(start).Milliseconds())
+	}()
+
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
 	}
 
-	q := r.URL.Query()
-
-	scenario := q.Get("scenario")
-	if scenario == "" {
-		scenario = "current"
-	}
-
-	attribute := q.Get("attribute")
 	if attribute == "" {
 		respondError(w, http.StatusBadRequest, "attribute parameter is required")
 		return
@@ -555,7 +564,14 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query catchments
+	queryStart := time.Now()
 	fc, err := h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy)
+	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
+		if fc != nil {
+			return len(fc.Features)
+		}
+		return 0
+	}(), time.Since(queryStart).Milliseconds())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -573,7 +589,9 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain range for consistent color scaling across scenarios
+	domainStart := time.Now()
 	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
+	log.Printf("[perf] handleChoropleth step=getDomainRange attribute=%s duration_ms=%d", attribute, time.Since(domainStart).Milliseconds())
 	if err != nil {
 		// If domain tables don't exist, fall back to no domain range
 		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
@@ -615,19 +633,47 @@ func (h *Handler) handleListSites(w http.ResponseWriter, r *http.Request) {
 
 // handleGetSite returns a single site by ID
 func (h *Handler) handleGetSite(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	id := mux.Vars(r)["id"]
+	defer func() {
+		log.Printf("[perf] handleGetSite site_id=%s duration_ms=%d", id, time.Since(start).Milliseconds())
+	}()
+
 	if h.siteStore == nil {
 		respondError(w, http.StatusNotFound, "site store not initialized")
 		return
 	}
 
-	id := mux.Vars(r)["id"]
 	site, err := h.siteStore.Get(id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
+	// Strip the large per-catchment indicator arrays — they can be several MB for
+	// sites with 50+ catchments and are only needed by GET /sites/{id}/catchments.
+	// Omitting them here cuts response size and parse time dramatically.
+	site.Catchments = nil
+
 	respondJSON(w, http.StatusOK, site)
+}
+
+// waitForPendingCatchments waits (up to timeout) for the deferred goroutine that
+// populates site.Catchments after creation, then reloads the site from the store.
+// Returns the (possibly refreshed) site once the goroutine finishes or times out.
+func (h *Handler) waitForPendingCatchments(site *sites.Site, timeout time.Duration) *sites.Site {
+	if ch, ok := h.pendingCatchments.Load(site.ID); ok {
+		select {
+		case <-ch.(chan struct{}):
+		case <-time.After(timeout):
+			log.Printf("[perf] waitForPendingCatchments timeout site_id=%s", site.ID)
+			return site
+		}
+		if refreshed, err := h.siteStore.Get(site.ID); err == nil {
+			return refreshed
+		}
+	}
+	return site
 }
 
 func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
@@ -659,7 +705,10 @@ func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
 		return err
 	}
 	log.Printf("[perf] populateSiteCatchmentDetails step=getIndicators site_id=%s catchments=%d rows=%d duration_ms=%d", site.ID, len(site.CatchmentIDs), len(catchmentData), time.Since(indicatorsStart).Milliseconds())
-	if len(site.Geometry) > 0 {
+	// Catchment-created sites are dissolved from the selected catchments, so every
+	// catchment is by definition 100% inside the boundary (AOIFraction = 1.0).
+	// Skip the expensive geometry fetch + polyclip intersection in that case.
+	if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
 		aoiStart := time.Now()
 		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
 			return err
@@ -760,7 +809,15 @@ func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		catchmentIDs := append([]string(nil), created.CatchmentIDs...)
 		geometry := append(json.RawMessage(nil), created.Geometry...)
 		log.Printf("[perf] handleCreateSite step=deferCatchmentDetails site_id=%s catchments=%d", created.ID, len(catchmentIDs))
-		go h.populateSiteCatchmentDetailsDeferred(created.ID, catchmentIDs, geometry)
+		done := make(chan struct{})
+		h.pendingCatchments.Store(created.ID, done)
+		go func() {
+			defer func() {
+				h.pendingCatchments.Delete(created.ID)
+				close(done)
+			}()
+			h.populateSiteCatchmentDetailsDeferred(created.ID, catchmentIDs, geometry)
+		}()
 	}
 
 	respondJSON(w, http.StatusCreated, created)
@@ -1088,90 +1145,54 @@ type ExtractIndicatorsRequest struct {
 	Site    map[string]interface{} `json:"site"`
 }
 
-// handleExtractIndicators extracts and stores indicators for a site from its catchments
-// This performs area-weighted aggregation of all indicator values
-func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request) {
-	if h.siteStore == nil {
-		respondError(w, http.StatusInternalServerError, "site store not initialized")
-		return
-	}
-	if h.gpkgStore == nil {
-		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
-		return
-	}
+// doSiteExtraction performs the full indicator extraction for a site and saves to disk.
+// Called from a background goroutine for webview runtime.
+func (h *Handler) doSiteExtraction(id string) error {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] doSiteExtraction site_id=%s duration_ms=%d", id, time.Since(start).Milliseconds())
+	}()
 
-	id := mux.Vars(r)["id"]
-
-	// Decode request body
-	var req ExtractIndicatorsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Warning: failed to decode request body: %v", err)
-		// Continue with extraction even if body decode fails (for backwards compatibility)
+	site, err := h.siteStore.Get(id)
+	if err != nil {
+		return fmt.Errorf("get site: %w", err)
 	}
 
-	var site *sites.Site
-	var err error
-
-	if req.Runtime == "browser" {
-		// Convert map to Site struct - never fetch from store in browser mode
-		if len(req.Site) == 0 {
-			respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
-			return
-		}
-
-		// Marshal and unmarshal to convert map to struct
-		siteJSON, marshalErr := json.Marshal(req.Site)
-		if marshalErr != nil {
-			respondError(w, http.StatusBadRequest, "invalid site data in request body")
-			return
-		}
-
-		site = &sites.Site{}
-		if err = json.Unmarshal(siteJSON, site); err != nil {
-			respondError(w, http.StatusBadRequest, "invalid site data in request body")
-			return
-		}
-	} else {
-		// Backwards compatibility: if runtime is missing/unknown, use persisted site
-		site, err = h.siteStore.Get(id)
-		if err != nil {
-			respondError(w, http.StatusNotFound, err.Error())
-			return
-		}
-	}
-
-	// Get catchment IDs for this site
 	catchmentIDs := site.CatchmentIDs
 	if len(catchmentIDs) == 0 {
-		respondError(w, http.StatusBadRequest, "site has no associated catchments")
-		return
+		return fmt.Errorf("site %s has no catchments", id)
 	}
 
-	// Get indicator data for all catchments
-	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(catchmentIDs)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
-		return
+	// Wait for the deferred catchment goroutine so we use cache rather than competing for DB.
+	if len(site.Catchments) == 0 {
+		site = h.waitForPendingCatchments(site, 10*time.Second)
+		catchmentIDs = site.CatchmentIDs
 	}
-	if len(site.Geometry) > 0 {
-		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
-			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+
+	var catchmentData []geodata.CatchmentIndicators
+	if len(site.Catchments) > 0 {
+		catchmentData = siteCatchmentsToIndicators(site.Catchments)
+		log.Printf("[perf] doSiteExtraction step=useCachedCatchments site_id=%s catchments=%d", id, len(catchmentData))
+	} else {
+		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(catchmentIDs)
+		if err != nil {
+			return fmt.Errorf("get catchment data: %w", err)
+		}
+		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
+			if aoiErr := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); aoiErr != nil {
+				log.Printf("Warning: ApplyAOIFractions for %s: %v", id, aoiErr)
+			}
 		}
 	}
 
 	if len(catchmentData) == 0 {
-		respondError(w, http.StatusNotFound, "no data found for catchments")
-		return
+		return fmt.Errorf("no catchment data for site %s", id)
 	}
 
-	// Compute area-weighted aggregations
-	indicators := computeAreaWeightedIndicators(catchmentData, h.gpkgStore)
+	indicators := computeAreaWeightedIndicators(catchmentData)
 	indicators.CatchmentIDs = catchmentIDs
-
-	// Update site with indicators
 	site.Indicators = indicators
 
-	// Rebuild catchments with Ideal reset to Reference, so any prior user edits are cleared.
 	freshCatchments := make([]sites.SiteCatchment, 0, len(catchmentData))
 	for _, c := range catchmentData {
 		ideal := make(map[string]float64, len(c.Reference))
@@ -1189,36 +1210,145 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 	site.Catchments = freshCatchments
 
-	// For browser runtime, return the site directly without storing
-	if req.Runtime == "browser" {
+	if _, err := h.siteStore.Update(id, site); err != nil {
+		return fmt.Errorf("update site: %w", err)
+	}
+	return nil
+}
+
+// handleGetSiteIndicators is the polling endpoint for async extraction.
+// Returns 200 + site (without catchments) once indicators are ready, or 202 while pending.
+func (h *Handler) handleGetSiteIndicators(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+	id := mux.Vars(r)["id"]
+	site, err := h.siteStore.Get(id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if site.Indicators != nil {
+		site.Catchments = nil
 		respondJSON(w, http.StatusOK, site)
 		return
 	}
+	if _, pending := h.pendingExtractions.Load(id); pending {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"extracting"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"idle"}`))
+}
 
-	// For other runtimes, update in store and return
-	updated, err := h.siteStore.Update(id, site)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to update site: "+err.Error())
+// handleExtractIndicators starts async indicator extraction for a site.
+// For webview: returns 202 immediately, runs extraction in background.
+// For browser: runs synchronously, returns extracted site.
+func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request) {
+	if h.siteStore == nil {
+		respondError(w, http.StatusInternalServerError, "site store not initialized")
+		return
+	}
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, updated)
+	id := mux.Vars(r)["id"]
+
+	var req ExtractIndicatorsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Warning: failed to decode extraction request body: %v", err)
+	}
+
+	// ── Browser runtime: synchronous extraction, return site directly ──────────
+	if req.Runtime == "browser" {
+		if len(req.Site) == 0 {
+			respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
+			return
+		}
+		siteJSON, marshalErr := json.Marshal(req.Site)
+		if marshalErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+		var site sites.Site
+		if err := json.Unmarshal(siteJSON, &site); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid site data in request body")
+			return
+		}
+		catchmentIDs := site.CatchmentIDs
+		if len(catchmentIDs) == 0 {
+			respondError(w, http.StatusBadRequest, "site has no associated catchments")
+			return
+		}
+		catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(catchmentIDs)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+			return
+		}
+		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
+			if aoiErr := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); aoiErr != nil {
+				log.Printf("Warning: ApplyAOIFractions for browser site: %v", aoiErr)
+			}
+		}
+		if len(catchmentData) == 0 {
+			respondError(w, http.StatusNotFound, "no data found for catchments")
+			return
+		}
+		indicators := computeAreaWeightedIndicators(catchmentData)
+		indicators.CatchmentIDs = catchmentIDs
+		site.Indicators = indicators
+		// Strip catchments from browser response — large data, frontend uses separate endpoint
+		site.Catchments = nil
+		respondJSON(w, http.StatusOK, &site)
+		return
+	}
+
+	// ── Webview runtime: async extraction ─────────────────────────────────────
+	site, err := h.siteStore.Get(id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if len(site.CatchmentIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+		return
+	}
+
+	// If extraction is already running for this site, just return 202.
+	if _, alreadyRunning := h.pendingExtractions.Load(id); alreadyRunning {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"extracting"}`))
+		return
+	}
+
+	h.pendingExtractions.Store(id, struct{}{})
+	go func() {
+		defer h.pendingExtractions.Delete(id)
+		if err := h.doSiteExtraction(id); err != nil {
+			log.Printf("Async extraction failed for site %s: %v", id, err)
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte(`{"status":"extracting"}`))
 }
 
 // computeAreaWeightedIndicators calculates area-weighted indicator aggregations
 
-func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, gpkgStore *geodata.GpkgStore) *sites.SiteIndicators {
+func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *sites.SiteIndicators {
 	indicators := &sites.SiteIndicators{
-		Reference:      make(map[string]float64),
-		ReferenceLower: make(map[string]float64),
-		ReferenceUpper: make(map[string]float64),
-		Current:        make(map[string]float64),
-		CurrentLower:   make(map[string]float64),
-		CurrentUpper:   make(map[string]float64),
-		Ideal:          make(map[string]float64),
-		IdealLower:     make(map[string]float64),
-		IdealUpper:     make(map[string]float64),
-		ExtractedAt:    time.Now().UTC().Format(time.RFC3339),
+		Reference:   make(map[string]float64),
+		Current:     make(map[string]float64),
+		Ideal:       make(map[string]float64),
+		ExtractedAt: time.Now().UTC().Format(time.RFC3339),
 		CatchmentCount: len(catchments),
 	}
 
@@ -1250,13 +1380,7 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, gpk
 
 	indicators.TotalAreaKm2 = totalValidArea
 
-	// Step 3: Compute whisker (upper/lower) bounds from GeoPackage tables
-	var whiskerBounds geodata.WhiskerBounds
-	if gpkgStore != nil {
-		whiskerBounds = gpkgStore.ComputeWhiskerBounds(catchments)
-	}
-
-	// Step 4: Collect all unique metric keys
+	// Step 3: Collect all unique metric keys
 	allKeys := make(map[string]bool)
 	for _, c := range catchments {
 		for k := range c.Reference {
@@ -1289,33 +1413,9 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators, gpk
 		// had current data for this key — otherwise curSum stays 0 which is misleading
 		// (e.g. a column that only exists in reference would appear as current=0).
 		indicators.Reference[key] = refSum
-		indicators.Ideal[key] = refSum // Initialize Ideal same as Reference
+		indicators.Ideal[key] = refSum
 		if hadCur {
 			indicators.Current[key] = curSum
-		}
-
-		// Store whisker bounds if available
-		if whiskerBounds.ReferenceLower != nil {
-			if val, ok := whiskerBounds.ReferenceLower[key]; ok {
-				indicators.ReferenceLower[key] = val
-				indicators.IdealLower[key] = val // Initialize IdealLower same as ReferenceLower
-			}
-		}
-		if whiskerBounds.ReferenceUpper != nil {
-			if val, ok := whiskerBounds.ReferenceUpper[key]; ok {
-				indicators.ReferenceUpper[key] = val
-				indicators.IdealUpper[key] = val // Initialize IdealUpper same as ReferenceUpper
-			}
-		}
-		if whiskerBounds.CurrentLower != nil {
-			if val, ok := whiskerBounds.CurrentLower[key]; ok {
-				indicators.CurrentLower[key] = val
-			}
-		}
-		if whiskerBounds.CurrentUpper != nil {
-			if val, ok := whiskerBounds.CurrentUpper[key]; ok {
-				indicators.CurrentUpper[key] = val
-			}
 		}
 	}
 
@@ -1486,6 +1586,10 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if site.Indicators != nil {
+		site.Indicators.Warnings = collectTargetStateWarnings(site.Indicators.Ideal)
+	}
+
 	// For browser runtime, return the site directly without storing
 	if req.Runtime == "browser" {
 		respondJSON(w, http.StatusOK, site)
@@ -1525,6 +1629,7 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	for key, value := range site.Indicators.Reference {
 		site.Indicators.Ideal[key] = value
 	}
+	site.Indicators.Warnings = nil
 
 	// Reset each catchment's ideal to its reference values
 	for i := range site.Catchments {
@@ -1614,7 +1719,24 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// slim=true: return only id+areaKm2+aoiFraction — used by MapView for AOI filtering.
+	// Avoids sending 100MB+ of indicator values the map view never reads.
+	slim := r.URL.Query().Get("slim") == "true"
+
 	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
+		if slim {
+			type slimCatchment struct {
+				ID          string  `json:"id"`
+				AreaKm2     float64 `json:"areaKm2"`
+				AOIFraction float64 `json:"aoiFraction,omitempty"`
+			}
+			result := make([]slimCatchment, len(site.Catchments))
+			for i, c := range site.Catchments {
+				result[i] = slimCatchment{ID: c.ID, AreaKm2: c.AreaKm2, AOIFraction: c.AOIFraction}
+			}
+			respondJSON(w, http.StatusOK, result)
+			return
+		}
 		respondJSON(w, http.StatusOK, siteCatchmentsToIndicators(site.Catchments))
 		return
 	}
@@ -1625,10 +1747,24 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
 		return
 	}
-	if len(site.Geometry) > 0 {
+	if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
 		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
 			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
 		}
+	}
+
+	if slim {
+		type slimCatchment struct {
+			ID          string  `json:"id"`
+			AreaKm2     float64 `json:"areaKm2"`
+			AOIFraction float64 `json:"aoiFraction,omitempty"`
+		}
+		result := make([]slimCatchment, len(catchmentData))
+		for i, c := range catchmentData {
+			result[i] = slimCatchment{ID: c.ID, AreaKm2: c.AreaKm2, AOIFraction: c.AOIFraction}
+		}
+		respondJSON(w, http.StatusOK, result)
+		return
 	}
 
 	respondJSON(w, http.StatusOK, catchmentData)
@@ -1703,6 +1839,19 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Return cached whisker bounds if already computed and stored in this site.
+	if site.Indicators != nil && len(site.Indicators.ReferenceLower) > 0 {
+		log.Printf("[perf] handleSiteWhiskers step=cached site_id=%s", id)
+		bounds := geodata.WhiskerBounds{
+			ReferenceLower: site.Indicators.ReferenceLower,
+			ReferenceUpper: site.Indicators.ReferenceUpper,
+			CurrentLower:   site.Indicators.CurrentLower,
+			CurrentUpper:   site.Indicators.CurrentUpper,
+		}
+		respondJSON(w, http.StatusOK, bounds)
+		return
+	}
+
 	catchmentData := []geodata.CatchmentIndicators(nil)
 	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
 		catchmentData = siteCatchmentsToIndicators(site.Catchments)
@@ -1712,7 +1861,7 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
 			return
 		}
-		if len(site.Geometry) > 0 {
+		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
 			if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
 				log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
 			}
@@ -1720,6 +1869,21 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bounds := h.gpkgStore.ComputeWhiskerBounds(catchmentData)
+
+	// Persist computed bounds into site indicators so subsequent requests are instant.
+	if h.siteStore != nil && r.Method != http.MethodPost {
+		if site.Indicators == nil {
+			site.Indicators = &sites.SiteIndicators{}
+		}
+		site.Indicators.ReferenceLower = bounds.ReferenceLower
+		site.Indicators.ReferenceUpper = bounds.ReferenceUpper
+		site.Indicators.CurrentLower = bounds.CurrentLower
+		site.Indicators.CurrentUpper = bounds.CurrentUpper
+		if _, updateErr := h.siteStore.Update(id, site); updateErr != nil {
+			log.Printf("Warning: failed to cache whisker bounds for site %s: %v", id, updateErr)
+		}
+	}
+
 	respondJSON(w, http.StatusOK, bounds)
 }
 
