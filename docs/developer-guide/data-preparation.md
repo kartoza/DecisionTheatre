@@ -63,6 +63,126 @@ All are available in the Nix dev shell (`nix develop`).
 
 The MapBox GL Style JSON at `data/mbtiles/style.json` defines how each layer is rendered (colours, line widths, label placement). Edit this file to change the map's visual appearance.
 
+## Fetching Data from Google Drive
+
+The script `scripts/fetch-data.sh` downloads all CSV files from a shared Google Drive folder directly into the `data/` directory. Run this before `make geopackage` to pull the latest source files in one step.
+
+### Installation: rclone
+
+The script requires [rclone](https://rclone.org), a command-line tool for cloud storage. Install it once on your machine:
+
+=== "Linux / macOS"
+
+    ```bash
+    curl https://rclone.org/install.sh | sudo bash
+    ```
+
+=== "macOS (Homebrew)"
+
+    ```bash
+    brew install rclone
+    ```
+
+=== "Windows"
+
+    Download the installer from [rclone.org/downloads](https://rclone.org/downloads/) and add `rclone.exe` to your `PATH`.
+
+### One-time Google Drive configuration
+
+rclone needs a named **remote** that points to your Google Drive account. Create one called `gdrive` by running:
+
+```bash
+rclone config
+```
+
+Follow the interactive prompts:
+
+1. Press `n` for **New remote**.
+2. Name it `gdrive`.
+3. Choose **Google Drive** as the storage type.
+4. Leave the client ID and secret blank (uses rclone's defaults).
+5. Choose scope `drive.readonly` if you only need to download, or `drive` for full access.
+6. Follow the browser OAuth flow to authorise rclone with your Google account.
+7. Accept the default for all remaining options and confirm.
+
+Verify the remote works:
+
+```bash
+rclone lsd gdrive:
+```
+
+!!! note "Service account authentication"
+    For automated or CI environments, use a Google service account instead of OAuth.
+    Pass `--drive-service-account-file /path/to/key.json` to rclone, or add it to your
+    remote configuration during `rclone config`.
+
+### Finding the folder ID
+
+Open the Google Drive folder in your browser. The folder ID is the last segment of the URL:
+
+```
+https://drive.google.com/drive/folders/1ABCdef_ghiJKLmnopQRSTuvwXYZ
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                        this is the folder ID
+```
+
+The folder must be shared with the Google account you authenticated with rclone, or set to **Anyone with the link**.
+
+### Usage
+
+```bash
+# Using Make (recommended)
+make fetch-data FOLDER=<folder-id-or-url>
+
+# Or directly
+./scripts/fetch-data.sh <folder-id-or-url> [data-dir]
+```
+
+Both a bare folder ID and a full URL are accepted:
+
+```bash
+# Bare folder ID
+make fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
+
+# Full shareable URL
+make fetch-data FOLDER="https://drive.google.com/drive/folders/1ABCdef_ghiJKLmnopQRSTuvwXYZ"
+
+# Custom destination directory
+./scripts/fetch-data.sh 1ABCdef_ghiJKLmnopQRSTuvwXYZ /path/to/data
+```
+
+### What the script does
+
+1. Extracts the folder ID from the argument (whether a bare ID or URL).
+2. Checks that rclone is installed and the `gdrive` remote exists.
+3. Copies every `*.csv` file from the Drive folder into `data/` using `rclone copy`.
+4. Skips files that are already up-to-date (same size and modification time).
+5. Retries automatically on transient network errors.
+6. Prints a summary of all CSV files in `data/` with their sizes when complete.
+
+### Using a different remote name
+
+If your rclone Google Drive remote is not called `gdrive`, set the `RCLONE_REMOTE` environment variable:
+
+```bash
+RCLONE_REMOTE=my-drive ./scripts/fetch-data.sh 1ABCdef_ghiJKLmnopQRSTuvwXYZ
+```
+
+### Full workflow
+
+```bash
+# 1. Download the CSV source files from Google Drive
+make fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
+
+# 2. Build the GeoPackage datapack
+make geopackage
+
+# 3. Launch the application
+make app
+```
+
+---
+
 ## Scenario Data (GeoPackage Datapack)
 
 The application uses a GeoPackage file (`datapack.gpkg`) containing catchment geometries and scenario data. This is built from raw input files using the `scripts/build-geopackage.sh` script.
@@ -71,14 +191,42 @@ The application uses a GeoPackage file (`datapack.gpkg`) containing catchment ge
 
 Place the following files in the `data/` directory:
 
-| File | Description |
-|------|-------------|
-| `catchments.gpkg` | GeoPackage containing catchment geometries in the `catchments_lev12` layer |
-| `current.csv` | Current scenario — per-catchment metrics |
-| `reference.csv` | Reference scenario — per-catchment metrics |
-| `metadata.csv` | (Optional) Describes each column in the scenario data |
+#### Geometry
 
-All CSVs must have a `catchID` column that cross-references the `HYBAS_ID` in the catchment geometries.
+| File | Required | Description |
+|------|----------|-------------|
+| `catchments.gpkg` | **Yes** | GeoPackage containing catchment polygon geometries in a layer named `catchments_lev12`. Each feature must have a `HYBAS_ID` attribute that matches the `catchID` column in the scenario CSVs. |
+
+#### Scenario CSVs
+
+All scenario CSVs must have a `catchID` column that cross-references `HYBAS_ID` in `catchments.gpkg`. All other columns are per-catchment indicator values stored as `REAL` in the database (`NA` becomes `NULL`).
+
+| File | Required | Description |
+|------|----------|-------------|
+| `current.csv` | **Yes** | Per-catchment indicator values for the **current** scenario. |
+| `reference.csv` | **Yes** | Per-catchment indicator values for the **reference** (historical baseline) scenario. |
+| `current_lower.csv` | No | Lower-bound uncertainty values for the current scenario. Displayed as the lower whisker in boxplot charts. |
+| `current_upper.csv` | No | Upper-bound uncertainty values for the current scenario. Displayed as the upper whisker in boxplot charts. |
+| `reference_lower.csv` | No | Lower-bound uncertainty values for the reference scenario. |
+| `reference_upper.csv` | No | Upper-bound uncertainty values for the reference scenario. |
+
+#### Metadata
+
+| File | Required | Description |
+|------|----------|-------------|
+| `metadata.csv` | No | Human-readable labels, units, chart types, map colours, and user-input flags for each indicator column. Without it the app still runs but uses raw column names with no colour coding or chart type detection. See the [Datapack Format](datapack-format.md#metadatacsv-column-reference) page for a full column-by-column reference. |
+
+#### Ecological Lookup Tables
+
+These files support the cascading recalculation workflow triggered when a user adjusts a target indicator. All three are optional — if absent the application falls back to proportional scaling.
+
+| File | Required | Description |
+|------|----------|-------------|
+| `NPP_by_treecover.csv` | No | Per-catchment net primary productivity (g/m²) indexed by `catchID`, with one column per tree-cover class bin (`X0_5` through `X80_100`). Used to recalculate NPP when the user adjusts tree-cover targets. |
+| `deltaSOC_bytcc_Mgha.csv` | No | Per-catchment change in soil organic carbon (ΔSOCc, Mg/ha) by tree-cover class. Same structure as `NPP_by_treecover.csv`. Used to recalculate soil carbon when tree-cover proportions change. |
+| `herb_traits_ready.csv` | No | Per-species herbivore trait table indexed by `Common_name`. Columns include `Body_mass`, `Diet`, `HFT_BII`, `Prop_Grass`, `DMI_kg_indiv_yr`, and `CH4_kg_indiv_yr`. Species names must match the suffixes used in the `herbs_sp_*` and `herbs_fg_*` indicator columns in the scenario CSVs. |
+
+See the [Datapack Format](datapack-format.md#ecological-lookup-tables) page for the full column specifications of each lookup file.
 
 ### Building the Datapack
 
