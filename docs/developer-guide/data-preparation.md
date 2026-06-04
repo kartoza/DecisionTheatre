@@ -205,16 +205,16 @@ All scenario CSVs must have a `catchID` column that cross-references `HYBAS_ID` 
 |------|----------|-------------|
 | `current.csv` | **Yes** | Per-catchment indicator values for the **current** scenario. |
 | `reference.csv` | **Yes** | Per-catchment indicator values for the **reference** (historical baseline) scenario. |
-| `current_lower.csv` | No | Lower-bound uncertainty values for the current scenario. Displayed as the lower whisker in boxplot charts. |
-| `current_upper.csv` | No | Upper-bound uncertainty values for the current scenario. Displayed as the upper whisker in boxplot charts. |
-| `reference_lower.csv` | No | Lower-bound uncertainty values for the reference scenario. |
-| `reference_upper.csv` | No | Upper-bound uncertainty values for the reference scenario. |
+| `current_lower.csv` | **Yes** | Lower-bound uncertainty values for the current scenario. Displayed as the lower whisker in boxplot charts. |
+| `current_upper.csv` | **Yes** | Upper-bound uncertainty values for the current scenario. Displayed as the upper whisker in boxplot charts. |
+| `reference_lower.csv` | **Yes** | Lower-bound uncertainty values for the reference scenario. |
+| `reference_upper.csv` | **Yes** | Upper-bound uncertainty values for the reference scenario. |
 
 #### Metadata
 
 | File | Required | Description |
 |------|----------|-------------|
-| `metadata.csv` | No | Human-readable labels, units, chart types, map colours, and user-input flags for each indicator column. Without it the app still runs but uses raw column names with no colour coding or chart type detection. See the [Datapack Format](datapack-format.md#metadatacsv-column-reference) page for a full column-by-column reference. |
+| `metadata.csv` | **Yes** | Human-readable labels, units, chart types, map colours, and user-input flags for each indicator column. Without it the app still runs but uses raw column names with no colour coding or chart type detection. See the [Datapack Format](datapack-format.md#metadatacsv-column-reference) page for a full column-by-column reference. |
 
 #### Ecological Lookup Tables
 
@@ -222,9 +222,9 @@ These files support the cascading recalculation workflow triggered when a user a
 
 | File | Required | Description |
 |------|----------|-------------|
-| `NPP_by_treecover.csv` | No | Per-catchment net primary productivity (g/m²) indexed by `catchID`, with one column per tree-cover class bin (`X0_5` through `X80_100`). Used to recalculate NPP when the user adjusts tree-cover targets. |
-| `deltaSOC_bytcc_Mgha.csv` | No | Per-catchment change in soil organic carbon (ΔSOCc, Mg/ha) by tree-cover class. Same structure as `NPP_by_treecover.csv`. Used to recalculate soil carbon when tree-cover proportions change. |
-| `herb_traits_ready.csv` | No | Per-species herbivore trait table indexed by `Common_name`. Columns include `Body_mass`, `Diet`, `HFT_BII`, `Prop_Grass`, `DMI_kg_indiv_yr`, and `CH4_kg_indiv_yr`. Species names must match the suffixes used in the `herbs_sp_*` and `herbs_fg_*` indicator columns in the scenario CSVs. |
+| `NPP_by_treecover.csv` | **Yes** | Per-catchment net primary productivity (g/m²) indexed by `catchID`, with one column per tree-cover class bin (`X0_5` through `X80_100`). Used to recalculate NPP when the user adjusts tree-cover targets. |
+| `deltaSOC_bytcc_Mgha.csv` | **Yes** | Per-catchment change in soil organic carbon (ΔSOCc, Mg/ha) by tree-cover class. Same structure as `NPP_by_treecover.csv`. Used to recalculate soil carbon when tree-cover proportions change. |
+| `herb_traits_ready.csv` | **Yes** | Per-species herbivore trait table indexed by `Common_name`. Columns include `Body_mass`, `Diet`, `HFT_BII`, `Prop_Grass`, `DMI_kg_indiv_yr`, and `CH4_kg_indiv_yr`. Species names must match the suffixes used in the `herbs_sp_*` and `herbs_fg_*` indicator columns in the scenario CSVs. |
 
 See the [Datapack Format](datapack-format.md#ecological-lookup-tables) page for the full column specifications of each lookup file.
 

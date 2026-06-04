@@ -8,7 +8,6 @@ A datapack is distributed as a compressed archive (`.zip` or `.7z`) with the fol
 
 ```
 decision-theatre-data-v{VERSION}/
-├── manifest.json               # Pack version and contents declaration
 └── data/
     ├── datapack.gpkg           # GeoPackage: catchment geometries + all scenario data
     └── mbtiles/
