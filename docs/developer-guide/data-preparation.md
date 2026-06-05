@@ -65,7 +65,7 @@ The MapBox GL Style JSON at `data/mbtiles/style.json` defines how each layer is 
 
 ## Fetching Data from Google Drive
 
-The script `scripts/fetch-data.sh` downloads all CSV files from a shared Google Drive folder directly into the `data/` directory. Run this before `make geopackage` to pull the latest source files in one step.
+The script `scripts/fetch-data.sh` downloads all files from a shared Google Drive folder (including subfolders) directly into the `data/` directory, preserving the folder structure. Run this before `make geopackage` to pull the latest source files in one step.
 
 ### Installation: rclone
 
@@ -155,10 +155,10 @@ make fetch-data FOLDER="https://drive.google.com/drive/folders/1ABCdef_ghiJKLmno
 
 1. Extracts the folder ID from the argument (whether a bare ID or URL).
 2. Checks that rclone is installed and the `gdrive` remote exists.
-3. Copies every `*.csv` file from the Drive folder into `data/` using `rclone copy`.
+3. Copies all files from the Drive folder and any subfolders into `data/` using `rclone copy`, preserving the subfolder structure.
 4. Skips files that are already up-to-date (same size and modification time).
 5. Retries automatically on transient network errors.
-6. Prints a summary of all CSV files in `data/` with their sizes when complete.
+6. Prints a summary of all files in `data/` with their sizes when complete.
 
 ### Using a different remote name
 

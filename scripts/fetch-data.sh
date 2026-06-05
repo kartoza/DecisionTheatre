@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# fetch-data.sh — Download CSV data files from a Google Drive folder.
+# fetch-data.sh — Download all data files from a Google Drive folder.
 #
 # Usage:
 #   ./scripts/fetch-data.sh <folder-id-or-url> [data-dir]
@@ -13,9 +13,10 @@
 #                       to the repository root.
 #
 # What it does:
-#   Downloads every .csv file found directly in the given Drive folder into
-#   <data-dir>. Existing files are overwritten only when the remote copy is
-#   newer or has a different size (rclone --update behaviour).
+#   Downloads all files from the given Drive folder (and any subfolders)
+#   into <data-dir>, preserving the folder structure. Existing files are
+#   overwritten only when the remote copy is newer or has a different size
+#   (rclone --update behaviour).
 #
 # Requirements:
 #   rclone — https://rclone.org/install/
@@ -131,19 +132,18 @@ check_remote() {
 download_csvs() {
     mkdir -p "$DATA_DIR"
 
-    info "Fetching CSV files from Google Drive folder: ${BOLD}${FOLDER_ID}${RESET}"
+    info "Fetching all files from Google Drive folder: ${BOLD}${FOLDER_ID}${RESET}"
     info "Destination: ${BOLD}${DATA_DIR}${RESET}"
     echo
 
     # Build the rclone source path.
     # --drive-root-folder-id pins rclone to the specific folder regardless of
     # where it lives in the Drive hierarchy, so no folder path is needed.
+    # rclone copy is recursive by default, so subfolders are mirrored.
     local src="${RCLONE_REMOTE}:"
 
     rclone copy "$src" "$DATA_DIR" \
         --drive-root-folder-id "$FOLDER_ID" \
-        --include "*.csv" \
-        --no-traverse \
         --progress \
         --stats-one-line \
         --update \
@@ -159,24 +159,24 @@ download_csvs() {
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
-    local csv_files
-    csv_files=$(find "$DATA_DIR" -maxdepth 1 -name "*.csv" | sort)
+    local all_files
+    all_files=$(find "$DATA_DIR" -type f | sort)
 
-    if [[ -z "$csv_files" ]]; then
-        warn "No CSV files found in ${DATA_DIR} after download."
+    if [[ -z "$all_files" ]]; then
+        warn "No files found in ${DATA_DIR} after download."
         return
     fi
 
-    info "CSV files in ${DATA_DIR}:"
+    info "Files in ${DATA_DIR}:"
     echo
-    printf "  %-40s  %s\n" "FILE" "SIZE"
-    printf "  %-40s  %s\n" "----" "----"
+    printf "  %-50s  %s\n" "FILE" "SIZE"
+    printf "  %-50s  %s\n" "----" "----"
     while IFS= read -r f; do
-        local name size
-        name=$(basename "$f")
+        local rel size
+        rel="${f#$DATA_DIR/}"
         size=$(du -h "$f" | cut -f1)
-        printf "  %-40s  %s\n" "$name" "$size"
-    done <<< "$csv_files"
+        printf "  %-50s  %s\n" "$rel" "$size"
+    done <<< "$all_files"
     echo
     info "Done. Run ${BOLD}make geopackage${RESET} to build datapack.gpkg."
 }
