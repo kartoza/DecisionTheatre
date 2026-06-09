@@ -536,6 +536,7 @@ function ViewPane({
         chartAxisLabelFilter={chartAxisLabelFilter}
         chartGraphMode={chartGraphMode}
         mapExtent={mapExtent}
+        targetHasBeenUpdated={targetHasBeenUpdated}
       />
 
       {/* Dial Chart layer */}
@@ -543,7 +544,7 @@ function ViewPane({
         visible={viewMode === 'dial' && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
-        targetValue={dialData?.targetValue}
+        targetValue={targetHasBeenUpdated ? dialData?.targetValue : undefined}
         min={dialData?.min ?? 0}
         max={dialData?.max ?? 100}
         attribute={dialAttributeLabel}

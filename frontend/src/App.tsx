@@ -58,7 +58,7 @@ function App() {
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
-  const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('rainbow');
+  const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('metadata');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
   const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
@@ -774,6 +774,7 @@ function App() {
           isExploreMode={isExploreMode}
           onNavigateToCreateSite={handleNavigateToCreateSite}
           mapStatistics={mapStatistics ?? undefined}
+          siteIndicators={currentSite?.indicators}
           isSwiperEnabled={isSwiperEnabled}
           isSiteAggregationActive={Boolean(currentSiteId) && (indicatorPaneIndex !== null
             ? viewModes[indicatorPaneIndex] === 'table'

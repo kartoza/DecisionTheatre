@@ -32,6 +32,7 @@ interface ChartViewProps {
   chartGroup?: string | null;
   chartAxisLabelFilter?: string | null;
   chartGraphMode?: 'line' | 'boxplot' | null;
+  targetHasBeenUpdated?: boolean;
 }
 
 /** Returns the mean from whichever stats bucket (left or right) matches the target scenario. */
@@ -270,6 +271,7 @@ function ChartView({
   chartGroup,
   chartAxisLabelFilter,
   chartGraphMode,
+  targetHasBeenUpdated = true,
 }: ChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 500 });
@@ -604,7 +606,7 @@ function ChartView({
       refVal = resolveValue(attribute, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
       curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
     }
-    const idealVal = siteIndicators?.ideal?.[attribute] ?? refVal;
+    const idealVal = targetHasBeenUpdated ? (siteIndicators?.ideal?.[attribute] ?? refVal) : null;
 
     const hasData = [refVal, curVal, idealVal].some(
       (v): v is number => typeof v === 'number' && Number.isFinite(v),
@@ -623,7 +625,7 @@ function ChartView({
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData]);
+  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData, targetHasBeenUpdated]);
 
   // Build grouped chart data for all columns where Grouping variable matches the selected group.
   const groupedChartData = useMemo(() => {
@@ -671,7 +673,7 @@ function ChartView({
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
-      const normalizedTarget = typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
+      const normalizedTarget = targetHasBeenUpdated && typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
 
       const siteRefUpperRaw = rangeMode === 'site'
         ? resolveMapValueForColumn(siteIndicators?.referenceUpper, col)
@@ -786,7 +788,7 @@ function ChartView({
       curLower: p.curLower,
     }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, siteCatchments, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, siteCatchments, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds, targetHasBeenUpdated]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
@@ -1176,6 +1178,7 @@ function ChartView({
 
     if (groupedChartType === 'line') {
       const x = chartData.map((item) => item.label);
+      const hasTargetData = chartData.some((item) => item.target !== null);
       const traces = [
         {
           type: 'scatter',
@@ -1205,7 +1208,7 @@ function ChartView({
           textfont: { color: SERIES_COLORS[1], size: 10 },
           cliponaxis: false,
         },
-        {
+        ...(hasTargetData ? [{
           type: 'scatter',
           mode: 'lines+markers+text',
           name: SERIES_LABELS[2],
@@ -1218,7 +1221,7 @@ function ChartView({
           connectgaps: false,
           textfont: { color: SERIES_COLORS[2], size: 10 },
           cliponaxis: false,
-        },
+        }] : []),
       ];
 
       return (

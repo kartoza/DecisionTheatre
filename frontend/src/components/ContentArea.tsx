@@ -472,6 +472,8 @@ function ContentArea({
             chartGraphMode={chartGraphModes?.[visibleIndices[0]] ?? null}
             mapExtent={mapExtent}
             refreshKey={refreshKey}
+            targetHasBeenUpdated={targetHasBeenUpdated}
+            editableTargetKeys={editableTargetKeys}
           />
         </Box>
       )}

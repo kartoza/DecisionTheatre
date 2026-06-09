@@ -67,7 +67,9 @@ nav:
       - Coding Standards: developer-guide/coding-standards.md
       - Testing: developer-guide/testing.md
       - Data Preparation: developer-guide/data-preparation.md
+      - Datapack Format: developer-guide/datapack-format.md
       - Preparing a Release: developer-guide/releasing.md
+      - Server Deployment: developer-guide/server-deployment.md
       - API Guide: developer-guide/api.md
 
 markdown_extensions:

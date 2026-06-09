@@ -1419,6 +1419,16 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
+	// Recompute fire-cascade derived values (fuelload, intensity, percBurned, …)
+	// from the aggregated inputs so all three scenarios are internally consistent.
+	// These are derived quantities; the raw inputs (NPP, litter, DMI, lowTC_prop)
+	// are the ground truth and must remain as aggregated from the GeoPackage.
+	workflow4FireCascade(indicators.Reference)
+	workflow4FireCascade(indicators.Ideal)
+	if len(indicators.Current) > 0 {
+		workflow4FireCascade(indicators.Current)
+	}
+
 	return indicators
 }
 

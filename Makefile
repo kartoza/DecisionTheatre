@@ -31,7 +31,7 @@ GOLINT := golangci-lint
 .PHONY: fmt lint check deps
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
-.PHONY: geopackage datapack list-datapack
+.PHONY: geopackage datapack list-datapack fetch-data
 .PHONY: design-export design-import design-preview
 .PHONY: release
 .PHONY: help info
@@ -75,7 +75,7 @@ build-docs:
 dev: build-backend
 	$(BIN_DIR)/$(BINARY_NAME) --port 8080 --data-dir ./data
 
-# Go backend with air hot-reload (watches .go files, auto-rebuilds)
+# Go backend with air hot-reload on :8080 (port configured in .air.toml)
 dev-backend:
 	air
 
@@ -183,6 +183,15 @@ release: build-frontend build-docs
 # ============================
 # Data conversion & packing
 # ============================
+
+# Download CSV source files from a Google Drive folder into data/
+# Usage: make fetch-data FOLDER=<folder-id-or-url>
+fetch-data:
+	@if [ -z "$(FOLDER)" ]; then \
+		echo "Usage: make fetch-data FOLDER=<google-drive-folder-id-or-url>"; \
+		exit 1; \
+	fi
+	./scripts/fetch-data.sh "$(FOLDER)"
 
 # Build datapack.gpkg from CSVs and catchment geometries
 # Creates scenario tables, domain min/max tables, spatial indexes
@@ -297,6 +306,7 @@ help:
 	@echo "  release           Build all packages and show release instructions"
 	@echo ""
 	@echo "Data Preparation:"
+	@echo "  fetch-data        Download CSVs from Google Drive (FOLDER=<id-or-url>)"
 	@echo "  geopackage        Build datapack.gpkg from CSVs + catchments"
 	@echo "  datapack          Package data into distributable .zip"
 	@echo "  list-datapack     List contents of last built data pack"

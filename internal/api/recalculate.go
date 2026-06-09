@@ -179,6 +179,13 @@ func recomputePropDerivedMetrics(ideal map[string]float64, oldLowTC, oldHighTC f
 		}
 	}
 	ideal["deltaSOC_Mgha"] = ideal["deltaSOC_Mgha_trees"] + ideal["deltaSOC_Mgha_grazers"]
+
+	// Recompute grazing intensity — NPP may have changed, DMI is unchanged.
+	// R scripts (0_5, fefa_ppp_v3 §4.8) always derive GI = DMI / (NPP × 1000)
+	// after any tree-cover or NPP update.
+	if npp := ideal["NPP_gm2"]; npp > 0 {
+		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
+	}
 }
 
 // ── Tree-cover workflows ──────────────────────────────────────────────────────
@@ -593,8 +600,11 @@ func workflow4FireCascade(ideal map[string]float64) {
 	ideal["fuelload_gm2"] = fuelload
 
 	// Step 2 — Fireline intensity.
-	intensityEarly := math.Exp(6.65747 + 0.0011896*fuelload)
-	intensityLate := math.Min(17000, math.Exp(6.65747+0.0035350*fuelload))
+	// Spec: Intensity = exp(6.65747 + coeff*fuelload) - min(Intensity)
+	// min(Intensity) = exp(6.65747) at fuelload=0, so both seasons share the same offset.
+	minIntensity := math.Exp(6.65747)
+	intensityEarly := math.Exp(6.65747+0.0011896*fuelload) - minIntensity
+	intensityLate := math.Min(17000, math.Exp(6.65747+0.0035350*fuelload)-minIntensity)
 	if mar, ok := ideal["MAR"]; ok && mar > 1500 {
 		intensityLate = intensityEarly
 	}

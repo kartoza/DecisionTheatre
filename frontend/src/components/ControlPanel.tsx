@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ViewMode, RangeMode } from '../types';
+import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
 
@@ -49,6 +49,7 @@ interface ControlPanelProps {
   onChartAxisLabelFilterChange?: (axisLabel: string | null) => void;
   chartGraphMode?: 'line' | 'boxplot' | null;
   onChartGraphModeChange?: (mode: 'line' | 'boxplot' | null) => void;
+  siteIndicators?: SiteIndicators | null;
 }
 
 import type { ZoneStats } from '../types';
@@ -396,6 +397,7 @@ function ControlPanel({
   onChartAxisLabelFilterChange,
   chartGraphMode,
   onChartGraphModeChange,
+  siteIndicators,
 }: ControlPanelProps) {
   const { columns, loading: columnsLoading } = useColumns();
   const { colors: attributeColors } = useAttributeColors();
@@ -529,16 +531,36 @@ function ControlPanel({
     : effectiveRangeMode === 'extent'
       ? 'Extent Zone Statistics'
       : 'Site Zone Statistics';
-  const leftZoneStats = effectiveRangeMode === 'domain'
+  const leftZoneStatsRaw = effectiveRangeMode === 'domain'
     ? mapStatistics?.fullStats?.left ?? null
     : effectiveRangeMode === 'site'
       ? mapStatistics?.siteStats?.left ?? null
       : mapStatistics?.leftStats ?? null;
-  const rightZoneStats = effectiveRangeMode === 'domain'
+  const rightZoneStatsRaw = effectiveRangeMode === 'domain'
     ? mapStatistics?.fullStats?.right ?? null
     : effectiveRangeMode === 'site'
       ? mapStatistics?.siteStats?.right ?? null
       : mapStatistics?.rightStats ?? null;
+
+  // When in site range mode, override count and mean with values from siteIndicators,
+  // which uses the same area-weighted logic as the aggregate table and site indicator page.
+  const applySiteIndicatorOverrides = (
+    stats: ZoneStats | null,
+    scenario: string,
+  ): ZoneStats | null => {
+    if (!stats || effectiveRangeMode !== 'site' || !siteIndicators || !comparison.attribute) return stats;
+    const key = scenario === 'reference' ? 'reference' : scenario === 'future' ? 'ideal' : 'current';
+    const mean = siteIndicators[key as keyof Pick<SiteIndicators, 'reference' | 'current' | 'ideal'>]?.[comparison.attribute];
+    return {
+      ...stats,
+      count: siteIndicators.catchmentCount,
+      ...(typeof mean === 'number' && Number.isFinite(mean) ? { mean } : {}),
+    };
+  };
+
+  const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
+  const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
+
   // Compute combined domain range from both scenarios so legend updates when zone range changes
   const combinedDomainRange: { min: number; max: number } | null = (() => {
     if (leftZoneStats && rightZoneStats) {
@@ -942,14 +964,14 @@ function ControlPanel({
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
                   COLOR SCALE (Domain Range)
                 </Text>
-                <ButtonGroup size="xs" isAttached variant="outline">
-                  <Button
+                <ButtonGroup size="xs" isAttached variant="outline"> 
+                  {/* <Button
                     onClick={() => onColorScaleModeChange('rainbow')}
                     variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
                     bg={colorScaleMode === 'rainbow' ? colors.pastelDarkGreen : undefined}
                   >
                     Rainbow
-                  </Button>
+                  </Button> */}
                   <Button
                     onClick={() => onColorScaleModeChange('metadata')}
                     variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}

@@ -804,14 +804,16 @@ function DialChart({
                   </text>
                 </g>
 
-                {/* Target */}
-                <g transform={`translate(${legendTargetX}, ${legendY})`}>
-                  <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.future} strokeWidth={4} strokeDasharray="8,6" />
-                  <polygon points="30,-5 42,0 30,5" fill={SCENARIO_COLORS.future} />
-                  <text x={50} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
-                    {legendTargetLabel}
-                  </text>
-                </g>
+                {/* Target — only shown when a target has been set */}
+                {targetValue !== undefined && (
+                  <g transform={`translate(${legendTargetX}, ${legendY})`}>
+                    <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.future} strokeWidth={4} strokeDasharray="8,6" />
+                    <polygon points="30,-5 42,0 30,5" fill={SCENARIO_COLORS.future} />
+                    <text x={50} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
+                      {legendTargetLabel}
+                    </text>
+                  </g>
+                )}
               </g>
             </svg>
           </motion.div>
