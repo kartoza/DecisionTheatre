@@ -221,6 +221,131 @@ See the [Data Preparation](data-preparation.md) guide for full details on input 
 
 ---
 
+### 3. Enabling Browser Downloads (Executables and Data Pack)
+
+When the application is running in **browser runtime** (accessed via a web browser rather than the desktop app), the **Download** page lets users download the application executables and the data pack directly from the server. Each item only appears when its path has been configured — unconfigured items display a "not configured" notice instead of a download button.
+
+#### `settings.json` — the single source of truth
+
+All download paths are stored in one file. Inside the container it lives at:
+
+```
+/root/.config/decision-theatre/settings.json
+```
+
+On a bare-metal or VM deployment (no Docker) it lives at:
+
+| OS | Path |
+|----|------|
+| Linux | `~/.config/decision-theatre/settings.json` |
+| macOS | `~/Library/Application Support/decision-theatre/settings.json` |
+| Windows | `%APPDATA%\decision-theatre\settings.json` |
+
+The complete set of download-related keys is:
+
+| Key | Description |
+|-----|-------------|
+| `data_pack_download_path` | Absolute path to the data pack archive (`.zip` or `.7z`) |
+| `executable_windows` | Absolute path to the Windows executable (`.exe` or installer) |
+| `executable_linux` | Absolute path to the Linux executable (`.tar.gz` or AppImage) |
+| `executable_macos` | Absolute path to the macOS disk image (`.dmg`) |
+
+A fully configured `settings.json` looks like this:
+
+```json
+{
+  "data_pack_download_path": "/app/downloads/decision-theatre-data-v1.0.0.7z",
+  "executable_windows":      "/app/downloads/decision-theatre-v1.0.0-windows.exe",
+  "executable_linux":        "/app/downloads/decision-theatre-linux-amd64-v1.0.0.tar.gz",
+  "executable_macos":        "/app/downloads/decision-theatre-v1.0.0-darwin-universal.dmg"
+}
+```
+
+You can omit any key you don't want to offer — that platform's card will show a "not configured" notice rather than a broken download link. All endpoints read `settings.json` on every request, so changes take effect immediately without a restart.
+
+---
+
+#### Docker setup
+
+##### Step 1 — Place download files on the host
+
+```bash
+mkdir -p /srv/decision-theatre/downloads
+
+# Copy whichever files you want to serve
+cp decision-theatre-data-v1.0.0.7z            /srv/decision-theatre/downloads/
+cp decision-theatre-linux-amd64-v1.0.0.tar.gz /srv/decision-theatre/downloads/
+cp decision-theatre-v1.0.0-windows.exe        /srv/decision-theatre/downloads/
+cp decision-theatre-v1.0.0-darwin-universal.dmg /srv/decision-theatre/downloads/
+```
+
+##### Step 2 — Write `settings.json` on the host
+
+```bash
+mkdir -p /srv/decision-theatre/config
+
+cat > /srv/decision-theatre/config/settings.json << 'EOF'
+{
+  "data_pack_download_path": "/app/downloads/decision-theatre-data-v1.0.0.7z",
+  "executable_windows":      "/app/downloads/decision-theatre-v1.0.0-windows.exe",
+  "executable_linux":        "/app/downloads/decision-theatre-linux-amd64-v1.0.0.tar.gz",
+  "executable_macos":        "/app/downloads/decision-theatre-v1.0.0-darwin-universal.dmg"
+}
+EOF
+```
+
+##### Step 3 — Add mounts to `docker-compose.yaml`
+
+```yaml
+services:
+  app:
+    # ...existing config...
+    volumes:
+      - ${DT_DATA_DIR}:/app/data
+      - ${DT_RESOURCES_DIR}:/app/resources:ro
+      - /srv/decision-theatre/downloads:/app/downloads:ro
+      - /srv/decision-theatre/config/settings.json:/root/.config/decision-theatre/settings.json:ro
+```
+
+!!! note
+    If the application also needs to **write** settings at runtime (e.g. a user installs a data pack via the setup guide), mount the config **directory** read-write instead of the file directly:
+
+    ```yaml
+    - /srv/decision-theatre/config:/root/.config/decision-theatre
+    ```
+
+##### Alternative — configure after start with `docker exec`
+
+```bash
+docker compose exec app mkdir -p /root/.config/decision-theatre
+docker compose exec app sh -c 'cat > /root/.config/decision-theatre/settings.json << EOF
+{
+  "data_pack_download_path": "/app/downloads/decision-theatre-data-v1.0.0.7z",
+  "executable_windows":      "/app/downloads/decision-theatre-v1.0.0-windows.exe",
+  "executable_linux":        "/app/downloads/decision-theatre-linux-amd64-v1.0.0.tar.gz",
+  "executable_macos":        "/app/downloads/decision-theatre-v1.0.0-darwin-universal.dmg"
+}
+EOF'
+```
+
+---
+
+#### Nginx considerations for large downloads
+
+The default `proxy_read_timeout` in `nginx.conf` is 300 seconds. This timeout applies between successive reads from the Go backend — **not** to the total transfer time — so a steady download of any size will complete without being interrupted. If your connection is very slow and the client pauses mid-download you may need to increase it:
+
+```nginx
+# In deployments/nginx.conf, inside the `location /` block:
+proxy_read_timeout 3600s;
+proxy_send_timeout 3600s;
+```
+
+```bash
+docker compose restart nginx
+```
+
+---
+
 ## TLS Certificates
 
 ### Using a CA-Issued Certificate (Wits/Sectigo)

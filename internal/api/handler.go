@@ -1586,6 +1586,15 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		lookup := h.getLookups().BuildLookupData(site)
 		recalculateIdeal(site.Indicators.Ideal, changedTargets, oldIdeal, changedSpeciesCounts, changedSpeciesBiomass, propClassChanged, lookup)
 
+		// If the recalculated target state violates ecological constraints,
+		// revert the ideal and return with warnings — do not propagate or save.
+		if warnings := collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference); len(warnings) > 0 {
+			site.Indicators.Ideal = oldIdeal
+			site.Indicators.Warnings = warnings
+			respondJSON(w, http.StatusOK, site)
+			return
+		}
+
 		// Propagate updated ideal values back to individual catchments.
 		if len(site.Catchments) > 0 {
 			var siteRef map[string]float64
@@ -1597,7 +1606,7 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	}
 
 	if site.Indicators != nil {
-		site.Indicators.Warnings = collectTargetStateWarnings(site.Indicators.Ideal)
+		site.Indicators.Warnings = collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference)
 	}
 
 	// For browser runtime, return the site directly without storing

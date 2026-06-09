@@ -453,7 +453,7 @@ function ViewPane({
     if (!Number.isFinite(n)) return '—';
     if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
     if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(2) + 'K';
-    if (Math.abs(n) < 0.01 && n !== 0) return n.toExponential(2);
+    if (Math.abs(n) < 0.01 && n !== 0) return n.toFixed(6);
     if (Math.abs(n) < 10) return n.toFixed(3);
     return n.toFixed(1);
   };

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	sevenzip "github.com/bodgit/sevenzip"
+	"github.com/gorilla/mux"
 	"github.com/ncruces/zenity"
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
@@ -208,6 +209,136 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		s.installStatus = "done"
 		s.installMu.Unlock()
 	}()
+}
+
+// handleDatapackDownloadInfo returns metadata about the configured downloadable datapack archive.
+// Returns { available: false } when no archive has been configured via settings.
+func (s *Server) handleDatapackDownloadInfo(w http.ResponseWriter, r *http.Request) {
+	settings, err := config.LoadSettings()
+	if err != nil || settings.DataPackDownloadPath == "" {
+		httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{"available": false})
+		return
+	}
+
+	fi, err := os.Stat(settings.DataPackDownloadPath)
+	if err != nil {
+		httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{"available": false})
+		return
+	}
+
+	httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{
+		"available":  true,
+		"filename":   filepath.Base(settings.DataPackDownloadPath),
+		"size_bytes": fi.Size(),
+	})
+}
+
+// handleDatapackDownload streams the configured datapack archive to the client.
+func (s *Server) handleDatapackDownload(w http.ResponseWriter, r *http.Request) {
+	settings, err := config.LoadSettings()
+	if err != nil || settings.DataPackDownloadPath == "" {
+		http.Error(w, "no datapack download configured", http.StatusNotFound)
+		return
+	}
+
+	fi, err := os.Stat(settings.DataPackDownloadPath)
+	if err != nil {
+		http.Error(w, "datapack file not found", http.StatusNotFound)
+		return
+	}
+
+	f, err := os.Open(settings.DataPackDownloadPath)
+	if err != nil {
+		http.Error(w, "could not open datapack file", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	filename := filepath.Base(settings.DataPackDownloadPath)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	http.ServeContent(w, r, filename, fi.ModTime(), f)
+}
+
+type executableInfo struct {
+	Available bool   `json:"available"`
+	Filename  string `json:"filename,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+// handleExecutablesInfo returns availability metadata for each platform executable.
+func (s *Server) handleExecutablesInfo(w http.ResponseWriter, r *http.Request) {
+	settings, err := config.LoadSettings()
+	if err != nil {
+		settings = &config.Settings{}
+	}
+
+	infoFor := func(path string) executableInfo {
+		if path == "" {
+			return executableInfo{Available: false}
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			return executableInfo{Available: false}
+		}
+		return executableInfo{Available: true, Filename: filepath.Base(path), SizeBytes: fi.Size()}
+	}
+
+	httputil.RespondJSON(w, http.StatusOK, map[string]executableInfo{
+		"windows": infoFor(settings.ExecutableWindows),
+		"linux":   infoFor(settings.ExecutableLinux),
+		"macos":   infoFor(settings.ExecutableMacOS),
+	})
+}
+
+// handleExecutableDownload streams the executable for the requested platform.
+// The platform is taken from the {platform} path variable: windows, linux, or macos.
+func (s *Server) handleExecutableDownload(w http.ResponseWriter, r *http.Request) {
+	platform := mux.Vars(r)["platform"]
+
+	settings, err := config.LoadSettings()
+	if err != nil {
+		http.Error(w, "could not load settings", http.StatusInternalServerError)
+		return
+	}
+
+	var filePath string
+	switch platform {
+	case "windows":
+		filePath = settings.ExecutableWindows
+	case "linux":
+		filePath = settings.ExecutableLinux
+	case "macos":
+		filePath = settings.ExecutableMacOS
+	default:
+		http.Error(w, "unknown platform", http.StatusBadRequest)
+		return
+	}
+
+	if filePath == "" {
+		http.Error(w, "no executable configured for this platform", http.StatusNotFound)
+		return
+	}
+
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		http.Error(w, "executable file not found", http.StatusNotFound)
+		return
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "could not open executable file", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	filename := filepath.Base(filePath)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	http.ServeContent(w, r, filename, fi.ModTime(), f)
 }
 
 // handleFileDialog opens a native OS file picker and returns the selected path.

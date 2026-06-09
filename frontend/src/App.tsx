@@ -11,6 +11,7 @@ import AboutPage from './components/AboutPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
+import DownloadPage from './components/DownloadPage';
 import { patchSite, patchSiteIndicators, useServerInfo, getSite } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
@@ -620,6 +621,23 @@ function App() {
         />
         <Box flex={1} overflow="auto">
           <AboutPage onNavigate={handleNavigate} />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      </Flex>
+    );
+  }
+
+  if (currentPage === 'download') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="auto">
+          <DownloadPage onNavigate={handleNavigate} />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
       </Flex>

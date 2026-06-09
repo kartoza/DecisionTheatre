@@ -43,15 +43,15 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
     explanation:
       "Weighted sum of litter biomass (g/m²). " +
       "Litter midpoints for the 10 classes are " +
-      "0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60, 3.30, 4.32 g/m².",
+      "0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60, 3.30, 4.32 g/m². " +
+      "Derived from leaf mass fraction (LMF = 4%) of AGB, adjusted for evergreen fraction per class.",
   },
   meanTC: {
     workflow: "Tree Cover (§1)",
-    formula: "meanTC = Σᵢ ( prop_class[i] × treecover_fraction[i] )",
+    formula: "meanTC = Σᵢ ( prop_class[i] × AGB_midpoint[i] )",
     explanation:
-      "Weighted mean tree-cover fraction (%). " +
-      "Tree-cover midpoints for the 10 classes match the AGB midpoints: " +
-      "2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90 %.",
+      "Weighted mean above-ground woody biomass (Mg/ha) across all 10 tree-cover classes. " +
+      "Uses the same AGB midpoints as AGBwd: 2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90 Mg/ha.",
   },
   NPP_gm2: {
     workflow: "Tree Cover (§1)",
@@ -59,7 +59,7 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
     explanation:
       "Net primary productivity (g/m²). " +
       "When site-specific NPP-by-tree-cover lookup data are available, NPP is the " +
-      "weighted sum of lookup values across all 10 classes. " +
+      "weighted sum of lookup values across all 10 classes (from pre-computed R script output). " +
       "Otherwise NPP scales proportionally with the change in low-tree-cover fraction.",
   },
   flamNPP_gm2: {
@@ -83,16 +83,52 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
 
   // ── Herbivores ───────────────────────────────────────────────────────────
   herbs_tot_kgkm2: {
-    workflow: "Herbivores (§2)",
-    formula: "herbs_tot = Σ( herbs_sp_kgkm2_[species] )\n  [direct edit: all sub-fields × (new / old)]",
+    workflow: "Herbivores (§4)",
+    formula: "herbs_tot = Σ( herbs_sp_kgkm2_[species] )\n  [direct edit: all herbs_* sub-fields × (new / old)]",
     explanation:
       "Total herbivore biomass (kg/km²) summed over all species. " +
       "When this field is edited directly, every other herbivore sub-field " +
       "(DMI, CH4, grazing fractions, functional groups, diet groups) is " +
       "scaled proportionally by the ratio new_total / old_total.",
   },
+  herbs_tot_DMI_kgkm2: {
+    workflow: "Herbivores (§4)",
+    formula: "herbs_tot_DMI = Σ( herbs_sp_DMI_kgkm2_[species] )\n  [direct edit: scaled by new_total / old_total]",
+    explanation:
+      "Total herbivore dry matter intake (kg/km²/yr) summed over all species. " +
+      "Per-species DMI = counts × DMI_per_individual (kg/head/yr) from the species trait table.",
+  },
+  herbs_tot_CH4_kgkm2: {
+    workflow: "Herbivores (§4)",
+    formula: "herbs_tot_CH4 = Σ( herbs_sp_CH4_kgkm2_[species] )\n  [direct edit: scaled by new_total / old_total]",
+    explanation:
+      "Total herbivore enteric methane (kg/km²/yr) summed over all species. " +
+      "Per-species CH4 = counts × CH4_per_individual (kg/head/yr), derived from allometric equations " +
+      "for ruminants and non-ruminants based on body mass.",
+  },
+  herbs_totGRAZING_kgkm2: {
+    workflow: "Herbivores (§4)",
+    formula: "herbs_totGRAZING = Σ( herbs_sp_kgkm2_[sp] × Prop_Grass[sp] )",
+    explanation:
+      "Total biomass of grazing herbivores (kg/km²) — only the grass-consuming fraction " +
+      "of each species' biomass, weighted by that species' Prop_Grass trait value.",
+  },
+  herbs_totGRAZING_DMI_kgkm2: {
+    workflow: "Herbivores (§4)",
+    formula: "herbs_totGRAZING_DMI = Σ( herbs_sp_DMI_kgkm2_[sp] × Prop_Grass[sp] )",
+    explanation:
+      "Dry matter intake (kg/km²/yr) attributable to grazing — only the grass portion of each " +
+      "species' DMI, weighted by Prop_Grass. Used for fuel-load reduction and grazing intensity.",
+  },
+  herbs_totGRAZING_CH4_kgkm2: {
+    workflow: "Herbivores (§4)",
+    formula: "herbs_totGRAZING_CH4 = Σ( herbs_sp_CH4_kgkm2_[sp] × Prop_Grass[sp] )",
+    explanation:
+      "Enteric methane (kg/km²/yr) from the grazing fraction of all herbivores, " +
+      "weighted by each species' Prop_Grass trait.",
+  },
   fracGrazing: {
-    workflow: "Herbivores (§2)",
+    workflow: "Herbivores (§4)",
     formula: "fracGrazing = herbs_totGRAZING_kgkm2 / herbs_tot_kgkm2",
     explanation:
       "Fraction of total herbivore biomass that belongs to grazing species " +
@@ -113,14 +149,14 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
     workflow: "SOC — Grazing Branch (§3 Branch 2)",
     formula:
       "% SOC change = −5.916 + 0.587 × (GI×100) − 0.00936 × (GI×100)²\n" +
-      "deltaSOC_grazers = SOC_Mgha_0_30 × (% SOC change / 100)\n" +
-      "                 − baseline SOC effect",
+      "deltaSOC_grazers = SOC_Mgha_0_30 × (% SOC change at target GI / 100)\n" +
+      "                 − SOC_Mgha_0_30 × (% SOC change at baseline GI / 100)",
     explanation:
-      "A quadratic polynomial relates grazing intensity (GI, expressed as a percentage 0–100) " +
-      "to the percentage change in soil carbon. " +
+      "A quadratic polynomial (Ren et al. 2023) relates grazing intensity (GI, expressed as 0–100 %) " +
+      "to the percentage change in soil carbon relative to no grazing. " +
       "Multiplying by the 0–30 cm SOC stock (Mg/ha) gives an absolute change. " +
-      "The baseline effect at the old grazing intensity is subtracted so the result " +
-      "is the net SOC change caused by this edit.",
+      "The baseline SOC effect at the pre-edit grazing intensity is subtracted so the result " +
+      "is the net SOC change caused by this edit alone.",
   },
   deltaSOC_Mgha: {
     workflow: "SOC Total (§3)",
@@ -142,18 +178,20 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
   },
   Intensity_early_kW_m: {
     workflow: "Fire Cascade (§2)",
-    formula: "Intensity_early = exp( 6.65747 + 0.0011896 × fuelload_gm2 )",
+    formula: "Intensity_early = exp( 6.65747 + 0.0011896 × fuelload_gm2 ) − exp( 6.65747 )",
     explanation:
-      "Fireline intensity for early-season fires (kW/m). " +
-      "An exponential function of fuel load — more fuel means more intense fire.",
+      "Fireline intensity for early-season (April) fires (kW/m). " +
+      "An exponential function of fuel load fitted to Kruger National Park burning data. " +
+      "The offset exp(6.65747) is subtracted so intensity is zero at zero fuel load.",
   },
   Intensity_late_kW_m: {
     workflow: "Fire Cascade (§2)",
-    formula: "Intensity_late = min( 17000,  exp( 6.65747 + 0.003535 × fuelload_gm2 ) )\n" +
+    formula: "Intensity_late = min( 17 000,  exp( 6.65747 + 0.003535 × fuelload_gm2 ) − exp( 6.65747 ) )\n" +
       "  [in high-rainfall areas MAR > 1500 mm: Intensity_late = Intensity_early]",
     explanation:
-      "Late-season fire intensity (kW/m) with a steeper fuel-load coefficient and an upper cap " +
-      "of 17,000 kW/m. In high-rainfall areas the late-season behaviour matches early season.",
+      "Late-season (October) fire intensity (kW/m) with a steeper fuel-load coefficient and an upper cap " +
+      "of 17 000 kW/m (maximum observed fireline intensity). " +
+      "In high-rainfall areas the late-season behaviour matches early season.",
   },
   percBurned_early: {
     workflow: "Fire Cascade (§2)",
@@ -161,7 +199,8 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
       "percBurned_early = areaBurned_early × lowTC_prop",
     explanation:
       "Percentage of the landscape burned by early fires. " +
-      "The area-burned model is an asymptotic exponential of fire intensity. " +
+      "The area-burned model is an asymptotic function of fire intensity fitted to field data " +
+      "(Dick Williams 1989, modified). " +
       "The result is scaled by the open (low tree-cover) fraction because only " +
       "open grassland can carry surface fire.",
   },
@@ -178,27 +217,53 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
       "Blended annual burn percentage, weighted by the proportion of early-season " +
       "fires (propEarly). propEarly defaults to 0.45 if not set.",
   },
+  fuelConsumption_early_gm2: {
+    workflow: "Fire Cascade (§2)",
+    formula: "fuelConsumption_early = fuelload_gm2 × percBurned_early / 100",
+    explanation:
+      "Grass biomass consumed by early-season fires (g/m²). " +
+      "Assumes 100% combustion of the fuel in the burned area.",
+  },
+  fuelConsumption_late_gm2: {
+    workflow: "Fire Cascade (§2)",
+    formula: "fuelConsumption_late = fuelload_gm2 × percBurned_late / 100",
+    explanation:
+      "Grass biomass consumed by late-season fires (g/m²). " +
+      "Assumes 100% combustion of the fuel in the burned area.",
+  },
   fuelConsumption_gm2: {
     workflow: "Fire Cascade (§2)",
     formula:
-      "fuelCons_early = fuelload × percBurned_early / 100\n" +
-      "fuelCons_late  = fuelload × percBurned_late  / 100\n" +
-      "fuelConsumption = fuelCons_early × propEarly + fuelCons_late × (1 − propEarly)",
+      "fuelConsumption = fuelConsumption_early × propEarly + fuelConsumption_late × (1 − propEarly)",
     explanation:
-      "Grass biomass consumed by fire (g/m²), blended across early and late seasons. " +
+      "Blended annual fuel consumption (g/m²) across early and late seasons. " +
       "A higher percentage burned or greater fuel load both increase consumption.",
+  },
+  CH4_early_kg_km2: {
+    workflow: "Fire Cascade (§2)",
+    formula:
+      "EFCH4_early = 66 × (1 − 0.92) − 2 = 3.28  g CH4 / kg dry matter\n" +
+      "CH4_early = fuelConsumption_early_gm2 × EFCH4_early",
+    explanation:
+      "Methane emitted by early-season fires (kg/km²). " +
+      "The emission factor uses modified combustion efficiency MCE = 0.92 for early fires. " +
+      "Units: g/m² × g CH4/kg DM = kg CH4/km².",
+  },
+  CH4_late_kg_km2: {
+    workflow: "Fire Cascade (§2)",
+    formula:
+      "EFCH4_late = 66 × (1 − 0.96) − 2 = 0.64  g CH4 / kg dry matter\n" +
+      "CH4_late = fuelConsumption_late_gm2 × EFCH4_late",
+    explanation:
+      "Methane emitted by late-season fires (kg/km²). " +
+      "Late fires burn more completely (MCE = 0.96) so emit less CH4 per unit fuel than early fires.",
   },
   CH4_kg_km2: {
     workflow: "Fire Cascade (§2)",
     formula:
-      "EFCH4_early = 66 × (1 − 0.92) − 2 = 3.28  g CH4 / kg dry matter\n" +
-      "EFCH4_late  = 66 × (1 − 0.96) − 2 = 0.64  g CH4 / kg dry matter\n" +
-      "CH4_fire = (fuelCons_early × 3.28 × propEarly\n" +
-      "          + fuelCons_late × 0.64 × (1−propEarly))",
+      "CH4_fire = CH4_early_kg_km2 × propEarly + CH4_late_kg_km2 × (1 − propEarly)",
     explanation:
-      "Methane emitted by fire (kg/km²). Emission factors are derived from the " +
-      "modified combustion efficiency (MCE): early fires burn less completely (MCE 0.92) " +
-      "and so produce more CH4 per unit of fuel than late fires (MCE 0.96).",
+      "Total fire methane (kg/km²) blended across early and late seasons by propEarly.",
   },
   CH4_both_kg_km2: {
     workflow: "Fire + Herbivores",
@@ -264,8 +329,10 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Last 5 classes (40–100 Mg/ha) each decrease by shift (clamped ≥ 0)",
         "Recalculate lowTC_prop and highTC_prop from updated class sums",
         "Run shared prop-derived metrics (AGBwd, LitterBiomass, NPP, flamNPP, deltaSOC_trees)",
+        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
-      outputs: ["lowTC_prop", "highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees"],
+      outputs: ["lowTC_prop", "highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
     });
   }
 
@@ -279,8 +346,10 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Recalculate lowTC_prop = sum of the 6 low-TC classes (0–50 Mg/ha)",
         "Recalculate highTC_prop = sum of the 4 high-TC classes (50–100 Mg/ha)",
         "Run shared prop-derived metrics (AGBwd, LitterBiomass, meanTC, NPP, flamNPP, deltaSOC_trees)",
+        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
-      outputs: ["lowTC_prop", "highTC_prop", "meanTC", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees"],
+      outputs: ["lowTC_prop", "highTC_prop", "meanTC", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
     });
   }
 
@@ -295,8 +364,10 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Redistribute the 6 low-TC biomass classes equally: each = lowTC_prop / 6",
         "Redistribute the 4 high-TC biomass classes equally: each = highTC_prop / 4",
         "Run shared prop-derived metrics (AGBwd, LitterBiomass, meanTC, NPP, flamNPP, deltaSOC_trees)",
+        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
-      outputs: ["highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "meanTC", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees"],
+      outputs: ["highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "meanTC", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
     });
   }
 
@@ -307,11 +378,18 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
       trigger: "You set herbs_tot_kgkm2 (total herbivore biomass) directly.",
       steps: [
         "Compute scale = new_total / old_total",
-        "Scale all herbs_* sub-fields proportionally (DMI, CH4, grazing fractions, functional groups, diet groups)",
+        "Scale all herbs_* sub-fields proportionally (DMI, CH4, grazing fractions, per-species, functional groups, diet groups)",
         "fracGrazing = herbs_totGRAZING_kgkm2 / herbs_tot_kgkm2",
         "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
       ],
-      outputs: ["herbs_tot_DMI_kgkm2", "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "fracGrazing", "grazing_intensity"],
+      outputs: [
+        "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "grazing_intensity",
+        "herbs_sp_kgkm2_*", "herbs_sp_counts_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+      ],
     });
   }
 
@@ -325,11 +403,18 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "For each changed species: DMI = count × DMI_per_individual (kg/km²/yr)",
         "For each changed species: CH4 = count × CH4_per_individual (kg/km²/yr)",
         "Recompute total biomass, DMI, CH4 as sums over all species",
-        "Recompute grazing totals and diet/functional-group aggregates",
+        "Recompute grazing totals (×Prop_Grass) and diet/functional-group aggregates",
         "fracGrazing = herbs_totGRAZING_kgkm2 / herbs_tot_kgkm2",
         "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
       ],
-      outputs: ["herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "fracGrazing", "grazing_intensity"],
+      outputs: [
+        "herbs_sp_kgkm2_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "grazing_intensity",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+      ],
     });
   }
 
@@ -345,20 +430,27 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Recompute total biomass, DMI, CH4 and all aggregates",
         "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
       ],
-      outputs: ["herbs_sp_counts_*", "herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "grazing_intensity"],
+      outputs: [
+        "herbs_sp_counts_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "grazing_intensity",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+      ],
     });
   }
 
-  // §3 Branch 2 — SOC grazing (runs whenever NPP or grazing DMI changes)
+  // §3 Branch 2 — SOC grazing (runs whenever tree cover, NPP, or grazing DMI changes)
   if (anyTreeChange || anyHerbChange || nppChanged) {
     steps.push({
       name: "SOC Grazing §3 Branch 2 — Grazer carbon effect",
-      trigger: "Triggered automatically because NPP or grazing DMI changed.",
+      trigger: "Triggered automatically because tree cover, NPP, or grazing DMI changed.",
       steps: [
         "Compute target grazing intensity: GI = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
         "Compute baseline GI at old values (before the edit)",
-        "% SOC change = −5.916 + 0.587 × (GI×100) − 0.00936 × (GI×100)²",
-        "deltaSOC_grazers = SOC_0_30 × (% SOC change / 100) − baseline SOC effect",
+        "% SOC change = −5.916 + 0.587 × (GI×100) − 0.00936 × (GI×100)²  [Ren et al. 2023]",
+        "deltaSOC_grazers = SOC_0_30 × (% SOC change at target GI / 100) − SOC_0_30 × (% SOC change at baseline GI / 100)",
         "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
       outputs: ["deltaSOC_Mgha_grazers", "deltaSOC_Mgha"],
@@ -381,21 +473,29 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
   if (anyTreeChange || anyHerbChange || nppChanged || propEarlyChanged) {
     steps.push({
       name: "Fire Cascade §2 — Fire regime recalculation",
-      trigger: "Triggered automatically because NPP, litter, grazing DMI, or tree cover changed.",
+      trigger: "Triggered automatically because NPP, litter, grazing DMI, tree cover, or propEarly changed.",
       steps: [
-        "Fuel load = max(0, NPP + LitterBiomass − herbs_totGRAZING_DMI / 1000)",
-        "Intensity_early = exp(6.65747 + 0.0011896 × fuelload)",
-        "Intensity_late  = min(17 000, exp(6.65747 + 0.003535 × fuelload))",
+        "Fuel load = max(0, NPP_gm2 + LitterBiomass_gm2 − herbs_totGRAZING_DMI_kgkm2 / 1000)",
+        "Intensity_early = exp(6.65747 + 0.0011896 × fuelload) − exp(6.65747)",
+        "Intensity_late  = min(17 000, exp(6.65747 + 0.003535 × fuelload) − exp(6.65747))",
         "  [In high-rainfall areas MAR > 1500 mm: Intensity_late = Intensity_early]",
         "areaBurned = max(0, 98.24 − 97.95 × exp(−0.001122 × intensity)) per season",
         "percBurned_early = areaBurned_early × lowTC_prop",
         "percBurned_late  = areaBurned_late  × lowTC_prop",
-        "Fuel consumption = fuelload × percBurned / 100 per season",
-        "CH4 emission factor: early = 3.28 g/kg (MCE 0.92), late = 0.64 g/kg (MCE 0.96)",
+        "fuelConsumption_early = fuelload × percBurned_early / 100",
+        "fuelConsumption_late  = fuelload × percBurned_late  / 100",
+        "CH4_early = fuelConsumption_early × 3.28 g/kg  (MCE 0.92)",
+        "CH4_late  = fuelConsumption_late  × 0.64 g/kg  (MCE 0.96)",
         "Blend early/late: percBurned = propEarly×early + (1−propEarly)×late",
-        "CH4_both = fire_CH4 + herbivore_enteric_CH4",
+        "CH4_both = fire_CH4 + herbs_tot_CH4_kgkm2",
       ],
-      outputs: ["fuelload_gm2", "Intensity_early_kW_m", "Intensity_late_kW_m", "percBurned_early", "percBurned_late", "percBurned", "fuelConsumption_gm2", "CH4_kg_km2", "CH4_both_kg_km2"],
+      outputs: [
+        "fuelload_gm2",
+        "Intensity_early_kW_m", "Intensity_late_kW_m",
+        "percBurned_early", "percBurned_late", "percBurned",
+        "fuelConsumption_early_gm2", "fuelConsumption_late_gm2", "fuelConsumption_gm2",
+        "CH4_early_kg_km2", "CH4_late_kg_km2", "CH4_kg_km2", "CH4_both_kg_km2",
+      ],
     });
   }
 

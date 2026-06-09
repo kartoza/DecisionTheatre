@@ -129,6 +129,10 @@ func (s *Server) setupRoutes() {
 	// Data pack management routes
 	s.router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
 	s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
+	s.router.HandleFunc("/api/datapack/download-info", s.handleDatapackDownloadInfo).Methods("GET")
+	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
+	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
+	s.router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
 	s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
 
 	// Tile routes - served directly for performance

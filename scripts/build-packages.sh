@@ -7,19 +7,20 @@ set -euo pipefail
 #   ./scripts/build-packages.sh [--platform linux|windows|darwin|flatpak|snap|all] [--arch amd64|arm64] [--version VERSION]
 #
 # Produces dist/ artefacts:
-#   Linux:   .tar.gz, .deb, .rpm  (native build, requires nfpm for deb/rpm)
-#   Flatpak: .flatpak             (requires flatpak-builder)
-#   Snap:    .snap                (requires snapcraft)
-#   Windows: .zip with .exe       (cross-compile via mingw-w64, or native on Windows)
+#   Linux:   .tar.gz + .deb  (delegates to build-debian-installer.sh for .deb)
+#   Flatpak: .flatpak        (requires flatpak-builder)
+#   Snap:    .snap           (requires snapcraft)
+#   Windows: .zip + .msi     (delegates to build-windows-installer.sh for .msi)
 #   macOS:   .tar.gz (or .dmg if on macOS with hdiutil)
 #
 # Prerequisites (available in nix develop):
-#   - go, gcc, pkg-config          (always)
-#   - nfpm                         (linux deb/rpm)
-#   - flatpak-builder              (flatpak)
-#   - snapcraft                    (snap)
-#   - x86_64-w64-mingw32-gcc / CXX (windows cross-compile from linux)
-#   - zip                          (windows .zip)
+#   - go, gcc, pkg-config              (always)
+#   - dpkg-deb, ldd                    (linux .deb via build-debian-installer.sh)
+#   - flatpak-builder                  (flatpak)
+#   - snapcraft                        (snap)
+#   - x86_64-w64-mingw32-gcc/g++       (windows cross-compile from linux)
+#   - dotnet + wix (or .tools/wix)     (windows .msi via build-windows-installer.sh)
+#   - zip                              (windows .zip)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -104,49 +105,6 @@ ensure_frontend() {
 }
 
 # -------------------------------------------------------
-# Helper: fetch Microsoft Edge WebView2 bootstrapper
-# -------------------------------------------------------
-ensure_webview2_bootstrapper() {
-    local target="$DIST_DIR/MicrosoftEdgeWebView2Setup.exe"
-    local url="${WEBVIEW2_BOOTSTRAPPER_URL:-https://go.microsoft.com/fwlink/p/?LinkId=2124703}"
-
-    if [ -f "$target" ]; then
-        return 0
-    fi
-
-    echo "==> Downloading Microsoft Edge WebView2 bootstrapper..."
-    if command -v curl &>/dev/null; then
-        curl -fL "$url" -o "$target"
-    elif command -v wget &>/dev/null; then
-        wget -O "$target" "$url"
-    else
-        echo "ERROR: curl or wget is required to download WebView2 bootstrapper" >&2
-        return 1
-    fi
-}
-
-# -------------------------------------------------------
-# Helper: fix WebView2 header case mismatch on Linux hosts
-# webview_go includes "EventToken.h" but mingw ships "eventtoken.h"
-# -------------------------------------------------------
-setup_windows_webview2_headers() {
-    local compat_dir="$DIST_DIR/.windows-webview2-compat/include"
-    local src_header="/usr/share/mingw-w64/include/eventtoken.h"
-    local compat_header="$compat_dir/EventToken.h"
-
-    if [ ! -f "$src_header" ]; then
-        echo "ERROR: missing mingw header: $src_header" >&2
-        echo "Install mingw-w64 headers (e.g. gcc-mingw-w64-x86-64)." >&2
-        return 1
-    fi
-
-    mkdir -p "$compat_dir"
-    cp "$src_header" "$compat_header"
-
-    export CGO_CXXFLAGS="-I$compat_dir ${CGO_CXXFLAGS:-}"
-}
-
-# -------------------------------------------------------
 # Linux native build
 # -------------------------------------------------------
 build_linux() {
@@ -163,69 +121,47 @@ build_linux() {
     tar -czf "$DIST_DIR/$tarball" -C "$DIST_DIR" "$BINARY_NAME"
     echo "  -> $DIST_DIR/$tarball"
 
-    # deb + rpm via nfpm (if available)
-    if command -v nfpm &>/dev/null; then
-        echo "==> Building .deb and .rpm via nfpm..."
-        export VERSION GOARCH="$arch"
-        (cd "$PROJECT_ROOT" && nfpm package --packager deb --target "$DIST_DIR/")
-        (cd "$PROJECT_ROOT" && nfpm package --packager rpm --target "$DIST_DIR/")
-    else
-        echo "  (nfpm not found — skipping .deb/.rpm; install with: nix profile install nixpkgs#nfpm)"
-    fi
+    # .deb via build-debian-installer.sh (bundles runtime webkit/GTK libs)
+    echo "==> Building .deb package..."
+    bash "$SCRIPT_DIR/build-debian-installer.sh" \
+        --skip-frontend --skip-docs \
+        --version "$VERSION" \
+        --arch "$arch"
 
     rm -f "$DIST_DIR/${BINARY_NAME}"
 }
 
 # -------------------------------------------------------
 # Windows cross-compile
+# Delegates to build-windows-installer.sh which handles:
+#   - mingw cross-compilation
+#   - WebView2 bootstrapper download
+#   - EventToken.h header case fix
+#   - MSI packaging via WiX (with local .tools/wix fallback)
+# After the installer script runs, the .exe in bin/ is reused for the .zip.
 # -------------------------------------------------------
 build_windows() {
     local arch="${1:-$ARCH}"
     echo "==> Building windows/${arch}..."
     ensure_frontend
 
-    # Determine cross-compiler
-    local cc cxx
-    if [ "$arch" = "amd64" ]; then
-        cc="x86_64-w64-mingw32-gcc"
-        cxx="x86_64-w64-mingw32-g++"
+    # build-windows-installer.sh compiles the binary and produces the .msi
+    bash "$SCRIPT_DIR/build-windows-installer.sh" \
+        --skip-frontend --skip-docs \
+        --version "$VERSION" \
+        --arch "$arch"
+
+    # Reuse the .exe produced by the installer script for the .zip archive
+    local exe="$PROJECT_ROOT/bin/${BINARY_NAME}.exe"
+    if [ -f "$exe" ]; then
+        cp "$exe" "$DIST_DIR/${BINARY_NAME}.exe"
+        local zipname="${BINARY_NAME}-windows-${arch}-v${VERSION}.zip"
+        (cd "$DIST_DIR" && zip -j "$zipname" "${BINARY_NAME}.exe")
+        echo "  -> $DIST_DIR/$zipname"
+        rm -f "$DIST_DIR/${BINARY_NAME}.exe"
     else
-        cc="aarch64-w64-mingw32-gcc"
-        cxx="aarch64-w64-mingw32-g++"
+        echo "  WARNING: bin/${BINARY_NAME}.exe not found after installer build — skipping .zip" >&2
     fi
-
-    if ! command -v "$cc" &>/dev/null; then
-        echo "ERROR: $cc not found. Install mingw-w64 for Windows cross-compilation." >&2
-        echo "  On NixOS / nix: nix-shell -p pkgsCross.mingwW64.stdenv.cc" >&2
-        echo "  On Ubuntu:      sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64" >&2
-        return 1
-    fi
-
-    setup_windows_webview2_headers
-
-    CGO_ENABLED=1 CC="$cc" CXX="$cxx" GOOS=windows GOARCH="$arch" \
-        go build -ldflags "$LDFLAGS -H windowsgui" -o "$DIST_DIR/${BINARY_NAME}.exe" "$PROJECT_ROOT"
-
-    # Create zip
-    local zipname="${BINARY_NAME}-windows-${arch}-v${VERSION}.zip"
-    (cd "$DIST_DIR" && zip -j "$zipname" "${BINARY_NAME}.exe")
-    echo "  -> $DIST_DIR/$zipname"
-
-    # Build .msi via WiX Toolset (Windows hosts only)
-    if command -v wix &>/dev/null && [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN|Windows_NT) ]]; then
-        ensure_webview2_bootstrapper
-        echo "==> Building Windows .msi installer via WiX..."
-        local msiname="${BINARY_NAME}-windows-${arch}-v${VERSION}.msi"
-        wix build \
-            -d Version="$VERSION" \
-            -o "$DIST_DIR/$msiname" \
-            "$PROJECT_ROOT/packaging/windows/product.wxs"
-        echo "  -> $DIST_DIR/$msiname"
-    else
-        echo "  (skipping .msi on this host; build on Windows with WiX Toolset v4+ for MSI output)"
-    fi
-
-    rm -f "$DIST_DIR/${BINARY_NAME}.exe"
 }
 
 # -------------------------------------------------------

@@ -99,6 +99,53 @@ export function useServerInfo() {
   return { info, error };
 }
 
+export interface DatapackDownloadInfo {
+  available: boolean;
+  filename?: string;
+  size_bytes?: number;
+}
+
+export function useDatapackDownloadInfo() {
+  const [downloadInfo, setDownloadInfo] = useState<DatapackDownloadInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<DatapackDownloadInfo>(`${API_BASE}/datapack/download-info`)
+      .then((info) => { setDownloadInfo(info); setLoading(false); })
+      .catch(() => { setDownloadInfo({ available: false }); setLoading(false); });
+  }, []);
+
+  return { downloadInfo, loading };
+}
+
+export interface ExecutablePlatformInfo {
+  available: boolean;
+  filename?: string;
+  size_bytes?: number;
+}
+
+export interface ExecutablesInfo {
+  windows: ExecutablePlatformInfo;
+  linux: ExecutablePlatformInfo;
+  macos: ExecutablePlatformInfo;
+}
+
+export function useExecutablesInfo() {
+  const [executablesInfo, setExecutablesInfo] = useState<ExecutablesInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<ExecutablesInfo>(`${API_BASE}/executables/info`)
+      .then((info) => { setExecutablesInfo(info); setLoading(false); })
+      .catch(() => {
+        setExecutablesInfo({ windows: { available: false }, linux: { available: false }, macos: { available: false } });
+        setLoading(false);
+      });
+  }, []);
+
+  return { executablesInfo, loading };
+}
+
 export function useColumns() {
   const [columns, setColumns] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);

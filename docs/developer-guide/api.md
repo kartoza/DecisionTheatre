@@ -218,6 +218,115 @@ Serves uploaded images (project thumbnails).
 |-----------|------|-------------|
 | `path` | path | Image file path relative to `data/images/` |
 
+## Browser Downloads
+
+These endpoints serve the distributable datapack archive and platform executables for direct browser download. They are only relevant in **browser runtime** (server deployment); the desktop app installs the data pack via the setup guide from a local file.
+
+All paths are configured in `settings.json`. See [Server Deployment — Enabling Browser Downloads](server-deployment.md#3-enabling-browser-downloads-executables-and-data-pack) for full setup instructions.
+
+### `GET /api/datapack/download-info`
+
+Returns metadata about the configured downloadable archive. The frontend uses this endpoint on page load to decide whether to show the download button.
+
+**Response when an archive is configured:**
+
+```json
+{
+  "available": true,
+  "filename": "decision-theatre-data-v1.0.0.7z",
+  "size_bytes": 9876543210
+}
+```
+
+**Response when no archive is configured:**
+
+```json
+{
+  "available": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `available` | boolean | `true` if `data_pack_download_path` is set and the file exists |
+| `filename` | string | Base filename of the archive (omitted when `available` is `false`) |
+| `size_bytes` | integer | File size in bytes (omitted when `available` is `false`) |
+
+---
+
+### `GET /api/datapack/download`
+
+Streams the configured archive file to the client as an attachment.
+
+**Response headers:**
+
+| Header | Value |
+|--------|-------|
+| `Content-Disposition` | `attachment; filename="<archive-filename>"` |
+| `Content-Type` | `application/octet-stream` |
+| `Content-Length` | File size in bytes |
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `404 Not Found` | `data_pack_download_path` is not configured or the file does not exist |
+| `500 Internal Server Error` | The file exists but cannot be opened |
+
+---
+
+### `GET /api/executables/info`
+
+Returns availability metadata for each platform executable. The frontend uses this on the Download page to decide which platform cards to show as downloadable.
+
+**Response:**
+
+```json
+{
+  "windows": { "available": true,  "filename": "decision-theatre-v1.0.0-windows.exe",          "size_bytes": 45678901 },
+  "linux":   { "available": true,  "filename": "decision-theatre-linux-amd64-v1.0.0.tar.gz",   "size_bytes": 23456789 },
+  "macos":   { "available": false }
+}
+```
+
+Each platform object:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `available` | boolean | `true` if the path is set in `settings.json` and the file exists |
+| `filename` | string | Base filename (omitted when `available` is `false`) |
+| `size_bytes` | integer | File size in bytes (omitted when `available` is `false`) |
+
+---
+
+### `GET /api/executables/download/{platform}`
+
+Streams the executable for the requested platform as a file attachment.
+
+**Path parameters:**
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `platform` | `windows`, `linux`, `macos` | Target platform |
+
+**Response headers:**
+
+| Header | Value |
+|--------|-------|
+| `Content-Disposition` | `attachment; filename="<filename>"` |
+| `Content-Type` | `application/octet-stream` |
+| `Content-Length` | File size in bytes |
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | `platform` is not one of `windows`, `linux`, `macos` |
+| `404 Not Found` | Path not configured in `settings.json` or file does not exist |
+| `500 Internal Server Error` | File exists but cannot be opened |
+
+---
+
 ## Static Assets
 
 All other routes serve the embedded React SPA. The server implements SPA routing by returning `index.html` for any path not matching the above patterns.

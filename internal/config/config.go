@@ -18,7 +18,11 @@ type Config struct {
 
 // Settings holds persistent user settings saved to disk
 type Settings struct {
-	DataPackPath string `json:"data_pack_path,omitempty"`
+	DataPackPath         string `json:"data_pack_path,omitempty"`
+	DataPackDownloadPath string `json:"data_pack_download_path,omitempty"`
+	ExecutableWindows    string `json:"executable_windows,omitempty"`
+	ExecutableLinux      string `json:"executable_linux,omitempty"`
+	ExecutableMacOS      string `json:"executable_macos,omitempty"`
 }
 
 // SettingsDir returns the platform-appropriate config directory.

@@ -163,7 +163,7 @@ export type IdentifyResult = {
   data: Record<string, Record<string, number>>;
 } | null;
 
-export type AppPage = 'landing' | 'about' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators';
+export type AppPage = 'landing' | 'about' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators' | 'download';
 
 // Statistics for the visible zone (viewport)
 export interface ZoneStats {

@@ -8,9 +8,10 @@ import {
   useColorModeValue,
   Tooltip,
 } from '@chakra-ui/react';
-import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2 } from 'react-icons/fi';
+import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload } from 'react-icons/fi';
 import { useServerInfo } from '../hooks/useApi';
 import type { AppPage } from '../types';
+import { getAppRuntime } from '../types/runtime';
 import rewildLogo from '../assets/logo-vertical-white-3x 1.png';
 import fefaLogo from '../assets/JM_FEFA_Logo_Dark_RGB_72dpi_aw.png';
 import { colors } from '../styles/colors';
@@ -29,6 +30,7 @@ interface HeaderProps {
 
 function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, onEditBoundary, isBoundaryEditMode }: HeaderProps) {
   const { info } = useServerInfo();
+  const isBrowser = getAppRuntime() === 'browser';
   const bgColor = useColorModeValue('white', colors.darkGray);
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const siteTitleColor = useColorModeValue('gray.700', 'gray.200');
@@ -175,6 +177,19 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
               </Badge>
             </Tooltip>
           </HStack>
+        )}
+
+        {isBrowser && onNavigate && (
+          <Tooltip label="Download">
+            <IconButton
+              aria-label="Download"
+              icon={<FiDownload />}
+              onClick={() => onNavigate('download')}
+              variant={currentPage === 'download' ? 'solid' : 'ghost'}
+              colorScheme="brand"
+              size="sm"
+            />
+          </Tooltip>
         )}
 
         <Tooltip label="Documentation">
