@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a data pack zip from local data/ directory.
+# Build a distributable data pack from the local data/ directory.
 # Usage: ./scripts/package-data.sh [version]
 #
-# The data pack bundles:
-#   - MBTiles catchment map tiles (from data/mbtiles/)
-#   - Tile style JSON
-#   - GeoPackage datapack (if present)
+# Compresses the entire data/ folder into a zip archive, excluding:
+#   - data/sites/   (user-saved site JSON files — not distributable)
+#   - data/.~lock.* (LibreOffice/spreadsheet lock files)
 #
-# The resulting zip can be installed into Decision Theatre via the UI
-# or by extracting it and pointing --data-dir at it.
+# The resulting archive can be installed via the Decision Theatre setup guide
+# or by extracting it next to the application binary.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DATA_DIR="$PROJECT_ROOT/data"
 
 VERSION="${1:-$(cd "$PROJECT_ROOT" && git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
 DIST_DIR="$PROJECT_ROOT/dist"
@@ -27,55 +27,46 @@ echo "Building data pack: $PACK_NAME"
 echo ""
 
 # -------------------------------------------------------
-# Step 1: Validate required resources
+# Step 1: Validate
 # -------------------------------------------------------
-if [ ! -d "$PROJECT_ROOT/data/mbtiles" ]; then
-    echo "ERROR: data/mbtiles directory not found" >&2
-    exit 1
-fi
-
-if [ ! -f "$PROJECT_ROOT/data/mbtiles/africa.mbtiles" ]; then
-    echo "ERROR: data/mbtiles/africa.mbtiles not found" >&2
+if [ ! -d "$DATA_DIR" ]; then
+    echo "ERROR: data/ directory not found at $DATA_DIR" >&2
     exit 1
 fi
 
 # -------------------------------------------------------
-# Step 2: Assemble pack
+# Step 2: Copy data/ excluding sites/ and lock files
 # -------------------------------------------------------
 PACK_DIR="$WORK_DIR/$PACK_NAME"
-mkdir -p "$PACK_DIR/data/mbtiles"
+mkdir -p "$PACK_DIR"
 
-# Copy mbtiles and style JSON (exclude build scripts and source gpkg)
-echo "==> Bundling MBTiles and styles..."
-cp "$PROJECT_ROOT/data/mbtiles/africa.mbtiles" "$PACK_DIR/data/mbtiles/"
-echo "    africa.mbtiles ($(du -h "$PACK_DIR/data/mbtiles/africa.mbtiles" | cut -f1))"
+echo "==> Copying data/ (excluding sites/)..."
 
-if [ -f "$PROJECT_ROOT/data/mbtiles/style.json" ]; then
-    cp "$PROJECT_ROOT/data/mbtiles/style.json" "$PACK_DIR/data/mbtiles/"
-    echo "    style.json"
-fi
+# tar pipe: archive data/ on the source side with exclusions, extract on dest side.
+# This is portable and avoids requiring rsync.
+tar -C "$PROJECT_ROOT" \
+    --exclude='data/sites' \
+    --exclude='data/.~lock.*' \
+    -cf - data \
+  | tar -C "$PACK_DIR" -xf -
 
-if [ -f "$PROJECT_ROOT/data/mbtiles/uow_tiles.json" ]; then
-    cp "$PROJECT_ROOT/data/mbtiles/uow_tiles.json" "$PACK_DIR/data/mbtiles/"
-    echo "    uow_tiles.json"
-fi
-
-# Copy GeoPackage datapack if present
-if [ -f "$PROJECT_ROOT/data/datapack.gpkg" ]; then
-    echo "==> Bundling GeoPackage datapack..."
-    cp "$PROJECT_ROOT/data/datapack.gpkg" "$PACK_DIR/data/"
-    echo "    datapack.gpkg ($(du -h "$PACK_DIR/data/datapack.gpkg" | cut -f1))"
-fi
+echo "    $(find "$PACK_DIR/data" -type f | wc -l) files copied"
 
 # -------------------------------------------------------
 # Step 3: Generate manifest
 # -------------------------------------------------------
 echo "==> Writing manifest..."
-MBTILES_LIST=$(cd "$PACK_DIR/data/mbtiles" 2>/dev/null && ls *.mbtiles 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+
+MBTILES_LIST=$(
+    find "$PACK_DIR/data/mbtiles" -maxdepth 1 -name "*.mbtiles" -printf '%f\n' 2>/dev/null \
+    | sort \
+    | jq -R -s 'split("\n") | map(select(length > 0))' \
+    || echo "[]"
+)
+
 GPKG_EXISTS="false"
-if [ -f "$PACK_DIR/data/datapack.gpkg" ]; then
-    GPKG_EXISTS="true"
-fi
+[ -f "$PACK_DIR/data/datapack.gpkg" ] && GPKG_EXISTS="true"
+
 cat > "$PACK_DIR/manifest.json" <<EOF
 {
   "format": "decision-theatre-datapack",
