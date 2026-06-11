@@ -30,11 +30,11 @@ These files are consumed by `scripts/build-geopackage.sh` to produce `datapack.g
 | `catchments.gpkg` | **Yes** | GeoPackage containing catchment polygon geometries in a layer named `catchments_lev12`. Each feature must have a `HYBAS_ID` attribute that cross-references the CSV `catchID` column. |
 | `current.csv` | **Yes** | Per-catchment indicator values for the **current** scenario. |
 | `reference.csv` | **Yes** | Per-catchment indicator values for the **reference** (historical baseline) scenario. |
-| `current_lower.csv` | No | Lower-bound uncertainty values for the current scenario (used for whisker plots). |
-| `current_upper.csv` | No | Upper-bound uncertainty values for the current scenario. |
-| `reference_lower.csv` | No | Lower-bound uncertainty values for the reference scenario. |
-| `reference_upper.csv` | No | Upper-bound uncertainty values for the reference scenario. |
-| `metadata.csv` | No | Human-readable descriptions, display settings, and UI behaviour flags for each indicator column. Without it the app still works, but uses raw column names in the UI with no colour coding, chart type detection, or user-editable targets. |
+| `current_lower.csv` | **Yes** | Lower-bound uncertainty values for the current scenario (used for whisker plots). |
+| `current_upper.csv` | **Yes** | Upper-bound uncertainty values for the current scenario. |
+| `reference_lower.csv` | **Yes** | Lower-bound uncertainty values for the reference scenario. |
+| `reference_upper.csv` | **Yes** | Upper-bound uncertainty values for the reference scenario. |
+| `metadata.csv` | **Yes** | Human-readable descriptions, display settings, and UI behaviour flags for each indicator column. Without it the app still works, but uses raw column names in the UI with no colour coding, chart type detection, or user-editable targets. |
 
 #### Scenario CSV Format
 
@@ -57,9 +57,9 @@ These three files support the **cascading recalculation** workflow triggered whe
 
 | File | Required | Description |
 |------|----------|-------------|
-| `NPP_by_treecover.csv` | No | Per-catchment net primary productivity (NPP, g/m²) broken down by ten tree-cover class bins. Used to recalculate NPP when the user adjusts tree-cover targets. |
-| `deltaSOC_bytcc_Mgha.csv` | No | Per-catchment change in soil organic carbon (ΔSOCc, Mg/ha) by tree-cover class. Used to recalculate soil carbon when tree-cover proportions change. |
-| `herb_traits_ready.csv` | No | Per-species herbivore trait table. Used to recalculate herbivore-related indicators (dry matter intake, methane emissions, diet-based biomass) when species counts or total herbivore biomass targets change. |
+| `NPP_by_treecover.csv` | **Yes** | Per-catchment net primary productivity (NPP, g/m²) broken down by ten tree-cover class bins. Used to recalculate NPP when the user adjusts tree-cover targets. |
+| `deltaSOC_bytcc_Mgha.csv` | **Yes** | Per-catchment change in soil organic carbon (ΔSOCc, Mg/ha) by tree-cover class. Used to recalculate soil carbon when tree-cover proportions change. |
+| `herb_traits_ready.csv` | **Yes** | Per-species herbivore trait table. Used to recalculate herbivore-related indicators (dry matter intake, methane emissions, diet-based biomass) when species counts or total herbivore biomass targets change. |
 
 #### `NPP_by_treecover.csv` Format
 
