@@ -606,7 +606,10 @@ function ChartView({
       refVal = resolveValue(attribute, 'reference', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
       curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
     }
-    const idealVal = targetHasBeenUpdated ? (siteIndicators?.ideal?.[attribute] ?? refVal) : null;
+    const attrIdeal = siteIndicators?.ideal?.[attribute];
+    const attrRef = siteIndicators?.reference?.[attribute];
+    const attributeTargetChanged = typeof attrIdeal === 'number' && typeof attrRef === 'number' && attrIdeal !== attrRef;
+    const idealVal = (targetHasBeenUpdated && attributeTargetChanged) ? attrIdeal : null;
 
     const hasData = [refVal, curVal, idealVal].some(
       (v): v is number => typeof v === 'number' && Number.isFinite(v),
@@ -668,12 +671,12 @@ function ChartView({
           ? siteCur
           : resolveMapValueForColumn(catchmentData?.current ?? null, col))
         : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
-      const targetVal = siteTarget ?? (typeof refVal === 'number' ? refVal : undefined);
       const label = resolveAxisLabelForColumn(col, xAxisLabels) ?? col;
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
-      const normalizedTarget = targetHasBeenUpdated && typeof targetVal === 'number' && Number.isFinite(targetVal) ? targetVal : null;
+      const colTargetChanged = typeof siteTarget === 'number' && typeof siteRef === 'number' && siteTarget !== siteRef;
+      const normalizedTarget = targetHasBeenUpdated && colTargetChanged && typeof siteTarget === 'number' && Number.isFinite(siteTarget) ? siteTarget : null;
 
       const siteRefUpperRaw = rangeMode === 'site'
         ? resolveMapValueForColumn(siteIndicators?.referenceUpper, col)

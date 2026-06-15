@@ -2418,6 +2418,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Create the slider with touch-action to prevent browser gestures
     const slider = document.createElement('div');
+    slider.id = 'tour-map-swiper';
     slider.style.cssText = `
       position:absolute;
       top:0;
@@ -2435,6 +2436,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Slider handle
     const handle = document.createElement('div');
+    handle.id = 'tour-map-swiper';
     handle.style.cssText = `
       position:absolute;
       top:50%;
@@ -3448,6 +3450,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   siteGeometryRef.current = siteGeometry;
   const zoomToSiteRef = useRef(zoomToSite);
   zoomToSiteRef.current = zoomToSite;
+
+  // Zoom to site when the guided tour requests it
+  useEffect(() => {
+    const handler = () => { void zoomToSiteRef.current(); };
+    window.addEventListener('dt:tour-zoom-to-site', handler);
+    return () => window.removeEventListener('dt:tour-zoom-to-site', handler);
+  }, []);
+
   const onBoundaryUpdateRef = useRef(onBoundaryUpdate);
   onBoundaryUpdateRef.current = onBoundaryUpdate;
   const editVerticesRef = useRef<[number, number][]>([]);

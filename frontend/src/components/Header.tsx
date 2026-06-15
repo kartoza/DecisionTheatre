@@ -1,4 +1,5 @@
 import {
+  Box,
   Flex,
   IconButton,
   Spacer,
@@ -119,17 +120,18 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
                 />
               </Tooltip>
             )}
-            <Tooltip label="My Sites">
-              <IconButton
-                id="tour-nav-sites"
-                aria-label="Go to sites"
-                icon={<FiMapPin />}
-                onClick={() => onNavigate('sites')}
-                variant={currentPage === 'sites' ? 'solid' : 'ghost'}
-                colorScheme="brand"
-                size="sm"
-              />
-            </Tooltip>
+            <Box id="tour-nav-sites" display="inline-flex">
+              <Tooltip label="My Sites">
+                <IconButton
+                  aria-label="Go to sites"
+                  icon={<FiMapPin />}
+                  onClick={() => onNavigate('sites')}
+                  variant={currentPage === 'sites' ? 'solid' : 'ghost'}
+                  colorScheme="brand"
+                  size="sm"
+                />
+              </Tooltip>
+            </Box>
             {(currentPage === 'map' || currentPage === 'indicators') && (
               <>
                 <Tooltip label="Map view">

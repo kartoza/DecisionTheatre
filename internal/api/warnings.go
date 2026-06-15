@@ -8,7 +8,7 @@ const (
 
 type targetStateWarningRule struct {
 	message string
-	check   func(ideal, reference map[string]float64) bool
+	check   func(ideal, reference, current map[string]float64) bool
 }
 
 // targetStateWarningRules is the central registry for target-state warning
@@ -16,14 +16,14 @@ type targetStateWarningRule struct {
 var targetStateWarningRules = []targetStateWarningRule{
 	{
 		message: warningNPPGM2,
-		// Fires when target grazing DMI (kg/km²) exceeds the reference NPP
+		// Fires when target grazing DMI (kg/km²) exceeds the current NPP
 		// capacity. NPP_gm2 (g/m²) × 1000 converts to kg/km² for comparison.
-		check: func(ideal, reference map[string]float64) bool {
-			if ideal == nil || reference == nil {
+		check: func(ideal, reference, current map[string]float64) bool {
+			if ideal == nil || current == nil {
 				return false
 			}
 			herbs, hasHerbs := ideal["herbs_totGRAZING_DMI_kgkm2"]
-			npp, hasNPP := reference[colNPP]
+			npp, hasNPP := current[colNPP]
 			if !hasHerbs || !hasNPP {
 				return false
 			}
@@ -32,14 +32,14 @@ var targetStateWarningRules = []targetStateWarningRule{
 	},
 }
 
-func collectTargetStateWarnings(ideal, reference map[string]float64) []string {
+func collectTargetStateWarnings(ideal, reference, current map[string]float64) []string {
 	if ideal == nil {
 		return nil
 	}
 
 	warnings := make([]string, 0, len(targetStateWarningRules))
 	for _, rule := range targetStateWarningRules {
-		if rule.check != nil && rule.check(ideal, reference) {
+		if rule.check != nil && rule.check(ideal, reference, current) {
 			warnings = append(warnings, rule.message)
 		}
 	}

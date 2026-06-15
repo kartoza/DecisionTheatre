@@ -13,7 +13,7 @@ import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
+import { getSiteCatchments, useAttributeDetails, useAttributeUnits } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
@@ -119,6 +119,7 @@ function ViewPane({
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
+  const { units: attributeUnits } = useAttributeUnits();
   const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
 
   // Lazy-mount MapView: only render once the pane has been in map mode at least once.
@@ -170,18 +171,6 @@ function ViewPane({
       return;
     }
 
-    // Use pre-computed aggregate indicators when available — avoids fetching 100MB+
-    // of per-catchment data just to compute a single weighted mean per attribute.
-    if (siteIndicators?.reference && siteIndicators?.current) {
-      const referenceValue = siteIndicators.reference[comparison.attribute];
-      const currentValue = siteIndicators.current[comparison.attribute];
-      if (referenceValue !== undefined || currentValue !== undefined) {
-        setDialCatchmentData({ referenceValue, currentValue });
-        setDialCatchmentLoading(false);
-        return;
-      }
-    }
-
     let cancelled = false;
     setDialCatchmentLoading(true);
 
@@ -210,7 +199,7 @@ function ViewPane({
       });
 
     return () => { cancelled = true; };
-  }, [comparison.attribute, siteId, viewMode, siteIndicators]);
+  }, [comparison.attribute, siteId, viewMode]);
 
   useEffect(() => {
     if (viewMode !== 'dial' || !comparison.attribute) {
@@ -299,22 +288,16 @@ function ViewPane({
     // This ensures the dial reflects full dataset, current extent, or site-only stats.
     switch (rangeMode) {
       case 'site':
-        // Prefer per-attribute sources first so each quad pane reflects its own factor.
-        if (siteIndicators) {
-          referenceValue = siteIndicators.reference?.[attribute];
-          currentValue = siteIndicators.current?.[attribute];
-          targetValue = siteIndicators.ideal?.[attribute];
-          const values = [referenceValue, currentValue, targetValue]
-            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
-          if (values.length > 0) {
-            min = Math.min(...values) * 0.9;
-            max = Math.max(...values) * 1.1;
-          }
-        } else if (dialCatchmentData) {
-          referenceValue = dialCatchmentData.referenceValue;
+        // Current uses AOI-weighted catchment values to match the Site Aggregation table.
+        // Reference uses siteIndicators.reference so the green callout aligns with the
+        // popup "Reference (baseline)" value — the AOI-weighted reference can differ enough
+        // to place the callout at the wrong arc position.
+        // Target (ideal) comes from siteIndicators as it is a site-level computed value.
+        if (dialCatchmentData) {
           currentValue = dialCatchmentData.currentValue;
-          targetValue = dialCatchmentData.referenceValue;
-          const values = [referenceValue, currentValue]
+          referenceValue = siteIndicators?.reference?.[attribute] ?? dialCatchmentData.referenceValue;
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          const values = [referenceValue, currentValue, targetValue]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
             min = Math.min(...values) * 0.9;
@@ -418,7 +401,17 @@ function ViewPane({
       max = mid + 10;
     }
 
-    return { min, max, referenceValue, currentValue, targetValue };
+    // Only expose target when it actually differs from reference — prevents showing a
+    // spurious target marker for factors the user never changed.
+    // Compare both values from siteIndicators (same source) to avoid false positives
+    // from minor AOI-weighting differences between dialCatchmentData and siteIndicators.
+    const siteIdeal = siteIndicators?.ideal?.[attribute];
+    const siteRef = siteIndicators?.reference?.[attribute];
+    const targetChanged = typeof siteIdeal === 'number' && typeof siteRef === 'number'
+      ? siteIdeal !== siteRef
+      : (typeof targetValue === 'number' && typeof referenceValue === 'number' && targetValue !== referenceValue);
+
+    return { min, max, referenceValue, currentValue, targetValue, targetChanged };
   }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
@@ -544,10 +537,11 @@ function ViewPane({
         visible={viewMode === 'dial' && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
-        targetValue={targetHasBeenUpdated ? dialData?.targetValue : undefined}
+        targetValue={targetHasBeenUpdated && (dialData?.targetChanged ?? false) ? dialData?.targetValue : undefined}
         min={dialData?.min ?? 0}
         max={dialData?.max ?? 100}
         attribute={dialAttributeLabel}
+        unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
         rangeMode={rangeMode}
         onRangeModeChange={isQuad ? undefined : onRangeModeChange}
         isSiteAvailable={!!siteId}

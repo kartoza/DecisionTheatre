@@ -126,7 +126,7 @@ function DialChart({
   min: _inputMin,
   max: inputMax,
   attribute = '',
-  unit: _unit = '',
+  unit = '',
   rangeMode = 'domain',
   onRangeModeChange,
   isSiteAvailable = true,
@@ -789,7 +789,7 @@ function DialChart({
                   fontWeight="700"
                   opacity={arcProgress}
                 >
-                  {attribute}
+                  {attribute}{unit ? ` (${unit})` : ''}
                 </text>
               )}
 

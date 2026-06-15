@@ -1588,7 +1588,7 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 
 		// If the recalculated target state violates ecological constraints,
 		// revert the ideal and return with warnings — do not propagate or save.
-		if warnings := collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference); len(warnings) > 0 {
+		if warnings := collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference, site.Indicators.Current); len(warnings) > 0 {
 			site.Indicators.Ideal = oldIdeal
 			site.Indicators.Warnings = warnings
 			respondJSON(w, http.StatusOK, site)
@@ -1606,7 +1606,7 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	}
 
 	if site.Indicators != nil {
-		site.Indicators.Warnings = collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference)
+		site.Indicators.Warnings = collectTargetStateWarnings(site.Indicators.Ideal, site.Indicators.Reference, site.Indicators.Current)
 	}
 
 	// For browser runtime, return the site directly without storing

@@ -95,8 +95,9 @@ func recalculateIdeal(ideal map[string]float64, changedTargets map[string]bool, 
 // classes 1–10. Source: §1 AGBvals.
 var agbMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
 
-// litterMidpoints are the litter biomass midpoints (g/m²). Source: §1 LitterClasses.
-var litterMidpoints = [10]float64{0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60, 3.30, 4.32}
+// litterMidpoints are the litter biomass midpoints in g/m². Source: §1 LitterClasses.
+// R formula: (1-evergreenFrac)*LMF*AGBvals*100 — the ×100 converts Mg/ha to g/m².
+var litterMidpoints = [10]float64{6.0, 18.0, 36.0, 70.0, 98.0, 144.0, 198.0, 260.0, 330.0, 432.0}
 
 // treeCoverMidpoints are the tree-cover fraction midpoints (%) used for meanTC.
 // Source: §1 Treefracs.

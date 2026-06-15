@@ -6,14 +6,20 @@ import {
   HStack,
   IconButton,
   Portal,
+  Spinner,
   Text,
   VStack,
 } from '@chakra-ui/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiHelpCircle, FiMap, FiMapPin, FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
+import { createSite, listSites } from '../hooks/useApi';
+import { getAppRuntime } from '../types/runtime';
+import type { Site } from '../types';
+import tourViewModesImg from '../assets/tour-view-modes.png';
 
 const TOUR_SEEN_KEY = 'dt-tour-seen';
+const DEFINE_BOUNDARY_STEP = 3;
 
 interface TourStep {
   icon: React.ReactElement;
@@ -21,6 +27,7 @@ interface TourStep {
   description: string;
   targetId?: string;
   navigateTo?: string;
+  image?: string;
 }
 
 const STEPS: TourStep[] = [
@@ -42,16 +49,25 @@ const STEPS: TourStep[] = [
     icon: <FiMapPin size={28} />,
     title: 'Create a Site',
     description:
-      'Click "Create New Site" to define a study area — import a shapefile or GeoJSON, or draw the boundary directly on the map. Go ahead and create one, then click Next.',
+      'Click "Create New Site" to open the site creation wizard. You can upload a Shapefile or GeoJSON, draw a boundary on the map, or select catchments.',
     targetId: 'tour-create-site-btn',
     navigateTo: 'sites',
   },
   {
-    icon: <FiMap size={28} />,
-    title: 'Map View',
+    icon: <FiMapPin size={28} />,
+    title: 'Define Your Boundary',
     description:
-      'Open a site to see its data on the choropleth map. Drag the split-screen slider to compare two scenarios side by side.',
-    navigateTo: 'explore',
+      'Choose a method to define your study area. After drawing or uploading your boundary, fill in a name and description, then click "Create Site" to save it and open it on the map.',
+    targetId: 'tour-creation-methods',
+    navigateTo: 'create-site',
+  },
+  {
+    icon: <FiMap size={28} />,
+    title: 'Your Site on the Map',
+    description:
+      'Your site is now visible on the choropleth map. Drag the highlighted slider to compare two scenarios side by side.',
+    targetId: 'tour-map-swiper',
+    navigateTo: 'map',
   },
   {
     icon: <FiBarChart2 size={28} />,
@@ -68,6 +84,7 @@ const STEPS: TourStep[] = [
       'Use these buttons to switch the pane between Map, Chart, Dial, and Table. In quad-pane mode all four views are shown at once.',
     targetId: 'tour-view-modes',
     navigateTo: 'explore',
+    image: tourViewModesImg,
   },
   {
     icon: <FiHelpCircle size={28} />,
@@ -77,6 +94,25 @@ const STEPS: TourStep[] = [
     targetId: 'tour-nav-docs',
   },
 ];
+
+function geoBBox(geometry: GeoJSON.Geometry): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const u = (x: number, y: number) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  const scan = (g: GeoJSON.Geometry) => {
+    if (g.type === 'Point') { u(g.coordinates[0], g.coordinates[1]); }
+    else if (g.type === 'MultiPoint' || g.type === 'LineString') { g.coordinates.forEach(c => u(c[0], c[1])); }
+    else if (g.type === 'MultiLineString' || g.type === 'Polygon') { g.coordinates.forEach(r => r.forEach(c => u(c[0], c[1]))); }
+    else if (g.type === 'MultiPolygon') { g.coordinates.forEach(p => p.forEach(r => r.forEach(c => u(c[0], c[1])))); }
+    else if (g.type === 'GeometryCollection') { g.geometries.forEach(scan); }
+  };
+  scan(geometry);
+  return { minX, minY, maxX, maxY };
+}
 
 const MotionBox = motion(Box);
 
@@ -122,20 +158,22 @@ function useSpotlightRect(targetId: string | undefined) {
 }
 
 function SpotlightRing({ rect }: { rect: DOMRect }) {
-  const pad = 5;
+  const pad = 6;
   return (
     <Box
       position="fixed"
       pointerEvents="none"
       zIndex={1401}
-      top={rect.top - pad}
-      left={rect.left - pad}
-      width={rect.width + pad * 2}
-      height={rect.height + pad * 2}
+      style={{
+        top: `${rect.top - pad}px`,
+        left: `${rect.left - pad}px`,
+        width: `${rect.width + pad * 2}px`,
+        height: `${rect.height + pad * 2}px`,
+      }}
       borderRadius="md"
-      border="2px solid"
+      border="4px solid"
       borderColor={colors.orange}
-      boxShadow={`0 0 0 4px ${colors.orange}33`}
+      boxShadow={`0 0 0 4px ${colors.orange}`}
       transition="all 0.3s ease"
     />
   );
@@ -144,6 +182,7 @@ function SpotlightRing({ rect }: { rect: DOMRect }) {
 export default function TourGuide() {
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
+  const [demoStatus, setDemoStatus] = useState<{ message: string; pct: number } | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem(TOUR_SEEN_KEY)) setVisible(true);
@@ -158,6 +197,15 @@ export default function TourGuide() {
     window.addEventListener('dt:restart-tour', handler);
     return () => window.removeEventListener('dt:restart-tour', handler);
   }, []);
+
+  // When step 4 ("Your Site on the Map") becomes active, zoom the map to the site
+  useEffect(() => {
+    if (step !== 4 || !visible) return;
+    const timer = setTimeout(() => {
+      window.dispatchEvent(new Event('dt:tour-zoom-to-site'));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [step, visible]);
 
   const navigate = (page: string) => {
     window.dispatchEvent(new CustomEvent('dt:navigate', { detail: page }));
@@ -174,8 +222,61 @@ export default function TourGuide() {
     setStep(nextStep);
   };
 
-  const next = () => {
-    if (step < STEPS.length - 1) goToStep(step + 1);
+  const next = async () => {
+    const currentStep = step;
+
+    if (currentStep === DEFINE_BOUNDARY_STEP) {
+      try {
+        const sites = await listSites();
+        if (sites.length === 0) {
+          setDemoStatus({ message: 'Fetching demo shapefile…', pct: 15 });
+
+          const resp = await fetch('/data/demo/Munywana_dissolved_fixed.zip');
+          if (!resp.ok) throw new Error('Failed to fetch demo shapefile');
+          const buffer = await resp.arrayBuffer();
+
+          setDemoStatus({ message: 'Processing boundary geometry…', pct: 45 });
+          const shp = await import('shpjs');
+          const raw = await shp.default(buffer);
+          const fc = Array.isArray(raw) ? raw[0] : raw;
+
+          let geometry: GeoJSON.Geometry;
+          if ('features' in fc && Array.isArray(fc.features) && fc.features.length > 0) {
+            geometry = fc.features.length === 1
+              ? fc.features[0].geometry
+              : {
+                  type: 'GeometryCollection' as const,
+                  geometries: fc.features.map((f: GeoJSON.Feature) => f.geometry),
+                };
+          } else {
+            throw new Error('No features found in shapefile');
+          }
+
+          setDemoStatus({ message: 'Creating site…', pct: 75 });
+          const site = await createSite({
+            title: 'Munywana',
+            geometry,
+            boundingBox: geoBBox(geometry),
+            creationMethod: 'shapefile',
+            appRuntime: getAppRuntime(),
+          } as Partial<Site>);
+
+          setDemoStatus({ message: 'Opening on map…', pct: 95 });
+          window.dispatchEvent(new CustomEvent('dt:tour-open-site', { detail: site }));
+          await new Promise<void>(r => setTimeout(r, 600));
+
+          setDemoStatus(null);
+          goToStep(currentStep + 1);
+          return;
+        }
+      } catch (err) {
+        console.error('[tour] Demo site creation failed:', err);
+        setDemoStatus(null);
+        // fall through to normal next
+      }
+    }
+
+    if (currentStep < STEPS.length - 1) goToStep(currentStep + 1);
     else dismiss();
   };
 
@@ -248,6 +349,26 @@ export default function TourGuide() {
               {current.description}
             </Text>
 
+            {current.image && (
+              <Box
+                borderRadius="md"
+                overflow="hidden"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                bg="whiteAlpha.50"
+                p={2}
+                w="full"
+                display="flex"
+                justifyContent="center"
+              >
+                <img
+                  src={current.image}
+                  alt={current.title}
+                  style={{ maxWidth: '100%', height: 'auto', imageRendering: 'crisp-edges' }}
+                />
+              </Box>
+            )}
+
             {/* Progress dots */}
             <HStack spacing={1.5}>
               {STEPS.map((_, i) => (
@@ -258,39 +379,58 @@ export default function TourGuide() {
                   borderRadius="full"
                   bg={i === step ? colors.orange : 'whiteAlpha.300'}
                   transition="all 0.2s"
-                  cursor="pointer"
-                  onClick={() => goToStep(i)}
+                  cursor={demoStatus ? 'default' : 'pointer'}
+                  onClick={() => { if (!demoStatus) goToStep(i); }}
                 />
               ))}
             </HStack>
 
-            <Flex w="full" justify="space-between" align="center">
-              <Button
-                size="xs"
-                variant="ghost"
-                color="whiteAlpha.500"
-                onClick={dismiss}
-                _hover={{ color: 'white' }}
-              >
-                Skip tour
-              </Button>
-              <HStack spacing={2}>
-                {step > 0 && (
-                  <Button size="xs" variant="ghost" color="whiteAlpha.700" onClick={prev} _hover={{ color: 'white' }}>
-                    Back
-                  </Button>
-                )}
+            {demoStatus ? (
+              <VStack spacing={2} w="full" pt={1}>
+                <HStack spacing={2} w="full">
+                  <Spinner size="xs" color={colors.orange} flexShrink={0} />
+                  <Text fontSize="xs" color="whiteAlpha.700" flex={1}>{demoStatus.message}</Text>
+                  <Text fontSize="xs" color={colors.orange} fontWeight="bold">{demoStatus.pct}%</Text>
+                </HStack>
+                <Box w="full" bg="whiteAlpha.100" borderRadius="full" h="6px" overflow="hidden">
+                  <Box
+                    w={`${demoStatus.pct}%`}
+                    bg={colors.orange}
+                    h="full"
+                    borderRadius="full"
+                    transition="width 0.4s ease"
+                  />
+                </Box>
+              </VStack>
+            ) : (
+              <Flex w="full" justify="space-between" align="center">
                 <Button
                   size="xs"
-                  bg={colors.orange}
-                  color="white"
-                  _hover={{ opacity: 0.85 }}
-                  onClick={next}
+                  variant="ghost"
+                  color="whiteAlpha.500"
+                  onClick={dismiss}
+                  _hover={{ color: 'white' }}
                 >
-                  {isLast ? 'Get started' : 'Next'}
+                  Skip tour
                 </Button>
-              </HStack>
-            </Flex>
+                <HStack spacing={2}>
+                  {step > 0 && (
+                    <Button size="xs" variant="ghost" color="whiteAlpha.700" onClick={prev} _hover={{ color: 'white' }}>
+                      Back
+                    </Button>
+                  )}
+                  <Button
+                    size="xs"
+                    bg={colors.orange}
+                    color="white"
+                    _hover={{ opacity: 0.85 }}
+                    onClick={next}
+                  >
+                    {isLast ? 'Get started' : 'Next'}
+                  </Button>
+                </HStack>
+              </Flex>
+            )}
           </VStack>
         </MotionBox>
       </AnimatePresence>

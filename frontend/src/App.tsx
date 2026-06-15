@@ -340,6 +340,13 @@ function App() {
     }, 500);
   }, [layoutMode]);
 
+  // Listen for tour demo site open event
+  useEffect(() => {
+    const handler = (e: Event) => handleOpenSite((e as CustomEvent).detail as Site);
+    window.addEventListener('dt:tour-open-site', handler);
+    return () => window.removeEventListener('dt:tour-open-site', handler);
+  }, [handleOpenSite]);
+
   // Clone a site - navigates to create-site with site data pre-filled
   const handleCloneSite = useCallback((site: Site) => {
     // Set editSite to pre-fill the form, but it will create a new site

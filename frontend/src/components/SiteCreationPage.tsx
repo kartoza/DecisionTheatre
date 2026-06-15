@@ -444,10 +444,9 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     setStep('details');
   }, [thumbnail]);
 
-  const handleSubmitSite = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!siteTitle.trim()) {
+  const submitSiteData = useCallback(async (titleOverride?: string) => {
+    const titleToUse = (titleOverride ?? siteTitle).trim();
+    if (!titleToUse) {
       toast({ title: 'Please enter a title', status: 'warning', duration: 3000 });
       return;
     }
@@ -483,7 +482,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       }
 
       const siteData: Record<string, unknown> = {
-        title: siteTitle.trim(),
+        title: titleToUse,
         description: siteDescription.trim(),
         appRuntime: getAppRuntime(),
       };
@@ -531,6 +530,12 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     } finally {
       setIsSubmitting(false);
     }
+  }, [siteTitle, siteDescription, geometry, boundingBox, selectedCatchmentIds, selectedMethod,
+      isEditMode, editSite, thumbnail, inferCatchmentIdsForGeometry, onSiteCreated, logPerf, toast]);
+
+  const handleSubmitSite = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitSiteData();
   };
 
   const handleBack = useCallback(() => {
@@ -779,6 +784,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
                 transition={bounceConfig}
               >
                 <Flex
+                  id="tour-creation-methods"
                   flexWrap="wrap"
                   gap={6}
                   justify="center"
