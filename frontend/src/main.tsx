@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { ChakraProvider, ColorModeScript } from '@chakra-ui/react';
 import App from './App';
 import TourGuide from './components/TourGuide';
+import MunywanaDemoTour from './components/MunywanaDemoTour';
 import ErrorBoundary from './components/ErrorBoundary';
 import { theme } from './styles/theme';
 
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ErrorBoundary>
         <App />
         <TourGuide />
+        <MunywanaDemoTour />
       </ErrorBoundary>
     </ChakraProvider>
   </React.StrictMode>,

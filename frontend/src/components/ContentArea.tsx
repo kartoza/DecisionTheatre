@@ -5,7 +5,7 @@ import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -211,6 +211,19 @@ function ContentArea({
     if (typeof onOpenTargetModal === 'function') onOpenTargetModal();
   };
 
+  // Broadcast open/close so the guided tour can hide itself while the modal
+  // is visible. Using a ref to skip the initial mount dispatch.
+  const prevModalOpenRef = useRef(false);
+  useEffect(() => {
+    const isOpen = isTargetModalOpen ?? false;
+    if (isOpen && !prevModalOpenRef.current) {
+      window.dispatchEvent(new Event('dt:targets-modal-opened'));
+    } else if (!isOpen && prevModalOpenRef.current) {
+      window.dispatchEvent(new Event('dt:targets-modal-closed'));
+    }
+    prevModalOpenRef.current = isOpen;
+  }, [isTargetModalOpen]);
+
   const saveTargetValues = async () => {
     if (!siteIndicators || !onSiteIndicatorsChange) {
       onCloseTargetModal?.();
@@ -341,6 +354,7 @@ function ContentArea({
           {siteIndicators && editableTargetKeys.length > 0 && (
             <Tooltip label="Edit target values" placement="bottom">
               <Button
+                id="demo-edit-targets-btn"
                 size="sm"
                 leftIcon={<FiEdit2 size={14} />}
                 onClick={openTargetModal}

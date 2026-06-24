@@ -2418,7 +2418,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Create the slider with touch-action to prevent browser gestures
     const slider = document.createElement('div');
-    slider.id = 'tour-map-swiper';
     slider.style.cssText = `
       position:absolute;
       top:0;
@@ -3448,15 +3447,36 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   isBoundaryEditModeRef.current = isBoundaryEditMode;
   const siteGeometryRef = useRef(siteGeometry);
   siteGeometryRef.current = siteGeometry;
+  const siteBoundsRef = useRef(siteBounds);
+  siteBoundsRef.current = siteBounds;
   const zoomToSiteRef = useRef(zoomToSite);
   zoomToSiteRef.current = zoomToSite;
 
-  // Zoom to site when the guided tour requests it
+  // Flag set by the guided tour event; cleared once the zoom executes.
+  const tourZoomPendingRef = useRef(false);
+
+  // When the tour requests a zoom, execute immediately if everything is ready,
+  // otherwise set the pending flag so the reactive effect below handles it.
   useEffect(() => {
-    const handler = () => { void zoomToSiteRef.current(); };
+    const handler = () => {
+      if (leftMapRef.current && mapsReady.current.left && siteBoundsRef.current) {
+        void zoomToSiteRef.current();
+      } else {
+        tourZoomPendingRef.current = true;
+      }
+    };
     window.addEventListener('dt:tour-zoom-to-site', handler);
     return () => window.removeEventListener('dt:tour-zoom-to-site', handler);
   }, []);
+
+  // Deferred tour zoom: executes once both maps are ready and siteBounds is
+  // available, covering the common case where the event fires before the
+  // MapLibre instance or site state has fully initialised.
+  useEffect(() => {
+    if (!areMapsReady || !siteBounds || !tourZoomPendingRef.current) return;
+    tourZoomPendingRef.current = false;
+    void zoomToSite();
+  }, [areMapsReady, siteBounds, zoomToSite]);
 
   const onBoundaryUpdateRef = useRef(onBoundaryUpdate);
   onBoundaryUpdateRef.current = onBoundaryUpdate;

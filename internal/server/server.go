@@ -154,6 +154,11 @@ func (s *Server) setupRoutes() {
 	s.router.PathPrefix("/data/images/").Handler(
 		http.StripPrefix("/data/images/", http.FileServer(http.Dir(imagesDir))))
 
+	// Serve walkthrough demo site JSON files from data/walkthroughs directory
+	walkthroughsDir := filepath.Join(s.cfg.DataDir, "walkthroughs")
+	s.router.PathPrefix("/data/walkthroughs/").Handler(
+		http.StripPrefix("/data/walkthroughs/", http.FileServer(http.Dir(walkthroughsDir))))
+
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
 	if err != nil {

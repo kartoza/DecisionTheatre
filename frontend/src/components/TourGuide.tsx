@@ -10,7 +10,7 @@ import {
   Text,
   VStack,
 } from '@chakra-ui/react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiHelpCircle, FiMap, FiMapPin, FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
 import { createSite, listSites } from '../hooks/useApi';
@@ -145,12 +145,14 @@ function useSpotlightRect(targetId: string | undefined) {
 
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update);
+    window.addEventListener('pointermove', update);
 
     return () => {
       clearInterval(poll);
       observerRef.current?.disconnect();
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
+      window.removeEventListener('pointermove', update);
     };
   }, [targetId]);
 
@@ -183,6 +185,7 @@ export default function TourGuide() {
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
   const [demoStatus, setDemoStatus] = useState<{ message: string; pct: number } | null>(null);
+  const dragControls = useDragControls();
 
   useEffect(() => {
     if (!localStorage.getItem(TOUR_SEEN_KEY)) setVisible(true);
@@ -304,6 +307,9 @@ export default function TourGuide() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -12 }}
           transition={{ duration: 0.22 }}
+          drag
+          dragControls={dragControls}
+          dragMomentum={false}
           bg={colors.darkGray}
           borderRadius="xl"
           boxShadow="dark-lg"
@@ -327,7 +333,14 @@ export default function TourGuide() {
           />
 
           <VStack align="start" spacing={3}>
-            <HStack spacing={3}>
+            <HStack
+              spacing={3}
+              onPointerDown={(e) => dragControls.start(e)}
+              cursor="grab"
+              userSelect="none"
+              w="full"
+              pr={6}
+            >
               <Flex
                 align="center"
                 justify="center"

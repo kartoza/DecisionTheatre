@@ -74,7 +74,7 @@ The script requires [rclone](https://rclone.org), a command-line tool for cloud 
 === "Linux / macOS"
 
     ```bash
-    curl https://rclone.org/install.sh | sudo bash
+    sudo curl https://rclone.org/install.sh | sudo bash
     ```
 
 === "macOS (Homebrew)"
@@ -99,9 +99,9 @@ Follow the interactive prompts:
 
 1. Press `n` for **New remote**.
 2. Name it `gdrive`.
-3. Choose **Google Drive** as the storage type.
+3. Choose **Google Drive** **24** as the storage type.
 4. Leave the client ID and secret blank (uses rclone's defaults).
-5. Choose scope `drive.readonly` if you only need to download, or `drive` for full access.
+5. Choose scope `drive.readonly` **2** if you only need to download, or `drive` for full access.
 6. Follow the browser OAuth flow to authorise rclone with your Google account.
 7. Accept the default for all remaining options and confirm.
 

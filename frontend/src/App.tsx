@@ -61,7 +61,7 @@ function App() {
   const [is3DMode, setIs3DMode] = useState(false);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('metadata');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
-  const [swiperPosition, setSwiperPosition] = useState<number>(0); // Synchronized slider position
+  const [swiperPosition, setSwiperPosition] = useState<number>(50); // Synchronized slider position
   const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
   const [chartAxisLabelFilters, setChartAxisLabelFilters] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
   const [chartGraphModes, setChartGraphModes] = useState<('line' | 'boxplot' | null)[]>(() => loadPaneStates().map(() => null));
@@ -347,6 +347,7 @@ function App() {
     return () => window.removeEventListener('dt:tour-open-site', handler);
   }, [handleOpenSite]);
 
+
   // Clone a site - navigates to create-site with site data pre-filled
   const handleCloneSite = useCallback((site: Site) => {
     // Set editSite to pre-fill the form, but it will create a new site
@@ -381,6 +382,60 @@ function App() {
     setIndicatorPaneIndex(null);
     setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
   }, [focusedPane]);
+
+  // Listen for demo event to reset to single pane map view.
+  useEffect(() => {
+    const handler = () => {
+      setLayoutMode('single');
+      setViewModes((prev) => prev.map((_, i) => (i === 0 ? 'map' : prev[i])));
+      setSwiperPosition(50);
+    };
+    window.addEventListener('dt:demo-single-map-view', handler);
+    return () => window.removeEventListener('dt:demo-single-map-view', handler);
+  }, []);
+
+  // Listen for demo event to switch to a 6-dial, 3-column layout for the
+  // Exploring Management Targets tour step.
+  useEffect(() => {
+    const handler = () => {
+      const base = { leftScenario: 'reference' as const, rightScenario: 'current' as const };
+      const demoPanes: PaneStates = [
+        { ...base, attribute: 'lowTC_prop' },
+        { ...base, attribute: 'percBurned' },
+        { ...base, attribute: 'CH4_both_kg_km2' },
+        { ...base, attribute: 'fracGrazing' },
+        { ...base, attribute: 'herbs_tot_kgkm2' },
+        { ...base, attribute: 'NPP_gm2' },
+      ];
+      setLayoutMode('quad');
+      setQuadColumns(3);
+      setIndicatorPaneIndex(null);
+      setPaneStates(demoPanes);
+      setViewModes(demoPanes.map(() => 'dial'));
+    };
+    window.addEventListener('dt:demo-go-quad-dial', handler);
+    return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
+  }, []);
+
+  // Listen for demo event to switch to single-pane chart view with TreeBiomassProp selected.
+  useEffect(() => {
+    const handler = () => {
+      setLayoutMode('single');
+      setIndicatorPaneIndex(0);
+      setViewModes((prev) => {
+        const next = [...prev];
+        next[0] = 'chart';
+        return next;
+      });
+      setChartGroups((prev) => {
+        const next = [...prev];
+        next[0] = 'TreeBiomassProp';
+        return next;
+      });
+    };
+    window.addEventListener('dt:demo-tree-biomass-chart', handler);
+    return () => window.removeEventListener('dt:demo-tree-biomass-chart', handler);
+  }, []);
 
   const handleAddPane = useCallback(() => {
     setPaneStates((prev) => {
@@ -450,6 +505,20 @@ function App() {
       return next;
     });
   }, []);
+
+  // Listen for demo pane state updates (used by MunywanaDemoTour to auto-select indicators).
+  // Also switches to single-pane layout so the quad view from a later demo step is cleared.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const partial = (e as CustomEvent).detail as Partial<ComparisonState>;
+      handlePaneStateChange(0, partial);
+      setLayoutMode('single');
+      setFocusedPane(0);
+      setIndicatorPaneIndex(0);
+    };
+    window.addEventListener('dt:demo-pane-state', handler);
+    return () => window.removeEventListener('dt:demo-pane-state', handler);
+  }, [handlePaneStateChange]);
 
   const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
     setViewModes((prev) => {

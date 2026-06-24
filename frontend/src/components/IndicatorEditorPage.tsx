@@ -742,6 +742,61 @@ export default function IndicatorEditorPage({
     [groupedIndicatorRows]
   );
 
+  // Key of the first currently-editable row in the Herbivores group, used to
+  // assign the tour spotlight ID dynamically rather than hardcoding a species name.
+  const firstEditableHerbivoreKey = useMemo(() => {
+    const herbivoresGroup = groupedIndicatorRows.find((g) => g.groupName === 'Herbivores');
+    if (!herbivoresGroup) return null;
+    return herbivoresGroup.rows.find((row) => userInputs[row.key] === true)?.key ?? null;
+  }, [groupedIndicatorRows, userInputs]);
+
+  // Keep a ref so the tour event handler always sees the latest group list.
+  const groupedIndicatorRowsRef = useRef(groupedIndicatorRows);
+  groupedIndicatorRowsRef.current = groupedIndicatorRows;
+
+  // Set when the tour event fires before the data has loaded; cleared on apply.
+  const pendingFocusHerbivoresRef = useRef(false);
+
+  const applyHerbivoresFocus = (groups: typeof groupedIndicatorRows) => {
+    const next: Record<string, boolean> = {};
+    groups.forEach((group) => {
+      next[group.groupName] = group.groupName !== 'Herbivores';
+    });
+    setCollapsedGroups(next);
+    // Scroll the inner container so the Herbivores header is visible after
+    // the collapse animations settle.
+    setTimeout(() => {
+      const container = document.getElementById('demo-indicators-container');
+      const section = document.getElementById('demo-herbivore-section');
+      if (!container || !section) return;
+      const offset = section.getBoundingClientRect().top
+        - container.getBoundingClientRect().top
+        + container.scrollTop
+        - 20;
+      container.scrollTo({ top: offset, behavior: 'smooth' });
+    }, 400);
+  };
+
+  // If the event arrived while the page was still loading, apply once data lands.
+  useEffect(() => {
+    if (!pendingFocusHerbivoresRef.current || groupedIndicatorRows.length === 0) return;
+    pendingFocusHerbivoresRef.current = false;
+    applyHerbivoresFocus(groupedIndicatorRows);
+  }, [groupedIndicatorRows]);
+
+  // Collapse all groups except Herbivores when the guided tour requests it.
+  useEffect(() => {
+    const handler = () => {
+      if (groupedIndicatorRowsRef.current.length > 0) {
+        applyHerbivoresFocus(groupedIndicatorRowsRef.current);
+      } else {
+        pendingFocusHerbivoresRef.current = true;
+      }
+    };
+    window.addEventListener('dt:demo-focus-herbivores', handler);
+    return () => window.removeEventListener('dt:demo-focus-herbivores', handler);
+  }, []);
+
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
     if (!localIndicators) return null;
@@ -887,6 +942,7 @@ export default function IndicatorEditorPage({
 
             <Tooltip label="Reset target state to ecological reference">
               <IconButton
+                id="demo-reset-targets"
                 aria-label="Reset"
                 icon={<FiAlertTriangle />}
                 variant="ghost"
@@ -940,7 +996,7 @@ export default function IndicatorEditorPage({
       </Box>
 
       {/* Scrollable Table */}
-      <Box h="calc(100% - 140px)" overflow="auto" px={6} py={4}>
+      <Box id="demo-indicators-container" h="calc(100% - 140px)" overflow="auto" px={6} py={4}>
         <Table variant="simple" size="sm">
           <Thead position="sticky" top={0} bg={tableBg} zIndex={5} style={{ background: "#171923", paddingBottom: "10px" }}>
             <Tr>
@@ -959,6 +1015,7 @@ export default function IndicatorEditorPage({
                   <Fragment key={group.groupName}>
                     <Tr>
                       <Td
+                        id={group.groupName === 'Herbivores' ? 'demo-herbivore-section' : undefined}
                         colSpan={5}
                         bg="whiteAlpha.50"
                         borderColor="whiteAlpha.200"
@@ -1001,6 +1058,7 @@ export default function IndicatorEditorPage({
                     return (
                       <MotionTr
                         key={row.key}
+                        id={row.key === firstEditableHerbivoreKey ? 'demo-herbivore-editable-row' : (row.key === 'herbs_tot_kgkm2' ? 'demo-herbivore-biomass-row' : undefined)}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: index * 0.01 }}

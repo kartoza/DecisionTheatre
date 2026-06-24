@@ -917,6 +917,7 @@ function ControlPanel({
 
           {viewMode !== 'chart' && (
             <Box
+              id="demo-attribute-selector"
               p={4}
               borderRadius="lg"
               border="1px"

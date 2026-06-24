@@ -298,6 +298,9 @@ export interface Site {
 
   // Site indicators (aggregated from catchments)
   indicators?: SiteIndicators;
+
+  // Set to 'walkthrough' for built-in demo sites; these are read-only
+  source?: 'walkthrough';
 }
 
 export interface CreateSiteRequest {

@@ -299,55 +299,57 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
                           <Icon as={FiMapPin} boxSize={12} color="whiteAlpha.400" />
                         </Flex>
                       )}
-                      {/* Action buttons overlay */}
-                      <HStack
-                        position="absolute"
-                        top={2}
-                        right={2}
-                        spacing={1}
-                        opacity={0}
-                        _groupHover={{ opacity: 1 }}
-                        sx={{
-                          'div:hover &': { opacity: 1 },
-                        }}
-                      >
-                        <Tooltip label="Edit site">
-                          <IconButton
-                            aria-label="Edit site"
-                            icon={<FiEdit2 />}
-                            size="sm"
-                            variant="solid"
-                            bg="blackAlpha.600"
-                            color="white"
-                            _hover={{ bg: 'purple.500' }}
-                            onClick={(e) => handleEdit(site, e)}
-                          />
-                        </Tooltip>
-                        <Tooltip label="Clone site">
-                          <IconButton
-                            aria-label="Clone site"
-                            icon={<FiCopy />}
-                            size="sm"
-                            variant="solid"
-                            bg="blackAlpha.600"
-                            color="white"
-                            _hover={{ bg: 'cyan.500' }}
-                            onClick={(e) => handleClone(site, e)}
-                          />
-                        </Tooltip>
-                        <Tooltip label="Delete site">
-                          <IconButton
-                            aria-label="Delete site"
-                            icon={<FiTrash2 />}
-                            size="sm"
-                            variant="solid"
-                            bg="blackAlpha.600"
-                            color="white"
-                            _hover={{ bg: 'red.500' }}
-                            onClick={(e) => handleDelete(site, e)}
-                          />
-                        </Tooltip>
-                      </HStack>
+                      {/* Action buttons overlay — hidden for read-only walkthrough sites */}
+                      {site.source !== 'walkthrough' && (
+                        <HStack
+                          position="absolute"
+                          top={2}
+                          right={2}
+                          spacing={1}
+                          opacity={0}
+                          _groupHover={{ opacity: 1 }}
+                          sx={{
+                            'div:hover &': { opacity: 1 },
+                          }}
+                        >
+                          <Tooltip label="Edit site">
+                            <IconButton
+                              aria-label="Edit site"
+                              icon={<FiEdit2 />}
+                              size="sm"
+                              variant="solid"
+                              bg="blackAlpha.600"
+                              color="white"
+                              _hover={{ bg: 'purple.500' }}
+                              onClick={(e) => handleEdit(site, e)}
+                            />
+                          </Tooltip>
+                          <Tooltip label="Clone site">
+                            <IconButton
+                              aria-label="Clone site"
+                              icon={<FiCopy />}
+                              size="sm"
+                              variant="solid"
+                              bg="blackAlpha.600"
+                              color="white"
+                              _hover={{ bg: 'cyan.500' }}
+                              onClick={(e) => handleClone(site, e)}
+                            />
+                          </Tooltip>
+                          <Tooltip label="Delete site">
+                            <IconButton
+                              aria-label="Delete site"
+                              icon={<FiTrash2 />}
+                              size="sm"
+                              variant="solid"
+                              bg="blackAlpha.600"
+                              color="white"
+                              _hover={{ bg: 'red.500' }}
+                              onClick={(e) => handleDelete(site, e)}
+                            />
+                          </Tooltip>
+                        </HStack>
+                      )}
                     </Box>
 
                     {/* Content */}

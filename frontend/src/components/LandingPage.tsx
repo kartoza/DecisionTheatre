@@ -371,7 +371,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 </Text>
               </Box> */}
               <Box style={buttonOverlayStyle}>
-                <Button {...outlinedButtonProps}>
+                <Button
+                  {...outlinedButtonProps}
+                  onClick={() => window.dispatchEvent(new Event('dt:start-munywana-demo'))}
+                >
                   Explore Conservation Futures
                 </Button>
               </Box>
@@ -485,7 +488,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 transition="all 0.2s"
                 boxShadow="md"
               >
-                From A to Z 
+                From A to Z
               </Button>
             </Box>
           </Flex>
