@@ -289,12 +289,9 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 			}
 		}
 
-		// XAxisLabels — fall back to Detailed name when value is "all" or empty
-		if iXAxis >= 0 {
-			xv := get(rec, iXAxis)
-			if strings.EqualFold(xv, "all") || xv == "" {
-				xv = get(rec, iDetailedName)
-			}
+		// XAxisLabels — use Detailed name column
+		if iDetailedName >= 0 {
+			xv := get(rec, iDetailedName)
 			if xv != "" {
 				mc.XAxisLabels[column] = xv
 				if norm != "" {

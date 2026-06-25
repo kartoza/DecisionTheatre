@@ -2,18 +2,21 @@ import {
   Box,
   Button,
   HStack,
+  IconButton,
   Text,
+  Tooltip,
   VStack,
   useToast,
 } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FiCheck, FiRotateCcw, FiSquare, FiTrash2 } from 'react-icons/fi';
+import { FiCheck, FiGlobe, FiRotateCcw, FiSquare, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
+import { getAppRuntime } from '../types/runtime';
 
 const MotionBox = motion(Box);
 
@@ -25,6 +28,10 @@ interface SiteCreationMapProps {
   onGeometryComplete: (geometry: GeoJSON.Geometry, catchmentIds?: string[], thumbnail?: string) => void;
   onCancel: () => void;
 }
+
+const GOOGLE_SATELLITE_SOURCE_ID = 'google-satellite';
+const GOOGLE_SATELLITE_LAYER_ID = 'google-satellite-tiles';
+const GOOGLE_TILE_URL = 'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
 
 // Bright, chunky line styles for site boundaries
 const SITE_LINE_PAINT = {
@@ -67,6 +74,9 @@ function SiteCreationMap({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const viewportBoundsRef = useRef<maplibregl.LngLatBoundsLike | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [isGoogleBasemap, setIsGoogleBasemap] = useState(false);
+  const isGoogleBasemapRef = useRef(false);
+  const hiddenLayersRef = useRef<string[]>([]);
   const [drawnPoints, setDrawnPoints] = useState<[number, number][]>([]);
   const [selectedCatchments, setSelectedCatchments] = useState<Map<string, GeoJSON.Feature>>(new Map());
   const [isAnimating, setIsAnimating] = useState(false);
@@ -211,6 +221,37 @@ function SiteCreationMap({
             'fill-opacity': 0,
           },
         }, beforeLayer); // Insert below the outlines if layer exists
+      }
+
+      // Default to Google satellite in browser runtime — inject it beneath all vector layers
+      if (getAppRuntime() === 'browser') {
+        const firstLayerId = map.getStyle()?.layers?.[0]?.id;
+        if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
+          map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
+            type: 'raster',
+            tiles: [GOOGLE_TILE_URL],
+            tileSize: 256,
+            attribution: '© Google Maps',
+            maxzoom: 21,
+          });
+        }
+        if (!map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) {
+          map.addLayer(
+            { id: GOOGLE_SATELLITE_LAYER_ID, type: 'raster', source: GOOGLE_SATELLITE_SOURCE_ID },
+            firstLayerId,
+          );
+        }
+        // Hide fill/background layers so satellite shows through at all zoom levels
+        const hidden: string[] = [];
+        for (const layer of map.getStyle()?.layers ?? []) {
+          if (layer.type === 'fill' || layer.type === 'background') {
+            map.setLayoutProperty(layer.id, 'visibility', 'none');
+            hidden.push(layer.id);
+          }
+        }
+        hiddenLayersRef.current = hidden;
+        isGoogleBasemapRef.current = true;
+        setIsGoogleBasemap(true);
       }
 
       // If we have initial geometry, display it
@@ -778,6 +819,52 @@ function SiteCreationMap({
     });
   }, [drawnPoints.length, updateDrawingPreview]);
 
+  const toggleGoogleBasemap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const next = !isGoogleBasemapRef.current;
+    isGoogleBasemapRef.current = next;
+    setIsGoogleBasemap(next);
+
+    if (next) {
+      if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
+        map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
+          type: 'raster',
+          tiles: [GOOGLE_TILE_URL],
+          tileSize: 256,
+          attribution: '© Google Maps',
+          maxzoom: 21,
+        });
+      }
+      if (!map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) {
+        const firstLayerId = map.getStyle()?.layers?.[0]?.id;
+        map.addLayer(
+          { id: GOOGLE_SATELLITE_LAYER_ID, type: 'raster', source: GOOGLE_SATELLITE_SOURCE_ID },
+          firstLayerId,
+        );
+      }
+      const hidden: string[] = [];
+      for (const layer of map.getStyle()?.layers ?? []) {
+        if (layer.id === GOOGLE_SATELLITE_LAYER_ID) continue;
+        if (layer.type === 'fill' || layer.type === 'background') {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
+          hidden.push(layer.id);
+        }
+      }
+      hiddenLayersRef.current = hidden;
+    } else {
+      if (map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) map.removeLayer(GOOGLE_SATELLITE_LAYER_ID);
+      if (map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) map.removeSource(GOOGLE_SATELLITE_SOURCE_ID);
+      for (const layerId of hiddenLayersRef.current) {
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, 'visibility', 'visible');
+        }
+      }
+      hiddenLayersRef.current = [];
+    }
+  }, []);
+
   const getInstructions = () => {
     switch (mode) {
       case 'drawn':
@@ -809,6 +896,37 @@ function SiteCreationMap({
     >
       {/* Map container */}
       <Box ref={mapContainerRef} w="100%" h="100%" />
+
+      {/* Google basemap toggle */}
+      <AnimatePresence>
+        {isMapReady && (
+          <MotionBox
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            position="absolute"
+            top={4}
+            left={4}
+          >
+            <Tooltip
+              label={isGoogleBasemap ? 'Switch to default basemap' : 'Switch to Google satellite'}
+              placement="right"
+            >
+              <IconButton
+                aria-label="Toggle Google satellite basemap"
+                icon={<FiGlobe />}
+                size="sm"
+                onClick={toggleGoogleBasemap}
+                bg={isGoogleBasemap ? 'cyan.500' : 'blackAlpha.700'}
+                color={isGoogleBasemap ? 'black' : 'white'}
+                _hover={{ bg: isGoogleBasemap ? 'cyan.400' : 'blackAlpha.600' }}
+                backdropFilter="blur(10px)"
+                borderRadius="lg"
+              />
+            </Tooltip>
+          </MotionBox>
+        )}
+      </AnimatePresence>
 
       {/* Instructions overlay */}
       <AnimatePresence>

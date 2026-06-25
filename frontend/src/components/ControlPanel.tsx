@@ -411,6 +411,9 @@ function ControlPanel({
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
 
+  const [factorDerivedMode, setFactorDerivedMode] = useState(false);
+  const [factorDerivedValue, setFactorDerivedValue] = useState('');
+
   const uniqueVariableTypes = useMemo(
     () => [...new Set(Object.values(variableTypes))].filter((t) => t && t !== 'catchID').sort(),
     [variableTypes],
@@ -521,6 +524,46 @@ function ControlPanel({
       .map((col) => ({ value: col, label: attributeDetails[col] || col })),
     [columns, canMap, attributeDetails],
   );
+
+  // Variable types that already have at least one mapable column in the factor dropdown
+  const variableTypesWithMapableColumns = useMemo(
+    () => new Set(
+      columns
+        .filter((col) => canMap[col])
+        .map((col) => resolveVariableTypeForColumn(col, variableTypes))
+        .filter((vt): vt is string => Boolean(vt && vt !== 'catchID')),
+    ),
+    [columns, canMap, variableTypes],
+  );
+
+  // For each variable type, collect the unique graphable grouping variable values
+  const variableTypeGroupMap = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const col of columns) {
+      if (!canGraph[col]) continue;
+      const vt = resolveVariableTypeForColumn(col, variableTypes);
+      if (!vt || vt === 'catchID') continue;
+      const gv = resolveGroupingVariableForColumn(col, groupingVariables);
+      if (!gv || gv === 'catchID') continue;
+      if (!map.has(vt)) map.set(vt, new Set());
+      map.get(vt)!.add(gv);
+    }
+    return map;
+  }, [columns, canGraph, variableTypes, groupingVariables]);
+
+  // Virtual entries for variable types that have no mapable columns but exactly
+  // one graphable grouping variable — these are surfaced directly in the
+  // INDIVIDUAL FACTOR dropdown (e.g. TreeBiomassProp → "Tree biomass class").
+  const singleGroupVirtualOptions = useMemo(() => {
+    const result: { value: string; label: string }[] = [];
+    for (const [vt, groups] of variableTypeGroupMap.entries()) {
+      if (variableTypesWithMapableColumns.has(vt)) continue;
+      if (groups.size !== 1) continue;
+      const [gv] = groups;
+      result.push({ value: `__group__|${vt}|${gv}`, label: gv });
+    }
+    return result;
+  }, [variableTypeGroupMap, variableTypesWithMapableColumns]);
 
   const attributeColor = colorScaleMode === 'metadata' && comparison.attribute
     ? attributeColors[comparison.attribute]
@@ -810,107 +853,190 @@ function ControlPanel({
               </HStack>
 
               <SearchableSelect
-                value={!chartGroup ? (comparison.attribute ?? '') : ''}
+                value={factorDerivedMode ? factorDerivedValue : (!chartGroup ? (comparison.attribute ?? '') : '')}
                 onChange={(val) => {
-                  if (val) {
-                    onAttributeChange(val);
+                  if (!val) {
+                    setFactorDerivedMode(false);
+                    setFactorDerivedValue('');
+                    onChartGroupChange?.(null);
+                    onChartAxisLabelFilterChange?.(null);
+                    return;
+                  }
+                  if (val.startsWith('__group__|')) {
+                    const withoutPrefix = val.slice('__group__|'.length);
+                    const pipeIndex = withoutPrefix.indexOf('|');
+                    const vt = withoutPrefix.slice(0, pipeIndex);
+                    const gv = withoutPrefix.slice(pipeIndex + 1);
+                    setFactorDerivedMode(true);
+                    setFactorDerivedValue(val);
+                    onChartGroupChange?.(vt);
+                    onChartAxisLabelFilterChange?.(gv);
+                    return;
+                  }
+                  onAttributeChange(val);
+                  const vt = resolveVariableTypeForColumn(val, variableTypes);
+                  if (vt && vt !== 'catchID') {
+                    setFactorDerivedMode(true);
+                    setFactorDerivedValue(val);
+                    onChartGroupChange?.(vt);
+                    onChartAxisLabelFilterChange?.(null);
+                  } else {
+                    setFactorDerivedMode(false);
+                    setFactorDerivedValue('');
                     onChartGroupChange?.(null);
                     onChartAxisLabelFilterChange?.(null);
                   }
                 }}
-                options={allGraphableFactorOptions}
+                options={[...allGraphableFactorOptions, ...singleGroupVirtualOptions]}
                 placeholder="Select a factor to view"
                 focusColor="#2bb0ed"
                 allowClear
               />
 
-              <Box mt={4} mb={2} borderTop="1px" borderColor={borderColor} />
-
-              <HStack mb={2}>
-                <Badge bg={colors.pastelLightOrange} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                  VARIABLE TYPE
-                </Badge>
-                <Tooltip label="Select a VariableType_highest level of grouping from metadata.csv">
-                  <Box cursor="help">
-                    <FiInfo size={14} color="gray" />
-                  </Box>
-                </Tooltip>
-              </HStack>
-
-              <SearchableSelect
-                value={chartGroup ?? ''}
-                onChange={(val) => onChartGroupChange?.(val || null)}
-                options={uniqueVariableTypes.map((group) => ({ value: group, label: group.replace(/_/g, ' ') }))}
-                placeholder="No variable type selected"
-                focusColor="#e65100"
-                allowClear
-              />
-
-              {chartGroup && (
-                <Text fontSize="xs" color="gray.500" mt={2}>
-                  Showing charted factors for variable type{' '}
-                  <Text as="span" fontWeight="600" color="orange.400">
-                    {chartGroup.replace(/_/g, ' ')}
-                  </Text>
-                </Text>
+              {factorDerivedMode && chartGroup && groupingVariableOptions.length > 1 && (
+                <Box mt={3}>
+                  <HStack mb={2}>
+                    <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                      GROUPING VARIABLE
+                    </Badge>
+                    <Tooltip label="Select a grouping variable to drill down into">
+                      <Box cursor="help">
+                        <FiInfo size={14} color="gray" />
+                      </Box>
+                    </Tooltip>
+                  </HStack>
+                  <SearchableSelect
+                    value={chartAxisLabelFilter ?? ''}
+                    onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
+                    options={groupingVariableOptions}
+                    placeholder="No grouping variable selected"
+                    focusColor="#4caf50"
+                    allowClear
+                  />
+                </Box>
               )}
 
-              {chartGroup && (
+              {factorDerivedMode && lineBoxplotToggleAvailable && (
                 <Box mt={3}>
-                  {groupingVariableOptions.length !== 1 && (
-                    <>
-                      <HStack mb={2}>
-                        <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                          GROUPING VARIABLE
-                        </Badge>
-                        <Tooltip label="Select a Grouping variable filtered by the selected variable type">
-                          <Box cursor="help">
-                            <FiInfo size={14} color="gray" />
-                          </Box>
-                        </Tooltip>
-                      </HStack>
+                  <HStack justify="space-between" align="center" mb={2}>
+                    <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                      GRAPH STYLE
+                    </Badge>
+                  </HStack>
+                  <ButtonGroup size="xs" isAttached variant="outline">
+                    <Button
+                      onClick={() => onChartGraphModeChange?.('line')}
+                      variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? 'solid' : 'outline'}
+                      colorScheme="gray"
+                      bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.pastelLightBlue : undefined}
+                      color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.dark : undefined}
+                    >
+                      Line
+                    </Button>
+                    <Button
+                      onClick={() => onChartGraphModeChange?.('boxplot')}
+                      variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? 'solid' : 'outline'}
+                      colorScheme="gray"
+                      bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.pastelLightBlue : undefined}
+                      color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.dark : undefined}
+                    >
+                      Whisker Boxplot
+                    </Button>
+                  </ButtonGroup>
+                </Box>
+              )}
 
-                      <SearchableSelect
-                        value={chartAxisLabelFilter ?? ''}
-                        onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
-                        options={groupingVariableOptions}
-                        placeholder="No grouping variable selected"
-                        focusColor="#4caf50"
-                        allowClear
-                      />
-                    </>
+              {!factorDerivedMode && (
+                <>
+                  <Box mt={4} mb={2} borderTop="1px" borderColor={borderColor} />
+
+                  <HStack mb={2}>
+                    <Badge bg={colors.pastelLightOrange} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                      VARIABLE TYPE
+                    </Badge>
+                    <Tooltip label="Select a VariableType_highest level of grouping from metadata.csv">
+                      <Box cursor="help">
+                        <FiInfo size={14} color="gray" />
+                      </Box>
+                    </Tooltip>
+                  </HStack>
+
+                  <SearchableSelect
+                    value={chartGroup ?? ''}
+                    onChange={(val) => onChartGroupChange?.(val || null)}
+                    options={uniqueVariableTypes.map((group) => ({ value: group, label: group.replace(/_/g, ' ') }))}
+                    placeholder="No variable type selected"
+                    focusColor="#e65100"
+                    allowClear
+                  />
+
+                  {chartGroup && (
+                    <Text fontSize="xs" color="gray.500" mt={2}>
+                      Showing charted factors for variable type{' '}
+                      <Text as="span" fontWeight="600" color="orange.400">
+                        {chartGroup.replace(/_/g, ' ')}
+                      </Text>
+                    </Text>
                   )}
 
-                  {lineBoxplotToggleAvailable && (
+                  {chartGroup && (
                     <Box mt={3}>
-                      <HStack justify="space-between" align="center" mb={2}>
-                        <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                          GRAPH STYLE
-                        </Badge>
-                      </HStack>
-                      <ButtonGroup size="xs" isAttached variant="outline">
-                        <Button
-                          onClick={() => onChartGraphModeChange?.('line')}
-                          variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? 'solid' : 'outline'}
-                          colorScheme="gray"
-                          bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.pastelLightBlue : undefined}
-                          color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.dark : undefined}
-                        >
-                          Line
-                        </Button>
-                        <Button
-                          onClick={() => onChartGraphModeChange?.('boxplot')}
-                          variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? 'solid' : 'outline'}
-                          colorScheme="gray"
-                          bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.pastelLightBlue : undefined}
-                          color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.dark : undefined}
-                        >
-                          Whisker Boxplot
-                        </Button>
-                      </ButtonGroup>
+                      {groupingVariableOptions.length !== 1 && (
+                        <>
+                          <HStack mb={2}>
+                            <Badge bg={colors.pastelLightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                              GROUPING VARIABLE
+                            </Badge>
+                            <Tooltip label="Select a Grouping variable filtered by the selected variable type">
+                              <Box cursor="help">
+                                <FiInfo size={14} color="gray" />
+                              </Box>
+                            </Tooltip>
+                          </HStack>
+
+                          <SearchableSelect
+                            value={chartAxisLabelFilter ?? ''}
+                            onChange={(val) => onChartAxisLabelFilterChange?.(val || null)}
+                            options={groupingVariableOptions}
+                            placeholder="No grouping variable selected"
+                            focusColor="#4caf50"
+                            allowClear
+                          />
+                        </>
+                      )}
+
+                      {lineBoxplotToggleAvailable && (
+                        <Box mt={3}>
+                          <HStack justify="space-between" align="center" mb={2}>
+                            <Badge bg={colors.pastelDarkGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+                              GRAPH STYLE
+                            </Badge>
+                          </HStack>
+                          <ButtonGroup size="xs" isAttached variant="outline">
+                            <Button
+                              onClick={() => onChartGraphModeChange?.('line')}
+                              variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? 'solid' : 'outline'}
+                              colorScheme="gray"
+                              bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.pastelLightBlue : undefined}
+                              color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'line' ? colors.dark : undefined}
+                            >
+                              Line
+                            </Button>
+                            <Button
+                              onClick={() => onChartGraphModeChange?.('boxplot')}
+                              variant={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? 'solid' : 'outline'}
+                              colorScheme="gray"
+                              bg={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.pastelLightBlue : undefined}
+                              color={(chartGraphMode ?? (rangeMode === 'site' ? 'boxplot' : 'line')) === 'boxplot' ? colors.dark : undefined}
+                            >
+                              Whisker Boxplot
+                            </Button>
+                          </ButtonGroup>
+                        </Box>
+                      )}
                     </Box>
                   )}
-                </Box>
+                </>
               )}
             </Box>
           )}

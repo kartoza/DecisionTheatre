@@ -1085,7 +1085,6 @@ function ChartView({
     // At -50° rotation, each char projects ~5.5px vertically; add tick area padding.
     const plotlyBottomMargin = Math.max(110, Math.round(maxLabelLen * 5.5) + 35);
     // Place the footer annotation proportionally inside the bottom margin.
-    const plotlyAnnotationY = -(plotlyBottomMargin / 500);
 
     if (groupedChartType === 'boxplot') {
       const seriesDefs = [
@@ -1159,17 +1158,6 @@ function ChartView({
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
               },
-              annotations: [
-                {
-                  text: `(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`,
-                  xref: 'paper',
-                  yref: 'paper',
-                  x: 0.5,
-                  y: plotlyAnnotationY,
-                  showarrow: false,
-                  font: { color: '#a0aec0', size: 12 },
-                },
-              ],
             } as any}
             config={{ responsive: true, displaylogo: false }}
             useResizeHandler
@@ -1250,17 +1238,6 @@ function ChartView({
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
               },
-              annotations: [
-                {
-                  text: `(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`,
-                  xref: 'paper',
-                  yref: 'paper',
-                  x: 0.5,
-                  y: plotlyAnnotationY,
-                  showarrow: false,
-                  font: { color: '#a0aec0', size: 12 },
-                },
-              ],
             } as any}
             config={{ responsive: true, displaylogo: false }}
             useResizeHandler
@@ -1604,15 +1581,6 @@ function ChartView({
             })}
           </>
         )}
-
-        <text
-          x={PADDING.left + plotW / 2}
-          y={svgHeight - 8}
-          textAnchor="middle" fill="#a0aec0"
-          fontSize={13} fontFamily="Inter, sans-serif" fontWeight={500}
-        >
-          {`(Variable type: ${chartGroup}; Grouping variable: ${chartAxisLabelFilter})`}
-        </text>
 
         {SERIES_LABELS.map((label, i) => {
           const legendX = PADDING.left + i * 150;
@@ -2026,7 +1994,7 @@ function ChartView({
             exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.3 } }}
             style={{ width: '100%', height: '100%' }}
           >
-            {chartGroup ? renderGroupedChart() : renderSummaryChart()}
+            {chartGroup && chartAxisLabelFilter && groupedChartData ? renderGroupedChart() : renderSummaryChart()}
           </motion.div>
         )}
       </AnimatePresence>
