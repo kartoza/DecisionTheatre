@@ -1,0 +1,16 @@
+data/
+resources/
+test_data/
+tmp/
+dist/
+docs_site/
+site/
+node_modules/
+.venv/
+result/
+packaging/
+*.docx
+*.html
+*.png
+*.7z
+R scripts/
