@@ -2,15 +2,18 @@
 .github
 .direnv
 .go
+.venv
 .webkit-compat
 bin
 build-dir
 coverage.out
 dist
 node_modules
+packaging
 release
 result
 site
+test_data
 tmp
 
 frontend/dist
@@ -19,16 +22,18 @@ internal/server/docs_site
 internal/server/static
 requirements/site
 
+data
+docs_site
+resources
+
+R scripts
+
+*.7z
+*.docx
 *.exe
 *.gguf
 *.gob
 *.gpkg
+*.html
 *.mbtiles
-
-data/*.csv
-data/*.geoparquet
-data/*.json
-data/*.mbtiles
-data/*.parquet
-data/images
-data/sites
+*.png
