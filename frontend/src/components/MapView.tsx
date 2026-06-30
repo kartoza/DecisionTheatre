@@ -1429,10 +1429,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         [bounds.maxX, bounds.maxY],
       );
 
+      let siteIdealOverrides: Map<number, number> | undefined;
+      if (getAppRuntime() === 'browser' && (c.leftScenario === 'future' || c.rightScenario === 'future')) {
+        const catchments = await getSiteCatchments(siteId).catch(() => []);
+        if (catchments.length > 0 && c.attribute) {
+          siteIdealOverrides = new Map();
+          for (const cat of catchments) {
+            const val = cat.ideal?.[c.attribute];
+            if (val !== undefined) {
+              const numId = Math.round(parseFloat(cat.id));
+              if (!isNaN(numId)) siteIdealOverrides.set(numId, val);
+            }
+          }
+        }
+      }
+
       try {
         const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, siteId),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, siteId),
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, siteId, siteIdealOverrides),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, siteId, siteIdealOverrides),
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
@@ -1517,10 +1532,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             const weightedLeftMean = leftMap?.[c.attribute];
             const weightedRightMean = rightMap?.[c.attribute];
 
-            if (leftSiteStats && typeof weightedLeftMean === 'number' && Number.isFinite(weightedLeftMean)) {
+            if (leftSiteStats && typeof weightedLeftMean === 'number' && Number.isFinite(weightedLeftMean)
+                && weightedLeftMean >= leftSiteStats.min && weightedLeftMean <= leftSiteStats.max) {
               leftSiteStats.mean = weightedLeftMean;
             }
-            if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)) {
+            if (rightSiteStats && typeof weightedRightMean === 'number' && Number.isFinite(weightedRightMean)
+                && weightedRightMean >= rightSiteStats.min && weightedRightMean <= rightSiteStats.max) {
               rightSiteStats.mean = weightedRightMean;
             }
           }
@@ -1558,7 +1575,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     return () => {
       cancelled = true;
     };
-  }, [siteId, siteBounds, siteGeometry, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors]);
+  }, [siteId, siteBounds, siteGeometry, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors, refreshKey]);
 
   /**
    * Remove choropleth layers from a map.

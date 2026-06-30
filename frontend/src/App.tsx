@@ -327,6 +327,9 @@ function App() {
     if (site.layoutMode) {
       setLayoutMode(site.layoutMode);
     }
+    if (site.quadColumns) {
+      setQuadColumns(site.quadColumns);
+    }
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
     // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
@@ -367,6 +370,7 @@ function App() {
     setEditSite(null); // Clear edit state
     startBackgroundIndicatorExtraction(site);
     handleOpenSite(site);
+    setViewModes((prev) => prev.map((m, i) => (i === 0 ? 'map' : m)));
   }, [handleOpenSite, startBackgroundIndicatorExtraction]);
 
   // Switch to single pane (focus a specific pane) and show its filter panel

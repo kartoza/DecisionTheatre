@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
+import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
 
 const API_BASE = '/api';
@@ -566,6 +567,9 @@ export async function createSite(
       thumbnail: data.thumbnail ?? null,
       createdAt: now,
       updatedAt: now,
+      paneStates: structuredClone(DEFAULT_PANE_STATES),
+      layoutMode: 'single',
+      quadColumns: 3,
       ...data,
       appRuntime: 'browser',
     };
@@ -601,7 +605,12 @@ export async function createSite(
   const response = await fetch(`${API_BASE}/sites`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      paneStates: structuredClone(DEFAULT_PANE_STATES),
+      layoutMode: 'single',
+      quadColumns: 3,
+      ...data,
+    }),
   });
   if (!response.ok) {
     throw new Error(`Failed to create site: ${response.statusText}`);
@@ -695,6 +704,7 @@ export async function patchSiteIndicators(
           const updatedSite = await response.json() as SiteWithCatchments;
           if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
             persistLocalCatchments(id, updatedSite.catchments);
+            _catchmentsCache.delete(id);
           }
           return updateSite(id, { indicators: updatedSite.indicators });
         }
@@ -723,6 +733,7 @@ export async function patchSiteIndicators(
   if (!response.ok) {
     throw new Error(`Failed to update site indicators: ${response.statusText}`);
   }
+  _catchmentsCache.delete(id);
   return response.json();
 }
 
