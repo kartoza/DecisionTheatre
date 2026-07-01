@@ -834,6 +834,31 @@ export async function getSiteAOIFractions(siteId: string): Promise<{ id: string;
   return promise;
 }
 
+// FullDomainData holds precomputed area-weighted means for all attributes
+// across the entire dataset for reference and current scenarios.
+export interface FullDomainData {
+  reference: Record<string, number>;
+  current: Record<string, number>;
+}
+
+// Fetch precalculated full-domain averages once on mount. The backend caches
+// the result after the first computation so all subsequent calls return instantly.
+export function useFullDomainPrecalculated() {
+  const [data, setData] = useState<FullDomainData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<FullDomainData>(`${API_BASE}/precalculate/full`)
+      .then((result) => {
+        setData(result);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { data, loading };
+}
+
 export type WhiskerBoundsResponse = {
   referenceUpper: Record<string, number>;
   referenceLower: Record<string, number>;

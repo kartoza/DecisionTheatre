@@ -19,6 +19,14 @@ import (
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
 
+// FullDomainData holds precomputed area-weighted means for all attributes across
+// the full dataset for each scenario. Used by the frontend to skip per-attribute
+// aggregate API calls when zone range mode is "Full" (domain).
+type FullDomainData struct {
+	Reference map[string]float64 `json:"reference"`
+	Current   map[string]float64 `json:"current"`
+}
+
 // Handler provides HTTP API endpoints
 type Handler struct {
 	tileStore          *tiles.MBTilesStore
@@ -30,6 +38,10 @@ type Handler struct {
 	lookups            *LookupTables
 	pendingCatchments  sync.Map // siteID → chan struct{} closed when deferred catchment goroutine finishes
 	pendingExtractions sync.Map // siteID → struct{} while async indicator extraction is running
+
+	// Cached full-domain precalculation: computed once on first request.
+	fullDomainMu    sync.Mutex
+	fullDomainCache *FullDomainData
 }
 
 // NewHandler creates a new API handler. metadata.csv is parsed synchronously
@@ -97,6 +109,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
+	r.HandleFunc("/precalculate/full", h.handlePrecalculateFull).Methods("GET")
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
 
@@ -435,6 +448,61 @@ func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, agg)
+}
+
+// handlePrecalculateFull returns precomputed area-weighted means for all
+// attributes across the full dataset for both reference and current scenarios.
+// The result is computed once and cached in memory for the server lifetime so
+// subsequent requests (e.g. quad-view panes all loading on startup) are served
+// instantly without hitting the database again.
+func (h *Handler) handlePrecalculateFull(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusNotFound, "no geo data loaded")
+		return
+	}
+
+	h.fullDomainMu.Lock()
+	cached := h.fullDomainCache
+	h.fullDomainMu.Unlock()
+
+	if cached != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		json.NewEncoder(w).Encode(cached)
+		return
+	}
+
+	columns := h.gpkgStore.GetColumns()
+	if len(columns) == 0 {
+		respondError(w, http.StatusInternalServerError, "no columns available")
+		return
+	}
+
+	start := time.Now()
+	refAgg, err := h.gpkgStore.GetScenarioAverages("reference", columns, nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute reference averages: %v", err))
+		return
+	}
+	curAgg, err := h.gpkgStore.GetScenarioAverages("current", columns, nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute current averages: %v", err))
+		return
+	}
+	log.Printf("[perf] handlePrecalculateFull columns=%d duration_ms=%d", len(columns), time.Since(start).Milliseconds())
+
+	data := &FullDomainData{
+		Reference: refAgg,
+		Current:   curAgg,
+	}
+
+	h.fullDomainMu.Lock()
+	h.fullDomainCache = data
+	h.fullDomainMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	json.NewEncoder(w).Encode(data)
 }
 
 // handleComparisonData returns comparison data for two scenarios

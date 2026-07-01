@@ -12,7 +12,8 @@ import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite } from './hooks/useApi';
+import FeedbackLink from './components/FeedbackLink';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
@@ -67,6 +68,7 @@ function App() {
   const [chartGraphModes, setChartGraphModes] = useState<('line' | 'boxplot' | null)[]>(() => loadPaneStates().map(() => null));
   const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
+  const { data: fullDomainData } = useFullDomainPrecalculated();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const extractingIndicatorsRef = useRef(false);
   const extractingSiteIdRef = useRef<string | null>(null);
@@ -686,6 +688,7 @@ function App() {
           <LandingPage onNavigate={handleNavigate} />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -703,6 +706,7 @@ function App() {
           <AboutPage onNavigate={handleNavigate} />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -720,6 +724,7 @@ function App() {
           <DownloadPage onNavigate={handleNavigate} />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -742,6 +747,7 @@ function App() {
           />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -764,6 +770,7 @@ function App() {
           />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -787,6 +794,7 @@ function App() {
           />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
       </Flex>
     );
   }
@@ -857,6 +865,7 @@ function App() {
             refreshKey={mapRefreshSeq}
             quadColumns={quadColumns}
             onQuadColumnsChange={setQuadColumns}
+            fullDomainData={fullDomainData}
           />
         </Box>
 
@@ -900,6 +909,7 @@ function App() {
 
       {/* Docs panel - always mounted to preserve iframe navigation state */}
       <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+      <FeedbackLink />
     </Flex>
   );
 }

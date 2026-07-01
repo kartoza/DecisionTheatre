@@ -14,6 +14,7 @@ import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { getSiteCatchments, useAttributeDetails, useAttributeUnits } from '../hooks/useApi';
+import type { FullDomainData } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
@@ -61,6 +62,7 @@ interface ViewPaneProps {
   editableTargetKeys?: string[];
   quadColumns?: QuadColumns;
   onQuadColumnsChange?: (cols: QuadColumns) => void;
+  fullDomainData?: FullDomainData | null;
 }
 
 // View mode cycle order
@@ -116,6 +118,7 @@ function ViewPane({
   editableTargetKeys = [],
   quadColumns = 2,
   onQuadColumnsChange,
+  fullDomainData,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
@@ -220,6 +223,19 @@ function ViewPane({
       return;
     }
 
+    // For full-domain mode, use precalculated data directly when available
+    // to avoid redundant per-attribute API calls on every attribute switch.
+    if (rangeMode === 'domain' && fullDomainData) {
+      const referenceValue = fullDomainData.reference[comparison.attribute];
+      const currentValue = fullDomainData.current[comparison.attribute];
+      setDialRangeValues({
+        referenceValue: typeof referenceValue === 'number' && !isNaN(referenceValue) ? referenceValue : undefined,
+        currentValue: typeof currentValue === 'number' && !isNaN(currentValue) ? currentValue : undefined,
+      });
+      setDialRangeLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setDialRangeLoading(true);
 
@@ -263,6 +279,7 @@ function ViewPane({
     comparison.leftScenario,
     comparison.rightScenario,
     mapExtent,
+    fullDomainData,
   ]);
 
   const dialAttributeLabel = comparison.attribute

@@ -5,6 +5,7 @@ import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
+import type { FullDomainData } from '../hooks/useApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
@@ -53,6 +54,7 @@ interface ContentAreaProps {
   refreshKey?: number;
   quadColumns?: QuadColumns;
   onQuadColumnsChange?: (cols: QuadColumns) => void;
+  fullDomainData?: FullDomainData | null;
 }
 
 const paneVariants = {
@@ -143,6 +145,7 @@ function ContentArea({
   refreshKey,
   quadColumns = 2,
   onQuadColumnsChange,
+  fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
@@ -460,6 +463,7 @@ function ContentArea({
                   editableTargetKeys={editableTargetKeys}
                   quadColumns={quadColumns}
                   onQuadColumnsChange={onQuadColumnsChange}
+                  fullDomainData={fullDomainData}
                 />
               </motion.div>
             ))}
@@ -509,6 +513,7 @@ function ContentArea({
             refreshKey={refreshKey}
             targetHasBeenUpdated={targetHasBeenUpdated}
             editableTargetKeys={editableTargetKeys}
+            fullDomainData={fullDomainData}
           />
         </Box>
       )}

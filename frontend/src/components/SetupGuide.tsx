@@ -25,9 +25,23 @@ function SetupGuide({ info }: SetupGuideProps) {
   const [selectedPath, setSelectedPath] = useState('');
   const [browsing, setBrowsing] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [installProgress, setInstallProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const toast = useToast();
+
+  // Individual poll requests get their own timeout so a single unresponsive
+  // request (e.g. while routes are being rebuilt after install) can't stall
+  // the poll loop indefinitely — it aborts and retries on the next tick instead.
+  const fetchWithTimeout = async (input: RequestInfo, timeoutMs = 10000) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { signal: controller.signal });
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
 
   const handleBrowse = async () => {
     setBrowsing(true);
@@ -48,6 +62,7 @@ function SetupGuide({ info }: SetupGuideProps) {
   const handleInstall = async () => {
     if (!selectedPath) return;
     setInstalling(true);
+    setInstallProgress(0);
     setError(null);
 
     try {
@@ -85,7 +100,7 @@ function SetupGuide({ info }: SetupGuideProps) {
       }
 
       try {
-        const res = await fetch('/api/datapack/status');
+        const res = await fetchWithTimeout('/api/datapack/status');
         const data = await res.json();
 
         if (data.install_status === 'error') {
@@ -94,7 +109,12 @@ function SetupGuide({ info }: SetupGuideProps) {
           return;
         }
 
+        if (typeof data.install_progress === 'number') {
+          setInstallProgress(data.install_progress);
+        }
+
         if (data.install_status === 'done' || data.installed) {
+          setInstallProgress(100);
           toast({
             title: 'Data pack installed',
             description: 'Reloading application...',
@@ -105,7 +125,8 @@ function SetupGuide({ info }: SetupGuideProps) {
           return;
         }
       } catch (_) {
-        // Server may be briefly unavailable while routes are rebuilt — keep polling
+        // Server may be briefly unavailable while routes are rebuilt, or this
+        // poll timed out — keep polling on the next tick either way.
       }
 
       pollTimerRef.current = window.setTimeout(tick, 2000);
@@ -199,7 +220,19 @@ function SetupGuide({ info }: SetupGuideProps) {
               )}
             </VStack>
             {installing && (
-              <Progress size="xs" isIndeterminate mt={2} colorScheme="blue" />
+              <Box mt={2}>
+                <Progress
+                  size="xs"
+                  value={installProgress}
+                  isIndeterminate={installProgress <= 0}
+                  colorScheme="blue"
+                />
+                {installProgress > 0 && (
+                  <Text fontSize="xs" color="gray.400" mt={1}>
+                    {Math.round(installProgress)}%
+                  </Text>
+                )}
+              </Box>
             )}
             {error && (
               <Alert status="error" mt={3} borderRadius="md" bg="red.900">

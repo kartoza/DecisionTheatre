@@ -68,9 +68,10 @@ type Server struct {
 	auxPorts   []int
 
 	// Install state — protected by installMu
-	installMu     sync.Mutex
-	installStatus string // "idle" | "installing" | "done" | "error"
-	installErr    string
+	installMu       sync.Mutex
+	installStatus   string // "idle" | "installing" | "done" | "error"
+	installErr      string
+	installProgress float64 // 0-100, only meaningful while installStatus == "installing"
 }
 
 // New creates a new Server with all components initialized

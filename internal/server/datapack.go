@@ -34,13 +34,15 @@ func (s *Server) handleDatapackStatus(w http.ResponseWriter, r *http.Request) {
 	s.installMu.Lock()
 	installStatus := s.installStatus
 	installErr := s.installErr
+	installProgress := s.installProgress
 	s.installMu.Unlock()
 
 	// While installing, report progress without reading settings
 	if installStatus == "installing" {
 		httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{
-			"installed":      false,
-			"install_status": installStatus,
+			"installed":        false,
+			"install_status":   installStatus,
+			"install_progress": installProgress,
 		})
 		return
 	}
@@ -128,6 +130,7 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	s.installStatus = "installing"
 	s.installErr = ""
+	s.installProgress = 0
 	s.installMu.Unlock()
 
 	// Install into the directory where the app binary lives
@@ -166,6 +169,21 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 			s.installMu.Unlock()
 		}
 
+		// A panic here runs on a goroutine with no caller to recover it, which
+		// would otherwise crash the whole desktop app and force a manual restart.
+		// Turn it into a reported install error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				setErr(fmt.Sprintf("installation failed unexpectedly: %v", r))
+			}
+		}()
+
+		setProgress := func(percent float64) {
+			s.installMu.Lock()
+			s.installProgress = percent
+			s.installMu.Unlock()
+		}
+
 		// Replace the existing data/ folder if present
 		existingData := filepath.Join(packDir, "data")
 		if _, err := os.Stat(existingData); err == nil {
@@ -178,9 +196,9 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		// Extract archive
 		var extractErr error
 		if strings.HasSuffix(strings.ToLower(req.Path), ".7z") {
-			extractErr = extract7zDatapack(req.Path, packDir)
+			extractErr = extract7zDatapack(req.Path, packDir, setProgress)
 		} else {
-			extractErr = extractDatapack(req.Path, packDir)
+			extractErr = extractDatapack(req.Path, packDir, setProgress)
 		}
 		if extractErr != nil {
 			setErr(fmt.Sprintf("extraction failed: %v", extractErr))
@@ -410,7 +428,8 @@ func (s *Server) reloadDataStores(packDir string) {
 
 // extractDatapack unzips a data pack archive into destDir, preserving the
 // directory structure from the zip (e.g. a zip containing data/ will produce destDir/data/).
-func extractDatapack(zipPath, destDir string) error {
+// onProgress, if non-nil, is called after each file with the cumulative percent (0-100) extracted.
+func extractDatapack(zipPath, destDir string, onProgress func(percent float64)) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("could not open zip: %w", err)
@@ -419,6 +438,11 @@ func extractDatapack(zipPath, destDir string) error {
 
 	if len(r.File) == 0 {
 		return fmt.Errorf("empty zip archive")
+	}
+
+	var totalBytes, doneBytes uint64
+	for _, f := range r.File {
+		totalBytes += f.UncompressedSize64
 	}
 
 	for _, f := range r.File {
@@ -454,13 +478,19 @@ func extractDatapack(zipPath, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("could not extract file: %w", err)
 		}
+
+		doneBytes += f.UncompressedSize64
+		if onProgress != nil && totalBytes > 0 {
+			onProgress(float64(doneBytes) / float64(totalBytes) * 100)
+		}
 	}
 
 	return nil
 }
 
 // extract7zDatapack extracts a 7z data pack archive into destDir.
-func extract7zDatapack(archivePath, destDir string) error {
+// onProgress, if non-nil, is called after each file with the cumulative percent (0-100) extracted.
+func extract7zDatapack(archivePath, destDir string, onProgress func(percent float64)) error {
 	r, err := sevenzip.OpenReader(archivePath)
 	if err != nil {
 		return fmt.Errorf("could not open 7z archive: %w", err)
@@ -469,6 +499,11 @@ func extract7zDatapack(archivePath, destDir string) error {
 
 	if len(r.File) == 0 {
 		return fmt.Errorf("empty 7z archive")
+	}
+
+	var totalBytes, doneBytes uint64
+	for _, f := range r.File {
+		totalBytes += f.UncompressedSize
 	}
 
 	for _, f := range r.File {
@@ -503,6 +538,11 @@ func extract7zDatapack(archivePath, destDir string) error {
 		outFile.Close()
 		if err != nil {
 			return fmt.Errorf("could not extract file: %w", err)
+		}
+
+		doneBytes += f.UncompressedSize
+		if onProgress != nil && totalBytes > 0 {
+			onProgress(float64(doneBytes) / float64(totalBytes) * 100)
 		}
 	}
 
