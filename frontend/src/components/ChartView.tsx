@@ -62,6 +62,36 @@ function formatVal(val: number): string {
   return SMALL_NUMBER_FORMATTER.format(val);
 }
 
+const LOG_SCALE_RANGE_THRESHOLD = 500;
+
+function positiveFiniteValues(values: (number | null | undefined)[]): number[] {
+  return values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+}
+
+/** True when the spread between the lowest and highest finite positive value exceeds the log-scale threshold. */
+function shouldUseLogScale(values: (number | null | undefined)[]): boolean {
+  const positive = positiveFiniteValues(values);
+  if (positive.length < 2) return false;
+  return (Math.max(...positive) - Math.min(...positive)) > LOG_SCALE_RANGE_THRESHOLD;
+}
+
+/**
+ * A log axis cannot represent zero/negative values, so Plotly silently drops them — which
+ * truncates whiskers right at the plot edge instead of rendering them. Clamping to a floor
+ * just below the smallest real value keeps every sample visible on the log axis.
+ */
+function logScaleFloor(values: (number | null | undefined)[]): number {
+  const positive = positiveFiniteValues(values);
+  return positive.length > 0 ? Math.min(...positive) / 2 : 1;
+}
+
+/** Explicit padded range (in log10 units) so whiskers/markers near the extremes aren't flush against the plot edges. */
+function computeLogAxisRange(values: (number | null | undefined)[]): [number, number] | undefined {
+  const positive = positiveFiniteValues(values);
+  if (positive.length === 0) return undefined;
+  return [Math.log10(Math.min(...positive)) - 0.3, Math.log10(Math.max(...positive)) + 0.15];
+}
+
 function composeYAxisLabel(axisLabel?: string, units?: string): string {
   const label = (axisLabel ?? '').trim();
   const unit = (units ?? '').trim();
@@ -1093,20 +1123,29 @@ function ChartView({
         { key: 'target', name: 'Target', color: SERIES_COLORS[2] },
       ] as const;
 
+      const recordedValues = chartData.flatMap((item) => [
+        item.ref, item.cur, item.target, item.refUpper, item.refLower, item.curUpper, item.curLower,
+      ]);
+      const useLogScale = shouldUseLogScale(recordedValues);
+      const logFloor = useLogScale ? logScaleFloor(recordedValues) : 0;
+
       const traces = seriesDefs.map((series) => {
         const x: string[] = [];
         const y: number[] = [];
 
         for (const item of chartData) {
-          const val = item[series.key];
-          if (typeof val !== 'number' || !Number.isFinite(val)) continue;
+          const rawVal = item[series.key];
+          if (typeof rawVal !== 'number' || !Number.isFinite(rawVal)) continue;
+          const val = useLogScale && rawVal <= 0 ? logFloor : rawVal;
 
-          const upper = series.key === 'cur'
-            ? (item.curUpper ?? val)
-            : (item.refUpper ?? val);
-          const lower = series.key === 'cur'
-            ? (item.curLower ?? val)
-            : (item.refLower ?? val);
+          const upperRaw = series.key === 'cur'
+            ? (item.curUpper ?? rawVal)
+            : (item.refUpper ?? rawVal);
+          const lowerRaw = series.key === 'cur'
+            ? (item.curLower ?? rawVal)
+            : (item.refLower ?? rawVal);
+          const upper = useLogScale && upperRaw <= 0 ? logFloor : upperRaw;
+          const lower = useLogScale && lowerRaw <= 0 ? logFloor : lowerRaw;
 
           const q1Val = val - (val - lower) * 0.5;
           const q3Val = val + (upper - val) * 0.5;
@@ -1134,6 +1173,8 @@ function ChartView({
         };
       }).filter((trace) => trace.x.length > 0);
 
+      const logAxisRange = useLogScale ? computeLogAxisRange(recordedValues) : undefined;
+
       return (
         <Box w="100%" h="100%" bg="#1a202c">
           <Plot
@@ -1157,6 +1198,8 @@ function ChartView({
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
+                type: useLogScale ? 'log' : 'linear',
+                ...(logAxisRange ? { range: logAxisRange, autorange: false } : {}),
               },
             } as any}
             config={{ responsive: true, displaylogo: false }}
@@ -1215,6 +1258,8 @@ function ChartView({
         }] : []),
       ];
 
+      const useLogScale = shouldUseLogScale(chartData.flatMap((item) => [item.ref, item.cur, item.target]));
+
       return (
         <Box w="100%" h="100%" bg="#1a202c">
           <Plot
@@ -1237,6 +1282,7 @@ function ChartView({
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
+                type: useLogScale ? 'log' : 'linear',
               },
             } as any}
             config={{ responsive: true, displaylogo: false }}
@@ -1641,11 +1687,18 @@ function ChartView({
           lower: typeof refLowerRaw === 'number' ? refLowerRaw : targetVal },
       ];
 
+      const recordedValues = seriesDefs.flatMap((series) => [series.val, series.upper, series.lower]);
+      const useLogScale = shouldUseLogScale(recordedValues);
+      const logFloor = useLogScale ? logScaleFloor(recordedValues) : 0;
+
       const traces = seriesDefs.flatMap((series) => {
         if (series.val === null) return [];
-        const val = series.val as number;
-        const upper = (series.upper ?? val) as number;
-        const lower = (series.lower ?? val) as number;
+        const rawVal = series.val as number;
+        const val = useLogScale && rawVal <= 0 ? logFloor : rawVal;
+        const upperRaw = (series.upper ?? rawVal) as number;
+        const lowerRaw = (series.lower ?? rawVal) as number;
+        const upper = useLogScale && upperRaw <= 0 ? logFloor : upperRaw;
+        const lower = useLogScale && lowerRaw <= 0 ? logFloor : lowerRaw;
         const q1 = val - (val - lower) * 0.5;
         const q3 = val + (upper - val) * 0.5;
         const samples = [lower, q1, val, q3, upper];
@@ -1662,6 +1715,8 @@ function ChartView({
           quartilemethod: 'linear',
         }];
       });
+
+      const logAxisRange = useLogScale ? computeLogAxisRange(recordedValues) : undefined;
 
       return (
         <Box w="100%" h="100%" bg="#1a202c">
@@ -1684,6 +1739,8 @@ function ChartView({
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
+                type: useLogScale ? 'log' : 'linear',
+                ...(logAxisRange ? { range: logAxisRange, autorange: false } : {}),
               },
               annotations: [
                 {
@@ -1763,6 +1820,8 @@ function ChartView({
           cliponaxis: false,
         }));
 
+      const useLogScale = shouldUseLogScale(values);
+
       return (
         <Box w="100%" h="100%" bg="#1a202c">
           <Plot
@@ -1788,6 +1847,7 @@ function ChartView({
                 gridcolor: '#2d3748',
                 zeroline: false,
                 tickfont: { color: '#718096', size: 11 },
+                type: useLogScale ? 'log' : 'linear',
               },
             } as any}
             config={{ responsive: true, displaylogo: false }}

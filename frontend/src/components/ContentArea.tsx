@@ -1,4 +1,4 @@
-import { Box, Button, FormControl, FormLabel, HStack, IconButton, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, IconButton, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
@@ -92,6 +92,14 @@ const RANGE_MODE_CONFIG: { id: RangeMode; label: string; icon: React.ReactElemen
   { id: 'site', label: 'Site', icon: <FiTarget size={14} /> },
 ];
 
+function formatVariableType(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
 function ContentArea({
   mode,
   paneStates,
@@ -179,6 +187,19 @@ function ContentArea({
         return aLabel.localeCompare(bLabel);
       });
   }, [attributeDetails, siteIndicators, targetInputs, variableTypes]);
+
+  const targetGroups = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    editableTargetKeys.forEach((key) => {
+      const groupName = variableTypes[key] ? formatVariableType(variableTypes[key]) : 'Other';
+      const keysInGroup = groups.get(groupName) ?? [];
+      keysInGroup.push(key);
+      groups.set(groupName, keysInGroup);
+    });
+    return Array.from(groups.entries())
+      .map(([groupName, keys]) => ({ groupName, keys }))
+      .sort((a, b) => a.groupName.localeCompare(b.groupName));
+  }, [editableTargetKeys, variableTypes]);
 
   const targetHasBeenUpdated = useMemo(() => {
     if (!siteIndicators?.ideal || !siteIndicators?.reference) return false;
@@ -499,56 +520,71 @@ function ContentArea({
           <ModalHeader>Edit Target Values</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
-            <VStack spacing={5} align="stretch">
-              {editableTargetKeys.map((key) => {
-                const refVal = siteIndicators?.reference?.[key];
-                const safeRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
-                const unit = attributeUnits[key] ?? '';
-                const isProportion = unit === 'proportion' || unit === 'fraction';
-                const metaRange = targetRanges[key];
-                const safeMin = (metaRange?.min != null && Number.isFinite(metaRange.min)) ? metaRange.min : 0;
-                const safeMax = (metaRange?.max != null && Number.isFinite(metaRange.max)) ? metaRange.max : isProportion ? 1 : safeRef + 1000;
-                const range = safeMax - safeMin;
-                const step = isProportion ? 0.01 : range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
-                const rawVal = targetDraftValues[key] ?? '';
-                const numVal = rawVal !== '' && Number.isFinite(Number(rawVal))
-                  ? Math.min(safeMax, Math.max(safeMin, Number(rawVal)))
-                  : safeMin;
-                return (
-                  <FormControl key={key}>
-                    <HStack justify="space-between" mb={2}>
-                      <FormLabel fontSize="sm" color="gray.200" mb={0}>
-                        {attributeDetails[key] ?? key}
-                        {attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>({attributeUnits[key]})</Box> : null}
-                        <Box fontSize="xs" color="gray.500" fontWeight="normal" mt={0.5}>{key}</Box>
-                      </FormLabel>
-                      <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
-                        {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
-                      </Box>
-                    </HStack>
-                    <Slider
-                      value={numVal}
-                      min={safeMin}
-                      max={safeMax}
-                      step={step}
-                      colorScheme="cyan"
-                      onChange={(val) =>
-                        setTargetDraftValues((prev) => ({ ...prev, [key]: String(val) }))
-                      }
-                    >
-                      <SliderTrack bg="whiteAlpha.200">
-                        <SliderFilledTrack />
-                      </SliderTrack>
-                      <SliderThumb />
-                    </Slider>
-                    <HStack justify="space-between" mt={1}>
-                      <Box fontSize="xs" color="gray.500">{safeMin.toFixed(2)}</Box>
-                      <Box fontSize="xs" color="gray.500">{safeMax.toFixed(2)}</Box>
-                    </HStack>
-                  </FormControl>
-                );
-              })}
-            </VStack>
+            <Accordion allowMultiple>
+              {targetGroups.map((group) => (
+                <AccordionItem key={group.groupName} border="none" mb={3}>
+                  <AccordionButton bg="whiteAlpha.50" borderRadius="md" _hover={{ bg: 'whiteAlpha.100' }}>
+                    <Box flex="1" textAlign="left" fontSize="sm" fontWeight="bold" color="gray.200">
+                      {group.groupName}
+                    </Box>
+                    <Box fontSize="xs" color="gray.500" mr={2}>{group.keys.length}</Box>
+                    <AccordionIcon />
+                  </AccordionButton>
+                  <AccordionPanel pb={4}>
+                    <VStack spacing={5} align="stretch">
+                      {group.keys.map((key) => {
+                        const refVal = siteIndicators?.reference?.[key];
+                        const safeRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
+                        const unit = attributeUnits[key] ?? '';
+                        const isProportion = unit === 'proportion' || unit === 'fraction';
+                        const metaRange = targetRanges[key];
+                        const safeMin = (metaRange?.min != null && Number.isFinite(metaRange.min)) ? metaRange.min : 0;
+                        const safeMax = (metaRange?.max != null && Number.isFinite(metaRange.max)) ? metaRange.max : isProportion ? 1 : safeRef + 1000;
+                        const range = safeMax - safeMin;
+                        const step = isProportion ? 0.01 : range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
+                        const rawVal = targetDraftValues[key] ?? '';
+                        const numVal = rawVal !== '' && Number.isFinite(Number(rawVal))
+                          ? Math.min(safeMax, Math.max(safeMin, Number(rawVal)))
+                          : safeMin;
+                        return (
+                          <FormControl key={key}>
+                            <HStack justify="space-between" mb={2}>
+                              <FormLabel fontSize="sm" color="gray.200" mb={0}>
+                                {attributeDetails[key] ?? key}
+                                {attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>({attributeUnits[key]})</Box> : null}
+                                <Box fontSize="xs" color="gray.500" fontWeight="normal" mt={0.5}>{key}</Box>
+                              </FormLabel>
+                              <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
+                                {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
+                              </Box>
+                            </HStack>
+                            <Slider
+                              value={numVal}
+                              min={safeMin}
+                              max={safeMax}
+                              step={step}
+                              colorScheme="cyan"
+                              onChange={(val) =>
+                                setTargetDraftValues((prev) => ({ ...prev, [key]: String(val) }))
+                              }
+                            >
+                              <SliderTrack bg="whiteAlpha.200">
+                                <SliderFilledTrack />
+                              </SliderTrack>
+                              <SliderThumb />
+                            </Slider>
+                            <HStack justify="space-between" mt={1}>
+                              <Box fontSize="xs" color="gray.500">{safeMin.toFixed(2)}</Box>
+                              <Box fontSize="xs" color="gray.500">{safeMax.toFixed(2)}</Box>
+                            </HStack>
+                          </FormControl>
+                        );
+                      })}
+                    </VStack>
+                  </AccordionPanel>
+                </AccordionItem>
+              ))}
+            </Accordion>
           </ModalBody>
           <ModalFooter>
             <Button variant="ghost" mr={3} onClick={onCloseTargetModal}>Cancel</Button>
