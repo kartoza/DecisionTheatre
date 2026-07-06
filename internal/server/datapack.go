@@ -10,16 +10,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	sevenzip "github.com/bodgit/sevenzip"
 	"github.com/gorilla/mux"
-	"github.com/ncruces/zenity"
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/httputil"
 	"github.com/kartoza/decision-theatre/internal/sites"
 	"github.com/kartoza/decision-theatre/internal/tiles"
+	"github.com/ncruces/zenity"
 )
+
+// installStaleAfter bounds how long an install is allowed to sit in the
+// "installing" state before a new install request is allowed to supersede
+// it. Without this, a genuinely wedged extraction (e.g. antivirus holding a
+// file lock on Windows) would leave installMu stuck forever, forcing users
+// to kill and restart the whole desktop app just to retry.
+const installStaleAfter = 20 * time.Minute
 
 // datapackManifest describes the contents of a data pack zip
 type datapackManifest struct {
@@ -121,9 +129,10 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject concurrent installs
+	// Reject concurrent installs, unless the previous one has been stuck long
+	// enough that it's safe to assume it's wedged rather than genuinely busy.
 	s.installMu.Lock()
-	if s.installStatus == "installing" {
+	if s.installStatus == "installing" && time.Since(s.installStartedAt) < installStaleAfter {
 		s.installMu.Unlock()
 		httputil.RespondError(w, http.StatusConflict, "installation already in progress")
 		return
@@ -131,19 +140,38 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 	s.installStatus = "installing"
 	s.installErr = ""
 	s.installProgress = 0
+	s.installStartedAt = time.Now()
 	s.installMu.Unlock()
 
-	// Install into the directory where the app binary lives
-	exe, err := os.Executable()
+	// Install into a per-user writable directory rather than next to the
+	// executable: on Windows the executable typically lives under Program
+	// Files, which standard users cannot write to, causing extraction to
+	// fail or stall while Windows repeatedly denies writes.
+	packDir, err := config.DataStoreDir()
 	if err != nil {
 		s.installMu.Lock()
 		s.installStatus = "error"
-		s.installErr = fmt.Sprintf("could not determine executable path: %v", err)
+		s.installErr = fmt.Sprintf("could not determine data directory: %v", err)
 		s.installMu.Unlock()
 		httputil.RespondError(w, http.StatusInternalServerError, s.installErr)
 		return
 	}
-	packDir := filepath.Dir(exe)
+	if err := os.MkdirAll(packDir, 0o755); err != nil {
+		s.installMu.Lock()
+		s.installStatus = "error"
+		s.installErr = fmt.Sprintf("could not create data directory %s: %v", packDir, err)
+		s.installMu.Unlock()
+		httputil.RespondError(w, http.StatusInternalServerError, s.installErr)
+		return
+	}
+	if err := checkWritable(packDir); err != nil {
+		s.installMu.Lock()
+		s.installStatus = "error"
+		s.installErr = fmt.Sprintf("cannot write to %s: %v", packDir, err)
+		s.installMu.Unlock()
+		httputil.RespondError(w, http.StatusInternalServerError, s.installErr)
+		return
+	}
 
 	// Close existing data stores before removing files (required on Windows)
 	if s.tileStore != nil {
@@ -184,10 +212,13 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 			s.installMu.Unlock()
 		}
 
-		// Replace the existing data/ folder if present
+		// Replace the existing data/ folder if present. Retried with backoff
+		// because Windows can transiently deny deletion of a just-closed
+		// SQLite file while antivirus finishes scanning it or the OS
+		// finishes releasing its memory mapping.
 		existingData := filepath.Join(packDir, "data")
 		if _, err := os.Stat(existingData); err == nil {
-			if err := os.RemoveAll(existingData); err != nil {
+			if err := removeAllWithRetry(existingData); err != nil {
 				setErr(fmt.Sprintf("could not remove existing data folder: %v", err))
 				return
 			}
@@ -424,6 +455,38 @@ func (s *Server) reloadDataStores(packDir string) {
 	// Rebuild routes so the new apiHandler gets the updated store references
 	// (gorilla/mux does not support updating routes in place)
 	s.rebuildRoutes()
+}
+
+// checkWritable verifies the current process can create files in dir by
+// creating and removing a small probe file. This turns a permissions problem
+// into an immediate, clear error instead of a long, confusing failure partway
+// through extracting a large archive.
+func checkWritable(dir string) error {
+	probe := filepath.Join(dir, ".write-test")
+	f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return os.Remove(probe)
+}
+
+// removeAllWithRetry deletes path, retrying with backoff on failure. On
+// Windows, deleting a file just closed by another handle (e.g. a SQLite
+// database that used memory-mapped I/O) can transiently fail with "access is
+// denied" or "used by another process" while the OS finishes releasing the
+// mapping or antivirus finishes scanning it; a short retry loop rides out
+// that window instead of failing the whole install.
+func removeAllWithRetry(path string) error {
+	const maxAttempts = 5
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err = os.RemoveAll(path); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+	}
+	return err
 }
 
 // extractDatapack unzips a data pack archive into destDir, preserving the

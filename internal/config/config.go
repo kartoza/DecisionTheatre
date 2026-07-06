@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const appName = "decision-theatre"
@@ -37,21 +38,44 @@ func SettingsDir() (string, error) {
 	return filepath.Join(configDir, appName), nil
 }
 
-// DataDir returns the platform-appropriate data directory for extracted data packs.
-// Linux: ~/.local/share/decision-theatre
+// DataStoreDir returns the platform-appropriate, per-user writable directory
+// for extracted data packs. This is deliberately independent of the
+// executable's own location: on Windows the executable typically lives under
+// Program Files, which standard (non-admin) users cannot write to, so
+// installing a data pack there fails or hangs while Windows retries denied
+// writes. Using a per-user directory instead — the same approach already
+// used for SettingsDir — keeps installation working without elevation.
+// Linux: $XDG_DATA_HOME/decision-theatre or ~/.local/share/decision-theatre
 // macOS: ~/Library/Application Support/decision-theatre
 // Windows: %LOCALAPPDATA%\decision-theatre
 func DataStoreDir() (string, error) {
-	// On macOS and Windows, UserConfigDir and data dir are effectively the same.
-	// On Linux, XDG_DATA_HOME defaults to ~/.local/share
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+	switch runtime.GOOS {
+	case "windows":
+		dir := os.Getenv("LOCALAPPDATA")
+		if dir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			dir = filepath.Join(home, "AppData", "Local")
+		}
 		return filepath.Join(dir, appName), nil
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "Library", "Application Support", appName), nil
+	default:
+		if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+			return filepath.Join(dir, appName), nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".local", "share", appName), nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", appName), nil
 }
 
 func settingsPath() (string, error) {

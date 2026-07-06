@@ -56,17 +56,6 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
         <img 
         style={{width: "100px"}}
         src={rewildLogo} alt="Rewild Capital Logo" />
-        {info?.version && (
-          <Badge
-            bg={colors.darkGreen}
-            color={colors.dark}
-            variant="subtle"
-            fontSize="xs"
-            borderRadius="full"
-          >
-            v{info.version}
-          </Badge>
-        )}
         {/* Site title - show when viewing a site */}
         {siteTitle && (currentPage === 'map' || currentPage === 'indicators') && (
           <>

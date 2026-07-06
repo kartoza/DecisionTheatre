@@ -42,12 +42,12 @@ var glyphHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // Server holds all the components for the web application
 type Server struct {
-	cfg          config.Config
-	httpServer   *http.Server
-	router       *mux.Router
-	tileStore    *tiles.MBTilesStore
-	gpkgStore    *geodata.GpkgStore
-	siteStore    *sites.Store
+	cfg        config.Config
+	httpServer *http.Server
+	router     *mux.Router
+	tileStore  *tiles.MBTilesStore
+	gpkgStore  *geodata.GpkgStore
+	siteStore  *sites.Store
 
 	// Cached style JSON bytes (rewritten to use local URLs). Protected by styleOnce.
 	styleOnce  sync.Once
@@ -56,7 +56,7 @@ type Server struct {
 	// In-process glyph cache: key = "fontstack/range", value = []byte.
 	// Glyphs fetched from the external CDN on first use are served locally
 	// for all subsequent requests, eliminating external HTTPS latency in quad view.
-	glyphCache     sync.Map
+	glyphCache      sync.Map
 	glyphCacheSizeB atomic.Int64
 
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
@@ -68,10 +68,11 @@ type Server struct {
 	auxPorts   []int
 
 	// Install state — protected by installMu
-	installMu       sync.Mutex
-	installStatus   string // "idle" | "installing" | "done" | "error"
-	installErr      string
-	installProgress float64 // 0-100, only meaningful while installStatus == "installing"
+	installMu        sync.Mutex
+	installStatus    string // "idle" | "installing" | "done" | "error"
+	installErr       string
+	installProgress  float64   // 0-100, only meaningful while installStatus == "installing"
+	installStartedAt time.Time // set when installStatus transitions to "installing"
 }
 
 // New creates a new Server with all components initialized
