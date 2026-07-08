@@ -201,6 +201,12 @@ geopackage:
 # Package data files into distributable .zip (mbtiles + geopackage)
 datapack:
 	./scripts/package-data.sh $(VERSION)
+	@APP_CID=$$(cd deployments && docker compose ps -q app 2>/dev/null); \
+	if [ -n "$$APP_CID" ] && [ "$$(docker inspect -f '{{.State.Running}}' "$$APP_CID" 2>/dev/null)" = "true" ]; then \
+		echo "==> Updating downloads config inside the running deployments-app container..."; \
+		docker exec "$$APP_CID" /app/scripts/update-download-config.sh \
+			--datapack "/app/dist/decision-theatre-data-v$(VERSION).zip"; \
+	fi
 
 # List contents of the most recently built data pack
 list-datapack:

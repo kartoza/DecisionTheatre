@@ -88,6 +88,46 @@ The script (`scripts/build-packages.sh`) accepts `--platform`, `--arch`, and `--
 ./scripts/build-packages.sh --platform windows --arch amd64 --version 0.2.0
 ```
 
+### Downloads Page Auto-Configuration
+
+`scripts/package-data.sh`, `scripts/build-windows-installer.sh`, `scripts/build-debian-installer.sh`, the macOS build in `scripts/build-packages.sh`, and `scripts/build-cross-docker.sh` each call `scripts/update-download-config.sh` after producing their artefact. It writes the artefact's path into the local `settings.json` that `internal/config.SettingsDir()` reads (e.g. `~/.config/decision-theatre/settings.json` on Linux), which is what the in-app downloads page serves. Practically: build on the same machine you run the app on, and the download page immediately offers the new files — no manual settings edit needed. Requires `jq`; if it's missing, the update is skipped with a warning rather than failing the build.
+
+**This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). Since `dist/` is bind-mounted into the container at `/app/dist` and `scripts/` at `/app/scripts`, point the config at the container-internal paths by running the same script *inside* the container instead:
+
+```bash
+docker exec deployments-app-1 /app/scripts/update-download-config.sh \
+  --executable-linux /app/dist/cross/decision-theatre \
+  --executable-windows /app/dist/cross/decision-theatre.exe
+```
+
+The runtime image includes `jq` for exactly this purpose.
+
+## Building Executables in Docker
+
+If you don't want to install Nix, Go, Node, or mingw-w64 locally, `deployments/Dockerfile.cross` builds the raw Linux and Windows executables inside Docker (frontend + docs included), using BuildKit's `--output` to export the binary straight to a host directory — no container to clean up afterwards.
+
+Requires Docker with BuildKit (Docker 23+, or `DOCKER_BUILDKIT=1` set).
+
+Use `scripts/build-cross-docker.sh` rather than calling `docker build` directly — the export targets only place files in the output directory, they don't touch the downloads page config the way the other `build-*.sh` scripts do, so this wrapper builds and then calls `update-download-config.sh` itself:
+
+```bash
+# Both platforms -> dist/cross/decision-theatre, dist/cross/decision-theatre.exe
+./scripts/build-cross-docker.sh
+
+# Single platform
+./scripts/build-cross-docker.sh --platform linux
+./scripts/build-cross-docker.sh --platform windows
+
+# Custom version / output directory
+./scripts/build-cross-docker.sh --platform windows --version 0.2.0 --dest dist/cross
+```
+
+This produces the bare executables only — not installers (`.deb`, `.msi`, etc.). Feed the exported binary into `packaging/` tooling (e.g. `nfpm`, WiX) if you need a package.
+
+If you need the raw `docker build --output` invocation directly (e.g. for a custom pipeline), see the `export-linux-amd64`, `export-windows-amd64`, and `export-all` targets in `deployments/Dockerfile.cross` — just remember to run `scripts/update-download-config.sh` yourself afterwards.
+
+**macOS is not available in Docker.** The app links against Cocoa/WebKit via CGO, which requires Apple's SDK and toolchain. That SDK isn't redistributable and there's no reliable open cross-toolchain for it, so macOS binaries must be built natively on macOS via `make packages-darwin` (see the table above).
+
 ## Building a Data Pack
 
 Data packs are built locally (not in CI) because they contain large binary data files:
@@ -97,6 +137,8 @@ make datapack
 ```
 
 This creates `dist/decision-theatre-data-v{VERSION}.zip` with a SHA256 checksum. Upload the data pack to the GitHub Release manually or distribute it separately.
+
+`make datapack` also updates the downloads page config (see above): `scripts/package-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
 
 ## Packaging Configuration Files
 

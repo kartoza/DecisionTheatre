@@ -301,3 +301,5 @@ dpkg-deb --build "$PKG_ROOT" "$DEB_FILE" >/dev/null
 
 echo ""
 echo "Desktop Debian package build complete: $DEB_FILE"
+
+"$SCRIPT_DIR/update-download-config.sh" --executable-linux "$DEB_FILE"

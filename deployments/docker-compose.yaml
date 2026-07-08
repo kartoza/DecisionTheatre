@@ -21,6 +21,9 @@ services:
     volumes:
       - ${DT_DATA_DIR}:/app/data
       - ${DT_RESOURCES_DIR}:/app/resources:ro
+      - ../scripts:/app/scripts:ro
+      - ../dist:/app/dist
+      - decision-theatre-settings:/root/.config/decision-theatre
 
   nginx:
     image: nginx:1.27-bookworm
@@ -37,3 +40,6 @@ services:
     tmpfs:
       - /var/cache/nginx
       - /var/run
+
+volumes:
+  decision-theatre-settings:

@@ -94,3 +94,5 @@ echo ""
 echo "Data pack created:"
 echo "  $DIST_DIR/$PACK_NAME.zip ($(du -h "$DIST_DIR/$PACK_NAME.zip" | cut -f1))"
 echo "  $DIST_DIR/$PACK_NAME.zip.sha256"
+
+"$SCRIPT_DIR/update-download-config.sh" --datapack "$DIST_DIR/$PACK_NAME.zip"

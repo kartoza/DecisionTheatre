@@ -273,10 +273,12 @@ func (s *Server) Stop() error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// baseURL returns the scheme+host for the current request.
+// baseURL returns the scheme+host for the current request. When running
+// behind a reverse proxy that terminates TLS (e.g. nginx), r.TLS is nil even
+// for HTTPS requests, so we also honor the standard X-Forwarded-Proto header.
 func baseURL(r *http.Request) string {
 	scheme := "http"
-	if r.TLS != nil {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s", scheme, r.Host)

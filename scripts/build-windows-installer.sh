@@ -221,3 +221,5 @@ echo "==> Building MSI package with WiX..."
 
 echo ""
 echo "Windows MSI package build complete: $MSI_FILE"
+
+"$SCRIPT_DIR/update-download-config.sh" --executable-windows "$MSI_FILE"

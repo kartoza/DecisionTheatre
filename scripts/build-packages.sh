@@ -183,10 +183,12 @@ build_darwin() {
     # Use create-dmg.sh if available, otherwise tar.gz
     if command -v hdiutil &>/dev/null && [ -f "$PROJECT_ROOT/packaging/macos/create-dmg.sh" ]; then
         (cd "$DIST_DIR" && bash "$PROJECT_ROOT/packaging/macos/create-dmg.sh" "${BINARY_NAME}" "$VERSION" "$arch")
+        "$SCRIPT_DIR/update-download-config.sh" --executable-macos "$DIST_DIR/decision-theatre-darwin-${arch}.dmg"
     else
         local tarball="${BINARY_NAME}-darwin-${arch}-v${VERSION}.tar.gz"
         tar -czf "$DIST_DIR/$tarball" -C "$DIST_DIR" "$BINARY_NAME"
         echo "  -> $DIST_DIR/$tarball"
+        "$SCRIPT_DIR/update-download-config.sh" --executable-macos "$DIST_DIR/$tarball"
     fi
 
     rm -f "$DIST_DIR/${BINARY_NAME}"

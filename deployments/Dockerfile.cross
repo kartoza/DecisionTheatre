@@ -1,0 +1,122 @@
+# syntax=docker/dockerfile:1
+
+# Cross-platform build image for Decision Theatre.
+#
+# Produces the raw Go/CGO executable for:
+#   - Linux   (native compile)
+#   - Windows (cross-compiled with mingw-w64)
+#
+# macOS is intentionally NOT a target here: the app links against Cocoa/WebKit
+# via CGO, which requires Apple's SDK and toolchain. That SDK cannot legally be
+# redistributed in a public Docker image and there is no reliable open
+# cross-toolchain for it, so macOS binaries must be built natively on macOS
+# (see docs/developer-guide/releasing.md, `make packages-darwin`).
+#
+# Usage: see "Building Executables in Docker" in
+# docs/developer-guide/releasing.md
+
+FROM node:22-bookworm AS frontend
+WORKDIR /src/frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+
+FROM python:3.12-bookworm AS docs
+WORKDIR /src
+
+RUN pip install --no-cache-dir \
+    mkdocs \
+    mkdocs-material \
+    mkdocs-minify-plugin \
+    pygments \
+    pymdown-extensions
+
+COPY mkdocs.yml ./
+COPY docs/ ./docs/
+RUN mkdocs build -d /out/docs_site
+
+
+FROM golang:1.24-bookworm AS base
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY go.mod go.sum ./
+RUN go mod edit -dropreplace github.com/webview/webview_go \
+    && go mod download
+
+COPY . .
+RUN go mod edit -dropreplace github.com/webview/webview_go
+
+COPY --from=frontend /src/frontend/dist ./frontend/dist
+RUN rm -rf internal/server/static \
+    && mkdir -p internal/server/static \
+    && cp -r frontend/dist/* internal/server/static/
+
+COPY --from=docs /out/docs_site ./internal/server/docs_site
+
+
+# ---------------------------------------------------------------------------
+# Linux (native)
+# ---------------------------------------------------------------------------
+FROM base AS linux-amd64
+ARG VERSION=dev
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        libgtk-3-dev \
+        libwebkit2gtk-4.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/linux_amd64/decision-theatre .
+
+
+# ---------------------------------------------------------------------------
+# Windows (cross-compiled with mingw-w64)
+# ---------------------------------------------------------------------------
+FROM base AS windows-amd64
+ARG VERSION=dev
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc-mingw-w64-x86-64 \
+        g++-mingw-w64-x86-64 \
+        mingw-w64-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# webview2's headers need EventToken.h, which mingw-w64 ships under a
+# different name. Mirrors scripts/build-windows-installer.sh.
+RUN mkdir -p /compat/include \
+    && cp /usr/share/mingw-w64/include/eventtoken.h /compat/include/EventToken.h
+ENV CGO_CXXFLAGS="-I/compat/include"
+
+RUN CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+    CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
+    go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
+    -o /out/windows_amd64/decision-theatre.exe .
+
+
+# ---------------------------------------------------------------------------
+# Export stages — select one with `docker build --target <name> --output ...`
+# ---------------------------------------------------------------------------
+FROM scratch AS export-linux-amd64
+COPY --from=linux-amd64 /out/linux_amd64/decision-theatre /decision-theatre
+
+FROM scratch AS export-windows-amd64
+COPY --from=windows-amd64 /out/windows_amd64/decision-theatre.exe /decision-theatre.exe
+
+FROM scratch AS export-all
+COPY --from=linux-amd64 /out/linux_amd64/decision-theatre /linux_amd64/decision-theatre
+COPY --from=windows-amd64 /out/windows_amd64/decision-theatre.exe /windows_amd64/decision-theatre.exe
