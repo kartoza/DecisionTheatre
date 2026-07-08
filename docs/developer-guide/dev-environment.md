@@ -156,6 +156,21 @@ The dev shell sets:
 | `GOCACHE` | `$PWD/.go/cache` | Go build cache |
 | `EDITOR` | `nvim` | Default editor |
 
+### Frontend (`frontend/.env`)
+
+The frontend reads its own environment variables via Vite, separate from the dev shell. Copy the template and fill in values as needed:
+
+```bash
+cd frontend
+cp .env.example .env
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `VITE_FEEDBACK_FORM_URL` | URL of the Google Form used to collect user feedback, linked from the footer. Leave blank (or omit) to hide the feedback link. |
+
+Restart `npx vite` (or `air`/the dev shell's frontend process) after changing `frontend/.env` — Vite only reads it at startup.
+
 ## Without Nix
 
 If you cannot use Nix, install manually:
