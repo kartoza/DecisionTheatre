@@ -674,6 +674,11 @@ function App() {
     return <SetupGuide info={info} />;
   }
 
+  // Voluntary reinstall, reached via the cog icon in the header
+  if (currentPage === 'setup' && info) {
+    return <SetupGuide info={info} onBack={() => handleNavigate('landing')} />;
+  }
+
   // Render landing/about/sites/create-site pages
   if (currentPage === 'landing') {
     return (

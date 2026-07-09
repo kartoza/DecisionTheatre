@@ -64,19 +64,61 @@ build_target() {
         "$PROJECT_ROOT"
 }
 
+# Translates a host path under $PROJECT_ROOT/dist to its path inside the
+# deployments-app container, where dist/ is bind-mounted at /app/dist (see
+# deployments/docker-compose.yaml). Fails if the path is outside dist/, e.g.
+# a custom --dest, since the container can't see it.
+container_path() {
+    local host_path="$1"
+    case "$host_path" in
+        "$PROJECT_ROOT/dist"/*)
+            printf '/app/dist/%s' "${host_path#"$PROJECT_ROOT"/dist/}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 UPDATE_ARGS=()
+CONTAINER_UPDATE_ARGS=()
 
 if [ "$PLATFORM" = "linux" ] || [ "$PLATFORM" = "all" ]; then
     build_target export-linux-amd64
     UPDATE_ARGS+=(--executable-linux "$DEST/decision-theatre")
+    if container_dest="$(container_path "$DEST/decision-theatre")"; then
+        CONTAINER_UPDATE_ARGS+=(--executable-linux "$container_dest")
+    fi
 fi
 
 if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
     build_target export-windows-amd64
     UPDATE_ARGS+=(--executable-windows "$DEST/decision-theatre.exe")
+    if container_dest="$(container_path "$DEST/decision-theatre.exe")"; then
+        CONTAINER_UPDATE_ARGS+=(--executable-windows "$container_dest")
+    fi
 fi
 
 "$SCRIPT_DIR/update-download-config.sh" "${UPDATE_ARGS[@]}"
+
+# If the deployments-app container is running, it serves the downloads page
+# from its own settings.json (a separate named volume, not the host's), so
+# the update above never reaches it. Mirror the `make datapack` behaviour and
+# update it too, provided the artefacts landed under dist/ where the
+# container can see them.
+APP_CID=""
+if command -v docker >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/deployments" ]; then
+    APP_CID="$(cd "$PROJECT_ROOT/deployments" && docker compose ps -q app 2>/dev/null || true)"
+fi
+
+if [ -n "$APP_CID" ] && [ "$(docker inspect -f '{{.State.Running}}' "$APP_CID" 2>/dev/null)" = "true" ]; then
+    if [ "${#CONTAINER_UPDATE_ARGS[@]}" -gt 0 ]; then
+        echo "==> Updating downloads config inside the running deployments-app container..."
+        docker exec "$APP_CID" /app/scripts/update-download-config.sh "${CONTAINER_UPDATE_ARGS[@]}"
+    else
+        echo "NOTE: deployments-app container is running but --dest is outside dist/, so its downloads config was not updated." >&2
+    fi
+fi
 
 echo ""
 echo "Executables in $DEST:"

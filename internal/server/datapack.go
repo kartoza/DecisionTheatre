@@ -27,7 +27,14 @@ import (
 // it. Without this, a genuinely wedged extraction (e.g. antivirus holding a
 // file lock on Windows) would leave installMu stuck forever, forcing users
 // to kill and restart the whole desktop app just to retry.
-const installStaleAfter = 20 * time.Minute
+//
+// This must comfortably exceed how long a legitimate install can take: data
+// packs are dominated by multi-gigabyte files (mbtiles, geopackage), and 7z
+// archives decode at only ~10MB/s through the pure-Go LZMA decoder used here
+// (no multithreading, unlike the native 7-Zip CLI), so a ~20-30GB pack can
+// genuinely take over an hour, longer on slower disks or under antivirus
+// scanning.
+const installStaleAfter = 3 * time.Hour
 
 // datapackManifest describes the contents of a data pack zip
 type datapackManifest struct {
@@ -212,6 +219,22 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 			s.installMu.Unlock()
 		}
 
+		// Preserve the user's own sites/images across a reinstall: these are
+		// created locally by the user (see sites.NewStore) and are never
+		// part of a distributed data pack (package-data.sh excludes
+		// data/sites when building one), so wiping data/ below would
+		// otherwise silently delete them.
+		siteBackupDir, err := backupSiteData(packDir)
+		if err != nil {
+			setErr(fmt.Sprintf("could not preserve existing site data: %v", err))
+			return
+		}
+		defer func() {
+			if siteBackupDir != "" {
+				os.RemoveAll(siteBackupDir)
+			}
+		}()
+
 		// Replace the existing data/ folder if present. Retried with backoff
 		// because Windows can transiently deny deletion of a just-closed
 		// SQLite file while antivirus finishes scanning it or the OS
@@ -220,6 +243,7 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		if _, err := os.Stat(existingData); err == nil {
 			if err := removeAllWithRetry(existingData); err != nil {
 				setErr(fmt.Sprintf("could not remove existing data folder: %v", err))
+				restoreSiteData(packDir, siteBackupDir)
 				return
 			}
 		}
@@ -233,14 +257,21 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		}
 		if extractErr != nil {
 			setErr(fmt.Sprintf("extraction failed: %v", extractErr))
+			restoreSiteData(packDir, siteBackupDir)
 			return
 		}
 
 		// Validate extracted contents
 		if _, err := os.Stat(filepath.Join(packDir, "data")); err != nil {
 			setErr("invalid data pack: missing data/ directory")
+			restoreSiteData(packDir, siteBackupDir)
 			return
 		}
+
+		// Restore the preserved sites/images into the freshly extracted
+		// data/ — the user's own data takes priority over anything the pack
+		// itself shipped at those paths.
+		restoreSiteData(packDir, siteBackupDir)
 
 		// Save settings
 		settings, _ := config.LoadSettings()
@@ -489,9 +520,106 @@ func removeAllWithRetry(path string) error {
 	return err
 }
 
+// backupSiteData moves packDir/data/sites and packDir/data/images — the
+// user's own created sites and thumbnails, never part of a distributed data
+// pack — out from under packDir/data before a (re)install wipes it. Returns
+// the backup directory (which the caller must remove once done with it), or
+// "" if there was nothing to preserve. The backup lives inside packDir so
+// os.Rename stays on the same filesystem.
+func backupSiteData(packDir string) (string, error) {
+	dataDir := filepath.Join(packDir, "data")
+	sitesDir := filepath.Join(dataDir, "sites")
+	imagesDir := filepath.Join(dataDir, "images")
+
+	hasSites := isDir(sitesDir)
+	hasImages := isDir(imagesDir)
+	if !hasSites && !hasImages {
+		return "", nil
+	}
+
+	backupDir, err := os.MkdirTemp(packDir, ".site-backup-*")
+	if err != nil {
+		return "", err
+	}
+
+	if hasSites {
+		if err := os.Rename(sitesDir, filepath.Join(backupDir, "sites")); err != nil {
+			os.RemoveAll(backupDir)
+			return "", err
+		}
+	}
+	if hasImages {
+		if err := os.Rename(imagesDir, filepath.Join(backupDir, "images")); err != nil {
+			os.RemoveAll(backupDir)
+			return "", err
+		}
+	}
+	return backupDir, nil
+}
+
+// restoreSiteData moves the sites/images preserved by backupSiteData back
+// into packDir/data, replacing anything the (re)installed pack itself placed
+// at those paths — the user's own data always wins. No-op if backupDir is
+// empty (backupSiteData found nothing to preserve). Errors are logged rather
+// than surfaced as an install failure: by the time this runs the new pack is
+// already in place, and losing the backup shouldn't be reported as if the
+// whole install failed.
+func restoreSiteData(packDir, backupDir string) {
+	if backupDir == "" {
+		return
+	}
+	dataDir := filepath.Join(packDir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		log.Printf("Warning: could not restore preserved site data: %v", err)
+		return
+	}
+
+	for _, name := range []string{"sites", "images"} {
+		src := filepath.Join(backupDir, name)
+		if !isDir(src) {
+			continue
+		}
+		dst := filepath.Join(dataDir, name)
+		if err := os.RemoveAll(dst); err != nil {
+			log.Printf("Warning: could not restore preserved %s: %v", name, err)
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			log.Printf("Warning: could not restore preserved %s: %v", name, err)
+		}
+	}
+}
+
+func isDir(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+// progressWriter wraps a destination file and reports cumulative extraction
+// progress after every write rather than only once a whole file is done.
+// Data packs are dominated by a couple of multi-gigabyte files (mbtiles,
+// geopackage), so per-file reporting alone leaves the progress bar frozen
+// for minutes at a time while one such file extracts, making a healthy
+// install look stalled.
+type progressWriter struct {
+	io.Writer
+	done       *uint64
+	totalBytes uint64
+	onProgress func(percent float64)
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	*w.done += uint64(n)
+	if w.onProgress != nil && w.totalBytes > 0 {
+		w.onProgress(float64(*w.done) / float64(w.totalBytes) * 100)
+	}
+	return n, err
+}
+
 // extractDatapack unzips a data pack archive into destDir, preserving the
 // directory structure from the zip (e.g. a zip containing data/ will produce destDir/data/).
-// onProgress, if non-nil, is called after each file with the cumulative percent (0-100) extracted.
+// onProgress, if non-nil, is called continuously with the cumulative percent (0-100) extracted.
 func extractDatapack(zipPath, destDir string, onProgress func(percent float64)) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -535,16 +663,12 @@ func extractDatapack(zipPath, destDir string, onProgress func(percent float64)) 
 			return fmt.Errorf("could not open zip entry: %w", err)
 		}
 
-		_, err = io.Copy(outFile, rc)
+		dest := &progressWriter{Writer: outFile, done: &doneBytes, totalBytes: totalBytes, onProgress: onProgress}
+		_, err = io.Copy(dest, rc)
 		rc.Close()
 		outFile.Close()
 		if err != nil {
 			return fmt.Errorf("could not extract file: %w", err)
-		}
-
-		doneBytes += f.UncompressedSize64
-		if onProgress != nil && totalBytes > 0 {
-			onProgress(float64(doneBytes) / float64(totalBytes) * 100)
 		}
 	}
 
@@ -552,7 +676,7 @@ func extractDatapack(zipPath, destDir string, onProgress func(percent float64)) 
 }
 
 // extract7zDatapack extracts a 7z data pack archive into destDir.
-// onProgress, if non-nil, is called after each file with the cumulative percent (0-100) extracted.
+// onProgress, if non-nil, is called continuously with the cumulative percent (0-100) extracted.
 func extract7zDatapack(archivePath, destDir string, onProgress func(percent float64)) error {
 	r, err := sevenzip.OpenReader(archivePath)
 	if err != nil {
@@ -596,16 +720,12 @@ func extract7zDatapack(archivePath, destDir string, onProgress func(percent floa
 			return fmt.Errorf("could not open archive entry: %w", err)
 		}
 
-		_, err = io.Copy(outFile, rc)
+		dest := &progressWriter{Writer: outFile, done: &doneBytes, totalBytes: totalBytes, onProgress: onProgress}
+		_, err = io.Copy(dest, rc)
 		rc.Close()
 		outFile.Close()
 		if err != nil {
 			return fmt.Errorf("could not extract file: %w", err)
-		}
-
-		doneBytes += f.UncompressedSize
-		if onProgress != nil && totalBytes > 0 {
-			onProgress(float64(doneBytes) / float64(totalBytes) * 100)
 		}
 	}
 

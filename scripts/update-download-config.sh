@@ -51,9 +51,42 @@ fi
 
 # jq is used to merge fields into settings.json without clobbering unrelated
 # keys. This is a convenience step, not a core part of packaging, so a
-# missing jq should not fail the surrounding build script.
+# missing jq should not fail the surrounding build script; we try to install
+# it first and only fall back to skipping if that is not possible.
+install_jq() {
+    local sudo_cmd=""
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        sudo_cmd="sudo"
+    fi
+
+    echo "jq not found; attempting to install it..." >&2
+    case "$(uname -s)" in
+        Darwin)
+            command -v brew >/dev/null 2>&1 && brew install jq
+            ;;
+        *)
+            if command -v apt-get >/dev/null 2>&1; then
+                $sudo_cmd apt-get update -qq && $sudo_cmd apt-get install -y jq
+            elif command -v dnf >/dev/null 2>&1; then
+                $sudo_cmd dnf install -y jq
+            elif command -v yum >/dev/null 2>&1; then
+                $sudo_cmd yum install -y jq
+            elif command -v pacman >/dev/null 2>&1; then
+                $sudo_cmd pacman -Sy --noconfirm jq
+            elif command -v apk >/dev/null 2>&1; then
+                $sudo_cmd apk add jq
+            fi
+            ;;
+    esac
+}
+
 if ! command -v jq >/dev/null 2>&1; then
-    echo "WARNING: jq not found; skipping downloads-page config update." >&2
+    install_jq || true
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+    echo "WARNING: could not install jq; skipping downloads-page config update." >&2
+    echo "  Install manually: sudo apt install jq (Debian/Ubuntu) or brew install jq (macOS)." >&2
     exit 0
 fi
 

@@ -61,7 +61,18 @@ func main() {
 	}
 
 	if resolvedDataDir == "" {
-		resolvedDataDir = "./data"
+		// Fall back to the same per-user directory a data pack install would
+		// use (config.DataStoreDir()/data), not a path relative to cwd: on
+		// Windows, double-clicking the exe sets cwd to the exe's own
+		// directory, so a bare "./data" fallback caused sites.NewStore to
+		// eagerly MkdirAll an empty "data" folder next to the executable on
+		// every startup, even before any data pack was installed.
+		if dataStoreDir, err := config.DataStoreDir(); err == nil {
+			resolvedDataDir = filepath.Join(dataStoreDir, "data")
+		} else {
+			log.Printf("Warning: could not determine per-user data directory: %v", err)
+			resolvedDataDir = "./data"
+		}
 	}
 	if resolvedResourcesDir == "" {
 		resolvedResourcesDir = "./resources"

@@ -9,7 +9,7 @@ import {
   useColorModeValue,
   Tooltip,
 } from '@chakra-ui/react';
-import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload } from 'react-icons/fi';
+import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload, FiSettings } from 'react-icons/fi';
 import { useServerInfo } from '../hooks/useApi';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -177,6 +177,19 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
               icon={<FiDownload />}
               onClick={() => onNavigate('download')}
               variant={currentPage === 'download' ? 'solid' : 'ghost'}
+              colorScheme="brand"
+              size="sm"
+            />
+          </Tooltip>
+        )}
+
+        {!isBrowser && onNavigate && (
+          <Tooltip label="Reinstall data pack">
+            <IconButton
+              aria-label="Reinstall data pack"
+              icon={<FiSettings />}
+              onClick={() => onNavigate('setup')}
+              variant={currentPage === 'setup' ? 'solid' : 'ghost'}
               colorScheme="brand"
               size="sm"
             />

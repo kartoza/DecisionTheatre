@@ -92,7 +92,9 @@ The script (`scripts/build-packages.sh`) accepts `--platform`, `--arch`, and `--
 
 `scripts/package-data.sh`, `scripts/build-windows-installer.sh`, `scripts/build-debian-installer.sh`, the macOS build in `scripts/build-packages.sh`, and `scripts/build-cross-docker.sh` each call `scripts/update-download-config.sh` after producing their artefact. It writes the artefact's path into the local `settings.json` that `internal/config.SettingsDir()` reads (e.g. `~/.config/decision-theatre/settings.json` on Linux), which is what the in-app downloads page serves. Practically: build on the same machine you run the app on, and the download page immediately offers the new files — no manual settings edit needed. Requires `jq`; if it's missing, the update is skipped with a warning rather than failing the build.
 
-**This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). Since `dist/` is bind-mounted into the container at `/app/dist` and `scripts/` at `/app/scripts`, point the config at the container-internal paths by running the same script *inside* the container instead:
+**This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). `scripts/build-cross-docker.sh` handles this automatically: if the `deployments-app` container is running and the artefacts landed under `dist/` (the default `--dest`, bind-mounted into the container at `/app/dist`), it additionally `docker exec`s `update-download-config.sh` inside the container with the container-internal paths, mirroring what `make datapack` already does for data packs.
+
+If you used a custom `--dest` outside `dist/`, or need to update the container's config by hand for another reason, point it at the container-internal paths by running the same script *inside* the container instead:
 
 ```bash
 docker exec deployments-app-1 /app/scripts/update-download-config.sh \
@@ -108,7 +110,7 @@ If you don't want to install Nix, Go, Node, or mingw-w64 locally, `deployments/D
 
 Requires Docker with BuildKit (Docker 23+, or `DOCKER_BUILDKIT=1` set).
 
-Use `scripts/build-cross-docker.sh` rather than calling `docker build` directly — the export targets only place files in the output directory, they don't touch the downloads page config the way the other `build-*.sh` scripts do, so this wrapper builds and then calls `update-download-config.sh` itself:
+Use `scripts/build-cross-docker.sh` rather than calling `docker build` directly — the export targets only place files in the output directory, they don't touch the downloads page config the way the other `build-*.sh` scripts do, so this wrapper builds and then calls `update-download-config.sh` itself (both on the host, and inside the `deployments-app` container if it's running — see above):
 
 ```bash
 # Both platforms -> dist/cross/decision-theatre, dist/cross/decision-theatre.exe

@@ -14,14 +14,21 @@ import {
   AlertIcon,
   Progress,
   useToast,
+  IconButton,
+  Tooltip,
 } from '@chakra-ui/react';
+import { FiArrowLeft } from 'react-icons/fi';
 import type { ServerInfo } from '../types';
 
 interface SetupGuideProps {
   info: ServerInfo;
+  // Present when this page was opened voluntarily to reinstall/replace an
+  // already-installed data pack, as opposed to being shown because no data
+  // pack is installed yet (in which case there's nowhere useful to go back to).
+  onBack?: () => void;
 }
 
-function SetupGuide({ info }: SetupGuideProps) {
+function SetupGuide({ info, onBack }: SetupGuideProps) {
   const [selectedPath, setSelectedPath] = useState('');
   const [browsing, setBrowsing] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -90,11 +97,20 @@ function SetupGuide({ info }: SetupGuideProps) {
 
   const pollStatus = () => {
     const startTime = Date.now();
-    const maxWaitMs = 15 * 60 * 1000; // 15 minutes
+    // Data packs are dominated by multi-gigabyte files (mbtiles, geopackage).
+    // 7z archives decode at only ~10MB/s through the pure-Go LZMA decoder
+    // used server-side (no multithreading like the native 7-Zip CLI), so a
+    // large pack can genuinely take over an hour — longer on slow disks or
+    // under antivirus scanning. This must stay below the server's
+    // installStaleAfter so a still-running install isn't superseded by a
+    // retry before this bound is even reached.
+    const maxWaitMs = 3 * 60 * 60 * 1000; // 3 hours
 
     const tick = async () => {
       if (Date.now() - startTime > maxWaitMs) {
-        setError('Installation timed out. Please restart the application.');
+        setError(
+          'Installation is taking much longer than expected. It may still be running in the background — check the data folder size before restarting the application, since restarting will discard any progress made so far.'
+        );
         setInstalling(false);
         return;
       }
@@ -137,6 +153,7 @@ function SetupGuide({ info }: SetupGuideProps) {
 
   return (
     <Flex
+      position="relative"
       align="center"
       justify="center"
       minH="100vh"
@@ -144,6 +161,22 @@ function SetupGuide({ info }: SetupGuideProps) {
       color="white"
       p={8}
     >
+      {onBack && (
+        <Tooltip label="Back to app">
+          <IconButton
+            aria-label="Back to app"
+            icon={<FiArrowLeft />}
+            onClick={onBack}
+            position="absolute"
+            top={4}
+            left={4}
+            variant="ghost"
+            colorScheme="whiteAlpha"
+            color="gray.300"
+            _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+          />
+        </Tooltip>
+      )}
       <Box maxW="720px" w="full">
         <VStack spacing={6} align="stretch">
           <Box textAlign="center" mb={4}>
@@ -153,9 +186,15 @@ function SetupGuide({ info }: SetupGuideProps) {
             <Text color="gray.400" fontSize="lg">
               Offline catchment data exploration with embedded AI
             </Text>
-            <Badge colorScheme="yellow" mt={3} fontSize="sm" px={3} py={1}>
-              Data files required
-            </Badge>
+            {info.tiles_loaded ? (
+              <Badge colorScheme="blue" mt={3} fontSize="sm" px={3} py={1}>
+                Reinstall data pack
+              </Badge>
+            ) : (
+              <Badge colorScheme="yellow" mt={3} fontSize="sm" px={3} py={1}>
+                Data files required
+              </Badge>
+            )}
           </Box>
 
           <Divider borderColor="gray.700" />
