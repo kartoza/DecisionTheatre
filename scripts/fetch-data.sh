@@ -14,9 +14,9 @@
 #
 # What it does:
 #   Downloads all files from the given Drive folder (and any subfolders)
-#   into <data-dir>, preserving the folder structure. Existing files are
-#   overwritten only when the remote copy is newer or has a different size
-#   (rclone --update behaviour).
+#   into <data-dir>, preserving the folder structure. Every file is
+#   re-downloaded and overwritten unconditionally, without checking
+#   whether the remote copy has changed.
 #
 # Requirements:
 #   rclone — https://rclone.org/install/
@@ -146,7 +146,7 @@ download_csvs() {
         --drive-root-folder-id "$FOLDER_ID" \
         --progress \
         --stats-one-line \
-        --update \
+        --ignore-times \
         --transfers 4 \
         --checkers 8 \
         --retries 3 \
