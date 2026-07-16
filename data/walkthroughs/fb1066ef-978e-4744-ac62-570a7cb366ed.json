@@ -9,17 +9,7 @@
     {
       "leftScenario": "reference",
       "rightScenario": "current",
-      "attribute": "lowTC_prop"
-    },
-    {
-      "leftScenario": "reference",
-      "rightScenario": "current",
-      "attribute": "percBurned"
-    },
-    {
-      "leftScenario": "reference",
-      "rightScenario": "current",
-      "attribute": "CH4_both_kg_km2"
+      "attribute": "AGBwd_Mgha"
     },
     {
       "leftScenario": "reference",
@@ -29,16 +19,15 @@
     {
       "leftScenario": "reference",
       "rightScenario": "current",
-      "attribute": "herbs_tot_kgkm2"
+      "attribute": "NPP_gm2"
     },
     {
       "leftScenario": "reference",
       "rightScenario": "current",
-      "attribute": "NPP_gm2"
+      "attribute": "percBurned"
     }
   ],
   "layoutMode": "quad",
-  "quadColumns": 3,
   "geometry": {
     "bbox": [
       32.13731315561924,
