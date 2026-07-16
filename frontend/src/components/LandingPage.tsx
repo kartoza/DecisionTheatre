@@ -414,7 +414,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 </Text>
               </Box> */}
               <Box style={buttonOverlayStyle}>
-                <Button {...outlinedButtonProps}>
+                <Button
+                  {...outlinedButtonProps}
+                  onClick={() => window.dispatchEvent(new Event('dt:start-shaihills-demo'))}
+                >
                   Explore Policy Impacts
                 </Button>
               </Box>

@@ -4,6 +4,7 @@ tmp_dir = "tmp"
 [build]
   bin = "./tmp/decision-theatre"
   cmd = "go build -o ./tmp/decision-theatre ."
+  args_bin = ["--port", "8080", "--headless", "--data-dir", "./data", "--resources-dir", "./resources"]
   delay = 1000
   exclude_dir = ["tmp", "frontend", "node_modules", ".go", ".git", "data", "resources", "dist", "vendor"]
   exclude_regex = ["_test\\.go$"]
@@ -15,9 +16,6 @@ tmp_dir = "tmp"
   log = "build-errors.log"
   send_interrupt = true
   stop_on_error = true
-
-[build.args_bin]
-  _ = ["--port", "8080", "--headless", "--data-dir", "./data", "--resources-dir", "./resources"]
 
 [color]
   build = "yellow"
