@@ -331,6 +331,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             transition="all 0.2s"
             boxShadow="none"
             mt={5}
+            onClick={() => onNavigate('partnership')}
           >
             The FEFA and Rewild Capital Partnership
           </Button>
@@ -394,7 +395,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 </Text>
               </Box> */}
               <Box style={buttonOverlayStyle}>
-                <Button {...outlinedButtonProps}>
+                <Button
+                  {...outlinedButtonProps}
+                  onClick={() => window.dispatchEvent(new Event('dt:start-viphya-demo'))}
+                >
                   Explore Shared Landscapes
                 </Button>
               </Box>
@@ -598,21 +602,21 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               flexShrink={0}
               p={3}
             >
-              <Image src={fefaLogog} w={150}  objectFit="contain" />
+              <a href='https://futureecosystemsafrica.org/' target="_blank"><Image src={fefaLogog} w={150}  objectFit="contain" /></a>
             </Box>
 
             <Box
               flexShrink={0}
               p={3}
             >
-              <Image src={rewildLogo} w={150}  objectFit="contain" />
+              <a href='https://rewild.org/' target="_blank"><Image src={rewildLogo} w={150}  objectFit="contain" /></a>
             </Box>
 
             <Box
               flexShrink={0}
               p={3}
             >
-              <Image src={kartozaLogo} w={280}  objectFit="contain" />
+              <a href='https://kartoza.com/' target="_blank"><Image src={kartozaLogo} w={280}  objectFit="contain" /></a>
             </Box>
           </Flex>
 

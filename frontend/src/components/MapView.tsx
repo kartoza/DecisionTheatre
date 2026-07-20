@@ -225,6 +225,15 @@ function normalizeBoundaryGeometry(geometry: GeoJSON.Geometry): GeoJSON.Geometry
   return stripped;
 }
 
+function padBoundsForFit(bounds: BoundingBox): [[number, number], [number, number]] {
+  const dx = (bounds.maxX - bounds.minX) * 0.1;
+  const dy = (bounds.maxY - bounds.minY) * 0.1;
+  return [
+    [bounds.minX - dx, bounds.minY - dy],
+    [bounds.maxX + dx, bounds.maxY + dy],
+  ];
+}
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const normalized = hex.trim().replace('#', '');
   if (normalized.length === 3) {
@@ -1875,27 +1884,31 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Zoom to site bounds with 10% padding
   const zoomToSite = useCallback(async (extraOptions?: Partial<maplibregl.FitBoundsOptions>) => {
-    const leftMap = leftMapRef.current;
-    if (!leftMap) return;
+    if (!leftMapRef.current) return;
 
     const resolvedBounds = await resolveSiteBounds();
     if (!resolvedBounds) return;
 
-    // Add 10% padding to bounds
-    const dx = (resolvedBounds.maxX - resolvedBounds.minX) * 0.1;
-    const dy = (resolvedBounds.maxY - resolvedBounds.minY) * 0.1;
+    const fit = () => {
+      const map = leftMapRef.current;
+      if (!map) return;
+      // Sync the canvas to the container's current size first: the site-open
+      // action that triggers this zoom also opens the control panel, which
+      // animates the container narrower over 0.3s. If the container is still
+      // mid-transition, fitBounds below would target the pre-transition size.
+      map.resize();
+      map.fitBounds(padBoundsForFit(resolvedBounds), {
+        padding: 50,
+        duration: 1000,
+        maxZoom: 14,
+        ...extraOptions,
+      });
+    };
 
-    const paddedBounds: [[number, number], [number, number]] = [
-      [resolvedBounds.minX - dx, resolvedBounds.minY - dy],
-      [resolvedBounds.maxX + dx, resolvedBounds.maxY + dy],
-    ];
-
-    leftMap.fitBounds(paddedBounds, {
-      padding: 50,
-      duration: 1000,
-      maxZoom: 14,
-      ...extraOptions,
-    });
+    fit();
+    // Re-fit once the panel transition above has settled, correcting any
+    // mis-fit from measuring the container mid-transition.
+    window.setTimeout(fit, 400);
   }, [resolveSiteBounds]);
 
   // Toggle 3D mode - smoothly ease pitch between 0 and 60 degrees
@@ -2924,7 +2937,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         applyZoomOutClipToBounds(rightMap, bounds);
       }
 
-      if (isQuad && siteId) {
+      if (siteId) {
         reapplyBoundaryLayers();
       }
     };
@@ -2954,7 +2967,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         resizeFrameRef.current = null;
       }
     };
-  }, [isQuad, siteId, reapplyBoundaryLayers]);
+  }, [siteId, reapplyBoundaryLayers]);
 
   // Toggle split-screen layout and slider visibility
   useEffect(() => {
@@ -3350,19 +3363,23 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           const bounds = site?.boundingBox;
           if (!bounds) return;
 
-          const dx = (bounds.maxX - bounds.minX) * 0.1;
-          const dy = (bounds.maxY - bounds.minY) * 0.1;
-
-          const paddedBounds: [[number, number], [number, number]] = [
-            [bounds.minX - dx, bounds.minY - dy],
-            [bounds.maxX + dx, bounds.maxY + dy],
-          ];
-
-          leftMap.fitBounds(paddedBounds, {
+          leftMap.resize();
+          leftMap.fitBounds(padBoundsForFit(bounds), {
             padding: 50,
             duration: 1000,
             maxZoom: 14,
           });
+          // Re-fit once the panel-open transition has settled, correcting any
+          // mis-fit from measuring the container mid-transition.
+          window.setTimeout(() => {
+            if (isBoundaryEditModeRef.current) return;
+            leftMapRef.current?.resize();
+            leftMapRef.current?.fitBounds(padBoundsForFit(bounds), {
+              padding: 50,
+              duration: 1000,
+              maxZoom: 14,
+            });
+          }, 400);
         };
 
         const geometry = site?.geometry;
@@ -3412,7 +3429,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   }, [siteId, siteGeometry, areMapsReady]);
 
   useEffect(() => {
-    if (!isQuad || !siteId) return;
+    if (!siteId) return;
     const timer = window.setTimeout(() => {
       reapplyBoundaryLayers();
     }, 700);
@@ -3420,7 +3437,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     return () => {
       window.clearTimeout(timer);
     };
-  }, [isQuad, siteId, reapplyBoundaryLayers]);
+  }, [siteId, reapplyBoundaryLayers]);
 
   // Zoom to site bounds when siteBounds changes (with 10% padding)
   useEffect(() => {
@@ -3429,22 +3446,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const zoomToBounds = () => {
       const leftMap = leftMapRef.current;
       if (!leftMap) return;
-
-      // Add 10% padding to bounds
-      const dx = (siteBounds.maxX - siteBounds.minX) * 0.1;
-      const dy = (siteBounds.maxY - siteBounds.minY) * 0.1;
-
-      const paddedBounds: [[number, number], [number, number]] = [
-        [siteBounds.minX - dx, siteBounds.minY - dy],
-        [siteBounds.maxX + dx, siteBounds.maxY + dy],
-      ];
-
-      leftMap.fitBounds(paddedBounds, {
+      // Sync the canvas to the container's current size first: opening a
+      // site also opens the control panel, which animates the container
+      // narrower over 0.3s. If still mid-transition, fitBounds below would
+      // target the pre-transition size and under/over-zoom.
+      leftMap.resize();
+      leftMap.fitBounds(padBoundsForFit(siteBounds), {
         padding: 50,
         duration: 1000,
         maxZoom: 14,
       });
     };
+
+    const cleanups: Array<() => void> = [];
 
     // If map is ready, zoom immediately; otherwise wait for load event
     const leftMap = leftMapRef.current;
@@ -3452,11 +3466,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       zoomToBounds();
     } else if (leftMap) {
       leftMap.once('load', zoomToBounds);
+      cleanups.push(() => leftMap.off('load', zoomToBounds));
     } else {
       // Map not created yet, use a short delay
       const timer = setTimeout(zoomToBounds, 500);
-      return () => clearTimeout(timer);
+      cleanups.push(() => clearTimeout(timer));
     }
+
+    // Re-fit once the panel transition above has settled, correcting any
+    // mis-fit from measuring the container mid-transition.
+    const settleTimer = window.setTimeout(zoomToBounds, 400);
+    cleanups.push(() => window.clearTimeout(settleTimer));
+
+    return () => cleanups.forEach((cleanup) => cleanup());
   }, [siteBounds]);
 
   // Store edit mode refs for event handlers

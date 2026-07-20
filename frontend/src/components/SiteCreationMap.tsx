@@ -205,6 +205,36 @@ function SiteCreationMap({
       mapRef.current = map;
       setIsMapReady(true);
 
+      // The shared basemap style doesn't include catchment boundary layers,
+      // so add them here — otherwise catchments are invisible under the
+      // ecoregion/country fills with nothing to select against.
+      if (!map.getLayer('Catchments Fill')) {
+        map.addLayer({
+          id: 'Catchments Fill',
+          type: 'fill',
+          source: 'UoW Tiles',
+          'source-layer': 'catchments_lev12',
+          minzoom: 8,
+          paint: {
+            'fill-color': 'rgba(60, 140, 180, 0.1)',
+            'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
+          },
+        });
+      }
+      if (!map.getLayer('Catchments Outlines')) {
+        map.addLayer({
+          id: 'Catchments Outlines',
+          type: 'line',
+          source: 'UoW Tiles',
+          'source-layer': 'catchments_lev12',
+          minzoom: 8,
+          paint: {
+            'line-color': 'rgba(60, 140, 180, 0.6)',
+            'line-width': 2.5,
+          },
+        });
+      }
+
       // Add a transparent fill layer for catchment selection (clickable area)
       // This must be added after the base style loads
       if (!map.getLayer('catchments-selectable-fill')) {
@@ -241,9 +271,14 @@ function SiteCreationMap({
             firstLayerId,
           );
         }
-        // Hide fill/background layers so satellite shows through at all zoom levels
+        // Hide fill/background layers so satellite shows through at all zoom levels.
+        // Skip catchments-selectable-fill: it's already invisible (opacity 0) and
+        // exists purely so click handlers can query it — hiding it would make
+        // maplibre exclude it from queryRenderedFeatures, silently breaking
+        // catchment selection while the (line-type) outlines stay visible.
         const hidden: string[] = [];
         for (const layer of map.getStyle()?.layers ?? []) {
+          if (layer.id === 'catchments-selectable-fill') continue;
           if (layer.type === 'fill' || layer.type === 'background') {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
             hidden.push(layer.id);

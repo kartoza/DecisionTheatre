@@ -8,6 +8,7 @@ import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
 import LandingPage from './components/LandingPage';
 import AboutPage from './components/AboutPage';
+import PartnershipPage from './components/PartnershipPage';
 import SitesPage from './components/SitesPage';
 import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
@@ -709,6 +710,24 @@ function App() {
         />
         <Box flex={1} overflow="auto">
           <AboutPage onNavigate={handleNavigate} />
+        </Box>
+        <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
+        <FeedbackLink />
+      </Flex>
+    );
+  }
+
+  if (currentPage === 'partnership') {
+    return (
+      <Flex direction="column" h="100vh" overflow="hidden">
+        <Header
+          onToggleDocs={onToggleDocs}
+          isDocsOpen={isDocsOpen}
+          onNavigate={handleNavigate}
+          currentPage={currentPage}
+        />
+        <Box flex={1} overflow="auto">
+          <PartnershipPage onNavigate={handleNavigate} />
         </Box>
         <DocsPanel isOpen={isDocsOpen} onClose={onCloseDocs} />
         <FeedbackLink />

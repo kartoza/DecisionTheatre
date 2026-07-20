@@ -55,7 +55,7 @@ export const DEFAULT_PANE_STATES: PaneStates = [
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'lowTC_prop' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'percBurned' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'CH4_both_kg_km2' },
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'fracGrazing' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'SOC_Mgha_0_30' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'herbs_tot_kgkm2' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'NPP_gm2' },
 ];
@@ -165,7 +165,7 @@ export type IdentifyResult = {
   data: Record<string, Record<string, number>>;
 } | null;
 
-export type AppPage = 'landing' | 'about' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators' | 'download' | 'setup';
+export type AppPage = 'landing' | 'about' | 'partnership' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators' | 'download' | 'setup';
 
 // Statistics for the visible zone (viewport)
 export interface ZoneStats {

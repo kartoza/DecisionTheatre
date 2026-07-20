@@ -5,6 +5,7 @@ import App from './App';
 import TourGuide from './components/TourGuide';
 import MunywanaDemoTour from './components/MunywanaDemoTour';
 import ShaiHillsDemoTour from './components/ShaiHillsDemoTour';
+import ViphyaDemoTour from './components/ViphyaDemoTour';
 import ErrorBoundary from './components/ErrorBoundary';
 import { theme } from './styles/theme';
 
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <TourGuide />
         <MunywanaDemoTour />
         <ShaiHillsDemoTour />
+        <ViphyaDemoTour />
       </ErrorBoundary>
     </ChakraProvider>
   </React.StrictMode>,
