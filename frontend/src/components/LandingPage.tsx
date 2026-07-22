@@ -491,6 +491,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 w="280px"
                 fontSize="sm"
                 fontWeight="semibold"
+                onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
                 _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
                 transition="all 0.2s"
                 boxShadow="md"
@@ -618,18 +619,6 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             >
               <a href='https://kartoza.com/' target="_blank"><Image src={kartozaLogo} w={280}  objectFit="contain" /></a>
             </Box>
-          </Flex>
-
-          <Flex justify="center" pb={6}>
-            <Button
-              variant="ghost"
-              size="sm"
-              color="whiteAlpha.600"
-              _hover={{ color: 'white' }}
-              onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
-            >
-              Take the tour
-            </Button>
           </Flex>
       </Box>
 

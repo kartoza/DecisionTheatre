@@ -118,8 +118,8 @@ const MIN_CATCHMENT_ZOOM = 7;
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-const MAX_FILL_OPACITY = 0.45;
-const CHOROPLETH_BASE_FILL_OPACITY = 0.45;
+const MAX_FILL_OPACITY = 0.80;
+const CHOROPLETH_BASE_FILL_OPACITY = 0.65;
 const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
 const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
 const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
@@ -934,12 +934,47 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const overlay = identifyOverlayRef.current;
     const lngLat = identifyOverlayLngLatRef.current;
     const leftMap = leftMapRef.current;
+    const mapContainer = mapContainerRef.current;
 
-    if (!overlay || !lngLat || !leftMap) return;
+    if (!overlay || !lngLat || !leftMap || !mapContainer) return;
 
     const projected = leftMap.project({ lng: lngLat[0], lat: lngLat[1] });
     overlay.style.left = `${projected.x}px`;
     overlay.style.top = `${projected.y}px`;
+
+    // Clamp the overlay so it always stays fully within the map container,
+    // even when the click point is near an edge (the overlay is centered
+    // above the point via a CSS transform, so it can otherwise overflow).
+    const margin = 8;
+    const containerWidth = mapContainer.clientWidth;
+    const containerHeight = mapContainer.clientHeight;
+    const containerRect = mapContainer.getBoundingClientRect();
+    const overlayRect = overlay.getBoundingClientRect();
+
+    const overlayLeft = overlayRect.left - containerRect.left;
+    const overlayRight = overlayRect.right - containerRect.left;
+    const overlayTop = overlayRect.top - containerRect.top;
+    const overlayBottom = overlayRect.bottom - containerRect.top;
+
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (overlayLeft < margin) {
+      offsetX = margin - overlayLeft;
+    } else if (overlayRight > containerWidth - margin) {
+      offsetX = containerWidth - margin - overlayRight;
+    }
+
+    if (overlayTop < margin) {
+      offsetY = margin - overlayTop;
+    } else if (overlayBottom > containerHeight - margin) {
+      offsetY = containerHeight - margin - overlayBottom;
+    }
+
+    if (offsetX !== 0 || offsetY !== 0) {
+      overlay.style.left = `${projected.x + offsetX}px`;
+      overlay.style.top = `${projected.y + offsetY}px`;
+    }
   }, []);
 
   // Debounce timer for choropleth fetching
@@ -2033,7 +2068,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           for (const [text, align] of [['Attribute', 'left'], ['Reference', 'right'], ['Current', 'right'], ['Departure from ref.', 'left']] as const) {
             const th = document.createElement('th');
             th.textContent = text;
-            th.style.cssText = `text-align:${align};padding:4px 6px;color:#CBD5E0;`;
+            th.style.cssText = `text-align:${align};padding:4px 6px;color:#CBD5E0;position:sticky;top:0;background:#1A202C;z-index:1;`;
             headerRow.appendChild(th);
           }
           table.appendChild(headerRow);
@@ -2248,24 +2283,40 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           attrHead.style.textAlign = 'left';
           attrHead.style.padding = '4px 6px';
           attrHead.style.color = '#CBD5E0';
+          attrHead.style.position = 'sticky';
+          attrHead.style.top = '0';
+          attrHead.style.background = '#1A202C';
+          attrHead.style.zIndex = '1';
 
           const leftHead = document.createElement('th');
           leftHead.textContent = leftLabel;
           leftHead.style.textAlign = 'right';
           leftHead.style.padding = '4px 6px';
           leftHead.style.color = '#CBD5E0';
+          leftHead.style.position = 'sticky';
+          leftHead.style.top = '0';
+          leftHead.style.background = '#1A202C';
+          leftHead.style.zIndex = '1';
 
           const rightHead = document.createElement('th');
           rightHead.textContent = rightLabel;
           rightHead.style.textAlign = 'right';
           rightHead.style.padding = '4px 6px';
           rightHead.style.color = '#CBD5E0';
+          rightHead.style.position = 'sticky';
+          rightHead.style.top = '0';
+          rightHead.style.background = '#1A202C';
+          rightHead.style.zIndex = '1';
 
           const trendHead = document.createElement('th');
           trendHead.textContent = 'Departure from reference';
           trendHead.style.textAlign = 'left';
           trendHead.style.padding = '4px 6px';
           trendHead.style.color = '#CBD5E0';
+          trendHead.style.position = 'sticky';
+          trendHead.style.top = '0';
+          trendHead.style.background = '#1A202C';
+          trendHead.style.zIndex = '1';
 
           headerRow.appendChild(attrHead);
           headerRow.appendChild(leftHead);

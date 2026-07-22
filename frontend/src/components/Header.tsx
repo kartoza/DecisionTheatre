@@ -51,10 +51,10 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
     >
       <HStack spacing={3}>
         <img 
-        style={{width: "100px"}}
+        style={{width: "110px"}}
         src={fefaLogo} alt="FEFA Logo" />
         <img 
-        style={{width: "100px"}}
+        style={{width: "80px"}}
         src={rewildLogo} alt="Rewild Capital Logo" />
         {/* Site title - show when viewing a site */}
         {siteTitle && (currentPage === 'map' || currentPage === 'indicators') && (

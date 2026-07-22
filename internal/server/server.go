@@ -161,6 +161,12 @@ func (s *Server) setupRoutes() {
 	s.router.PathPrefix("/data/walkthroughs/").Handler(
 		http.StripPrefix("/data/walkthroughs/", http.FileServer(http.Dir(walkthroughsDir))))
 
+	// Serve demo assets (e.g. the Munywana boundary shapefile used by the
+	// guided tour) from the data/demo directory.
+	demoDir := filepath.Join(s.cfg.DataDir, "demo")
+	s.router.PathPrefix("/data/demo/").Handler(
+		http.StripPrefix("/data/demo/", http.FileServer(http.Dir(demoDir))))
+
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
 	if err != nil {

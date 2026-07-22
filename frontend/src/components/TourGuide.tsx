@@ -186,10 +186,21 @@ export default function TourGuide() {
   const [visible, setVisible] = useState(false);
   const [demoStatus, setDemoStatus] = useState<{ message: string; pct: number } | null>(null);
   const dragControls = useDragControls();
+  const siteCountAtBoundaryStepRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem(TOUR_SEEN_KEY)) setVisible(true);
   }, []);
+
+  // Snapshot how many sites exist as the user arrives at the "Define Your
+  // Boundary" step, so we can tell on Next whether they actually created one.
+  useEffect(() => {
+    if (step !== DEFINE_BOUNDARY_STEP || !visible) return;
+    siteCountAtBoundaryStepRef.current = null;
+    listSites()
+      .then((sites) => { siteCountAtBoundaryStepRef.current = sites.length; })
+      .catch(() => { siteCountAtBoundaryStepRef.current = null; });
+  }, [step, visible]);
 
   useEffect(() => {
     const handler = () => {
@@ -231,7 +242,9 @@ export default function TourGuide() {
     if (currentStep === DEFINE_BOUNDARY_STEP) {
       try {
         const sites = await listSites();
-        if (sites.length === 0) {
+        const baseline = siteCountAtBoundaryStepRef.current;
+        const siteWasCreated = baseline !== null && sites.length > baseline;
+        if (!siteWasCreated) {
           setDemoStatus({ message: 'Fetching demo shapefile…', pct: 15 });
 
           const resp = await fetch('/data/demo/Munywana_dissolved_fixed.zip');
