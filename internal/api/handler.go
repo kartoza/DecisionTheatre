@@ -602,6 +602,13 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// zoom is optional; callers that omit it (or send a non-numeric value)
+	// get full-detail geometry, matching the pre-existing behaviour.
+	zoom, err := strconv.ParseFloat(q.Get("zoom"), 64)
+	if err != nil {
+		zoom = geodata.DetailZoomThreshold
+	}
+
 	// For the future/target scenario with a known site, build a lookup of
 	// per-catchment ideal values so the choropleth shows user-edited targets.
 	siteID := q.Get("siteId")
@@ -631,9 +638,17 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		queryScenario = "reference"
 	}
 
-	// Query catchments
+	// Query catchments. valuesOnly requests bypass the zoom-based render paths
+	// entirely: they're used for statistics that need true full-dataset
+	// accuracy (and, for site stats, real per-catchment HYBAS_ID to filter by)
+	// rather than a bounded, renderable feature count.
 	queryStart := time.Now()
-	fc, err := h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy)
+	var fc *geodata.FeatureCollection
+	if q.Get("valuesOnly") == "1" {
+		fc, err = h.gpkgStore.QueryCatchmentValues(queryScenario, attribute, minx, miny, maxx, maxy)
+	} else {
+		fc, err = h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy, zoom)
+	}
 	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
 		if fc != nil {
 			return len(fc.Features)

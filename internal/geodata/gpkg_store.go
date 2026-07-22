@@ -25,7 +25,19 @@ type GpkgStore struct {
 	columns    []string
 	mu         sync.RWMutex
 	idColCache sync.Map // tableName -> idColumnName string
+
+	// gridGeometryCache holds the dissolved geometry for each low-zoom
+	// choropleth grid cell (see gridCellSizeDegrees), keyed by cell. It is
+	// independent of scenario/attribute - only the per-request value join
+	// changes - so it is computed once in the background and reused for
+	// every grid-aggregated choropleth request.
+	gridGeometryCache map[gridCellKey]json.RawMessage
+	gridGeometryReady chan struct{}
+	gridGeometryOnce  sync.Once
 }
+
+// gridCellKey identifies one cell of the low-zoom choropleth aggregation grid.
+type gridCellKey struct{ gx, gy int64 }
 
 // CatchmentFeature represents a single catchment with geometry and attributes
 type CatchmentFeature struct {
@@ -64,14 +76,20 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	}
 
 	store := &GpkgStore{
-		db:      db,
-		dataDir: dataDir,
+		db:                db,
+		dataDir:           dataDir,
+		gridGeometryReady: make(chan struct{}),
 	}
 
 	// Load column names from scenario_current
 	if err := store.loadColumns(); err != nil {
 		log.Printf("Warning: could not load columns: %v", err)
 	}
+
+	// Start building the low-zoom choropleth grid geometry cache in the
+	// background so it's typically warm by the time a user zooms out far
+	// enough to need it (see queryCatchmentsGridAggregated).
+	store.ensureGridGeometryCache()
 
 	return store, nil
 }
@@ -329,11 +347,40 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 	return result, nil
 }
 
-// QueryCatchments returns catchments within a bounding box with a specific attribute
-func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+// DetailZoomThreshold is retained for logging/observability only; it no longer
+// selects the render path (see QueryCatchments).
+const DetailZoomThreshold = 5.0
+
+// maxDetailedFeatures is the most per-catchment features QueryCatchments will
+// ever return as full detailed geometry. A fixed zoom threshold isn't a
+// reliable proxy for "how many catchments does this bbox match" - dense
+// regions (e.g. mountainous or forested areas with many small catchments) can
+// exceed a feature-count budget at a zoom level that's perfectly safe
+// elsewhere. Deciding on the actual match count instead guarantees every
+// catchment in view is represented (falling back to the grid-aggregated
+// choropleth rather than silently truncating and leaving gaps).
+const maxDetailedFeatures = 10000
+
+// gridCellSizeDegrees is the size of the lat/long cell used to aggregate
+// catchments when a bbox matches more than maxDetailedFeatures catchments.
+// Catchments falling in the same cell are dissolved into a single feature
+// (their simplified geometries unioned together) whose value is the
+// SUB_AREA-weighted average of its members, so the area is still fully
+// covered but with far fewer features, and the cell outline follows real
+// catchment boundaries instead of a plain square.
+const gridCellSizeDegrees = 0.5
+
+// QueryCatchments returns catchments within a bounding box with a specific
+// attribute. If the bbox matches at most maxDetailedFeatures catchments it
+// returns full per-catchment geometry; otherwise it falls back to a
+// grid-aggregated choropleth (see gridCellSizeDegrees) so a densely-catchmented
+// area never gets silently truncated into a gappy render.
+func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx, maxy, zoom float64) (*FeatureCollection, error) {
 	start := time.Now()
+	var path string
+	var matched int
 	defer func() {
-		log.Printf("[perf] QueryCatchments scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
+		log.Printf("[perf] QueryCatchments scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] zoom=%.1f matched=%d path=%s duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, zoom, matched, path, time.Since(start).Milliseconds())
 	}()
 
 	// Validate scenario
@@ -344,10 +391,51 @@ func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
 
+	matched, err := s.countCatchmentsInBounds(tableName, minx, miny, maxx, maxy)
+	if err != nil {
+		return nil, err
+	}
+
+	if matched <= maxDetailedFeatures {
+		path = "detailed"
+		return s.queryCatchmentsDetailed(tableName, attribute, minx, miny, maxx, maxy)
+	}
+	path = "aggregated"
+	return s.queryCatchmentsGridAggregated(tableName, attribute, minx, miny, maxx, maxy)
+}
+
+// countCatchmentsInBounds counts how many rows queryCatchmentsDetailed would
+// return for this bbox - same FROM/JOIN/WHERE, minus the geometry/value
+// columns - so QueryCatchments can decide the render path from an exact
+// count rather than an approximation. Cheap enough to run on every request:
+// no geometry parsing, just an indexed bbox lookup and a join.
+func (s *GpkgStore) countCatchmentsInBounds(tableName string, minx, miny, maxx, maxy float64) (int, error) {
+	query := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM catchments_lev12 c
+		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
+		WHERE c.geojson IS NOT NULL
+		  AND c.fid IN (
+			SELECT id FROM rtree_catchments_lev12_geom
+			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
+		  )
+	`, tableName)
+
+	var count int
+	if err := s.db.QueryRow(query, maxx, minx, maxy, miny).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count query failed: %w", err)
+	}
+	return count, nil
+}
+
+// queryCatchmentsDetailed returns one feature per catchment with full-detail geometry.
+func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	// Use pre-computed geojson column - much faster than WKB conversion
 	// Only select the fields we need (no geometry blob)
 	// Use integer columns for faster index-based joins
-	// Limit to 2000 features for performance (frontend should zoom in for more detail)
+	// The caller (QueryCatchments) has already confirmed the bbox matches at
+	// most maxDetailedFeatures catchments; this LIMIT is just a defensive cap,
+	// not the mechanism that decides detailed vs. aggregated.
 	query := fmt.Sprintf(`
 		SELECT
 			c.HYBAS_ID,
@@ -360,10 +448,10 @@ func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx
 			SELECT id FROM rtree_catchments_lev12_geom
 			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
 		  )
-		LIMIT 2000
+		LIMIT ?
 	`, attribute, tableName)
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	rows, err := s.db.Query(query, maxx, minx, maxy, miny, maxDetailedFeatures)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -397,6 +485,231 @@ func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx
 			ID:         int64(id),
 			Geometry:   json.RawMessage(geojsonStr),
 			Properties: props,
+		})
+	}
+
+	return &FeatureCollection{
+		Type:     "FeatureCollection",
+		Features: features,
+	}, nil
+}
+
+// QueryCatchmentValues returns every catchment's attribute value within a bounding
+// box, with no geometry and no LIMIT. It exists for statistics (min/max/mean/count)
+// where accuracy across the true full dataset matters and per-catchment HYBAS_ID is
+// required (e.g. filtering to a site's catchments), unlike QueryCatchments' render
+// paths, which trade some accuracy/detail for a bounded, renderable feature count.
+// Callers never hand this to a map source, so shipping one feature per catchment
+// (with a null geometry) doesn't carry the rendering cost that motivated those
+// other paths.
+func (s *GpkgStore) QueryCatchmentValues(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] QueryCatchmentValues scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
+	}()
+
+	tableName := resolveScenarioTable(scenario)
+	if !s.isValidColumn(attribute) {
+		return nil, fmt.Errorf("invalid attribute: %s", attribute)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT c.HYBAS_ID, s."%s" as value
+		FROM catchments_lev12 c
+		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
+		WHERE s."%s" IS NOT NULL
+		  AND c.fid IN (
+			SELECT id FROM rtree_catchments_lev12_geom
+			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
+		  )
+	`, attribute, tableName, attribute)
+
+	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	features := []GeoJSONFeature{}
+	for rows.Next() {
+		var id, value float64
+		if err := rows.Scan(&id, &value); err != nil {
+			log.Printf("Warning: failed to scan row: %v", err)
+			continue
+		}
+
+		features = append(features, GeoJSONFeature{
+			Type:     "Feature",
+			ID:       int64(id),
+			Geometry: json.RawMessage("null"),
+			Properties: map[string]interface{}{
+				"HYBAS_ID": int64(id),
+				attribute:  value,
+			},
+		})
+	}
+
+	return &FeatureCollection{
+		Type:     "FeatureCollection",
+		Features: features,
+	}, nil
+}
+
+// ensureGridGeometryCache kicks off buildGridGeometryCache exactly once. Safe
+// to call from every request; only the first call actually starts the build.
+func (s *GpkgStore) ensureGridGeometryCache() {
+	s.gridGeometryOnce.Do(func() {
+		go s.buildGridGeometryCache()
+	})
+}
+
+// buildGridGeometryCache dissolves every catchment's simplified geometry into
+// its gridCellSizeDegrees cell, once for the lifetime of the store. This is
+// the expensive part of grid aggregation (~150k small polygon unions); doing
+// it here means a choropleth request only has to do a cheap SQL aggregation
+// over attribute values and look up the matching pre-built geometry.
+func (s *GpkgStore) buildGridGeometryCache() {
+	start := time.Now()
+	defer close(s.gridGeometryReady)
+
+	rows, err := s.db.Query(`
+		SELECT lat, long, geojson_simplified
+		FROM catchments_lev12
+		WHERE lat IS NOT NULL AND long IS NOT NULL AND geojson_simplified IS NOT NULL
+	`)
+	if err != nil {
+		log.Printf("Warning: failed to build grid geometry cache: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	polygonsByCell := make(map[gridCellKey][]polyclip.Polygon)
+	for rows.Next() {
+		var lat, long float64
+		var geojsonStr string
+		if err := rows.Scan(&lat, &long, &geojsonStr); err != nil {
+			continue
+		}
+
+		key := gridCellKey{
+			gx: int64(math.Floor(long / gridCellSizeDegrees)),
+			gy: int64(math.Floor(lat / gridCellSizeDegrees)),
+		}
+		polys, err := geometryRawToPolygons(json.RawMessage(geojsonStr))
+		if err != nil {
+			continue
+		}
+		polygonsByCell[key] = append(polygonsByCell[key], polys...)
+	}
+
+	cache := make(map[gridCellKey]json.RawMessage, len(polygonsByCell))
+	for key, polys := range polygonsByCell {
+		if len(polys) == 0 {
+			continue
+		}
+
+		dissolved := polys[0]
+		for i := 1; i < len(polys); i++ {
+			dissolved = dissolved.Construct(polyclip.UNION, polys[i])
+		}
+
+		geometryJSON, _, err := polyclipPolygonToGeoJSON(dissolved)
+		if err != nil {
+			continue
+		}
+		cache[key] = geometryJSON
+	}
+
+	s.mu.Lock()
+	s.gridGeometryCache = cache
+	s.mu.Unlock()
+
+	log.Printf("[perf] grid geometry cache built: %d cells in %dms", len(cache), time.Since(start).Milliseconds())
+}
+
+// queryCatchmentsGridAggregated bins catchments into gridCellSizeDegrees cells and
+// returns one feature per populated cell: the pre-dissolved union of its members'
+// simplified geometries (see buildGridGeometryCache), coloured by the
+// SUB_AREA-weighted average of the attribute across those members. Unioning keeps
+// the cell's outline following real catchment boundaries (rather than a plain
+// square), while still cutting the feature count the same ~20x a synthetic grid
+// would.
+func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+	s.ensureGridGeometryCache()
+	<-s.gridGeometryReady
+
+	s.mu.RLock()
+	geometryCache := s.gridGeometryCache
+	s.mu.RUnlock()
+
+	query := fmt.Sprintf(`
+		SELECT c.lat, c.long, c.SUB_AREA, s."%s" as value
+		FROM catchments_lev12 c
+		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
+		WHERE s."%s" IS NOT NULL
+		  AND c.lat IS NOT NULL AND c.long IS NOT NULL
+		  AND c.SUB_AREA IS NOT NULL AND c.SUB_AREA > 0
+		  AND c.fid IN (
+			SELECT id FROM rtree_catchments_lev12_geom
+			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
+		  )
+	`, attribute, tableName, attribute)
+
+	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	type cellAccumulator struct {
+		weightedSum float64
+		totalArea   float64
+		count       int
+	}
+	cells := make(map[gridCellKey]*cellAccumulator)
+
+	for rows.Next() {
+		var lat, long, area, value float64
+		if err := rows.Scan(&lat, &long, &area, &value); err != nil {
+			log.Printf("Warning: failed to scan row: %v", err)
+			continue
+		}
+
+		key := gridCellKey{
+			gx: int64(math.Floor(long / gridCellSizeDegrees)),
+			gy: int64(math.Floor(lat / gridCellSizeDegrees)),
+		}
+		acc, ok := cells[key]
+		if !ok {
+			acc = &cellAccumulator{}
+			cells[key] = acc
+		}
+		acc.weightedSum += value * area
+		acc.totalArea += area
+		acc.count++
+	}
+
+	features := make([]GeoJSONFeature, 0, len(cells))
+	var nextID int64
+	for key, acc := range cells {
+		if acc.totalArea <= 0 {
+			continue
+		}
+		geometryJSON, ok := geometryCache[key]
+		if !ok {
+			continue
+		}
+		nextID++
+
+		features = append(features, GeoJSONFeature{
+			Type:     "Feature",
+			ID:       nextID,
+			Geometry: geometryJSON,
+			Properties: map[string]interface{}{
+				attribute:        acc.weightedSum / acc.totalArea,
+				"aggregated":     true,
+				"catchmentCount": acc.count,
+			},
 		})
 	}
 
@@ -1260,7 +1573,7 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 	overlapStart := time.Now()
 
 	type intersectResult struct {
-		id  string
+		id   string
 		frac float64
 	}
 

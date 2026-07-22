@@ -112,8 +112,12 @@ export const PRISM_CSS_GRADIENT =
 const CATCHMENT_ID_PROP = 'HYBAS_ID';
 
 // Minimum zoom level at which catchment choropleth layers are displayed.
-// Set to 7 to ensure reasonable performance - lower zooms fetch too many features.
-const MIN_CATCHMENT_ZOOM = 7;
+// Below the backend's DetailZoomThreshold (internal/geodata/gpkg_store.go),
+// requests get a grid-aggregated choropleth instead of per-catchment geometry,
+// so the full continent can be shown even at low zoom without a feature-count
+// blowup - the actual zoom value is always forwarded, so the crossover is
+// controlled entirely on the backend.
+const MIN_CATCHMENT_ZOOM = 3;
 
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
@@ -262,10 +266,14 @@ interface ChoroplethData {
   features: Array<{
     type: string;
     id: number;
-    geometry: object;
+    // null for valuesOnly (stats) fetches - see QueryCatchmentValues in gpkg_store.go.
+    geometry: object | null;
     properties: {
-      HYBAS_ID: number;
-      [key: string]: number;
+      // Absent on grid-aggregated features (continent-scale zoom, see
+      // DetailZoomThreshold in gpkg_store.go), which represent a cell
+      // spanning many catchments rather than a single one.
+      HYBAS_ID?: number;
+      [key: string]: number | boolean | undefined;
     };
   }>;
   // Domain min/max values for consistent color scaling across scenarios
@@ -633,8 +641,10 @@ async function fetchChoroplethData(
   scenario: Scenario,
   attribute: string,
   bounds: maplibregl.LngLatBounds,
+  zoom: number,
   siteId?: string | null,
-  idealOverrides?: Map<number, number>
+  idealOverrides?: Map<number, number>,
+  valuesOnly = false
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -646,7 +656,15 @@ async function fetchChoroplethData(
     miny: sw.lat.toString(),
     maxx: ne.lng.toString(),
     maxy: ne.lat.toString(),
+    zoom: zoom.toString(),
   });
+
+  // valuesOnly bypasses zoom-based aggregation/truncation server-side entirely -
+  // used for stats that need every real catchment value and HYBAS_ID (e.g. site
+  // stats filter by catchment ID), not a render-sized sample.
+  if (valuesOnly) {
+    params.set('valuesOnly', '1');
+  }
 
   const hasSiteOverride = siteId && scenario === 'future';
   if (hasSiteOverride) {
@@ -686,6 +704,7 @@ async function fetchChoroplethData(
     // ideal overrides client-side for the future scenario.
     if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
       for (const feature of data.features) {
+        if (feature.properties.HYBAS_ID === undefined) continue;
         const val = idealOverrides.get(feature.properties.HYBAS_ID);
         if (val !== undefined) {
           feature.properties[attribute] = val;
@@ -1066,8 +1085,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
-        fetchChoroplethData(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides),
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
       ]);
 
       let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
@@ -1245,9 +1264,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     const fetchFullStats = async () => {
       try {
+        // These stats must reflect the true full dataset, not a render-sized
+        // sample/aggregate, so fetch every catchment's raw value regardless of
+        // viewport zoom (zoom argument is ignored server-side in this mode).
         const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds),
+          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
+          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
         ]);
 
         if (cancelled) return;
@@ -1489,9 +1511,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       try {
+        // filterDatasetByCatchmentIds below needs a real HYBAS_ID per feature,
+        // and the AOI-weighted stats need every matching catchment's raw value -
+        // the grid-aggregated render path can supply neither, so fetch true
+        // per-catchment values regardless of viewport zoom.
         const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, siteId, siteIdealOverrides),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, siteId, siteIdealOverrides),
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
