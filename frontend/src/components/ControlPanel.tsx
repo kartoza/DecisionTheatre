@@ -803,35 +803,6 @@ function ControlPanel({
             </Box>
           )}
 
-          {viewMode !== 'dial' && !hideScenarioSelectors && (
-            <>
-              {/* Scenario 1 (Left) */}
-              <ScenarioSelector
-                label="Scenario 1"
-                value={comparison.leftScenario}
-                onChange={onLeftChange}
-                side="left"
-                zoneStats={leftZoneStats}
-                hideLabel={isSiteAggregationActive}
-                zoneStatsLabel={zoneStatsLabel}
-              />
-
-              {/* Scenario 2 (Right) */}
-              {isSwiperEnabled && !isSiteAggregationActive && (
-                <ScenarioSelector
-                  label="Scenario 2"
-                  value={comparison.rightScenario}
-                  onChange={onRightChange}
-                  side="right"
-                  zoneStats={rightZoneStats}
-                  zoneStatsLabel={zoneStatsLabel}
-                />
-              )}
-            </>
-          )}
-
-          {viewMode !== 'dial' && <Divider />}
-
           {/* Parent Group selector — chart view only */}
           {viewMode === 'chart' && (
             <Box
@@ -1080,6 +1051,35 @@ function ControlPanel({
                 </Text>
               )}
             </Box>
+          )}
+
+          {viewMode !== 'dial' && <Divider />}
+
+          {viewMode !== 'dial' && !hideScenarioSelectors && (
+            <>
+              {/* Scenario 1 (Left) */}
+              <ScenarioSelector
+                label="Scenario 1"
+                value={comparison.leftScenario}
+                onChange={onLeftChange}
+                side="left"
+                zoneStats={leftZoneStats}
+                hideLabel={isSiteAggregationActive}
+                zoneStatsLabel={zoneStatsLabel}
+              />
+
+              {/* Scenario 2 (Right) */}
+              {isSwiperEnabled && !isSiteAggregationActive && (
+                <ScenarioSelector
+                  label="Scenario 2"
+                  value={comparison.rightScenario}
+                  onChange={onRightChange}
+                  side="right"
+                  zoneStats={rightZoneStats}
+                  zoneStatsLabel={zoneStatsLabel}
+                />
+              )}
+            </>
           )}
 
           <Divider />

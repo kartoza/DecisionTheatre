@@ -26,12 +26,12 @@ type GpkgStore struct {
 	mu         sync.RWMutex
 	idColCache sync.Map // tableName -> idColumnName string
 
-	// gridGeometryCache holds the dissolved geometry for each low-zoom
-	// choropleth grid cell (see gridCellSizeDegrees), keyed by cell. It is
-	// independent of scenario/attribute - only the per-request value join
-	// changes - so it is computed once in the background and reused for
-	// every grid-aggregated choropleth request.
-	gridGeometryCache map[gridCellKey]json.RawMessage
+	// gridGeometryCache holds the dissolved geometry for each cell of each
+	// aggregation resolution tier (see gridTiersDegrees), keyed by tier size
+	// then cell. It is independent of scenario/attribute - only the
+	// per-request value join changes - so it is computed once in the
+	// background and reused for every grid-aggregated choropleth request.
+	gridGeometryCache map[float64]map[gridCellKey]json.RawMessage
 	gridGeometryReady chan struct{}
 	gridGeometryOnce  sync.Once
 }
@@ -361,14 +361,22 @@ const DetailZoomThreshold = 5.0
 // choropleth rather than silently truncating and leaving gaps).
 const maxDetailedFeatures = 10000
 
-// gridCellSizeDegrees is the size of the lat/long cell used to aggregate
-// catchments when a bbox matches more than maxDetailedFeatures catchments.
-// Catchments falling in the same cell are dissolved into a single feature
-// (their simplified geometries unioned together) whose value is the
-// SUB_AREA-weighted average of its members, so the area is still fully
-// covered but with far fewer features, and the cell outline follows real
-// catchment boundaries instead of a plain square.
-const gridCellSizeDegrees = 0.5
+// gridTiersDegrees lists the aggregation cell sizes available when a bbox
+// matches more than maxDetailedFeatures catchments, finest first. Catchments
+// falling in the same cell are dissolved into a single feature (their
+// simplified geometries unioned together) whose value is the SUB_AREA-weighted
+// average of its members. queryCatchmentsGridAggregated picks the finest tier
+// whose resulting cell count for the *current* bbox stays within
+// gridRenderBudget: a small, sparse view gets a fine grid that reads almost
+// like the true catchment texture, while only a genuinely continent-scale
+// view falls back to the coarsest tier. Every tier fully covers the area (no
+// gaps) and its cell outlines follow real catchment boundaries rather than a
+// plain square.
+var gridTiersDegrees = []float64{0.08, 0.2, 0.5}
+
+// gridRenderBudget caps how many aggregated features a single choropleth
+// response may contain, mirroring maxDetailedFeatures for the render path.
+const gridRenderBudget = 8000
 
 // QueryCatchments returns catchments within a bounding box with a specific
 // attribute. If the bbox matches at most maxDetailedFeatures catchments it
@@ -563,11 +571,21 @@ func (s *GpkgStore) ensureGridGeometryCache() {
 	})
 }
 
+// gridCellKeyFor returns the cell a catchment at (lat, long) falls into at
+// the given tier's cell size.
+func gridCellKeyFor(lat, long, cellSizeDegrees float64) gridCellKey {
+	return gridCellKey{
+		gx: int64(math.Floor(long / cellSizeDegrees)),
+		gy: int64(math.Floor(lat / cellSizeDegrees)),
+	}
+}
+
 // buildGridGeometryCache dissolves every catchment's simplified geometry into
-// its gridCellSizeDegrees cell, once for the lifetime of the store. This is
-// the expensive part of grid aggregation (~150k small polygon unions); doing
-// it here means a choropleth request only has to do a cheap SQL aggregation
-// over attribute values and look up the matching pre-built geometry.
+// its cell, for every tier in gridTiersDegrees, once for the lifetime of the
+// store. This is the expensive part of grid aggregation (~150k small polygon
+// unions per tier); doing it here means a choropleth request only has to do a
+// cheap SQL aggregation over attribute values and look up the matching
+// pre-built geometry.
 func (s *GpkgStore) buildGridGeometryCache() {
 	start := time.Now()
 	defer close(s.gridGeometryReady)
@@ -583,7 +601,11 @@ func (s *GpkgStore) buildGridGeometryCache() {
 	}
 	defer rows.Close()
 
-	polygonsByCell := make(map[gridCellKey][]polyclip.Polygon)
+	polygonsByTierCell := make(map[float64]map[gridCellKey][]polyclip.Polygon, len(gridTiersDegrees))
+	for _, tier := range gridTiersDegrees {
+		polygonsByTierCell[tier] = make(map[gridCellKey][]polyclip.Polygon)
+	}
+
 	for rows.Next() {
 		var lat, long float64
 		var geojsonStr string
@@ -591,56 +613,61 @@ func (s *GpkgStore) buildGridGeometryCache() {
 			continue
 		}
 
-		key := gridCellKey{
-			gx: int64(math.Floor(long / gridCellSizeDegrees)),
-			gy: int64(math.Floor(lat / gridCellSizeDegrees)),
-		}
 		polys, err := geometryRawToPolygons(json.RawMessage(geojsonStr))
-		if err != nil {
+		if err != nil || len(polys) == 0 {
 			continue
 		}
-		polygonsByCell[key] = append(polygonsByCell[key], polys...)
+		for _, tier := range gridTiersDegrees {
+			key := gridCellKeyFor(lat, long, tier)
+			polygonsByTierCell[tier][key] = append(polygonsByTierCell[tier][key], polys...)
+		}
 	}
 
-	cache := make(map[gridCellKey]json.RawMessage, len(polygonsByCell))
-	for key, polys := range polygonsByCell {
-		if len(polys) == 0 {
-			continue
+	cache := make(map[float64]map[gridCellKey]json.RawMessage, len(gridTiersDegrees))
+	for _, tier := range gridTiersDegrees {
+		tierPolygons := polygonsByTierCell[tier]
+		tierCache := make(map[gridCellKey]json.RawMessage, len(tierPolygons))
+
+		for key, polys := range tierPolygons {
+			if len(polys) == 0 {
+				continue
+			}
+
+			dissolved := polys[0]
+			for i := 1; i < len(polys); i++ {
+				dissolved = dissolved.Construct(polyclip.UNION, polys[i])
+			}
+
+			geometryJSON, _, err := polyclipPolygonToGeoJSON(dissolved)
+			if err != nil {
+				continue
+			}
+			tierCache[key] = geometryJSON
 		}
 
-		dissolved := polys[0]
-		for i := 1; i < len(polys); i++ {
-			dissolved = dissolved.Construct(polyclip.UNION, polys[i])
-		}
-
-		geometryJSON, _, err := polyclipPolygonToGeoJSON(dissolved)
-		if err != nil {
-			continue
-		}
-		cache[key] = geometryJSON
+		cache[tier] = tierCache
+		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells", tier, len(tierCache))
 	}
 
 	s.mu.Lock()
 	s.gridGeometryCache = cache
 	s.mu.Unlock()
 
-	log.Printf("[perf] grid geometry cache built: %d cells in %dms", len(cache), time.Since(start).Milliseconds())
+	log.Printf("[perf] grid geometry cache built: %d tiers in %dms", len(gridTiersDegrees), time.Since(start).Milliseconds())
 }
 
-// queryCatchmentsGridAggregated bins catchments into gridCellSizeDegrees cells and
-// returns one feature per populated cell: the pre-dissolved union of its members'
-// simplified geometries (see buildGridGeometryCache), coloured by the
-// SUB_AREA-weighted average of the attribute across those members. Unioning keeps
-// the cell's outline following real catchment boundaries (rather than a plain
-// square), while still cutting the feature count the same ~20x a synthetic grid
-// would.
+// queryCatchmentsGridAggregated bins catchments into the finest gridTiersDegrees
+// cell size the current bbox can afford (see gridRenderBudget) and returns one
+// feature per populated cell: the pre-dissolved union of its members' simplified
+// geometries (see buildGridGeometryCache), coloured by the SUB_AREA-weighted
+// average of the attribute across those members. Unioning keeps the cell's
+// outline following real catchment boundaries (rather than a plain square), and
+// picking the finest affordable tier keeps the choropleth as close to the true
+// catchment texture as the feature budget allows - only a genuinely
+// continent-scale view is forced down to the coarsest tier.
 func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	s.ensureGridGeometryCache()
 	<-s.gridGeometryReady
-
-	s.mu.RLock()
-	geometryCache := s.gridGeometryCache
-	s.mu.RUnlock()
 
 	query := fmt.Sprintf(`
 		SELECT c.lat, c.long, c.SUB_AREA, s."%s" as value
@@ -661,33 +688,51 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 	}
 	defer rows.Close()
 
+	type catchmentRow struct{ lat, long, area, value float64 }
+	var catchmentRows []catchmentRow
+	for rows.Next() {
+		var r catchmentRow
+		if err := rows.Scan(&r.lat, &r.long, &r.area, &r.value); err != nil {
+			log.Printf("Warning: failed to scan row: %v", err)
+			continue
+		}
+		catchmentRows = append(catchmentRows, r)
+	}
+
 	type cellAccumulator struct {
 		weightedSum float64
 		totalArea   float64
 		count       int
 	}
-	cells := make(map[gridCellKey]*cellAccumulator)
 
-	for rows.Next() {
-		var lat, long, area, value float64
-		if err := rows.Scan(&lat, &long, &area, &value); err != nil {
-			log.Printf("Warning: failed to scan row: %v", err)
-			continue
+	// Try tiers finest-to-coarsest; use the first whose cell count fits the
+	// budget, falling back to the coarsest (last) tier regardless.
+	var chosenTier float64
+	var cells map[gridCellKey]*cellAccumulator
+	for i, tier := range gridTiersDegrees {
+		candidate := make(map[gridCellKey]*cellAccumulator)
+		for _, r := range catchmentRows {
+			key := gridCellKeyFor(r.lat, r.long, tier)
+			acc, ok := candidate[key]
+			if !ok {
+				acc = &cellAccumulator{}
+				candidate[key] = acc
+			}
+			acc.weightedSum += r.value * r.area
+			acc.totalArea += r.area
+			acc.count++
 		}
-
-		key := gridCellKey{
-			gx: int64(math.Floor(long / gridCellSizeDegrees)),
-			gy: int64(math.Floor(lat / gridCellSizeDegrees)),
+		if len(candidate) <= gridRenderBudget || i == len(gridTiersDegrees)-1 {
+			chosenTier = tier
+			cells = candidate
+			break
 		}
-		acc, ok := cells[key]
-		if !ok {
-			acc = &cellAccumulator{}
-			cells[key] = acc
-		}
-		acc.weightedSum += value * area
-		acc.totalArea += area
-		acc.count++
 	}
+	log.Printf("[perf] queryCatchmentsGridAggregated catchments=%d tier=%.3f cells=%d", len(catchmentRows), chosenTier, len(cells))
+
+	s.mu.RLock()
+	tierCache := s.gridGeometryCache[chosenTier]
+	s.mu.RUnlock()
 
 	features := make([]GeoJSONFeature, 0, len(cells))
 	var nextID int64
@@ -695,7 +740,7 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 		if acc.totalArea <= 0 {
 			continue
 		}
-		geometryJSON, ok := geometryCache[key]
+		geometryJSON, ok := tierCache[key]
 		if !ok {
 			continue
 		}

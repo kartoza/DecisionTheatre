@@ -29,16 +29,14 @@ function AggregateTable({
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
-  const [isTableVisible, setIsTableVisible] = useState(false);
+  const [isTableVisible, setIsTableVisible] = useState(true);
   const { details: attributeDetails } = useAttributeDetails();
 
   const attributeLabel = attributeDetails[attribute] ?? attribute;
 
-  // Reset table visibility whenever the panel is closed.
+  // Show the table by default whenever the panel opens; reset when it closes.
   useEffect(() => {
-    if (!visible) {
-      setIsTableVisible(false);
-    }
+    setIsTableVisible(visible);
   }, [visible]);
 
   // Fetch catchment data when panel is visible and siteId is available.
@@ -144,9 +142,9 @@ function AggregateTable({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}
           >
-            {/* Fixed top section: header + summary cards */}
+            {/* Header + summary cards — scrolls together with the table below. */}
             <Box px={6} pt={6} pb={4} flexShrink={0}>
               {/* Header */}
               <VStack spacing={4} align="stretch" mb={6}>
@@ -278,8 +276,8 @@ function AggregateTable({
               </HStack>
             </Box>
 
-            {/* Scrollable bottom section: table */}
-            <Box flex={1} overflow="auto" px={6} pb={6}>
+            {/* Table section — height comes from content; the outer pane scrolls, not this box. */}
+            <Box px={6} pb={6}>
               {!isTableVisible ? (
                 <Box
                   bg="whiteAlpha.50"
