@@ -27,6 +27,7 @@ type MetadataCache struct {
 	ChartTypes        map[string]string
 	GroupingVariables map[string]string
 	GroupingValues    map[string]string
+	Dial0Middle       map[string]bool
 }
 
 // loadMetadataCache opens metadata.csv once and builds all lookup maps.
@@ -47,6 +48,7 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 		ChartTypes:        make(map[string]string),
 		GroupingVariables: make(map[string]string),
 		GroupingValues:    make(map[string]string),
+		Dial0Middle:       make(map[string]bool),
 	}
 
 	path := filepath.Join(dataDir, "metadata.csv")
@@ -155,6 +157,8 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 
 	iGroupingVariable := col("Grouping variable")
 	iGroupingValues := col("GroupingValues")
+
+	iDial0Middle := col("dial_0_middle")
 
 	get := func(rec []string, i int) string {
 		if i < 0 || i >= len(rec) {
@@ -336,6 +340,18 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 				mc.GroupingValues[column] = v
 				if norm != "" {
 					mc.GroupingValues[norm] = v
+				}
+			}
+		}
+
+		// Dial0Middle: whether the dial gauge should center on zero, with
+		// positive values to the right and negative values to the left.
+		if iDial0Middle >= 0 {
+			if v := get(rec, iDial0Middle); v != "" {
+				b := parseBool(v)
+				mc.Dial0Middle[column] = b
+				if norm != "" {
+					mc.Dial0Middle[norm] = b
 				}
 			}
 		}

@@ -13,7 +13,7 @@ import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { getSiteCatchments, useAttributeDetails, useAttributeUnits } from '../hooks/useApi';
+import { getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
@@ -123,6 +123,7 @@ function ViewPane({
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const { units: attributeUnits } = useAttributeUnits();
+  const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
   const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
 
   // Lazy-mount MapView: only render once the pane has been in map mode at least once.
@@ -418,6 +419,14 @@ function ViewPane({
       max = mid + 10;
     }
 
+    // When flagged in metadata.csv, center the dial on zero: positive values
+    // read to the right, negative values to the left.
+    if (attributeDial0Middle[attribute]) {
+      const absMax = Math.max(Math.abs(min), Math.abs(max));
+      min = -absMax;
+      max = absMax;
+    }
+
     // Only expose target when it actually differs from reference — prevents showing a
     // spurious target marker for factors the user never changed.
     // Compare both values from siteIndicators (same source) to avoid false positives
@@ -429,7 +438,7 @@ function ViewPane({
       : (typeof targetValue === 'number' && typeof referenceValue === 'number' && targetValue !== referenceValue);
 
     return { min, max, referenceValue, currentValue, targetValue, targetChanged };
-  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);

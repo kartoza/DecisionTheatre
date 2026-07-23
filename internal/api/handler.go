@@ -107,6 +107,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/charttypes", h.handleMetadataChartTypes).Methods("GET")
 	r.HandleFunc("/metadata/groupingvariables", h.handleMetadataGroupingVariables).Methods("GET")
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
+	r.HandleFunc("/metadata/dial0middle", h.handleMetadataDial0Middle).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
 	r.HandleFunc("/precalculate/full", h.handlePrecalculateFull).Methods("GET")
@@ -187,6 +188,13 @@ func (h *Handler) handleMetadataCanMap(w http.ResponseWriter, r *http.Request) {
 // handleMetadataCanGraph returns a map of attribute column names to canGraph flags.
 func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.metaCache.CanGraph)
+}
+
+// handleMetadataDial0Middle returns a map of attribute column names to
+// dial_0_middle flags, indicating whether the dial gauge should center on
+// zero with positive values to the right and negative values to the left.
+func (h *Handler) handleMetadataDial0Middle(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.metaCache.Dial0Middle)
 }
 
 // handleMetadataAxisLabels returns a map of attribute column names to axis labels.

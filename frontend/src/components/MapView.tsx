@@ -736,7 +736,9 @@ function buildFillColorExpression(
 
     const range = max - min;
     if (range === 0) {
-      return baseColor;
+      // Degenerate domain (every visible value equals min) - treat it as the
+      // low end of the white-to-baseColor scale rather than the high end.
+      return '#FFFFFF';
     }
 
     return [
@@ -787,7 +789,9 @@ function buildOpacityColorExpression(
 
   const range = max - min;
   if (range === 0) {
-    return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+    // Degenerate domain (every visible value equals min) - treat it as the
+    // low end of the white-to-baseColor scale rather than the high end.
+    return '#FFFFFF';
   }
 
   return [

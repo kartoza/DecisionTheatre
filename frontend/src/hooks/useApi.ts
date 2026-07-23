@@ -344,6 +344,22 @@ export function useAttributeCanGraph() {
   return { canGraph, loading };
 }
 
+export function useAttributeDial0Middle() {
+  const [dial0Middle, setDial0Middle] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/dial0middle`)
+      .then((data) => {
+        setDial0Middle(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { dial0Middle, loading };
+}
+
 export function useAttributeChartTypes() {
   const [chartTypes, setChartTypes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
