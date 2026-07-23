@@ -669,18 +669,22 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 	s.ensureGridGeometryCache()
 	<-s.gridGeometryReady
 
+	// Every catchment in the bbox is included here, even ones with a null
+	// value for attribute - a cell whose catchments simply lack data for this
+	// particular indicator should still render (falling back to the domain
+	// minimum via the frontend's coalesce, same as the detailed path does for
+	// a null-valued catchment) rather than leaving a hole in the choropleth.
 	query := fmt.Sprintf(`
 		SELECT c.lat, c.long, c.SUB_AREA, s."%s" as value
 		FROM catchments_lev12 c
 		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
-		WHERE s."%s" IS NOT NULL
-		  AND c.lat IS NOT NULL AND c.long IS NOT NULL
+		WHERE c.lat IS NOT NULL AND c.long IS NOT NULL
 		  AND c.SUB_AREA IS NOT NULL AND c.SUB_AREA > 0
 		  AND c.fid IN (
 			SELECT id FROM rtree_catchments_lev12_geom
 			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
 		  )
-	`, attribute, tableName, attribute)
+	`, attribute, tableName)
 
 	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
 	if err != nil {
@@ -688,7 +692,10 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 	}
 	defer rows.Close()
 
-	type catchmentRow struct{ lat, long, area, value float64 }
+	type catchmentRow struct {
+		lat, long, area float64
+		value           sql.NullFloat64
+	}
 	var catchmentRows []catchmentRow
 	for rows.Next() {
 		var r catchmentRow
@@ -701,7 +708,7 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 
 	type cellAccumulator struct {
 		weightedSum float64
-		totalArea   float64
+		validArea   float64
 		count       int
 	}
 
@@ -718,8 +725,10 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 				acc = &cellAccumulator{}
 				candidate[key] = acc
 			}
-			acc.weightedSum += r.value * r.area
-			acc.totalArea += r.area
+			if r.value.Valid {
+				acc.weightedSum += r.value.Float64 * r.area
+				acc.validArea += r.area
+			}
 			acc.count++
 		}
 		if len(candidate) <= gridRenderBudget || i == len(gridTiersDegrees)-1 {
@@ -737,24 +746,25 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 	features := make([]GeoJSONFeature, 0, len(cells))
 	var nextID int64
 	for key, acc := range cells {
-		if acc.totalArea <= 0 {
-			continue
-		}
 		geometryJSON, ok := tierCache[key]
 		if !ok {
 			continue
 		}
 		nextID++
 
+		props := map[string]interface{}{
+			"aggregated":     true,
+			"catchmentCount": acc.count,
+		}
+		if acc.validArea > 0 {
+			props[attribute] = acc.weightedSum / acc.validArea
+		}
+
 		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       nextID,
-			Geometry: geometryJSON,
-			Properties: map[string]interface{}{
-				attribute:        acc.weightedSum / acc.totalArea,
-				"aggregated":     true,
-				"catchmentCount": acc.count,
-			},
+			Type:       "Feature",
+			ID:         nextID,
+			Geometry:   geometryJSON,
+			Properties: props,
 		})
 	}
 
