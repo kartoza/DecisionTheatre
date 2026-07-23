@@ -428,30 +428,6 @@ function computeAOIWeightedZoneStats(
   return { min, max, mean: weightedSum / totalValidArea, count };
 }
 
-function computeDomainRangeFromDatasets(
-  datasets: Array<ChoroplethData | null>,
-  attribute: string
-): DomainRange | null {
-  let min = Infinity;
-  let max = -Infinity;
-  let found = false;
-
-  for (const dataset of datasets) {
-    if (!dataset?.features?.length) continue;
-
-    for (const feature of dataset.features) {
-      const value = feature.properties?.[attribute];
-      if (typeof value !== 'number' || Number.isNaN(value)) continue;
-      if (value < min) min = value;
-      if (value > max) max = value;
-      found = true;
-    }
-  }
-
-  if (!found) return null;
-  return { min, max };
-}
-
 function filterDatasetByCatchmentIds(data: ChoroplethData | null, catchmentIds: Set<string>): ChoroplethData | null {
   if (!data) return null;
   if (catchmentIds.size === 0) return data;
@@ -929,8 +905,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const onStatisticsChangeRef = useRef(onStatisticsChange);
   onStatisticsChangeRef.current = onStatisticsChange;
 
-  // Site-scoped domain range cache (used for color scaling when a site is established)
-  const siteDomainRangeRef = useRef<DomainRange | null>(null);
   const siteZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
   const fullZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
   const extentZoneStatsRef = useRef<{ left: ZoneStats | null; right: ZoneStats | null } | null>(null);
@@ -1161,13 +1135,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftDisplay = leftData;
       const rightDisplay = rightData;
 
-      // Use site-scoped domain once a site is established; fall back to API global domain.
+      // Color scale always uses the attribute's global domain across every
+      // catchment, independent of the selected zone range (Full/Extent/Site).
       let min = 0;
       let max = 1;
-      if (siteId && siteDomainRangeRef.current) {
-        min = siteDomainRangeRef.current.min;
-        max = siteDomainRangeRef.current.max;
-      } else if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
+      if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
         min = leftData.domain_min;
         max = leftData.domain_max;
       } else if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
@@ -1235,7 +1207,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!siteId) return;
     siteCatchmentIdsRef.current = null;
     siteZoneStatsRef.current = null;
-    siteDomainRangeRef.current = null;
     // Invalidate module-level caches so the new boundary is re-inferred by the
     // first instance to run; subsequent instances will read the fresh result.
     clearSiteComputationCaches(siteId);
@@ -1426,7 +1397,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const updateSiteDomainRange = async () => {
       const c = comparisonRef.current;
       if (!siteId || !c.attribute) {
-        siteDomainRangeRef.current = null;
         siteZoneStatsRef.current = null;
         siteCatchmentIdsRef.current = null;
         applyColors();
@@ -1488,7 +1458,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       if (!bounds) {
-        siteDomainRangeRef.current = null;
         siteZoneStatsRef.current = null;
         applyColors();
         return;
@@ -1564,8 +1533,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const leftFiltered = filterDatasetByCatchmentIds(leftData, statsCatchmentIds);
         const rightFiltered = filterDatasetByCatchmentIds(rightData, statsCatchmentIds);
 
-        const siteDomainRange = computeDomainRangeFromDatasets([leftFiltered, rightFiltered], c.attribute);
-
         // Build fraction lookup from slim siteCatchments for fast AOI-weighted stats.
         // This replaces expensive per-catchment turfIntersect calls with O(1) lookups.
         const catchmentFractionMap = new Map<string, { aoiFraction: number; areaKm2: number }>();
@@ -1621,11 +1588,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           if (rightSiteStats) rightSiteStats.count = siteCatchments.length;
         }
 
-        siteDomainRangeRef.current = siteDomainRange;
         siteZoneStatsRef.current = { left: leftSiteStats, right: rightSiteStats };
         if (onStatisticsChangeRef.current) {
           onStatisticsChangeRef.current({
-            domainRange: siteDomainRange ?? lastDomainRangeRef.current,
+            domainRange: lastDomainRangeRef.current,
             leftStats: extentZoneStatsRef.current?.left ?? null,
             rightStats: extentZoneStatsRef.current?.right ?? null,
             fullStats: fullZoneStatsRef.current,
@@ -1635,8 +1601,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         applyColors();
       } catch (err) {
         if (!cancelled) {
-          console.error('Failed to compute site domain range:', err);
-          siteDomainRangeRef.current = null;
+          console.error('Failed to compute site zone stats:', err);
           siteZoneStatsRef.current = null;
           siteCatchmentIdsRef.current = null;
           applyColors();
@@ -3679,7 +3644,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (siteId) {
       siteCatchmentIdsRef.current = null;
       siteZoneStatsRef.current = null;
-      siteDomainRangeRef.current = null;
     }
     applyColorsRef.current();
 

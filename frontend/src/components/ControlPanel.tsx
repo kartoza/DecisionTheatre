@@ -604,20 +604,11 @@ function ControlPanel({
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
   const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
 
-  // Compute combined domain range from both scenarios so legend updates when zone range changes
-  const combinedDomainRange: { min: number; max: number } | null = (() => {
-    if (leftZoneStats && rightZoneStats) {
-      return {
-        min: Math.min(leftZoneStats.min, rightZoneStats.min),
-        max: Math.max(leftZoneStats.max, rightZoneStats.max),
-      };
-    }
-    if (leftZoneStats) return { min: leftZoneStats.min, max: leftZoneStats.max };
-    if (rightZoneStats) return { min: rightZoneStats.min, max: rightZoneStats.max };
-    // Fallback to overall domainRange from mapStatistics if available
-    if (mapStatistics?.domainRange) return { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max };
-    return null;
-  })();
+  // The color scale always reflects the attribute's global domain across every
+  // catchment, independent of the selected zone range (Full/Extent/Site).
+  const combinedDomainRange: { min: number; max: number } | null = mapStatistics?.domainRange
+    ? { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max }
+    : null;
   const [panelWidth, setPanelWidth] = useState(440);
   const [isResizing, setIsResizing] = useState(false);
   const resizeOriginX = useRef(0);
