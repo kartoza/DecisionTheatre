@@ -243,12 +243,14 @@ func workflow1TreeCover(ideal, oldIdeal map[string]float64, lookup *LookupData) 
 }
 
 // workflowMeanTC handles §1.3 — meanTC edited directly.
-// Computes diffMeanTC = oldMeanTC − newMeanTC and shifts each of the 10
-// classes by ±diffMeanTC/10 (first 5 low-TC classes increase, last 5
-// decrease), preserving the total sum at 1. Classes are clamped to [0,1]
-// then lowTC_prop / highTC_prop and all downstream metrics are recomputed.
+// Computes diffMeanTC = oldMeanTC − newMeanTC (on meanTC's 0–100 percentage
+// scale), converts it to the 0–1 fraction scale used by prop_X*Mgha, and
+// shifts each of the 10 classes by ±diffMeanTC/100/10 (first 5 low-TC classes
+// increase, last 5 decrease), preserving the total sum at 1. Classes are
+// clamped to [0,1] then lowTC_prop / highTC_prop and all downstream metrics
+// are recomputed.
 func workflowMeanTC(ideal, oldIdeal map[string]float64, lookup *LookupData) {
-	diffMeanTC := oldIdeal[colMeanTC] - ideal[colMeanTC]
+	diffMeanTC := (oldIdeal[colMeanTC] - ideal[colMeanTC]) / 100.0
 	shift := diffMeanTC / 10.0
 
 	increasing := []string{

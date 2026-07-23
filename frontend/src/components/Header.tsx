@@ -51,7 +51,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
     >
       <HStack spacing={3}>
         <img 
-        style={{width: "110px"}}
+        style={{width: "120px"}}
         src={fefaLogo} alt="FEFA Logo" />
         <img 
         style={{width: "80px"}}
