@@ -63,6 +63,14 @@ const SELECTED_CATCHMENT_LINE_PAINT = {
   'line-opacity': 0.8,
 };
 
+// The site boundary must always render above catchment/basemap layers, no
+// matter what gets added to the map afterwards (e.g. toggling satellite view).
+function moveSiteGeometryToTop(map: maplibregl.Map) {
+  for (const layerId of ['site-glow', 'site-fill', 'site-line']) {
+    if (map.getLayer(layerId)) map.moveLayer(layerId);
+  }
+}
+
 function SiteCreationMap({
   mode,
   initialGeometry,
@@ -452,7 +460,6 @@ function SiteCreationMap({
           minY: Math.min(nw.lat, se.lat),
           maxX: Math.max(nw.lng, se.lng),
           maxY: Math.max(nw.lat, se.lat),
-          limit: 5000,
         };
 
         let bboxFeatures: GeoJSON.Feature[] = [];
@@ -709,6 +716,8 @@ function SiteCreationMap({
       source: sourceId,
       paint: SITE_LINE_PAINT,
     });
+
+    moveSiteGeometryToTop(map);
   }, []);
 
   // Complete the drawing
@@ -879,15 +888,19 @@ function SiteCreationMap({
           firstLayerId,
         );
       }
+      // Skip catchments-selectable-fill (needed for click detection despite being
+      // invisible) and the site boundary's own fill, which must stay visible.
+      const skipHiding = new Set([GOOGLE_SATELLITE_LAYER_ID, 'catchments-selectable-fill', 'site-fill']);
       const hidden: string[] = [];
       for (const layer of map.getStyle()?.layers ?? []) {
-        if (layer.id === GOOGLE_SATELLITE_LAYER_ID) continue;
+        if (skipHiding.has(layer.id)) continue;
         if (layer.type === 'fill' || layer.type === 'background') {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
           hidden.push(layer.id);
         }
       }
       hiddenLayersRef.current = hidden;
+      moveSiteGeometryToTop(map);
     } else {
       if (map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) map.removeLayer(GOOGLE_SATELLITE_LAYER_ID);
       if (map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) map.removeSource(GOOGLE_SATELLITE_SOURCE_ID);

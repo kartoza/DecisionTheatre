@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
-import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
 
@@ -41,6 +41,8 @@ interface ControlPanelProps {
   hideColorScale?: boolean;
   colorScaleMode: ColorScaleMode;
   onColorScaleModeChange: (mode: ColorScaleMode) => void;
+  colorScaleType: ColorScaleType;
+  onColorScaleTypeChange: (scaleType: ColorScaleType) => void;
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   chartGroup?: string | null;
@@ -156,6 +158,7 @@ function SearchableSelect({
   focusColor = '#2bb0ed',
   allowClear = false,
   containerMt = 10,
+  fallbackLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -164,6 +167,8 @@ function SearchableSelect({
   focusColor?: string;
   allowClear?: boolean;
   containerMt?: number | string;
+  /** Label to show when value isn't among options (e.g. set programmatically, not user-selectable). */
+  fallbackLabel?: string;
 }) {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -173,8 +178,8 @@ function SearchableSelect({
   const inputBg = useColorModeValue('gray.50', 'gray.700');
 
   const selectedLabel = useMemo(
-    () => options.find((o) => o.value === value)?.label ?? '',
-    [options, value],
+    () => options.find((o) => o.value === value)?.label ?? (value ? fallbackLabel : undefined) ?? '',
+    [options, value, fallbackLabel],
   );
 
   const filtered = useMemo(() => {
@@ -389,6 +394,8 @@ function ControlPanel({
   hideColorScale = false,
   colorScaleMode,
   onColorScaleModeChange,
+  colorScaleType,
+  onColorScaleTypeChange,
   rangeMode = 'domain',
   onRangeModeChange,
   chartGroup,
@@ -413,6 +420,19 @@ function ControlPanel({
 
   const [factorDerivedMode, setFactorDerivedMode] = useState(false);
   const [factorDerivedValue, setFactorDerivedValue] = useState('');
+
+  // factorDerivedMode/factorDerivedValue are local UI state (not lifted to
+  // App), so demo tours drive the "Individual factor" selection here.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const attribute = (e as CustomEvent).detail?.attribute as string | undefined;
+      if (!attribute) return;
+      setFactorDerivedMode(true);
+      setFactorDerivedValue(attribute);
+    };
+    window.addEventListener('dt:demo-chart-individual-factor', handler);
+    return () => window.removeEventListener('dt:demo-chart-individual-factor', handler);
+  }, []);
 
   const uniqueVariableTypes = useMemo(
     () => [...new Set(Object.values(variableTypes))].filter((t) => t && t !== 'catchID').sort(),
@@ -1030,6 +1050,7 @@ function ControlPanel({
                 placeholder={columnsLoading ? 'Loading...' : 'Select an attribute'}
                 focusColor="#4caf50"
                 containerMt={2}
+                fallbackLabel={attributeDetails[comparison.attribute ?? '']}
               />
 
               {comparison.attribute && (
@@ -1096,6 +1117,34 @@ function ControlPanel({
                     bg={colorScaleMode === 'metadata' ? colors.pastelDarkGreen : undefined}
                   >
                     Single
+                  </Button>
+                </ButtonGroup>
+              </HStack>
+              <HStack justify="space-between" align="center" mb={2}>
+                <Text fontSize="xs" fontWeight="600" color="gray.500">
+                  SCALE TYPE
+                </Text>
+                <ButtonGroup size="xs" isAttached variant="outline">
+                  <Button
+                    onClick={() => onColorScaleTypeChange('linear')}
+                    variant={colorScaleType === 'linear' ? 'solid' : 'outline'}
+                    bg={colorScaleType === 'linear' ? colors.pastelDarkGreen : undefined}
+                  >
+                    Linear
+                  </Button>
+                  <Button
+                    onClick={() => onColorScaleTypeChange('logistic')}
+                    variant={colorScaleType === 'logistic' ? 'solid' : 'outline'}
+                    bg={colorScaleType === 'logistic' ? colors.pastelDarkGreen : undefined}
+                  >
+                    Logistic
+                  </Button>
+                  <Button
+                    onClick={() => onColorScaleTypeChange('logarithmic')}
+                    variant={colorScaleType === 'logarithmic' ? 'solid' : 'outline'}
+                    bg={colorScaleType === 'logarithmic' ? colors.pastelDarkGreen : undefined}
+                  >
+                    Log
                   </Button>
                 </ButtonGroup>
               </HStack>

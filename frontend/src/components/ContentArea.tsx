@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, SiteIndicators, RangeMode, ViewMode } from '../types';
+import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +31,7 @@ interface ContentAreaProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  colorScaleType: ColorScaleType;
   is3DMode?: boolean;
   on3DModeChange?: (enabled: boolean) => void;
   // Slider synchronization
@@ -125,6 +126,7 @@ function ContentArea({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  colorScaleType,
   is3DMode,
   on3DModeChange,
   swiperPosition,
@@ -446,6 +448,7 @@ function ContentArea({
                   isSwiperEnabled={isSwiperEnabled}
                   onSwiperEnabledChange={onSwiperEnabledChange}
                   colorScaleMode={colorScaleMode}
+                  colorScaleType={colorScaleType}
                   is3DMode={is3DMode}
                   on3DModeChange={on3DModeChange}
                   swiperPosition={swiperPosition}
@@ -498,6 +501,7 @@ function ContentArea({
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={onSwiperEnabledChange}
             colorScaleMode={colorScaleMode}
+            colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             on3DModeChange={on3DModeChange}
             swiperPosition={swiperPosition}

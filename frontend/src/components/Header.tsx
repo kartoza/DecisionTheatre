@@ -14,7 +14,7 @@ import { useServerInfo } from '../hooks/useApi';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import rewildLogo from '../assets/logo-vertical-white-3x 1.png';
-import fefaLogo from '../assets/JM_FEFA_Logo_Dark_RGB_72dpi_aw.png';
+import fefaLogo from '../assets/JM_FEFA_Logo_Light_LightLightText_RGB_72dpi_aw.png';
 import { colors } from '../styles/colors';
 
 interface HeaderProps {

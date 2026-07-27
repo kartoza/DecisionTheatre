@@ -4,7 +4,7 @@ import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, 
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, SiteIndicators } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
@@ -29,6 +29,7 @@ interface MapViewProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  colorScaleType: ColorScaleType;
   // Slider position synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -104,6 +105,14 @@ const PRISM_STOPS: [number, string][] = [
   [1, '#e8003f'],       // red
 ];
 
+// Steepness (k) of the logistic curve used by the 'logistic' color scale type.
+// Higher values sharpen the transition around the domain midpoint.
+const LOGISTIC_STEEPNESS = 10;
+
+// Strength (C) of the log1p curve used by the 'logarithmic' color scale type.
+// Higher values exaggerate contrast among low values at the expense of high ones.
+const LOGARITHMIC_STRENGTH = 9;
+
 // CSS gradient for legend
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
@@ -122,8 +131,11 @@ const MIN_CATCHMENT_ZOOM = 3;
 // Maximum extrusion height in metres for 3D mode
 const MAX_EXTRUSION_HEIGHT = 50000;
 
-const MAX_FILL_OPACITY = 0.80;
-const CHOROPLETH_BASE_FILL_OPACITY = 0.65;
+// Choropleth fill-opacity depends on which basemap is showing beneath it:
+// the busier Google satellite imagery needs a touch of transparency to read
+// as an overlay, while the flat vector basemap can take full opacity.
+const CHOROPLETH_FILL_OPACITY_SATELLITE = 0.80;
+const CHOROPLETH_FILL_OPACITY_DEFAULT = 1;
 const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
 const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
 const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
@@ -696,13 +708,69 @@ async function fetchChoroplethData(
 }
 
 /**
+ * Build a MapLibre expression producing the 0-1 normalized position of an
+ * attribute's value within [min, max].
+ *
+ * - 'logistic' passes the linear ratio through a sigmoid centered on the
+ *   domain midpoint, which compresses values near the extremes and expands
+ *   contrast around the middle of the range - useful when most values
+ *   cluster around the mean with a long tail.
+ * - 'logarithmic' passes the linear ratio through a log1p curve, which
+ *   expands contrast among low values at the expense of high ones - useful
+ *   when most values are small with a few large outliers. log1p (rather than
+ *   a plain log of the raw value) is used so the domain minimum, which can
+ *   legitimately be 0, never hits an undefined log(0).
+ */
+function buildNormalizedValueExpression(
+  attribute: string,
+  min: number,
+  range: number,
+  scaleType: ColorScaleType
+): maplibregl.ExpressionSpecification {
+  const linearRatio = [
+    '/',
+    ['-', ['coalesce', ['get', attribute], min], min],
+    range,
+  ] as maplibregl.ExpressionSpecification;
+
+  if (scaleType === 'linear') {
+    return linearRatio;
+  }
+
+  if (scaleType === 'logarithmic') {
+    return [
+      'let',
+      't',
+      linearRatio,
+      [
+        '/',
+        ['ln', ['+', 1, ['*', LOGARITHMIC_STRENGTH, ['var', 't']]]],
+        Math.log(1 + LOGARITHMIC_STRENGTH),
+      ],
+    ] as maplibregl.ExpressionSpecification;
+  }
+
+  return [
+    'let',
+    't',
+    linearRatio,
+    [
+      '/',
+      1,
+      ['+', 1, ['^', Math.E, ['*', -LOGISTIC_STEEPNESS, ['-', ['var', 't'], 0.5]]]],
+    ],
+  ] as maplibregl.ExpressionSpecification;
+}
+
+/**
  * Build a MapLibre expression for fill-color based on attribute value and global min/max.
  */
 function buildFillColorExpression(
   attribute: string,
   min: number,
   max: number,
-  baseColor?: string | null
+  baseColor?: string | null,
+  scaleType: ColorScaleType = 'linear'
 ): maplibregl.ExpressionSpecification | string {
   // When a metadata base color is provided, blend from white (low values)
   // to the base color (high values) instead of using opacity.
@@ -720,7 +788,7 @@ function buildFillColorExpression(
     return [
       'interpolate',
       ['linear'],
-      ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+      buildNormalizedValueExpression(attribute, min, range, scaleType),
       0,
       '#FFFFFF',
       1,
@@ -738,25 +806,17 @@ function buildFillColorExpression(
   return [
     'interpolate',
     ['linear'],
-    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    buildNormalizedValueExpression(attribute, min, range, scaleType),
     ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
   ] as maplibregl.ExpressionSpecification;
-}
-
-function buildFillOpacityExpression(
-  maxOpacity: number
-): maplibregl.ExpressionSpecification | number {
-  // Opacity is no longer used to encode value when metadata colors are
-  // selected; callers that pass through attribute-based opacity scaling
-  // should instead call this and receive a constant (max) opacity.
-  return maxOpacity;
 }
 
 function buildOpacityColorExpression(
   attribute: string,
   min: number,
   max: number,
-  baseColor: string
+  baseColor: string,
+  scaleType: ColorScaleType = 'linear'
 ): maplibregl.ExpressionSpecification | string {
   // Blend color from white (low values) to the metadata base color
   // (high values). Opacity will be handled separately by layer paint.
@@ -773,7 +833,7 @@ function buildOpacityColorExpression(
   return [
     'interpolate',
     ['linear'],
-    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    buildNormalizedValueExpression(attribute, min, range, scaleType),
     0,
     '#FFFFFF',
     1,
@@ -787,7 +847,8 @@ function buildOpacityColorExpression(
 function buildExtrusionExpression(
   attribute: string,
   min: number,
-  max: number
+  max: number,
+  scaleType: ColorScaleType = 'linear'
 ): maplibregl.ExpressionSpecification | number {
   const range = max - min;
   if (range === 0) {
@@ -796,7 +857,7 @@ function buildExtrusionExpression(
 
   return [
     '*',
-    ['/', ['-', ['coalesce', ['get', attribute], min], min], range],
+    buildNormalizedValueExpression(attribute, min, range, scaleType),
     MAX_EXTRUSION_HEIGHT,
   ] as maplibregl.ExpressionSpecification;
 }
@@ -833,7 +894,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
@@ -1170,10 +1231,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Apply to left map - verify the map is ready
       if (leftDisplay && leftDisplay.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor);
+          applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor);
+            applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
@@ -1183,10 +1244,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Apply to right map - verify the map is ready
       if (rightDisplay && rightDisplay.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor);
+          applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor);
+            applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
@@ -1195,7 +1256,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Failed to apply choropleth:', err);
     }
-  }, [colorScaleMode]);
+  }, [colorScaleMode, colorScaleType]);
 
   const applyColorsRef = useRef(applyColors);
   useEffect(() => {
@@ -1654,7 +1715,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     min: number,
     max: number,
     extruded: boolean,
-    attributeColor?: string | null
+    attributeColor?: string | null,
+    scaleType: ColorScaleType = 'linear'
   ) {
     const layerId = `choropleth-${side}`;
     const layer3dId = `${layerId}-3d`;
@@ -1663,6 +1725,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     try {
       const useOpacityScale = Boolean(attributeColor);
+      const fillOpacity = isGoogleBasemapRef.current
+        ? CHOROPLETH_FILL_OPACITY_SATELLITE
+        : CHOROPLETH_FILL_OPACITY_DEFAULT;
 
       const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
       if (source) {
@@ -1691,11 +1756,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             source: sourceId,
             paint: {
               'fill-extrusion-color': useOpacityScale && attributeColor
-                ? buildOpacityColorExpression(attribute, min, max, attributeColor)
-                : buildFillColorExpression(attribute, min, max, attributeColor),
-              'fill-extrusion-height': buildExtrusionExpression(attribute, min, max),
+                ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
+                : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+              'fill-extrusion-height': buildExtrusionExpression(attribute, min, max, scaleType),
               'fill-extrusion-base': 0,
-              'fill-extrusion-opacity': useOpacityScale ? 1 : 0.8,
+              'fill-extrusion-opacity': fillOpacity,
             },
           });
         } else {
@@ -1703,15 +1768,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             layer3dId,
             'fill-extrusion-color',
             useOpacityScale && attributeColor
-              ? buildOpacityColorExpression(attribute, min, max, attributeColor)
-              : buildFillColorExpression(attribute, min, max, attributeColor),
+              ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
+              : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(
             layer3dId,
             'fill-extrusion-height',
-            buildExtrusionExpression(attribute, min, max),
+            buildExtrusionExpression(attribute, min, max, scaleType),
           );
-          map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', useOpacityScale ? 1 : 0.8);
+          map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', fillOpacity);
         }
       } else {
         if (map.getLayer(layer3dId)) {
@@ -1724,33 +1789,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             type: 'fill',
             source: sourceId,
             paint: {
-              'fill-color': buildFillColorExpression(attribute, min, max, attributeColor),
+              'fill-color': buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
               // Keep boundaries soft so adjacent catchments blend visually.
               'fill-outline-color': CHOROPLETH_OUTLINE_COLOR,
-              'fill-opacity': useOpacityScale
-                ? buildFillOpacityExpression(MAX_FILL_OPACITY)
-                : CHOROPLETH_BASE_FILL_OPACITY,
+              'fill-opacity': fillOpacity,
             },
           });
         } else {
           map.setPaintProperty(
             layerId,
             'fill-color',
-            buildFillColorExpression(attribute, min, max, attributeColor),
+            buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(layerId, 'fill-outline-color', CHOROPLETH_OUTLINE_COLOR);
-          map.setPaintProperty(
-            layerId,
-            'fill-opacity',
-            useOpacityScale
-              ? buildFillOpacityExpression(MAX_FILL_OPACITY)
-              : CHOROPLETH_BASE_FILL_OPACITY,
-          );
+          map.setPaintProperty(layerId, 'fill-opacity', fillOpacity);
         }
 
         const edgeColorExpression = useOpacityScale && attributeColor
-          ? buildOpacityColorExpression(attribute, min, max, attributeColor)
-          : buildFillColorExpression(attribute, min, max, attributeColor);
+          ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
+          : buildFillColorExpression(attribute, min, max, attributeColor, scaleType);
 
         if (!map.getLayer(edgeBlendLayerId)) {
           map.addLayer({
@@ -1827,9 +1884,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     setIsChoroplethEnabled((prev) => !prev);
   }, []);
 
-  // Google basemap toggle state
-  const [isGoogleBasemap, setIsGoogleBasemap] = useState(false);
-  const isGoogleBasemapRef = useRef(false);
+  // Google basemap toggle state. Defaults on for the browser runtime.
+  const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
+  const isGoogleBasemapRef = useRef(getAppRuntime() === 'browser');
 
   const toggleGoogleBasemap = useCallback(() => {
     const leftMap = leftMapRef.current;
@@ -2644,11 +2701,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Load style from server (mbtiles base layers)
     const styleUrl = window.location.origin + '/data/style.json';
-    // Kick off the style fetch (no-op if another pane already started it).
+    // Kick off the style fetch (no-op if another pane already started it) so
+    // it's warm and ready the moment the user toggles off the Google basemap.
     warmStyleCache(styleUrl);
     // Use the cached object if available (staggered panes will find it ready),
-    // otherwise fall back to the URL so MapLibre fetches it normally.
-    const mapStyle = getStyleForMap(styleUrl);
+    // otherwise fall back to the URL so MapLibre fetches it normally. Browser
+    // runtime starts on the Google basemap (see isGoogleBasemapRef default).
+    const mapStyle = isGoogleBasemapRef.current ? GOOGLE_BASEMAP_STYLE : getStyleForMap(styleUrl);
 
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
@@ -3197,7 +3256,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, attributeColors, attributeDetails]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, attributeColors, attributeDetails]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {

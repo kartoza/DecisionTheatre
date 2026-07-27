@@ -11,7 +11,7 @@ import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
-import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
@@ -43,6 +43,7 @@ interface ViewPaneProps {
   isSwiperEnabled?: boolean;
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
+  colorScaleType: ColorScaleType;
   is3DMode?: boolean;
   on3DModeChange?: (enabled: boolean) => void;
   // Slider synchronization
@@ -101,6 +102,7 @@ function ViewPane({
   isSwiperEnabled,
   onSwiperEnabledChange,
   colorScaleMode,
+  colorScaleType,
   is3DMode,
   on3DModeChange,
   swiperPosition,
@@ -321,6 +323,20 @@ function ViewPane({
             min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
+        } else if (!dialCatchmentLoading && (siteIndicators?.reference || siteIndicators?.current)) {
+          // Live per-catchment data is unavailable (e.g. a demo/walkthrough
+          // site that isn't registered in the backend site store) — fall back
+          // to the site's precomputed aggregate indicators. Available in any
+          // layout, unlike the mapStatistics.siteStats fallback below.
+          referenceValue = siteIndicators?.reference?.[attribute];
+          currentValue = siteIndicators?.current?.[attribute];
+          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          const values = [referenceValue, currentValue, targetValue]
+            .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+          if (values.length > 0) {
+            min = Math.min(...values) * 0.9;
+            max = Math.max(...values) * 1.1;
+          }
         } else if (allowMapStatisticsFallback && mapStatistics?.siteStats) {
           referenceValue = mapStatistics.siteStats.left?.mean;
           currentValue = mapStatistics.siteStats.right?.mean;
@@ -514,6 +530,7 @@ function ViewPane({
           isSwiperEnabled={isSwiperEnabled}
           onSwiperEnabledChange={onSwiperEnabledChange}
           colorScaleMode={colorScaleMode}
+          colorScaleType={colorScaleType}
           is3DMode={is3DMode}
           on3DModeChange={on3DModeChange}
           swiperPosition={swiperPosition}

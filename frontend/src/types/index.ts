@@ -33,6 +33,9 @@ export interface ComparisonState {
 
 export type ColorScaleMode = 'rainbow' | 'metadata';
 
+/** How raw attribute values are normalized before mapping to the color scale */
+export type ColorScaleType = 'linear' | 'logistic' | 'logarithmic';
+
 export type LayoutMode = 'single' | 'quad';
 
 /** View mode for each pane: map choropleth, line chart, dial gauge, or aggregate table */

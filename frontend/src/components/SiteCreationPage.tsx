@@ -170,7 +170,6 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
         minY: bbox.minY,
         maxX: bbox.maxX,
         maxY: bbox.maxY,
-        limit: 20000,
         includeGeometry: false,
       }),
     });
@@ -468,14 +467,14 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
             catchmentIdsToPersist = inferred.ids;
             setSelectedCatchmentIds(inferred.ids);
           }
-          if (inferred.truncated) {
-            toast({
-              title: 'Catchment set may be incomplete',
-              description: 'Too many intersecting catchments were found; zoom in and refine if totals look off.',
-              status: 'warning',
-              duration: 5000,
-            });
-          }
+          // if (inferred.truncated) {
+          //   toast({
+          //     title: 'Catchment set may be incomplete',
+          //     description: 'Too many intersecting catchments were found; zoom in and refine if totals look off.',
+          //     status: 'warning',
+          //     duration: 5000,
+          //   });
+          // }
         } catch (err) {
           console.warn('Catchment inference failed:', err);
         }

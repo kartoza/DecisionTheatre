@@ -397,7 +397,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               <Box style={buttonOverlayStyle}>
                 <Button
                   {...outlinedButtonProps}
-                  onClick={() => window.dispatchEvent(new Event('dt:start-viphya-demo'))}
+                  onClick={() => window.dispatchEvent(new Event('dt:start-africa-demo'))}
                 >
                   Explore Shared Landscapes
                 </Button>
@@ -441,7 +441,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 </Text>
               </Box> */}
               <Box style={buttonOverlayStyle}>
-                <Button {...outlinedButtonProps}>
+                <Button
+                  {...outlinedButtonProps}
+                  onClick={() => window.dispatchEvent(new Event('dt:start-viphya-demo'))}
+                >
                   Explore Future Possibilities
                 </Button>
               </Box>

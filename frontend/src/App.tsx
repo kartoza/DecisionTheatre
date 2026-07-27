@@ -17,7 +17,7 @@ import FeedbackLink from './components/FeedbackLink';
 import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
-import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, RangeMode, ViewMode } from './types';
+import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
   loadPaneStates,
@@ -62,6 +62,7 @@ function App() {
   const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
   const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('metadata');
+  const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(50); // Synchronized slider position
   const [chartGroups, setChartGroups] = useState<(string | null)[]>(() => loadPaneStates().map(() => null));
@@ -442,6 +443,82 @@ function App() {
     };
     window.addEventListener('dt:demo-tree-biomass-chart', handler);
     return () => window.removeEventListener('dt:demo-tree-biomass-chart', handler);
+  }, []);
+
+  // Listen for demo event to switch to single-pane chart view with Herbivore
+  // biomass as the individual factor, grouped by functional group, for the
+  // AfricaDemoTour.
+  useEffect(() => {
+    const handler = () => {
+      setLayoutMode('single');
+      setIndicatorPaneIndex(0);
+      setViewModes((prev) => {
+        const next = [...prev];
+        next[0] = 'chart';
+        return next;
+      });
+      setPaneStates((prev) => {
+        const next = [...prev] as PaneStates;
+        next[0] = { ...next[0], attribute: 'herbs_tot_kgkm2' };
+        return next;
+      });
+      setChartGroups((prev) => {
+        const next = [...prev];
+        next[0] = 'Herbivores';
+        return next;
+      });
+      setChartAxisLabelFilters((prev) => {
+        const next = [...prev];
+        next[0] = 'Functional group';
+        return next;
+      });
+      // factorDerivedMode/factorDerivedValue live as local state inside
+      // ControlPanel (not lifted here), so sync them via a dedicated event.
+      window.dispatchEvent(new CustomEvent('dt:demo-chart-individual-factor', {
+        detail: { attribute: 'herbs_tot_kgkm2' },
+      }));
+    };
+    window.addEventListener('dt:demo-herbivore-functional-group-chart', handler);
+    return () => window.removeEventListener('dt:demo-herbivore-functional-group-chart', handler);
+  }, []);
+
+  // Listen for demo event to switch to a 6-dial, 3-column layout covering the
+  // ecosystem-scale consequences of the current herbivore regime, for the
+  // AfricaDemoTour.
+  useEffect(() => {
+    const handler = () => {
+      const base = { leftScenario: 'reference' as const, rightScenario: 'current' as const };
+      const demoPanes: PaneStates = [
+        { ...base, attribute: 'herbs_tot_kgkm2' },
+        { ...base, attribute: 'herbs_totGRAZING_kgkm2' },
+        { ...base, attribute: 'percBurned' },
+        { ...base, attribute: 'CH4_both_kg_km2' },
+        { ...base, attribute: 'NPP_gm2' },
+        { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
+      ];
+      setLayoutMode('quad');
+      setQuadColumns(3);
+      setIndicatorPaneIndex(null);
+      setPaneStates(demoPanes);
+      setViewModes(demoPanes.map(() => 'dial'));
+    };
+    window.addEventListener('dt:demo-go-quad-dial-africa', handler);
+    return () => window.removeEventListener('dt:demo-go-quad-dial-africa', handler);
+  }, []);
+
+  // Listen for demo event to swap the NPP dial for change-in-SOC, for the
+  // AfricaDemoTour "ecosystem-scale consequences" step.
+  useEffect(() => {
+    const handler = () => {
+      setPaneStates((prev) => {
+        if (prev.length <= 4) return prev;
+        const next = [...prev] as PaneStates;
+        next[4] = { ...next[4], attribute: 'deltaSOC_Mgha' };
+        return next;
+      });
+    };
+    window.addEventListener('dt:demo-swap-npp-soc', handler);
+    return () => window.removeEventListener('dt:demo-swap-npp-soc', handler);
   }, []);
 
   const handleAddPane = useCallback(() => {
@@ -869,6 +946,7 @@ function App() {
             isSwiperEnabled={isSwiperEnabled}
             onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
+            colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             on3DModeChange={setIs3DMode}
             swiperPosition={swiperPosition}
@@ -920,6 +998,8 @@ function App() {
               : viewModes[0] === 'table'))}
           colorScaleMode={colorScaleMode}
           onColorScaleModeChange={setColorScaleMode}
+          colorScaleType={colorScaleType}
+          onColorScaleTypeChange={setColorScaleType}
           rangeMode={rangeMode}
           onRangeModeChange={setRangeMode}
           chartGroup={indicatorPaneIndex !== null ? chartGroups[indicatorPaneIndex] : chartGroups[0]}

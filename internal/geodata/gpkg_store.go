@@ -1960,7 +1960,8 @@ func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit in
 	}()
 
 	if limit <= 0 {
-		limit = 5000
+		// SQLite treats a negative LIMIT as "no limit".
+		limit = -1
 	}
 
 	query := `
@@ -2009,7 +2010,8 @@ func (s *GpkgStore) GetCatchmentIDsByBBox(minx, miny, maxx, maxy float64, limit 
 	}()
 
 	if limit <= 0 {
-		limit = 5000
+		// SQLite treats a negative LIMIT as "no limit".
+		limit = -1
 	}
 
 	query := `

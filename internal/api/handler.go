@@ -1175,12 +1175,10 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// A limit of 0 (or negative) means no limit — return every catchment in the bbox.
 	limit := req.Limit
-	if limit <= 0 {
-		limit = 5000
-	}
-	if limit > 20000 {
-		limit = 20000
+	if limit < 0 {
+		limit = 0
 	}
 	includeGeometry := true
 	if req.IncludeGeometry != nil {
@@ -1198,7 +1196,7 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 			Type:         "FeatureCollection",
 			Features:     []geodata.GeoJSONFeature{},
 			CatchmentIDs: ids,
-			Truncated:    len(ids) >= limit,
+			Truncated:    limit > 0 && len(ids) >= limit,
 		}
 
 		respondJSON(w, http.StatusOK, response)
@@ -1220,7 +1218,7 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 		Type:         "FeatureCollection",
 		Features:     features,
 		CatchmentIDs: ids,
-		Truncated:    len(features) >= limit,
+		Truncated:    limit > 0 && len(features) >= limit,
 	}
 
 	respondJSON(w, http.StatusOK, response)
