@@ -18,7 +18,12 @@ DATA_DIR="$PROJECT_ROOT/data"
 VERSION="${1:-$(cd "$PROJECT_ROOT" && git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
 DIST_DIR="$PROJECT_ROOT/dist"
 PACK_NAME="decision-theatre-data-v${VERSION}"
-WORK_DIR="$(mktemp -d)"
+
+# Build the work dir under dist/ rather than the system tmp dir: mktemp -d
+# defaults to /tmp, which on some deployment hosts sits on a small root
+# filesystem while dist/ is on a volume with room for the full data/ copy.
+mkdir -p "$DIST_DIR"
+WORK_DIR="$(mktemp -d "$DIST_DIR/.datapack-work.XXXXXX")"
 
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT

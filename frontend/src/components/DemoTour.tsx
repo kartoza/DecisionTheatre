@@ -8,6 +8,7 @@ import {
   Portal,
   Spinner,
   Text,
+  useToast,
   VStack,
 } from '@chakra-ui/react';
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
@@ -119,6 +120,7 @@ export default function DemoTour({
   const [loadStatus, setLoadStatus] = useState<{ message: string; pct: number } | null>(null);
   const [isBlockedByModal, setIsBlockedByModal] = useState(false);
   const dragControls = useDragControls();
+  const toast = useToast();
 
   useEffect(() => {
     const handler = () => {
@@ -238,6 +240,12 @@ export default function DemoTour({
         if (!cancelled) {
           console.error(`[demo-tour:${siteId}] Failed to load site:`, error);
           setLoadStatus(null);
+          toast({
+            title: 'Could not load tour site',
+            description: 'The map still shows whatever was previously open.',
+            status: 'error',
+            duration: 5000,
+          });
         }
       }
     };

@@ -51,6 +51,8 @@ function App() {
   });
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
+  const currentSiteIdRef = useRef(currentSiteId);
+  useEffect(() => { currentSiteIdRef.current = currentSiteId; }, [currentSiteId]);
   const [currentSite, setCurrentSite] = useState<Site | null>(null);
   const [editSite, setEditSite] = useState<Site | null>(null);
   const [identifyResult, setIdentifyResult] = useState<IdentifyResult>(null);
@@ -122,9 +124,14 @@ function App() {
   // restored from localStorage above, so we only need the site object itself.
   useEffect(() => {
     if (!currentSiteId) return;
+    const requestedSiteId = currentSiteId;
     isLoadingSiteRef.current = true;
-    getSite(currentSiteId)
+    getSite(requestedSiteId)
       .then((site) => {
+        // Bail if something else (e.g. a demo tour) already opened a different
+        // site while this fetch was in flight — applying it now would silently
+        // overwrite the newer site's bounds/geometry.
+        if (currentSiteIdRef.current !== requestedSiteId) return;
         if (site) {
           setCurrentSite(site);
         } else {
@@ -133,6 +140,7 @@ function App() {
         }
       })
       .catch(() => {
+        if (currentSiteIdRef.current !== requestedSiteId) return;
         setCurrentSiteId(null);
         setCurrentPage('sites');
       })
