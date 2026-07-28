@@ -16,9 +16,11 @@
 #   2. Rebuilds the docker compose images (to pick up any pulled code
 #      changes). Runs every time, regardless of whether the Drive data
 #      has changed.
-#   3. Checks the configured Google Drive folder for changes. If nothing
-#      has changed, the script stops here — the stack is left running as
-#      is and no redeploy/rebuild happens.
+#   3. Checks the configured Google Drive folder for changes.
+#      - If nothing has changed: brings the stack up (picking up any
+#        image rebuilt in step 2, a no-op otherwise) and stops here —
+#        no data fetch or rebuild.
+#      - If changes are found: continues to step 4.
 #   4. Stops the deployments docker compose stack.
 #   5. Fetches fresh CSV source data from the configured Google Drive folder.
 #   6. Restarts the deployments docker compose stack.
@@ -47,7 +49,17 @@ docker compose build
 echo "==> Checking Google Drive folder for updates..."
 cd "$PROJECT_ROOT"
 if ./scripts/check-drive-updates.sh "$DRIVE_FOLDER"; then
-    echo "==> No data changes found — skipping redeploy."
+    echo "==> No data changes found — skipping data refresh and rebuild."
+
+    # up -d is idempotent: it only (re)creates containers whose image or
+    # config actually changed, so this safely picks up a code-only rebuild
+    # from step 2 above without needing to fetch new data.
+    echo "==> Starting deployments stack..."
+    cd "$DEPLOYMENTS_DIR"
+    docker compose up -d
+    docker compose ps
+    echo "==> Deployments stack started."
+
     echo "=== Scheduled redeploy finished at $(date -u +"%Y-%m-%dT%H:%M:%SZ") (no-op) ==="
     exit 0
 fi
@@ -63,6 +75,8 @@ make fetch-data FOLDER="$DRIVE_FOLDER"
 echo "==> Starting deployments stack..."
 cd "$DEPLOYMENTS_DIR"
 docker compose up -d
+docker compose ps
+echo "==> Deployments stack started."
 
 echo "==> Building datapack..."
 cd "$PROJECT_ROOT"
