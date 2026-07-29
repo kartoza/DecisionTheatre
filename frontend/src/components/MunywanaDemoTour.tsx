@@ -7,8 +7,8 @@ import {
   FiTarget,
 } from 'react-icons/fi';
 import DemoTour, { type DemoStep } from './DemoTour';
+import { MUNYWANA_SITE_ID } from '../constants/walkthroughSites';
 
-const MUNYWANA_SITE_ID = 'fb1066ef-978e-4744-ac62-570a7cb366ed';
 const EXPLORING_TARGETS_STEP = 5;
 const GRAZING_EFFECTS_STEP = 14;
 const HERBIVORE_INPUTS_STEP = 11;

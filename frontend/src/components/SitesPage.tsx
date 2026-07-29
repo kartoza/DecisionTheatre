@@ -281,7 +281,7 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
                       position="relative"
                       bg="gray.800"
                     >
-                      {site.thumbnail ? (
+                      {site.thumbnail && site.source !== 'walkthrough' ? (
                         <Image
                           src={site.thumbnail}
                           alt={site.title}

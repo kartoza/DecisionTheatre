@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
+import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 
 const API_BASE = '/api';
 const SITES_STORAGE_KEY = 'dt-sites';
@@ -535,12 +536,44 @@ export function useSites() {
   return { sites, loading, error, refetch: fetchSites };
 }
 
-export async function listSites(): Promise<Site[]> {
-  if (isBrowserRuntime()) {
-    return sortSitesByCreatedAtDesc(loadLocalSites());
-  }
+// Walkthrough demo sites live as static JSON under data/walkthroughs/ rather
+// than in the site store (localStorage in browser runtime, data/sites/ in
+// webview runtime), so they must be fetched separately and merged into every
+// listSites() result — otherwise a walkthrough only appears once its tour has
+// been run and it happens to get written into localStorage (browser only;
+// webview never persists it to disk at all). Cached for the session since the
+// static files don't change at runtime.
+let _walkthroughSitesPromise: Promise<Site[]> | null = null;
 
-  return fetchJSON<Site[]>(`${API_BASE}/sites`);
+async function loadWalkthroughSite(id: string): Promise<Site | null> {
+  try {
+    const site = await fetchJSON<Site>(`/data/walkthroughs/${id}.json`);
+    return { ...site, source: 'walkthrough' };
+  } catch {
+    return null;
+  }
+}
+
+function loadWalkthroughSites(): Promise<Site[]> {
+  if (!_walkthroughSitesPromise) {
+    _walkthroughSitesPromise = Promise.all(WALKTHROUGH_SITE_IDS.map(loadWalkthroughSite))
+      .then((sites) => sites.filter((site) => site !== null));
+  }
+  return _walkthroughSitesPromise;
+}
+
+export async function listSites(): Promise<Site[]> {
+  const [realSites, walkthroughSites] = await Promise.all([
+    isBrowserRuntime() ? loadLocalSites() : fetchJSON<Site[]>(`${API_BASE}/sites`),
+    loadWalkthroughSites(),
+  ]);
+
+  // A walkthrough already persisted into the real site list (e.g. the browser
+  // ran its tour before, resetting ideal targets along the way) takes
+  // precedence over the freshly-fetched static copy.
+  const realSiteIds = new Set(realSites.map((site) => site.id));
+  const merged = [...realSites, ...walkthroughSites.filter((site) => !realSiteIds.has(site.id))];
+  return sortSitesByCreatedAtDesc(merged);
 }
 
 // Promise-level deduplication caches: concurrent callers (e.g. all 4 quad-view panes)
@@ -548,6 +581,21 @@ export async function listSites(): Promise<Site[]> {
 const CACHE_TTL_MS = 30_000;
 const _siteCache = new Map<string, { promise: Promise<Site | null>; ts: number }>();
 const _catchmentsCache = new Map<string, { promise: Promise<CatchmentIndicators[]>; ts: number }>();
+
+// Walkthrough demo sites embed their own per-catchment breakdown directly in
+// the static JSON they're loaded from (they were never created through the
+// site store, so there's nothing on the server to fetch it from in webview
+// runtime — GET /sites/{id}/catchments 404s just like the indicators PATCH
+// did). Seed the same cache getSiteCatchments reads from, so every consumer
+// (table/chart/dial views) gets data with no network round trip at all.
+export function primeSiteCatchmentsFromEmbedded(site: Site): void {
+  const embedded = (site as SiteWithCatchments).catchments
+    ?? (site as SiteWithCatchments).catchmentIndicators
+    ?? (site as SiteWithCatchments).catchmentData;
+  if (Array.isArray(embedded) && embedded.length > 0) {
+    _catchmentsCache.set(site.id, { promise: Promise.resolve(embedded), ts: Date.now() });
+  }
+}
 
 export async function getSite(id: string): Promise<Site | null> {
   const now = Date.now();
@@ -692,8 +740,41 @@ export async function patchSite(
 
 export async function patchSiteIndicators(
   id: string,
-  indicators: Site['indicators']
+  indicators: Site['indicators'],
+  site?: Site
 ): Promise<Site> {
+  // Walkthrough demo sites are loaded straight from a static JSON file and
+  // were never created through the site store, so h.siteStore.Get(id) on the
+  // backend 404s for them. Route these through the same "runtime: browser"
+  // path real browser-runtime sessions use: the backend recalculates
+  // cascades from the site payload in the request body instead of loading
+  // it from data/sites/, and the result is never persisted to disk.
+  if (site?.source === 'walkthrough') {
+    const { thumbnail, ...siteWithoutThumbnail } = site;
+    const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runtime: 'browser',
+        site: siteWithoutThumbnail,
+        ideal: indicators?.ideal,
+        idealLower: indicators?.idealLower,
+        idealUpper: indicators?.idealUpper,
+        reference: indicators?.reference,
+        referenceLower: indicators?.referenceLower,
+        referenceUpper: indicators?.referenceUpper,
+        current: indicators?.current,
+        currentLower: indicators?.currentLower,
+        currentUpper: indicators?.currentUpper,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update site indicators: ${response.statusText}`);
+    }
+    _catchmentsCache.delete(id);
+    return response.json();
+  }
+
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(id);
     if (localSite) {

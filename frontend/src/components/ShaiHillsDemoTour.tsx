@@ -6,8 +6,8 @@ import {
   FiTarget,
 } from 'react-icons/fi';
 import DemoTour, { type DemoStep } from './DemoTour';
+import { SHAI_HILLS_SITE_ID } from '../constants/walkthroughSites';
 
-const SHAI_HILLS_SITE_ID = 'd4061726-167d-4074-9f58-4a0de0ed534b';
 const LOAD_SITE_STEP = 1;
 const FOREST_PATHWAY_STEP = 5;
 

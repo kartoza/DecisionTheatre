@@ -6,8 +6,8 @@ import {
   FiTarget,
 } from 'react-icons/fi';
 import DemoTour, { type DemoStep } from './DemoTour';
+import { AFRICA_SITE_ID } from '../constants/walkthroughSites';
 
-const AFRICA_SITE_ID = '6dede7c6-8eb3-47a8-a678-16c610b551e6';
 const LOAD_SITE_STEP = 1;
 const SCENARIO_1_STEP = 10;
 const SCENARIO_2_STEP = 11;

@@ -6,8 +6,8 @@ import {
   FiTarget,
 } from 'react-icons/fi';
 import DemoTour, { type DemoStep } from './DemoTour';
+import { VIPHYA_SITE_ID } from '../constants/walkthroughSites';
 
-const VIPHYA_SITE_ID = '165bcb54-71aa-49de-8e80-bb3142f16eb7';
 const LOAD_SITE_STEP = 1;
 const RESTORATION_PATHWAY_STEP = 5;
 

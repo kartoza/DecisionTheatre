@@ -14,7 +14,7 @@ import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -259,8 +259,11 @@ function App() {
   };
 
   useEffect(() => {
-    // Don't save if no site is open, we're loading a site, or on create-site page
-    if (!currentSiteId || isLoadingSiteRef.current || currentPage === 'create-site') {
+    // Don't save if no site is open, we're loading a site, on create-site page,
+    // or the open site is a read-only walkthrough demo (never persisted, so
+    // this would just 404 against the site store on every debounce tick).
+    if (!currentSiteId || isLoadingSiteRef.current || currentPage === 'create-site'
+      || currentSite?.source === 'walkthrough') {
       return;
     }
 
@@ -286,7 +289,7 @@ function App() {
         clearTimeout(siteAutoSaveTimerRef.current);
       }
     };
-  }, [currentSiteId, paneStates, layoutMode, focusedPane, currentPage]);
+  }, [currentSiteId, paneStates, layoutMode, focusedPane, currentPage, currentSite?.source]);
 
   // Navigate to a page
   const handleNavigate = useCallback((page: AppPage) => {
@@ -330,6 +333,7 @@ function App() {
 
     setCurrentSiteId(site.id);
     setCurrentSite(site); // Store full site for title and bounds
+    if (site.source === 'walkthrough') primeSiteCatchmentsFromEmbedded(site);
     setIsExploreMode(false); // Exit explore mode when opening a site
 
     // Load site state - restore pane states including indicator selections
@@ -741,8 +745,12 @@ function App() {
     });
 
     try {
-      const updatedSite = await patchSiteIndicators(currentSiteId, indicators);
-      setCurrentSite(updatedSite);
+      const updatedSite = await patchSiteIndicators(currentSiteId, indicators, currentSite ?? undefined);
+      // The backend has no concept of `source` — it's a frontend-only marker
+      // for read-only demo/walkthrough sites — so it never comes back in the
+      // response. Carry it forward or a walkthrough site would look like a
+      // normal (persistable) one after its first successful edit.
+      setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
       setMapRefreshSeq(s => s + 1);
 
       const warnings = updatedSite.indicators?.warnings ?? [];
@@ -751,7 +759,7 @@ function App() {
       console.error('Failed to update site indicators:', err);
       throw err;
     }
-  }, [currentSiteId, toast]);
+  }, [currentSiteId, currentSite, toast]);
 
   const isIndicatorOpen = indicatorPaneIndex !== null;
 

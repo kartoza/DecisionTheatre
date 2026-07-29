@@ -103,6 +103,17 @@ var litterMidpoints = [10]float64{6.0, 18.0, 36.0, 70.0, 98.0, 144.0, 198.0, 260
 // Source: §1 Treefracs.
 var treeCoverMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
 
+// midpointFor returns the tree-cover midpoint (%) for a prop_X*Mgha class
+// column, looked up by its position in allBiomassClasses.
+func midpointFor(class string) float64 {
+	for i, k := range allBiomassClasses {
+		if k == class {
+			return treeCoverMidpoints[i]
+		}
+	}
+	return 0
+}
+
 // ── Shared helper: recompute metrics after prop classes change ────────────────
 
 // recomputePropDerivedMetrics updates AGBwd, LitterBiomass, meanTC, NPP,
@@ -250,20 +261,55 @@ func workflow1TreeCover(ideal, oldIdeal map[string]float64, lookup *LookupData) 
 // clamped to [0,1] then lowTC_prop / highTC_prop and all downstream metrics
 // are recomputed.
 func workflowMeanTC(ideal, oldIdeal map[string]float64, lookup *LookupData) {
-	diffMeanTC := (oldIdeal[colMeanTC] - ideal[colMeanTC]) / 100.0
-	shift := diffMeanTC / 10.0
-
 	increasing := []string{
 		"prop_X0_5Mgha", "prop_X05_10Mgha", "prop_X10_20Mgha",
 		"prop_X20_30Mgha", "prop_X30_40Mgha",
 	}
 	decreasing := append([]string{"prop_X40_50Mgha"}, highTCBiomassClasses...)
 
+	// The meanTC value carried on ideal/oldIdeal can originate from a raw
+	// extraction that is not itself the weighted-midpoint sum of the class
+	// proportions below, so it is not a reliable baseline for how far the
+	// classes need to move. Recompute the baseline from the actual current
+	// proportions so the shift always targets the real gap to close.
+	var actualOldMeanTC float64
+	for i, k := range allBiomassClasses {
+		actualOldMeanTC += ideal[k] * treeCoverMidpoints[i]
+	}
+
+	var incMidpointSum, decMidpointSum float64
 	for _, k := range increasing {
-		ideal[k] = math.Max(0, ideal[k]+shift)
+		incMidpointSum += midpointFor(k)
 	}
 	for _, k := range decreasing {
-		ideal[k] = math.Max(0, ideal[k]-shift)
+		decMidpointSum += midpointFor(k)
+	}
+
+	// Moving `shift` from every decreasing class into every increasing class
+	// changes the weighted sum by shift * (incMidpointSum - decMidpointSum);
+	// solve for the shift that closes the gap to the requested target exactly.
+	shift := (actualOldMeanTC - ideal[colMeanTC]) / (decMidpointSum - incMidpointSum)
+
+	// Cap the shift so no class is pushed below zero, while keeping the same
+	// shift applied to every increasing/decreasing class — this preserves the
+	// total proportion mass (sum stays 1) even when the target isn't fully
+	// reachable, instead of clamping each class independently and silently
+	// breaking that invariant.
+	if shift > 0 {
+		for _, k := range decreasing {
+			shift = math.Min(shift, ideal[k])
+		}
+	} else if shift < 0 {
+		for _, k := range increasing {
+			shift = math.Max(shift, -ideal[k])
+		}
+	}
+
+	for _, k := range increasing {
+		ideal[k] += shift
+	}
+	for _, k := range decreasing {
+		ideal[k] -= shift
 	}
 
 	var newLowTC, newHighTC float64
