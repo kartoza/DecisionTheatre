@@ -453,10 +453,18 @@ export default function IndicatorEditorPage({
           duration: 2000,
         });
       } else {
+        // Walkthrough demo sites are loaded from a static JSON file and were
+        // never created through the site store, so the backend can't look
+        // them up by id. Send the site payload with runtime: 'browser' so
+        // the backend recalculates cascades from the payload instead of
+        // reading data/sites/{id}.json — the result is never persisted.
+        const isWalkthrough = site.source === 'walkthrough';
+        const { thumbnail, ...siteWithoutThumbnail } = site;
         const response = await fetch(`/api/sites/${site.id}/indicators`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            ...(isWalkthrough && { runtime: 'browser', site: siteWithoutThumbnail }),
             ideal: localIndicators.ideal,
             idealLower: localIndicators.idealLower,
             idealUpper: localIndicators.idealUpper,
@@ -475,8 +483,13 @@ export default function IndicatorEditorPage({
           // the backend may have recalculated dependent fields (e.g. fire cascade
           // after a herbivore or tree-cover edit).  Keep local values only for any
           // fields the server did not return (older backend compatibility).
+          // `source` is a frontend-only marker the backend doesn't know about
+          // (it's how read-only walkthrough/demo sites are recognized), so it
+          // never comes back in the response — carry it forward explicitly or
+          // this site would stop being treated as ephemeral after one edit.
           const updatedSite: Site = {
             ...savedSite,
+            source: site.source,
             indicators: {
               ...localIndicators,
               ...(savedSite.indicators ?? {}),
@@ -518,7 +531,41 @@ export default function IndicatorEditorPage({
     try {
       const runtime = getAppRuntime();
 
-      if (runtime === 'browser') {
+      // Walkthrough demo sites were never created through the site store, so
+      // the backend's reset endpoint (which always loads/persists by id) 404s
+      // for them. Resetting ideal to reference needs no cascade logic, so do
+      // it entirely client-side and skip both the backend and localStorage.
+      if (site.source === 'walkthrough') {
+        if (!localIndicators) {
+          throw new Error('No local indicators to reset');
+        }
+
+        const resetIndicators: SiteIndicators = {
+          reference: { ...(localIndicators.reference || {}) },
+          current: { ...(localIndicators.current || {}) },
+          ideal: { ...(localIndicators.reference || {}) },
+          idealLower: { ...(localIndicators.reference || {}) },
+          idealUpper: { ...(localIndicators.reference || {}) },
+          extractedAt: localIndicators.extractedAt,
+          catchmentCount: localIndicators.catchmentCount,
+          totalAreaKm2: localIndicators.totalAreaKm2,
+          catchmentIds: localIndicators.catchmentIds,
+        };
+        const updatedSite: Site = {
+          ...site,
+          indicators: resetIndicators,
+        };
+
+        setLocalIndicators(resetIndicators);
+        onSiteUpdated(updatedSite);
+        setHasChanges(false);
+        toast({
+          title: 'Values reset',
+          description: 'Ideal values have been reset to ecological reference values',
+          status: 'info',
+          duration: 3000,
+        });
+      } else if (runtime === 'browser') {
         if (!localIndicators) {
           throw new Error('No local indicators to reset');
         }
