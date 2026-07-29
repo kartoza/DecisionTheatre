@@ -99,8 +99,16 @@ var agbMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
 // R formula: (1-evergreenFrac)*LMF*AGBvals*100 — the ×100 converts Mg/ha to g/m².
 var litterMidpoints = [10]float64{6.0, 18.0, 36.0, 70.0, 98.0, 144.0, 198.0, 260.0, 330.0, 432.0}
 
-// treeCoverMidpoints are the tree-cover fraction midpoints (%) used for meanTC.
-// Source: §1 Treefracs.
+// treeCoverMidpoints are the tree-cover percentage midpoints (0–100 scale)
+// used for meanTC. Source: §1 Treefracs×100 (Treefracs is stored as a 0–1
+// fraction in R). meanTC itself is a percentage (see metadata.csv), not a
+// biomass quantity.
+//
+// These values are numerically identical to agbMidpoints because each
+// biomass class was defined to align with a matching tree-cover band (e.g.
+// "80-100 Mg/ha" ≈ "80-100% tree cover"), not because this is a duplicate of
+// that array — keep the two separate so a future change to one doesn't
+// silently change the other's (different) unit.
 var treeCoverMidpoints = [10]float64{2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90}
 
 // midpointFor returns the tree-cover midpoint (%) for a prop_X*Mgha class
@@ -254,12 +262,12 @@ func workflow1TreeCover(ideal, oldIdeal map[string]float64, lookup *LookupData) 
 }
 
 // workflowMeanTC handles §1.3 — meanTC edited directly.
-// Computes diffMeanTC = oldMeanTC − newMeanTC (on meanTC's 0–100 percentage
-// scale), converts it to the 0–1 fraction scale used by prop_X*Mgha, and
-// shifts each of the 10 classes by ±diffMeanTC/100/10 (first 5 low-TC classes
-// increase, last 5 decrease), preserving the total sum at 1. Classes are
-// clamped to [0,1] then lowTC_prop / highTC_prop and all downstream metrics
-// are recomputed.
+// Computes the exact shift needed to move mass from the decreasing (high-TC)
+// classes into the increasing (low-TC) classes so the weighted-midpoint sum
+// matches the requested meanTC exactly, preserving the total sum at 1. The
+// shift is not clamped: a requested meanTC outside what the current class
+// distribution can reach will push some classes negative. lowTC_prop /
+// highTC_prop and all downstream metrics are then recomputed.
 func workflowMeanTC(ideal, oldIdeal map[string]float64, lookup *LookupData) {
 	increasing := []string{
 		"prop_X0_5Mgha", "prop_X05_10Mgha", "prop_X10_20Mgha",
@@ -289,21 +297,6 @@ func workflowMeanTC(ideal, oldIdeal map[string]float64, lookup *LookupData) {
 	// changes the weighted sum by shift * (incMidpointSum - decMidpointSum);
 	// solve for the shift that closes the gap to the requested target exactly.
 	shift := (actualOldMeanTC - ideal[colMeanTC]) / (decMidpointSum - incMidpointSum)
-
-	// Cap the shift so no class is pushed below zero, while keeping the same
-	// shift applied to every increasing/decreasing class — this preserves the
-	// total proportion mass (sum stays 1) even when the target isn't fully
-	// reachable, instead of clamping each class independently and silently
-	// breaking that invariant.
-	if shift > 0 {
-		for _, k := range decreasing {
-			shift = math.Min(shift, ideal[k])
-		}
-	} else if shift < 0 {
-		for _, k := range increasing {
-			shift = math.Max(shift, -ideal[k])
-		}
-	}
 
 	for _, k := range increasing {
 		ideal[k] += shift

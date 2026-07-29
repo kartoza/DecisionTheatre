@@ -48,10 +48,12 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
   },
   meanTC: {
     workflow: "Tree Cover (§1)",
-    formula: "meanTC = Σᵢ ( prop_class[i] × AGB_midpoint[i] )",
+    formula: "meanTC = Σᵢ ( prop_class[i] × treeCover_midpoint[i] )",
     explanation:
-      "Weighted mean above-ground woody biomass (Mg/ha) across all 10 tree-cover classes. " +
-      "Uses the same AGB midpoints as AGBwd: 2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90 Mg/ha.",
+      "Weighted mean tree cover (%) across all 10 tree-cover classes, range 0–100. " +
+      "The tree-cover-percentage midpoints (2.5, 7.5, 15, 25, 35, 45, 55, 65, 75, 90 %) happen to share the " +
+      "same numeric values as the AGB midpoints used for AGBwd_Mgha, since each biomass class was defined to " +
+      "align with a matching tree-cover band — but meanTC itself is a percentage, not a biomass quantity.",
   },
   NPP_gm2: {
     workflow: "Tree Cover (§1)",

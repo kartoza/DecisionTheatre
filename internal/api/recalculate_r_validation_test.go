@@ -246,6 +246,14 @@ func cascadeCases() []cascadeCase {
 			changedTargets: setKeys("meanTC"),
 		},
 		{
+			// A target far outside what the current classes can reach without
+			// clamping — locks in that the shift is applied uncapped (some
+			// classes go negative) rather than clamped at zero.
+			name:           "mean_tc_edit_unreachable_target",
+			edit:           func(ideal map[string]float64) { ideal["meanTC"] = 5 },
+			changedTargets: setKeys("meanTC"),
+		},
+		{
 			name:             "prop_class_edit",
 			edit:             func(ideal map[string]float64) { ideal["prop_X0_5Mgha"] = 0.15 },
 			changedTargets:   setKeys(),
