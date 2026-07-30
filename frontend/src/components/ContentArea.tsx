@@ -156,6 +156,7 @@ function ContentArea({
   const { targetRanges } = useAttributeTargetRanges();
   const { variableTypes } = useAttributeVariableTypes();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
+  const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
@@ -215,21 +216,40 @@ function ContentArea({
     });
   }, [siteIndicators]);
 
-  // Populate draft values from current ideal whenever the modal opens, regardless
-  // of which entry point triggered it (header "Targets" button vs internal button).
+  // Populate draft values whenever the modal opens, regardless of which entry
+  // point triggered it (header "Targets" button vs internal button). If the
+  // user has already set a custom target for a key (ideal differs from
+  // reference), keep that value; otherwise default to the current state.
   useEffect(() => {
     if (!isTargetModalOpen) return;
     const nextDrafts: Record<string, string> = {};
     for (const key of editableTargetKeys) {
-      const value = siteIndicators?.ideal?.[key];
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        nextDrafts[key] = String(value);
+      const idealVal = siteIndicators?.ideal?.[key];
+      const refVal = siteIndicators?.reference?.[key];
+      const hasCustomTarget = typeof idealVal === 'number' && typeof refVal === 'number' &&
+        Number.isFinite(idealVal) && Number.isFinite(refVal) && idealVal !== refVal;
+
+      if (hasCustomTarget) {
+        nextDrafts[key] = String(idealVal);
+        continue;
+      }
+
+      const currentVal = siteIndicators?.current?.[key];
+      if (typeof currentVal === 'number' && Number.isFinite(currentVal)) {
+        nextDrafts[key] = String(currentVal);
+      } else if (typeof idealVal === 'number' && Number.isFinite(idealVal)) {
+        nextDrafts[key] = String(idealVal);
       } else {
         const fallback = siteIndicators?.idealLower?.[key];
         nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback) ? String(fallback) : '0';
       }
     }
     setTargetDraftValues(nextDrafts);
+    setTargetDefaultValues(
+      Object.fromEntries(
+        Object.entries(nextDrafts).map(([key, value]) => [key, Number(value)])
+      )
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTargetModalOpen]);
 
@@ -548,7 +568,11 @@ function ContentArea({
                         const isProportion = unit === 'proportion' || unit === 'fraction';
                         const metaRange = targetRanges[key];
                         const safeMin = (metaRange?.min != null && Number.isFinite(metaRange.min)) ? metaRange.min : 0;
-                        const safeMax = (metaRange?.max != null && Number.isFinite(metaRange.max)) ? metaRange.max : isProportion ? 1 : safeRef + 1000;
+                        const metaMax = (metaRange?.max != null && Number.isFinite(metaRange.max)) ? metaRange.max : isProportion ? 1 : safeRef + 1000;
+                        const defaultVal = targetDefaultValues[key];
+                        const safeMax = (typeof defaultVal === 'number' && Number.isFinite(defaultVal) && defaultVal > 1000)
+                          ? defaultVal + 1000
+                          : metaMax;
                         const range = safeMax - safeMin;
                         const step = isProportion ? 0.01 : range > 200 ? 1 : range > 20 ? 0.1 : 0.01;
                         const rawVal = targetDraftValues[key] ?? '';
