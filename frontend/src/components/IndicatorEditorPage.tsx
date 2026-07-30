@@ -1,4 +1,10 @@
 import {
+  AlertDialog,
+  AlertDialogBody,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogOverlay,
   Box,
   Button,
   Flex,
@@ -254,6 +260,8 @@ export default function IndicatorEditorPage({
 }: IndicatorEditorPageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  const resetCancelRef = useRef<HTMLButtonElement>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingScope, setEditingScope] = useState<'current' | 'reference' | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -522,11 +530,18 @@ export default function IndicatorEditorPage({
     }
   }, [site.id, localIndicators, onSiteUpdated, toast]);
 
-  const handleResetIdeal = useCallback(async () => {
-    if (!confirm('Reset all ideal values to ecological reference values? This cannot be undone.')) {
-      return;
-    }
+  // window.confirm relies on the browser's native dialog, which the desktop
+  // webview runtime (WebKitGTK via webview_go) does not implement — it
+  // silently resolves to false, so the reset button appeared to do nothing.
+  // Gate this with an in-app AlertDialog instead so the confirmation step
+  // works the same way in both runtimes, matching extractIndicators (which
+  // has no such gate and works in both).
+  const handleResetIdeal = useCallback(() => {
+    setIsResetConfirmOpen(true);
+  }, []);
 
+  const performResetIdeal = useCallback(async () => {
+    setIsResetConfirmOpen(false);
     setIsLoading(true);
     try {
       const runtime = getAppRuntime();
@@ -1406,6 +1421,29 @@ export default function IndicatorEditorPage({
           </Flex>
         )}
       </Box>
+
+      <AlertDialog
+        isOpen={isResetConfirmOpen}
+        leastDestructiveRef={resetCancelRef}
+        onClose={() => setIsResetConfirmOpen(false)}
+      >
+        <AlertDialogOverlay>
+          <AlertDialogContent bg="gray.800" color="gray.100">
+            <AlertDialogHeader>Reset target state</AlertDialogHeader>
+            <AlertDialogBody>
+              Reset all ideal values to ecological reference values? This cannot be undone.
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={resetCancelRef} variant="ghost" onClick={() => setIsResetConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button colorScheme="orange" onClick={performResetIdeal} ml={3}>
+                Reset
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
     </Box>
   );
 }

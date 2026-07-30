@@ -72,7 +72,9 @@ function AggregateTable({
 
   // Calculate all derived values from catchment data.
   // Step 1: For each catchment, compute how much of its area is inside the site.
-  //         validArea = areaKm2 * aoiFraction (or 1.0 when aoiFraction is missing)
+  //         validArea = areaKm2 * aoiFraction (or 0 when aoiFraction is missing,
+  //         matching the precomputed site.indicators convention of excluding
+  //         catchments with no known AOI overlap from the weighted average)
   // Step 2: Sum validArea across all catchments to get totalArea.
   // Step 3: For each catchment, compute its share of the site.
   //         weight = validArea / totalArea
@@ -87,7 +89,7 @@ function AggregateTable({
 
     // Build rows with calculated values
     const rows = catchments.map((c) => {
-      const fractionCovered = c.aoiFraction ?? 1.0; // Default to 1 if not provided
+      const fractionCovered = c.aoiFraction ?? 0; // Unknown overlap contributes no weight
       const validArea = c.areaKm2 * fractionCovered;
       const scenarioValues =
         scenario === 'reference' ? c.reference

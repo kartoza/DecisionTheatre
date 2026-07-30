@@ -291,6 +291,16 @@ function ContentArea({
         });
         return;
       }
+      // Sliders the user never touched still hold a draft — it defaults to
+      // the current-state value so untouched sliders start somewhere
+      // meaningful (see the modal-open effect above). Submitting that
+      // untouched draft as an "ideal" edit would make the backend think
+      // every uncustomized indicator changed at once, which derails the
+      // cascade recalculation for the one field actually being edited.
+      // Only include keys whose draft has actually moved from its
+      // modal-open snapshot.
+      const openedAt = targetDefaultValues[key];
+      if (typeof openedAt === 'number' && parsed === openedAt) continue;
       nextIdeal[key] = parsed;
     }
 
