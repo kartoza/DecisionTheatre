@@ -428,6 +428,17 @@ function ViewPane({
       targetValue = referenceValue;
     }
 
+    // Guard against min/max coming from a source (e.g. mapStatistics) that doesn't
+    // actually bound the reference/current/target values (e.g. dialRangeValues) —
+    // otherwise the dial clamps the reference marker to min/max and renders it at
+    // the wrong position instead of off-scale.
+    const displayedValues = [referenceValue, currentValue, targetValue]
+      .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+    if (displayedValues.length > 0) {
+      min = Math.min(min, ...displayedValues);
+      max = Math.max(max, ...displayedValues);
+    }
+
     // Ensure min < max
     if (min >= max) {
       const mid = (min + max) / 2 || 50;
