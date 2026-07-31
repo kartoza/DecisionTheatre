@@ -54,6 +54,11 @@ function App() {
   const currentSiteIdRef = useRef(currentSiteId);
   useEffect(() => { currentSiteIdRef.current = currentSiteId; }, [currentSiteId]);
   const [currentSite, setCurrentSite] = useState<Site | null>(null);
+  const currentSiteRef = useRef(currentSite);
+  useEffect(() => { currentSiteRef.current = currentSite; }, [currentSite]);
+  // Tracks whether the boundary was actually edited during the current
+  // edit-mode session, so exiting triggers a re-extract only when needed.
+  const boundaryEditedDuringSessionRef = useRef(false);
   const [editSite, setEditSite] = useState<Site | null>(null);
   const [identifyResult, setIdentifyResult] = useState<IdentifyResult>(null);
   const [mapExtent, setMapExtent] = useState<MapExtent | null>(null);
@@ -160,8 +165,9 @@ function App() {
     setIsExtractingIndicators(false);
   }, []);
 
-  const startBackgroundIndicatorExtraction = useCallback((site: Site | null) => {
-    if (!site || site.indicators || !site.catchmentIds?.length) return;
+  const startBackgroundIndicatorExtraction = useCallback((site: Site | null, options?: { force?: boolean }) => {
+    const force = options?.force ?? false;
+    if (!site || (!force && site.indicators) || !site.catchmentIds?.length) return;
     // Already extracting this exact site — don't double-start.
     if (extractingIndicatorsRef.current && extractingSiteIdRef.current === site.id) return;
 
@@ -710,12 +716,28 @@ function App() {
   // Toggle boundary edit mode
   const handleToggleBoundaryEdit = useCallback(() => {
     setIsBoundaryEditMode(prev => !prev);
-    if (!isBoundaryEditMode) setIs3DMode(false); // entering edit mode → flatten map
-  }, [isBoundaryEditMode]);
+    if (!isBoundaryEditMode) {
+      // Entering edit mode → flatten map and start tracking whether it's edited.
+      setIs3DMode(false);
+      boundaryEditedDuringSessionRef.current = false;
+      return;
+    }
+    // Exiting edit mode: if the boundary actually changed, re-extract indicators
+    // so the catchment count/stats reflect the new shape without the user having
+    // to go to the indicators page and click re-extract manually. Delayed so any
+    // in-flight boundary save (geometry + catchmentIds) has settled first.
+    if (boundaryEditedDuringSessionRef.current) {
+      boundaryEditedDuringSessionRef.current = false;
+      window.setTimeout(() => {
+        startBackgroundIndicatorExtraction(currentSiteRef.current, { force: true });
+      }, 1000);
+    }
+  }, [isBoundaryEditMode, startBackgroundIndicatorExtraction]);
 
   // Handle geometry update from boundary editing
   const handleBoundaryUpdate = useCallback(async (newGeometry: GeoJSON.Geometry, thumbnail?: string | null) => {
     if (!currentSiteId) return;
+    boundaryEditedDuringSessionRef.current = true;
 
     // Apply immediately so map state stays in sync while requests are in flight.
     setCurrentSite(prev => {

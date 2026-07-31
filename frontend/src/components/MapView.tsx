@@ -972,7 +972,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const lastDomainRangeRef = useRef<DomainRange | null>(null);
   const siteCatchmentIdsRef = useRef<Set<string> | null>(null);
   const boundaryGeometryRef = useRef<GeoJSON.Geometry | null>(siteGeometry ?? null);
-  boundaryGeometryRef.current = siteGeometry ?? null;
+  // Sync only when the prop itself changes value, not on every render — a
+  // render triggered by exiting edit mode (isBoundaryEditMode flipping)
+  // happens before the parent's async geometry update has propagated back
+  // down as a new `siteGeometry` prop, and blindly resyncing here would
+  // stomp the live-edited geometry already applied via updateBoundaryDisplay.
+  useEffect(() => {
+    boundaryGeometryRef.current = siteGeometry ?? null;
+    if (!siteGeometry) return;
+    // Final authoritative re-sync once the saved geometry round-trips back
+    // as a prop: setData()-only (no remove/recreate) so it's cheap and
+    // can't disturb layer state, but it corrects either map if its last
+    // live-drag setData() call during the edit didn't land.
+    const geometry = normalizeBoundaryGeometry(siteGeometry);
+    for (const map of [leftMapRef.current, rightMapRef.current]) {
+      const source = map?.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource | undefined;
+      source?.setData({ type: 'Feature', properties: {}, geometry });
+    }
+  }, [siteGeometry]);
   const identifyOverlayRef = useRef<HTMLDivElement | null>(null);
   const identifyOverlayLngLatRef = useRef<[number, number] | null>(null);
 
@@ -1441,7 +1458,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const onStyleData = () => {
         if (!map.isStyleLoaded()) return;
         map.off('styledata', onStyleData);
-        addBoundaryLayersIfMissing(map, geometry);
+        // Re-read the ref instead of using the geometry captured above: this
+        // listener can sit armed for a long time (e.g. registered on initial
+        // mount before the style has settled) and fire much later, after
+        // further edits — applying the stale closure value would silently
+        // revert any edits made in the meantime.
+        const latestGeometry = boundaryGeometryRef.current;
+        if (!latestGeometry) return;
+        addBoundaryLayersIfMissing(map, latestGeometry);
       };
       map.on('styledata', onStyleData);
     };
@@ -3370,6 +3394,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       console.log(`[MapView ${mapViewIdRef.current}] adding site boundary`, {
         map: getMapLabel(map),
         geometryType: normalized.type,
+        coordCount: (normalized as GeoJSON.Polygon).coordinates?.[0]?.length,
       });
       addBoundaryLayersIfMissing(map, normalized);
 
@@ -3531,7 +3556,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
-  }, [siteId, siteGeometry, areMapsReady]);
+    // siteGeometry intentionally excluded: this effect tears down and
+    // recreates the entire boundary source/layers on every dependency
+    // change (see cleanup above). Including siteGeometry here made that
+    // full destroy+recreate cycle run on every single boundary edit —
+    // instead of the cheap setData()-only path in updateBoundaryDisplay/
+    // updateBoundarySource — which was causing the right map's edit
+    // vertices to render stale after exiting edit mode with the compare
+    // swiper enabled. Geometry edits are already kept in sync by those
+    // lighter-weight paths; this effect only needs to (re)run on site
+    // switches or initial mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteId, areMapsReady]);
 
   useEffect(() => {
     if (!siteId) return;
@@ -3740,6 +3776,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         const thumbnail = captureMapThumbnail();
         onBoundaryUpdateRef.current?.(geometry, thumbnail);
       });
+      // By the time an edit finishes (e.g. mouseup), the map has usually
+      // already painted the last live-drag frame and gone idle, so nothing
+      // would ever trigger the 'render' event above without this — leaving
+      // the listener (and the save it guards) pending forever.
+      leftMap.triggerRepaint();
     } else {
       onBoundaryUpdateRef.current(geometry);
     }
@@ -4049,6 +4090,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     updateSource(leftMap);
     updateSource(rightMap);
+
+    // Keep the ref in sync so any style/resize-triggered re-apply of the
+    // boundary layers (e.g. reapplyBoundaryLayers) uses the live-edited
+    // geometry instead of stale data from before this edit.
+    boundaryGeometryRef.current = newGeometry;
   }, [buildGeometryFromVertices]);
 
   // Handle boundary edit mode changes
@@ -4060,9 +4106,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       return;
     }
 
-    if (isBoundaryEditMode && siteGeometry) {
+    if (isBoundaryEditMode && siteGeometryRef.current) {
       // Enter edit mode
-      const vertices = extractVertices(siteGeometry);
+      const vertices = extractVertices(siteGeometryRef.current);
       editVerticesRef.current = vertices;
       updateEditVerticesLayer(vertices);
 
@@ -4158,7 +4204,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       leftMap.getCanvas().style.cursor = '';
       rightMap.getCanvas().style.cursor = '';
     }
-  }, [isBoundaryEditMode, siteGeometry, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
+    // siteGeometry intentionally excluded: this effect sets up/tears down
+    // the vertex-drag handlers for entering/exiting edit mode. It read
+    // siteGeometry directly before, so saving an edit (which updates the
+    // siteGeometry prop) re-ran this effect mid-drag-session — tearing
+    // down and re-registering the mouse handlers and re-zooming the map —
+    // which raced with the in-flight edit and left the right map's
+    // (swiper-compare) boundary reverted to the pre-edit geometry after
+    // exiting edit mode. siteGeometryRef.current is used instead so this
+    // only reacts to isBoundaryEditMode transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBoundaryEditMode, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
 
   // Handle catchment add/remove click events
   useEffect(() => {
