@@ -11,9 +11,10 @@ import {
   IconButton,
   Image,
   Text,
+  VStack,
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AppPage } from '../types';
+import { SCENARIOS, type AppPage } from '../types';
 import { colors } from '../styles/colors';
 
 import partnerAfricanWildlife from '../assets/partners/africanwildlifeeconomy_logo 1.png';
@@ -194,6 +195,52 @@ const outlinedButtonProps: ButtonProps = {
   _hover: { bg: colors.orange, color: 'white', borderColor: 'transparent' },
 };
 
+// The six things the dashboard actually lets you do, condensed from the full
+// sentences into a scannable chip strip. Cycles through the app's existing
+// pastel palette — six capabilities, six tokens already in the design system.
+const dashboardCapabilities: { label: string; color: string }[] = [
+  { label: 'Assess current conditions', color: colors.pastelLightOrange },
+  { label: 'Compare with reference', color: colors.pastelLightBlue },
+  { label: 'Explore future scenarios', color: colors.pastelLightGreen },
+  { label: 'Adjust management variables', color: colors.pastelYellow },
+  { label: 'Investigate land-use impacts', color: colors.pastelDarkOrange },
+  { label: 'Visualise ecosystem connections', color: colors.pastelDarkGreen },
+];
+
+// Who each explore card speaks to — this used to be written but commented
+// out and never shown; surfacing it gives every card a clear "who this is
+// for" alongside the "what you can explore" button.
+const dashboardAudiences: { image: string; audience: string; cta: string; event: string }[] = [
+  { image: landOwnerImage, audience: 'Land owners & conservation managers', cta: 'Explore Conservation Futures', event: 'dt:start-munywana-demo' },
+  { image: ruralCommunityImage, audience: 'Rural communities', cta: 'Explore Shared Landscapes', event: 'dt:start-africa-demo' },
+  { image: localGovernmentImage, audience: 'Local government agencies and traditional leadership', cta: 'Explore Policy Impacts', event: 'dt:start-shaihills-demo' },
+  { image: futurePossibilitiesImage, audience: 'School learners, artists and members of the public', cta: 'Explore Future Possibilities', event: 'dt:start-viphya-demo' },
+];
+
+// Reuse the app's own reference/current/future colour coding (the same hues
+// used on every dial and chart) so the landing page teaches the legend
+// visitors will actually see once they open a site.
+const scenarioColors: Record<string, string> = Object.fromEntries(
+  SCENARIOS.map((s) => [s.id, s.color])
+);
+
+const gettingStartedStages: { id: string; eyebrow: string; description: string }[] = [
+  {
+    id: 'reference',
+    eyebrow: 'Reference',
+    description: 'The ecological baseline — conditions in which fire, grazing and nutrient cycling operate at appropriate, healthy levels.',
+  },
+  {
+    id: 'current',
+    eyebrow: 'Current',
+    description: "Today's landscape, assessed from environmental data collected over the past 20 years.",
+  },
+  {
+    id: 'future',
+    eyebrow: 'Future',
+    description: 'Adjust management and environmental variables to test how interventions could reshape the landscape over time.',
+  },
+];
 
 function LandingPage({ onNavigate }: LandingPageProps) {
   return (
@@ -245,7 +292,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               mb={5}
               lineHeight="1.7"
             >
-              Step into a powerful decision theatre where science meets strategy.
+              Explore how land management choices affect biodiversity, carbon storage and ecosystem functioning across African landscapes.
             </Text>
 
             <Text
@@ -255,7 +302,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               mb={9}
               lineHeight="1.7"
             >
-              This interactive tool brings together real-world data and ecosystem response to reveal the complex relationships between vegetation structure, biodiversity, carbon storage and vital ecological processes.
+               This interactive tool brings together real-world data and ecosystem response models to reveal the complex relationships between vegetation structure, biodiversity, carbon storage and vital ecological processes.
             </Text>
 
             <Button
@@ -291,7 +338,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             color="white"
             mb={10}
           >
-            Our Mission
+            Supporting landscape management 
           </Heading>
           <Flex gap="10" align="center" justify="center" wrap="wrap">
             <Box flex="1" minW="260px">
@@ -299,10 +346,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             </Box>
             <Box flex="1" minW="260px" textAlign="left">
               <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-                To empower land owners, local communities, and society to bring together real-world data and ecosystem response models for informed decision making and conservation.
+                Users can assess the current state of a landscape, compare it with ecological reference conditions and explore how different interventions may alter ecosystem functioning. This allows them to examine the consequences and trade-offs associated with different land management and conservation choices.
               </Text>
               <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-                Help guide our landscapes into nature-supporting paths by interacting with our tool to understand the constraints and opportunities in different landscapes across Africa.
+                The dashboard supports exploration at multiple scales, from individual catchments to the African continent as a whole
               </Text>
             </Box>
           </Flex>
@@ -340,169 +387,214 @@ function LandingPage({ onNavigate }: LandingPageProps) {
 
       {/* ── FROM DATA TO PROGRESS ─────────────────────────────── */}
       <Box bg={colors.darkGray} py={10} pb={20} px={6}>
-        <Container maxW="860px">
-          <Heading
-            {...headingProps}
-            as="h2"
-            fontSize={{ base: '3xl', md: '4xl' }}
-            fontWeight="bold"
-            color="white"
-            textAlign="center"
-            mb={10}
-          >
-            From Data to Progress
-          </Heading>
+        <Container maxW="1000px">
+          <Box textAlign="center" mb={9}>
+            <Text
+              fontSize="xs"
+              fontWeight="bold"
+              letterSpacing="0.14em"
+              textTransform="uppercase"
+              color={colors.brightGreen}
+              mb={3}
+            >
+              What you can do
+            </Text>
+            <Heading
+              {...headingProps}
+              as="h2"
+              fontSize={{ base: '3xl', md: '4xl' }}
+              fontWeight="bold"
+              color="white"
+            >
+              From Data to Progress
+            </Heading>
+          </Box>
 
-          <Text textAlign="center" fontSize="md" color="white" lineHeight="1.75" mb={5}>
-            Use cases for the Landscape Decision Dashboard
+          <Text textAlign="center" fontSize="md" color="whiteAlpha.800" lineHeight="1.75" mb={5}>
+            Use the Landscape Decision Dashboard to:
+          </Text>
+
+          {/* Capability strip — the six things the tool does, as a scannable
+              row of tags rather than a legalistic bulleted list. */}
+          <Flex wrap="wrap" gap={3} justify="center" mb={10}>
+            {dashboardCapabilities.map((cap) => (
+              <HStack
+                key={cap.label}
+                spacing={2}
+                bg="whiteAlpha.100"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                borderRadius="full"
+                px={4}
+                py={2}
+              >
+                <Box w="8px" h="8px" borderRadius="full" bg={cap.color} flexShrink={0} />
+                <Text fontSize="sm" color="white" fontWeight="medium" whiteSpace="nowrap">
+                  {cap.label}
+                </Text>
+              </HStack>
+            ))}
+          </Flex>
+
+          {/* Pull-quote — this is the tool's actual thesis, so it gets to be
+              the one oversized, quiet statement in the section. */}
+          <Text
+            textAlign="center"
+            fontSize={{ base: 'lg', md: 'xl' }}
+            color="white"
+            fontWeight="medium"
+            fontStyle="italic"
+            lineHeight="1.6"
+            maxW="700px"
+            mx="auto"
+            mb={14}
+          >
+            “The dashboard doesn't prescribe a course of action — it lets you explore the consequences of different interventions across a range of environmental factors.”
           </Text>
 
           <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={4}>
-            <Box
-              flexShrink={0}
-              p={3}
-              pos="relative"
-            >
-              <Image src={landOwnerImage}  objectFit="contain"  w="100%"/>
-              {/* <Box style={imageOverlayLabelStyle}>
-                <Text 
-                color='gray.900' 
-                fontSize={'xs'}>
-                  Land owners, conservation agencies, managers
-                </Text>
-              </Box> */}
-              <Box style={buttonOverlayStyle}>
-                <Button
-                  {...outlinedButtonProps}
-                  onClick={() => window.dispatchEvent(new Event('dt:start-munywana-demo'))}
-                >
-                  Explore Conservation Futures
-                </Button>
+            {dashboardAudiences.map((card) => (
+              <Box key={card.cta} flexShrink={0} p={3} pos="relative">
+                <Image src={card.image} objectFit="contain" w="100%" borderRadius="lg" />
+                {/* <Box position="absolute" top={6} left={6} bg="blackAlpha.700" borderRadius="lg" px={3} py={1.5} maxW="calc(100% - 48px)">
+                  <Text color="white" fontSize="xs" fontWeight="bold" letterSpacing="0.03em" textTransform="uppercase" lineHeight="1.4">
+                    {card.audience}
+                  </Text>
+                </Box> */}
+                <Box style={buttonOverlayStyle}>
+                  <Button
+                    {...outlinedButtonProps}
+                    onClick={() => window.dispatchEvent(new Event(card.event))}
+                  >
+                    {card.cta}
+                  </Button>
+                </Box>
               </Box>
-            </Box>
-
-            <Box
-              flexShrink={0}
-              p={3}
-              pos="relative"
-            >
-              <Image src={ruralCommunityImage}  objectFit="contain"  w="100%"/>
-              {/* <Box style={imageOverlayLabelStyle}>
-                <Text 
-                color='gray.900' 
-                fontSize={'xs'}>
-                  Rural communities
-                </Text>
-              </Box> */}
-              <Box style={buttonOverlayStyle}>
-                <Button
-                  {...outlinedButtonProps}
-                  onClick={() => window.dispatchEvent(new Event('dt:start-africa-demo'))}
-                >
-                  Explore Shared Landscapes
-                </Button>
-              </Box>
-            </Box>
-
-            <Box
-              flexShrink={0}
-              p={3}
-              pos="relative"
-            >
-              <Image src={localGovernmentImage}  objectFit="contain"  w="100%"/>
-              {/* <Box style={imageOverlayLabelStyle}>
-                <Text 
-                color='gray.900' 
-                fontSize={'xs'}>
-                  Local government agencies and tribal leadership
-                </Text>
-              </Box> */}
-              <Box style={buttonOverlayStyle}>
-                <Button
-                  {...outlinedButtonProps}
-                  onClick={() => window.dispatchEvent(new Event('dt:start-shaihills-demo'))}
-                >
-                  Explore Policy Impacts
-                </Button>
-              </Box>
-            </Box>
-
-            <Box
-              flexShrink={0}
-              p={3}
-              pos="relative"
-            >
-              <Image src={futurePossibilitiesImage}  objectFit="contain" w="100%"/>
-              {/* <Box style={imageOverlayLabelStyle}>
-                <Text 
-                color='gray.900' 
-                fontSize={'xs'}>
-                  School children, artists, public citizens
-                </Text>
-              </Box> */}
-              <Box style={buttonOverlayStyle}>
-                <Button
-                  {...outlinedButtonProps}
-                  onClick={() => window.dispatchEvent(new Event('dt:start-viphya-demo'))}
-                >
-                  Explore Future Possibilities
-                </Button>
-              </Box>
-            </Box>
+            ))}
           </Grid>
         </Container>
       </Box>
 
       {/* ── GETTING STARTED ───────────────────────────────────── */}
       <Box bg={colors.darkGray} py={16} px={6}>
-        <Container maxW="1200px" textAlign="center">
-          <Heading
-            {...headingProps}
-            as="h2"
-            fontSize={{ base: '3xl', md: '4xl' }}
-            fontWeight="bold"
-            color="white"
-            mb={10}
-          >
-            Getting Started
-          </Heading>
-          <Flex gap="10" align="center" justify="center" wrap="wrap">
-            <Box flex="1" minW="260px">
-              <Image src={gettingStartedImage} w="100%" objectFit="contain" mx="auto" mb={6} />
-            </Box>
-            <Box flex="1" minW="260px" textAlign="left">
-              <Text fontSize="lg" color="white" lineHeight="1.75" mb={1} fontWeight={"bold"}>
-                Understand Your Results — and What to Do Next
-              </Text>
-              <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-                This tool is designed to give you clear, actionable insight — not just numbers. It helps you compare where you are now, where you want to be, and what “good” looks like, so you can make informed decisions with confidence.
-              </Text>
+        <Container maxW="1200px">
+          <Box textAlign="center" mb={12}>
+            <Text
+              fontSize="xs"
+              fontWeight="bold"
+              letterSpacing="0.14em"
+              textTransform="uppercase"
+              color={colors.pastelLightBlue}
+              mb={3}
+            >
+              Three lenses, one landscape
+            </Text>
+            <Heading
+              {...headingProps}
+              as="h2"
+              fontSize={{ base: '3xl', md: '4xl' }}
+              fontWeight="bold"
+              color="white"
+            >
+              How does it work?
+            </Heading>
+          </Box>
 
-              <Text fontSize="lg" color="white" lineHeight="1.75" mb={1} fontWeight={"bold"}>
-                Not sure how to read your results?
-              </Text>
-              <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-                We've put together a simple, step-by-step guide. Read to learn more.
-              </Text>
-
-              <Button
-                bg={colors.orange}
-                color="white"
-                borderRadius="full"
-                px={8}
-                h="46px"
-                w="280px"
-                fontSize="sm"
-                fontWeight="semibold"
-                onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
-                _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
-                transition="all 0.2s"
-                boxShadow="md"
+          <Flex gap="12" align="flex-start" justify="center" wrap="wrap">
+            <Box flex="1" minW="260px" maxW="480px" mx="auto">
+              {/* Screenshot framed like a window, so it reads as "the real tool" rather than a loose image */}
+              <Box
+                borderRadius="xl"
+                overflow="hidden"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                boxShadow="0 24px 60px -24px rgba(0,0,0,0.7)"
+                bg="#11151c"
               >
-                From A to Z
-              </Button>
+                <HStack spacing={1.5} px={3} py={2.5} bg="whiteAlpha.100">
+                  <Box w="8px" h="8px" borderRadius="full" bg="whiteAlpha.400" />
+                  <Box w="8px" h="8px" borderRadius="full" bg="whiteAlpha.400" />
+                  <Box w="8px" h="8px" borderRadius="full" bg="whiteAlpha.400" />
+                </HStack>
+                <Image src={gettingStartedImage} w="100%" objectFit="contain" />
+              </Box>
+            </Box>
+
+            <Box flex="1" minW="260px" textAlign="left">
+              {/* Connected timeline, colour-coded to match the reference/current/future
+                  legend used throughout the dashboard's own dials and charts. */}
+              <VStack align="stretch" spacing={0} mb={7}>
+                {gettingStartedStages.map((stage, i) => {
+                  const isLast = i === gettingStartedStages.length - 1;
+                  const stageColor = scenarioColors[stage.id] ?? colors.pastelLightBlue;
+                  return (
+                    <HStack key={stage.id} align="stretch" spacing={4}>
+                      <VStack spacing={0} flexShrink={0} w="12px">
+                        <Box
+                          w="12px"
+                          h="12px"
+                          borderRadius="full"
+                          bg={stageColor}
+                          boxShadow={`0 0 0 4px ${stageColor}2A`}
+                          flexShrink={0}
+                          mt={1}
+                        />
+                        {!isLast && <Box w="2px" flex="1" bg="whiteAlpha.200" my={1} />}
+                      </VStack>
+                      <Box pb={isLast ? 0 : 5}>
+                        <Text
+                          fontSize="xs"
+                          fontWeight="bold"
+                          letterSpacing="0.08em"
+                          textTransform="uppercase"
+                          color={stageColor}
+                          mb={1}
+                        >
+                          {stage.eyebrow}
+                        </Text>
+                        <Text fontSize="md" color="white" lineHeight="1.7">
+                          {stage.description}
+                        </Text>
+                      </Box>
+                    </HStack>
+                  );
+                })}
+              </VStack>
+
+              
             </Box>
           </Flex>
+          <br></br>
+          <Box>
+
+              <Box
+                borderLeft="3px solid"
+                borderLeftColor={colors.blue}
+                bg="whiteAlpha.50"
+                borderRadius="md"
+                p={5}
+              >
+                <Text fontSize="md" color="white"  mb={1}>
+                  By comparing these scenarios, users can visualise how vegetation structure, biodiversity, productivity, carbon sequestration and other ecosystem processes are connected, and examine the trade-offs associated with different land management and conservation strategies.
+                </Text>
+                <br></br>
+                <Button
+                  bg={colors.orange}
+                  color="white"
+                  borderRadius="full"
+                  px={8}
+                  h="46px"
+                  fontSize="sm"
+                  fontWeight="semibold"
+                  onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
+                  _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
+                  transition="all 0.2s"
+                  boxShadow="md"
+                >
+                  From A to Z
+                </Button>
+              </Box>
+          </Box>
         </Container>
       </Box>
 
@@ -519,6 +611,10 @@ function LandingPage({ onNavigate }: LandingPageProps) {
           >
             Members of Our Ecosystem
           </Heading>
+
+          <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
+            The Landscape Decision Dashboard is developed through a partnership between Future Ecosystems for Africa and ReWild Capital.
+          </Text>
 
           <Box mb={12}>
             <PartnersCarousel />

@@ -432,6 +432,7 @@ function App() {
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
+      setRangeMode('site');
     };
     window.addEventListener('dt:demo-go-quad-dial', handler);
     return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
@@ -513,6 +514,7 @@ function App() {
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
+      setRangeMode('site');
     };
     window.addEventListener('dt:demo-go-quad-dial-africa', handler);
     return () => window.removeEventListener('dt:demo-go-quad-dial-africa', handler);
