@@ -689,6 +689,20 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
 	}
 
+	// Prefer metadata.csv's curated maxval_curr/maxval_ref over the scanned
+	// domain_maxima table for the max bound — these are authoritative
+	// per-scenario ceilings rather than a value derived from scanning every
+	// catchment. "future" (target) values are edited starting from current,
+	// so they share current's ceiling. Falls back to the scanned max when a
+	// column is missing/blank for this attribute.
+	maxvalByScenario := h.metaCache.MaxValReference
+	if scenario != "reference" {
+		maxvalByScenario = h.metaCache.MaxValCurrent
+	}
+	if metaMax, ok := maxvalByScenario[attribute]; ok {
+		domainRange.Max = metaMax
+	}
+
 	// Build response with domain range
 	response := ChoroplethResponse{
 		Type:      "FeatureCollection",

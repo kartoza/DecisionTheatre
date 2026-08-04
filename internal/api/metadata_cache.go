@@ -28,6 +28,8 @@ type MetadataCache struct {
 	GroupingVariables map[string]string
 	GroupingValues    map[string]string
 	Dial0Middle       map[string]bool
+	MaxValCurrent     map[string]float64
+	MaxValReference   map[string]float64
 }
 
 // loadMetadataCache opens metadata.csv once and builds all lookup maps.
@@ -49,6 +51,8 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 		GroupingVariables: make(map[string]string),
 		GroupingValues:    make(map[string]string),
 		Dial0Middle:       make(map[string]bool),
+		MaxValCurrent:     make(map[string]float64),
+		MaxValReference:   make(map[string]float64),
 	}
 
 	path := filepath.Join(dataDir, "metadata.csv")
@@ -159,6 +163,9 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 	iGroupingValues := col("GroupingValues")
 
 	iDial0Middle := col("dial_0_middle")
+
+	iMaxValCurrent := col("maxval_curr")
+	iMaxValReference := col("maxval_ref")
 
 	get := func(rec []string, i int) string {
 		if i < 0 || i >= len(rec) {
@@ -352,6 +359,25 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 				mc.Dial0Middle[column] = b
 				if norm != "" {
 					mc.Dial0Middle[norm] = b
+				}
+			}
+		}
+
+		// MaxValCurrent / MaxValReference: curated per-scenario ceilings for
+		// choropleth color scaling, used instead of scanning every catchment.
+		if iMaxValCurrent >= 0 {
+			if v := parseOptF(get(rec, iMaxValCurrent)); v != nil {
+				mc.MaxValCurrent[column] = *v
+				if norm != "" {
+					mc.MaxValCurrent[norm] = *v
+				}
+			}
+		}
+		if iMaxValReference >= 0 {
+			if v := parseOptF(get(rec, iMaxValReference)); v != nil {
+				mc.MaxValReference[column] = *v
+				if norm != "" {
+					mc.MaxValReference[norm] = *v
 				}
 			}
 		}

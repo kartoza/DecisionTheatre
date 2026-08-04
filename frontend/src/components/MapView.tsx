@@ -1209,15 +1209,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       // Color scale always uses the attribute's global domain across every
       // catchment, independent of the selected zone range (Full/Extent/Site).
+      // The backend's max is now scenario-specific (metadata.csv's curated
+      // maxval_curr/maxval_ref rather than a scan of every catchment), so the
+      // two sides can disagree when comparing reference against current —
+      // take the larger of the two so neither side's colors get clipped, and
+      // the result doesn't depend on which scenario happens to be on the left.
       let min = 0;
       let max = 1;
+      const domainMins: number[] = [];
+      const domainMaxes: number[] = [];
       if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
-        min = leftData.domain_min;
-        max = leftData.domain_max;
-      } else if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
-        min = rightData.domain_min;
-        max = rightData.domain_max;
+        domainMins.push(leftData.domain_min);
+        domainMaxes.push(leftData.domain_max);
       }
+      if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
+        domainMins.push(rightData.domain_min);
+        domainMaxes.push(rightData.domain_max);
+      }
+      if (domainMins.length > 0) min = Math.min(...domainMins);
+      if (domainMaxes.length > 0) max = Math.max(...domainMaxes);
       lastDomainRangeRef.current = { min, max };
 
       // Extent-based stats are always derived from the current viewport.
@@ -3289,12 +3299,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (map.getLayer(IDENTIFY_HIGHLIGHT_GLOW)) map.removeLayer(IDENTIFY_HIGHLIGHT_GLOW);
     };
 
-    // Helper to add neon yellow glow highlight to a catchment
-    const addHighlight = (map: maplibregl.Map, catchmentId: string) => {
+    // Helper to add neon blue glow highlight to a catchment
+    const addHighlight = (map: maplibregl.Map, side: 'left' | 'right', catchmentId: string) => {
       removeHighlight(map);
 
-      // Use the vector tile source "UoW Tiles" and filter by HYBAS_ID
-      const sourceId = 'UoW Tiles';
+      // Use the same per-side choropleth GeoJSON source the color layer already
+      // renders from (always present once a choropleth is showing) rather than
+      // the base style's "UoW Tiles" vector source, which doesn't exist at all
+      // when the Google satellite basemap is active — the default for browser
+      // runtime — leaving the highlight silently missing.
+      const sourceId = `choropleth-source-${side}`;
 
       // Check if the source exists
       if (!map.getSource(sourceId)) {
@@ -3305,30 +3319,28 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Parse catchmentId as number for filtering (HYBAS_ID is numeric)
       const catchmentIdNum = parseInt(catchmentId, 10);
 
-      // Add outer glow layer (neon yellow)
+      // Add outer glow layer (neon blue)
       map.addLayer({
         id: IDENTIFY_HIGHLIGHT_GLOW,
         type: 'line',
         source: sourceId,
-        'source-layer': 'catchments_lev12',
         filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
         paint: {
-          'line-color': '#FFFF00',  // Bright yellow
+          'line-color': '#00BFFF',  // Bright blue
           'line-width': 12,
           'line-blur': 8,
           'line-opacity': 0.7,
         },
       });
 
-      // Add inner bright line (white/yellow)
+      // Add inner bright line (pale blue)
       map.addLayer({
         id: IDENTIFY_HIGHLIGHT_LINE,
         type: 'line',
         source: sourceId,
-        'source-layer': 'catchments_lev12',
         filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
         paint: {
-          'line-color': '#FFFFAA',  // Pale yellow
+          'line-color': '#AEEFFF',  // Pale blue
           'line-width': 4,
           'line-opacity': 1,
         },
@@ -3341,8 +3353,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Add highlight if there's an identify result
     if (identifyResult?.catchmentID) {
-      addHighlight(leftMap, identifyResult.catchmentID);
-      addHighlight(rightMap, identifyResult.catchmentID);
+      addHighlight(leftMap, 'left', identifyResult.catchmentID);
+      addHighlight(rightMap, 'right', identifyResult.catchmentID);
     }
   }, [identifyResult]);
 
