@@ -711,6 +711,9 @@ func propagateIdealToCatchments(
 			for k, v := range catchments[i].Reference {
 				catchments[i].Ideal[k] = v
 			}
+			for k, v := range catchments[i].Current {
+				catchments[i].Ideal[k] = v
+			}
 		}
 		for key, newSiteVal := range newSiteIdeal {
 			oldSiteVal := oldSiteIdeal[key]

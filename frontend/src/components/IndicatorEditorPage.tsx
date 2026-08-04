@@ -548,19 +548,20 @@ export default function IndicatorEditorPage({
 
       // Walkthrough demo sites were never created through the site store, so
       // the backend's reset endpoint (which always loads/persists by id) 404s
-      // for them. Resetting ideal to reference needs no cascade logic, so do
+      // for them. Resetting ideal to current needs no cascade logic, so do
       // it entirely client-side and skip both the backend and localStorage.
       if (site.source === 'walkthrough') {
         if (!localIndicators) {
           throw new Error('No local indicators to reset');
         }
 
+        const resetIdeal = { ...(localIndicators.reference || {}), ...(localIndicators.current || {}) };
         const resetIndicators: SiteIndicators = {
           reference: { ...(localIndicators.reference || {}) },
           current: { ...(localIndicators.current || {}) },
-          ideal: { ...(localIndicators.reference || {}) },
-          idealLower: { ...(localIndicators.reference || {}) },
-          idealUpper: { ...(localIndicators.reference || {}) },
+          ideal: resetIdeal,
+          idealLower: resetIdeal,
+          idealUpper: resetIdeal,
           extractedAt: localIndicators.extractedAt,
           catchmentCount: localIndicators.catchmentCount,
           totalAreaKm2: localIndicators.totalAreaKm2,
@@ -576,7 +577,7 @@ export default function IndicatorEditorPage({
         setHasChanges(false);
         toast({
           title: 'Values reset',
-          description: 'Ideal values have been reset to ecological reference values',
+          description: 'Target values have been reset to current state values',
           status: 'info',
           duration: 3000,
         });
@@ -585,12 +586,13 @@ export default function IndicatorEditorPage({
           throw new Error('No local indicators to reset');
         }
 
+        const resetIdeal = { ...(localIndicators.reference || {}), ...(localIndicators.current || {}) };
         const resetIndicators: SiteIndicators = {
           reference: { ...(localIndicators.reference || {}) },
           current: { ...(localIndicators.current || {}) },
-          ideal: { ...(localIndicators.reference || {}) },
-          idealLower: { ...(localIndicators.reference || {}) },
-          idealUpper: { ...(localIndicators.reference || {}) },
+          ideal: resetIdeal,
+          idealLower: resetIdeal,
+          idealUpper: resetIdeal,
           extractedAt: localIndicators.extractedAt,
           catchmentCount: localIndicators.catchmentCount,
           totalAreaKm2: localIndicators.totalAreaKm2,
@@ -625,7 +627,7 @@ export default function IndicatorEditorPage({
         setHasChanges(false);
         toast({
           title: 'Values reset',
-          description: 'Ideal values have been reset to ecological reference values',
+          description: 'Target values have been reset to current state values',
           status: 'info',
           duration: 3000,
         });
@@ -641,7 +643,7 @@ export default function IndicatorEditorPage({
           setHasChanges(false);
           toast({
             title: 'Values reset',
-            description: 'Ideal values have been reset to ecological reference values',
+            description: 'Target values have been reset to current state values',
             status: 'info',
             duration: 3000,
           });
@@ -1002,7 +1004,7 @@ export default function IndicatorEditorPage({
               />
             </Tooltip>
 
-            <Tooltip label="Reset target state to ecological reference">
+            <Tooltip label="Reset target state to current state">
               <IconButton
                 id="demo-reset-targets"
                 aria-label="Reset"
@@ -1431,7 +1433,7 @@ export default function IndicatorEditorPage({
           <AlertDialogContent bg="gray.800" color="gray.100">
             <AlertDialogHeader>Reset target state</AlertDialogHeader>
             <AlertDialogBody>
-              Reset all ideal values to ecological reference values? This cannot be undone.
+              Reset all target values to current state values? This cannot be undone.
             </AlertDialogBody>
             <AlertDialogFooter>
               <Button ref={resetCancelRef} variant="ghost" onClick={() => setIsResetConfirmOpen(false)}>

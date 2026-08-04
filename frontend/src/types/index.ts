@@ -264,7 +264,7 @@ export interface SiteIndicators {
   currentLower?: Record<string, number>;
   // Upper bound of current range (defaults to current when not set)
   currentUpper?: Record<string, number>;
-  // Ideal values (starts as copy of reference mean, user-editable)
+  // Ideal values (starts as copy of current mean, user-editable)
   ideal: Record<string, number>;
   // Lower bound of acceptable ideal range (defaults to ideal when not set)
   idealLower?: Record<string, number>;

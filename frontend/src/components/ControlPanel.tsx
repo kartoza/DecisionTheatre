@@ -605,8 +605,16 @@ function ControlPanel({
       ? mapStatistics?.siteStats?.right ?? null
       : mapStatistics?.rightStats ?? null;
 
-  // When in site range mode, override count and mean with values from siteIndicators,
-  // which uses the same area-weighted logic as the aggregate table and site indicator page.
+  // When in site range mode, prefer the cached site-level aggregate's mean
+  // (same area-weighted logic as the aggregate table and site indicator page)
+  // over the live per-catchment mean — but only when it actually falls within
+  // the live min/max range. siteIndicators is a snapshot from the last
+  // extraction; if the boundary/catchments changed since (e.g. an edit that
+  // updates site.Catchments without re-extracting), it goes stale and can
+  // disagree with the aggregate table, which always computes fresh from the
+  // live per-catchment data — so an out-of-range value is rejected in favor
+  // of the live mean instead of silently displaying a mismatched number.
+  // Count is always the live per-catchment count for the same reason.
   const applySiteIndicatorOverrides = (
     stats: ZoneStats | null,
     scenario: string,
@@ -614,11 +622,8 @@ function ControlPanel({
     if (!stats || effectiveRangeMode !== 'site' || !siteIndicators || !comparison.attribute) return stats;
     const key = scenario === 'reference' ? 'reference' : scenario === 'future' ? 'ideal' : 'current';
     const mean = siteIndicators[key as keyof Pick<SiteIndicators, 'reference' | 'current' | 'ideal'>]?.[comparison.attribute];
-    return {
-      ...stats,
-      count: siteIndicators.catchmentCount,
-      ...(typeof mean === 'number' && Number.isFinite(mean) ? { mean } : {}),
-    };
+    const meanInRange = typeof mean === 'number' && Number.isFinite(mean) && mean >= stats.min && mean <= stats.max;
+    return meanInRange ? { ...stats, mean } : stats;
   };
 
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);

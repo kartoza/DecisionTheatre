@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner, Button } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { CatchmentIndicators, Scenario } from '../types';
+import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
 
 interface AggregateTableProps {
@@ -10,6 +10,11 @@ interface AggregateTableProps {
   siteId?: string | null;
   scenario?: Scenario;
   siteGeometry?: GeoJSON.Geometry | null;
+  // Site-level aggregate, used as a fallback "Site Average" when no
+  // per-catchment breakdown is available (e.g. a site with too many
+  // catchments to embed individually) — otherwise the average silently
+  // shows as 0 instead of the real, already-computed site-wide value.
+  siteIndicators?: SiteIndicators | null;
 }
 
 // Format numbers for display
@@ -26,6 +31,7 @@ function AggregateTable({
   siteId,
   scenario = 'current',
   siteGeometry,
+  siteIndicators,
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,7 +80,9 @@ function AggregateTable({
   // Step 1: For each catchment, compute how much of its area is inside the site.
   //         validArea = areaKm2 * aoiFraction (or 0 when aoiFraction is missing,
   //         matching the precomputed site.indicators convention of excluding
-  //         catchments with no known AOI overlap from the weighted average)
+  //         catchments with no known AOI overlap from the weighted average).
+  //         Also 0 when the attribute itself has no value for this catchment/
+  //         scenario, so a missing reading isn't silently treated as a real 0.
   // Step 2: Sum validArea across all catchments to get totalArea.
   // Step 3: For each catchment, compute its share of the site.
   //         weight = validArea / totalArea
@@ -82,26 +90,43 @@ function AggregateTable({
   //         weightedValue = weight * value
   // Step 5: Add all weighted values to get the site average.
   //         siteAverage = sum(weightedValue)
+  // Site-level aggregate for the current scenario/attribute, used when there's
+  // no per-catchment breakdown to compute from (e.g. a site with too many
+  // catchments to embed individually, like a continent-scale demo).
+  const fallbackAverage = useMemo(() => {
+    if (!attribute || !siteIndicators) return undefined;
+    const key = scenario === 'reference' ? 'reference' : scenario === 'future' ? 'ideal' : 'current';
+    const value = siteIndicators[key as keyof Pick<SiteIndicators, 'reference' | 'current' | 'ideal'>]?.[attribute];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }, [attribute, scenario, siteIndicators]);
+
   const calculations = useMemo(() => {
     if (!catchments || catchments.length === 0 || !attribute) {
-      return { rows: [], totalArea: 0, siteAverage: 0, hasData: false };
+      return { rows: [], totalArea: 0, siteAverage: fallbackAverage ?? 0, hasData: false };
     }
 
     // Build rows with calculated values
     const rows = catchments.map((c) => {
       const fractionCovered = c.aoiFraction ?? 0; // Unknown overlap contributes no weight
-      const validArea = c.areaKm2 * fractionCovered;
       const scenarioValues =
         scenario === 'reference' ? c.reference
         : scenario === 'future' ? (c.ideal ?? c.reference)
         : c.current;
-      const value = scenarioValues?.[attribute] ?? 0;
+      const rawValue = scenarioValues?.[attribute];
+      const hasValue = typeof rawValue === 'number' && Number.isFinite(rawValue);
+      // A catchment with no data for this attribute contributes no weight,
+      // same as an unknown aoiFraction above — otherwise it silently defaults
+      // to a value of 0 and drags the average down as if that were a real
+      // reading, rather than being excluded like the live map stats already
+      // exclude it (they only tally features with an actual numeric value).
+      const validArea = hasValue ? c.areaKm2 * fractionCovered : 0;
 
       return {
         id: c.id,
         area: c.areaKm2,
         fractionCovered,
-        value,
+        value: hasValue ? rawValue : 0,
+        hasValue,
         validArea,
       };
     });
@@ -216,7 +241,7 @@ function AggregateTable({
                       Total Valid Area
                     </Text>
                     <Text color="white" fontSize="3xl" fontWeight="bold">
-                      {formatNumber(calculations.totalArea, 1)}
+                      {formatNumber(calculations.hasData ? calculations.totalArea : (siteIndicators?.totalAreaKm2 ?? 0), 1)}
                     </Text>
                     <Text color="gray.500" fontSize="sm">
                       hectares
@@ -268,7 +293,7 @@ function AggregateTable({
                       Catchments
                     </Text>
                     <Text color="white" fontSize="3xl" fontWeight="bold">
-                      {calculations.rows.length}
+                      {calculations.hasData ? calculations.rows.length : (siteIndicators?.catchmentCount ?? 0)}
                     </Text>
                     <Text color="gray.500" fontSize="sm">
                       in site boundary
@@ -322,10 +347,12 @@ function AggregateTable({
                   textAlign="center"
                 >
                   <Text color="gray.400" fontSize="lg" mb={2}>
-                    No catchment data available
+                    {fallbackAverage !== undefined ? 'Per-catchment breakdown not available' : 'No catchment data available'}
                   </Text>
                   <Text color="gray.500" fontSize="sm">
-                    Create a site with catchments to see the aggregate calculation breakdown
+                    {fallbackAverage !== undefined
+                      ? 'This site has too many catchments to list individually — the Site Average above is the site-wide aggregate.'
+                      : 'Create a site with catchments to see the aggregate calculation breakdown'}
                   </Text>
                 </Box>
               ) : (
@@ -378,8 +405,8 @@ function AggregateTable({
                                 <Text>{(row.fractionCovered * 100).toFixed(0)}%</Text>
                               </HStack>
                             </Td>
-                            <Td color="orange.300" borderColor="whiteAlpha.100" isNumeric fontWeight="500">
-                              {formatNumber(row.value, 3)}
+                            <Td color={row.hasValue ? 'orange.300' : 'gray.500'} borderColor="whiteAlpha.100" isNumeric fontWeight="500">
+                              {row.hasValue ? formatNumber(row.value, 3) : 'N/A'}
                             </Td>
                             <Td color="gray.300" borderColor="whiteAlpha.100" isNumeric>
                               {formatNumber(row.validArea, 1)}
@@ -396,8 +423,8 @@ function AggregateTable({
                                 <Text>{(row.weight * 100).toFixed(1)}%</Text>
                               </HStack>
                             </Td>
-                            <Td color="cyan.300" borderColor="whiteAlpha.100" isNumeric fontWeight="600">
-                              {formatNumber(row.weightedValue, 4)}
+                            <Td color={row.hasValue ? 'cyan.300' : 'gray.500'} borderColor="whiteAlpha.100" isNumeric fontWeight="600">
+                              {row.hasValue ? formatNumber(row.weightedValue, 4) : 'N/A'}
                             </Td>
                           </motion.tr>
                         ))}
@@ -425,7 +452,7 @@ function AggregateTable({
                         Step 1: For each catchment, compute how much of its area is inside the site.
                       </Text>
                       <Text color="gray.500" fontSize="xs" textAlign="left">
-                        validArea = areaKm2 * aoiFraction (or 1.0 when aoiFraction is missing)
+                        validArea = areaKm2 * aoiFraction (0 when aoiFraction or the factor value is missing)
                       </Text>
                       <Text color="gray.500" fontSize="xs" textAlign="left">
                         Step 2: Sum validArea across all catchments to get totalArea.

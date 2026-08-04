@@ -120,7 +120,7 @@ const DEMO_STEPS: DemoStep[] = [
     icon: <FiTarget size={28} />,
     title: 'Resetting the Target State',
     description:
-      'After exploring higher herbivore scenarios, use the highlighted reset button to restore the target (ideal) values back to the ecological reference. This resets the baseline so your next scenario comparison starts from a clean reference state — an important step before running a new analysis.',
+      'After exploring higher herbivore scenarios, use the highlighted reset button to restore the target (ideal) values back to the current state. This resets the baseline so your next scenario comparison starts from a clean current-state baseline — an important step before running a new analysis.',
     targetId: 'demo-reset-targets',
     navigateTo: 'indicators',
   },

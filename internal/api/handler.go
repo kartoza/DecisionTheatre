@@ -1500,20 +1500,28 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
-	// Step 5: Compute AOI-weighted metrics
+	// Step 5: Compute AOI-weighted metrics.
+	// The denominator is per-key (only the area of catchments that actually
+	// have a value for this key), not the site's total valid area — otherwise
+	// a catchment missing this one attribute still counts toward the
+	// denominator with an implicit 0 numerator contribution, silently
+	// diluting the average toward 0 for any attribute a few catchments lack
+	// (matches the equivalent fix in the frontend's AggregateTable.tsx).
 	for key := range allKeys {
 		refSum := 0.0
+		refArea := 0.0
 		curSum := 0.0
+		curArea := 0.0
 		hadCur := false
 
 		for i, c := range catchments {
-			weight := validAreas[i] / totalValidArea // AOI proportion
-
 			if val, ok := c.Reference[key]; ok {
-				refSum += val * weight
+				refSum += val * validAreas[i]
+				refArea += validAreas[i]
 			}
 			if val, ok := c.Current[key]; ok {
-				curSum += val * weight
+				curSum += val * validAreas[i]
+				curArea += validAreas[i]
 				hadCur = true
 			}
 		}
@@ -1523,12 +1531,14 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		// (e.g. a column that only exists in reference would appear as current=0).
 		// Ideal starts as a copy of Current (falling back to Reference for keys with
 		// no current data) since the target state is user-editable from that baseline.
-		indicators.Reference[key] = refSum
-		if hadCur {
-			indicators.Current[key] = curSum
-			indicators.Ideal[key] = curSum
+		if refArea > 0 {
+			indicators.Reference[key] = refSum / refArea
+		}
+		if hadCur && curArea > 0 {
+			indicators.Current[key] = curSum / curArea
+			indicators.Ideal[key] = curSum / curArea
 		} else {
-			indicators.Ideal[key] = refSum
+			indicators.Ideal[key] = indicators.Reference[key]
 		}
 	}
 
@@ -1756,17 +1766,24 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Reset ideal to reference values
+	// Reset ideal to current values (falling back to reference for any key
+	// with no current value) — the target's baseline is the current state.
 	site.Indicators.Ideal = make(map[string]float64)
 	for key, value := range site.Indicators.Reference {
 		site.Indicators.Ideal[key] = value
 	}
+	for key, value := range site.Indicators.Current {
+		site.Indicators.Ideal[key] = value
+	}
 	site.Indicators.Warnings = nil
 
-	// Reset each catchment's ideal to its reference values
+	// Reset each catchment's ideal to its current values (same fallback).
 	for i := range site.Catchments {
 		ideal := make(map[string]float64, len(site.Catchments[i].Reference))
 		for k, v := range site.Catchments[i].Reference {
+			ideal[k] = v
+		}
+		for k, v := range site.Catchments[i].Current {
 			ideal[k] = v
 		}
 		site.Catchments[i].Ideal = ideal

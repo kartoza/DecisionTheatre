@@ -14,7 +14,7 @@ import {
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
-import { getSite, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { getSite, loadLocalSites, saveLocalSites, normalizeWalkthroughSite } from '../hooks/useApi';
 import type { Site } from '../types';
 
 export interface DemoStep {
@@ -179,7 +179,7 @@ export default function DemoTour({
       setLoadStatus({ message: 'Fetching site data…', pct: 40 });
       const response = await fetch(`/data/walkthroughs/${siteId}.json`);
       if (!response.ok) throw new Error('Walkthrough site data not found');
-      site = { ...await response.json() as Site, source: 'walkthrough' as const };
+      site = normalizeWalkthroughSite({ ...await response.json() as Site, source: 'walkthrough' as const });
     }
 
     // Reset ideal (target) values to match current each time the tour starts

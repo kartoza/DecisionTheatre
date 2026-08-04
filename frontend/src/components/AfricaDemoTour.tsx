@@ -107,7 +107,7 @@ const DEMO_STEPS: DemoStep[] = [
     icon: <FiTarget size={28} />,
     title: 'Scenario 2: Keep the Cattle, Match the Past',
     description:
-      'Now reset the targets back to reference and try the alternative: keep the cattle, but alter their biomass to match the biomass of herbivores that used to be there. Open the Targets panel again to set it up, then close it to see the outcome.',
+      'Now reset the targets back to the current state and try the alternative: keep the cattle, but alter their biomass to match the biomass of herbivores that used to be there. Open the Targets panel again to set it up, then close it to see the outcome.',
     targetId: 'demo-edit-targets-btn',
     navigateTo: 'map',
   },

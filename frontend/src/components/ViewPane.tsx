@@ -641,6 +641,7 @@ function ViewPane({
         siteId={siteId}
         scenario={comparison.leftScenario}
         siteGeometry={siteGeometry}
+        siteIndicators={siteIndicators}
       />
 
       {/* Pane label (shown in quad mode except dial view) */}

@@ -3,6 +3,7 @@ import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
+import { applyAOIWeightedIndicators } from '../utils/indicators';
 
 const API_BASE = '/api';
 const SITES_STORAGE_KEY = 'dt-sites';
@@ -545,10 +546,23 @@ export function useSites() {
 // static files don't change at runtime.
 let _walkthroughSitesPromise: Promise<Site[]> | null = null;
 
+// Walkthrough JSON files bake in a precomputed `indicators` aggregate that
+// can go stale relative to the aggregation formula (e.g. after a formula
+// fix) — unlike a real site, there's no "re-extract" action available to
+// refresh a read-only demo site. Recompute it live from the embedded
+// per-catchment breakdown on every load instead, so it can never drift.
+export function normalizeWalkthroughSite(site: Site): Site {
+  const embedded = (site as SiteWithCatchments).catchments
+    ?? (site as SiteWithCatchments).catchmentIndicators
+    ?? (site as SiteWithCatchments).catchmentData;
+  if (!Array.isArray(embedded) || embedded.length === 0 || !site.indicators) return site;
+  return { ...site, indicators: applyAOIWeightedIndicators(site.indicators, embedded) };
+}
+
 async function loadWalkthroughSite(id: string): Promise<Site | null> {
   try {
     const site = await fetchJSON<Site>(`/data/walkthroughs/${id}.json`);
-    return { ...site, source: 'walkthrough' };
+    return normalizeWalkthroughSite({ ...site, source: 'walkthrough' });
   } catch {
     return null;
   }
