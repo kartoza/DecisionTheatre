@@ -444,7 +444,9 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
   }, []);
 
-  // Listen for demo event to switch to single-pane chart view with TreeBiomassProp selected.
+  // Listen for demo event to switch to single-pane chart view with "Mean tree
+  // cover %" as the individual factor, grouped by tree biomass class, for the
+  // MunywanaDemoTour's "Tree Biomass Distribution" step.
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
@@ -454,11 +456,26 @@ function App() {
         next[0] = 'chart';
         return next;
       });
-      setChartGroups((prev) => {
-        const next = [...prev];
-        next[0] = 'TreeBiomassProp';
+      setPaneStates((prev) => {
+        const next = [...prev] as PaneStates;
+        next[0] = { ...next[0], attribute: 'meanTC' };
         return next;
       });
+      setChartGroups((prev) => {
+        const next = [...prev];
+        next[0] = 'Vegetation structure';
+        return next;
+      });
+      setChartAxisLabelFilters((prev) => {
+        const next = [...prev];
+        next[0] = 'Tree biomass class';
+        return next;
+      });
+      // factorDerivedMode/factorDerivedValue live as local state inside
+      // ControlPanel (not lifted here), so sync them via a dedicated event.
+      window.dispatchEvent(new CustomEvent('dt:demo-chart-individual-factor', {
+        detail: { attribute: 'meanTC' },
+      }));
     };
     window.addEventListener('dt:demo-tree-biomass-chart', handler);
     return () => window.removeEventListener('dt:demo-tree-biomass-chart', handler);
