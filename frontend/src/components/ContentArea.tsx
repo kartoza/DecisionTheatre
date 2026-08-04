@@ -208,33 +208,33 @@ function ContentArea({
   }, [editableTargetKeys, variableTypes]);
 
   const targetHasBeenUpdated = useMemo(() => {
-    if (!siteIndicators?.ideal || !siteIndicators?.reference) return false;
+    if (!siteIndicators?.ideal || !siteIndicators?.current) return false;
     return Object.entries(siteIndicators.ideal).some(([key, idealVal]) => {
-      const refVal = siteIndicators.reference[key];
-      return typeof refVal === 'number' && typeof idealVal === 'number' &&
-             Number.isFinite(refVal) && Number.isFinite(idealVal) && idealVal !== refVal;
+      const curVal = siteIndicators.current[key];
+      return typeof curVal === 'number' && typeof idealVal === 'number' &&
+             Number.isFinite(curVal) && Number.isFinite(idealVal) && idealVal !== curVal;
     });
   }, [siteIndicators]);
 
   // Populate draft values whenever the modal opens, regardless of which entry
   // point triggered it (header "Targets" button vs internal button). If the
   // user has already set a custom target for a key (ideal differs from
-  // reference), keep that value; otherwise default to the current state.
+  // current, its starting value), keep that value; otherwise default to the
+  // current state.
   useEffect(() => {
     if (!isTargetModalOpen) return;
     const nextDrafts: Record<string, string> = {};
     for (const key of editableTargetKeys) {
       const idealVal = siteIndicators?.ideal?.[key];
-      const refVal = siteIndicators?.reference?.[key];
-      const hasCustomTarget = typeof idealVal === 'number' && typeof refVal === 'number' &&
-        Number.isFinite(idealVal) && Number.isFinite(refVal) && idealVal !== refVal;
+      const currentVal = siteIndicators?.current?.[key];
+      const hasCustomTarget = typeof idealVal === 'number' && typeof currentVal === 'number' &&
+        Number.isFinite(idealVal) && Number.isFinite(currentVal) && idealVal !== currentVal;
 
       if (hasCustomTarget) {
         nextDrafts[key] = String(idealVal);
         continue;
       }
 
-      const currentVal = siteIndicators?.current?.[key];
       if (typeof currentVal === 'number' && Number.isFinite(currentVal)) {
         nextDrafts[key] = String(currentVal);
       } else if (typeof idealVal === 'number' && Number.isFinite(idealVal)) {

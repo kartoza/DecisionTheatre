@@ -922,9 +922,26 @@ export async function getSiteAOIFractions(siteId: string): Promise<{ id: string;
   const hit = _aOIFractionsCache.get(siteId);
   if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
 
-  const promise = fetch(`${API_BASE}/sites/${siteId}/catchments?slim=true`)
-    .then((r) => r.ok ? r.json() as Promise<{ id: string; areaKm2: number; aoiFraction?: number }[]> : [])
-    .catch(() => []);
+  const promise = (async (): Promise<{ id: string; areaKm2: number; aoiFraction?: number }[]> => {
+    // Browser-runtime sites (and walkthrough demos) live in localStorage/embedded
+    // JSON and were never created through the server-side site store, so a plain
+    // GET .../catchments 404s just like it does elsewhere in browser runtime.
+    // getSiteCatchments already knows how to resolve this (local cache, primed
+    // walkthrough cache, or POSTing the site body for server-side computation),
+    // so reuse it instead of duplicating that fetch logic here.
+    if (isBrowserRuntime()) {
+      const catchments = await getSiteCatchments(siteId).catch(() => []);
+      return catchments.map((c) => ({ id: c.id, areaKm2: c.areaKm2, aoiFraction: c.aoiFraction }));
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/sites/${siteId}/catchments?slim=true`);
+      if (!response.ok) return [];
+      return await response.json();
+    } catch {
+      return [];
+    }
+  })();
 
   promise.catch(() => _aOIFractionsCache.delete(siteId));
   _aOIFractionsCache.set(siteId, { promise, ts: now });

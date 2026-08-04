@@ -376,6 +376,66 @@ print(f"Done converting {len(rows)} geometries.")
 conn.close()
 PYEOF
 
+# Add pre-computed simplified GeoJSON column for the low-zoom grid-aggregated
+# choropleth (see buildGridGeometryCache in internal/geodata/gpkg_store.go).
+# Uses GEOS's topology-preserving simplifier (via ogr2ogr -simplify -makevalid)
+# rather than plain Douglas-Peucker: it guarantees each simplified polygon
+# stays valid (no self-intersections), which naive per-vertex simplification
+# doesn't - an invalid polygon fails the polyclip union done at server start
+# and leaves a gap in the choropleth for that grid cell.
+echo "Computing simplified GeoJSON geometries for grid aggregation..."
+SIMPLIFIED_GEOJSON=$(mktemp --suffix=.geojson)
+trap 'rm -f "$SIMPLIFIED_GEOJSON"' EXIT
+rm -f "$SIMPLIFIED_GEOJSON"
+ogr2ogr -f GeoJSON "$SIMPLIFIED_GEOJSON" "$OUTPUT" catchments_lev12 \
+    -simplify 0.001 -makevalid -select HYBAS_ID_int
+
+python3 - "$OUTPUT" "$SIMPLIFIED_GEOJSON" <<'PYEOF'
+import sqlite3
+import sys
+import json
+
+gpkg_path, geojson_path = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(gpkg_path)
+cur = conn.cursor()
+
+try:
+    cur.execute("ALTER TABLE catchments_lev12 ADD COLUMN geojson_simplified TEXT")
+except sqlite3.OperationalError:
+    pass  # Column already exists
+
+with open(geojson_path) as f:
+    simplified = json.load(f)
+
+batch_size = 1000
+updates = []
+for i, feature in enumerate(simplified["features"]):
+    hybas_id = feature["properties"]["HYBAS_ID_int"]
+    geometry = feature["geometry"]
+    if geometry is None:
+        continue
+    updates.append((json.dumps(geometry, separators=(",", ":")), hybas_id))
+
+    if len(updates) >= batch_size:
+        cur.executemany(
+            "UPDATE catchments_lev12 SET geojson_simplified = ? WHERE HYBAS_ID_int = ?",
+            updates)
+        conn.commit()
+        print(f"  Processed {i+1}/{len(simplified['features'])}...")
+        updates = []
+
+if updates:
+    cur.executemany(
+        "UPDATE catchments_lev12 SET geojson_simplified = ? WHERE HYBAS_ID_int = ?",
+        updates)
+    conn.commit()
+
+print(f"Done computing simplified geometries for {len(simplified['features'])} catchments.")
+conn.close()
+PYEOF
+rm -f "$SIMPLIFIED_GEOJSON"
+trap - EXIT
+
 # Create domain_minima and domain_maxima tables
 # These store the min/max values across both scenarios for consistent color scaling
 # Use a single SQL query that computes all min/max in ONE pass through the data

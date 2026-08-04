@@ -454,15 +454,16 @@ function ViewPane({
       max = absMax;
     }
 
-    // Only expose target when it actually differs from reference — prevents showing a
-    // spurious target marker for factors the user never changed.
+    // Only expose target when it actually differs from current — prevents showing a
+    // spurious target marker for factors the user never changed (target now starts
+    // as a copy of the current state, not reference).
     // Compare both values from siteIndicators (same source) to avoid false positives
     // from minor AOI-weighting differences between dialCatchmentData and siteIndicators.
     const siteIdeal = siteIndicators?.ideal?.[attribute];
-    const siteRef = siteIndicators?.reference?.[attribute];
-    const targetChanged = typeof siteIdeal === 'number' && typeof siteRef === 'number'
-      ? siteIdeal !== siteRef
-      : (typeof targetValue === 'number' && typeof referenceValue === 'number' && targetValue !== referenceValue);
+    const siteCurrentForTarget = siteIndicators?.current?.[attribute];
+    const targetChanged = typeof siteIdeal === 'number' && typeof siteCurrentForTarget === 'number'
+      ? siteIdeal !== siteCurrentForTarget
+      : (typeof targetValue === 'number' && typeof currentValue === 'number' && targetValue !== currentValue);
 
     return { min, max, referenceValue, currentValue, targetValue, targetChanged };
   }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle]);
@@ -478,13 +479,15 @@ function ViewPane({
   const btnSize = compact ? 'xs' : 'sm';
 
   const changedInputs = useMemo(() => {
-    if (!siteIndicators?.ideal || !siteIndicators?.reference) return [];
+    if (!siteIndicators?.ideal || !siteIndicators?.current) return [];
     return editableTargetKeys
       .map((key) => {
-        const ref = siteIndicators.reference[key];
-        const ideal = siteIndicators.ideal[key];
-        if (typeof ref !== 'number' || typeof ideal !== 'number') return null;
-        if (ref === ideal) return null;
+        const cur = siteIndicators.current[key];
+        const ideal = siteIndicators.ideal![key];
+        if (typeof cur !== 'number' || typeof ideal !== 'number') return null;
+        if (cur === ideal) return null;
+        const refRaw = siteIndicators.reference?.[key];
+        const ref = typeof refRaw === 'number' ? refRaw : cur;
         return { key, ref, ideal, delta: ideal - ref };
       })
       .filter((x): x is { key: string; ref: number; ideal: number; delta: number } => x !== null);

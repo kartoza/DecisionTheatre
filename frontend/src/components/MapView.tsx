@@ -145,8 +145,6 @@ const CATCHMENTS_OUTLINES_SOFT_OPACITY = 0.03;
 const MIN_CATCHMENT_OVERLAP_FRACTION = 0.2;
 const catchmentsOutlineOpacityRef = new WeakMap<maplibregl.Map, unknown>();
 
-let mapViewInstanceCounter = 0;
-
 function isNAValue(value: unknown): boolean {
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase();
@@ -895,7 +893,6 @@ const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
 function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
-  const mapViewIdRef = useRef(`mapview-${mapViewInstanceCounter += 1}`);
   const { colors: attributeColors } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -1174,7 +1171,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         if (inferredIds.size > 0) {
           siteCatchmentIds = inferredIds;
           siteCatchmentIdsRef.current = inferredIds;
-          console.log(`[Site Boundary] Inferred ${inferredIds.size} catchments from drawn geometry`);
         }
       }
 
@@ -1199,8 +1195,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           for (const id of nearbyIds) mergedIds.add(id);
           siteCatchmentIds = mergedIds;
           siteCatchmentIdsRef.current = mergedIds;
-          console.log(`New site id's ${siteCatchmentIds.size}`);
-          console.log(`[Site Boundary] Expanded with ${nearbyIds.size} nearby catchments`);
         }
       }
 
@@ -2837,7 +2831,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     });
     leftMap.on('zoomend', () => debouncedApplyColors());
-    // leftMap.on('zoom', () => console.log('[MapView] zoom:', leftMap.getZoom()));
 
     // When maps are loaded, mark ready, resize, and apply initial colours.
     // setAreMapsReady is called only once BOTH maps have loaded so the boundary
@@ -2866,7 +2859,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     leftMap.on('load', () => {
       mapsReady.current.left = true;
-      console.log(`[MapView ${mapViewIdRef.current}] left map loaded`, { isQuad: Boolean(isQuad) });
       signalReady();
       resizeAndRefresh(leftMap);
       if (mapsReady.current.right) {
@@ -2881,7 +2873,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     });
     rightMap.on('load', () => {
       mapsReady.current.right = true;
-      console.log(`[MapView ${mapViewIdRef.current}] right map loaded`, { isQuad: Boolean(isQuad) });
       signalReady();
       resizeAndRefresh(rightMap);
       if (mapsReady.current.left) {
@@ -3363,19 +3354,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Wait until maps are ready (state-based trigger ensures re-run)
     if (!leftMap || !rightMap || !areMapsReady) return;
 
-    console.log(`[MapView ${mapViewIdRef.current}] boundary effect start`, {
-      siteId: siteId ?? null,
-      hasGeometry: Boolean(siteGeometry),
-      leftReady: mapsReady.current.left,
-      rightReady: mapsReady.current.right,
-    });
-
-    const getMapLabel = (map: maplibregl.Map) => {
-      if (map === leftMap) return 'left';
-      if (map === rightMap) return 'right';
-      return 'unknown';
-    };
-
     // Helper to remove site boundary layers from a map
     const removeSiteBoundary = (map: maplibregl.Map) => {
       // Safety check: map.style is undefined after map.remove() is called
@@ -3391,26 +3369,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const addSiteBoundary = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
       const normalized = normalizeBoundaryGeometry(geometry);
       boundaryGeometryRef.current = normalized;
-      console.log(`[MapView ${mapViewIdRef.current}] adding site boundary`, {
-        map: getMapLabel(map),
-        geometryType: normalized.type,
-        coordCount: (normalized as GeoJSON.Polygon).coordinates?.[0]?.length,
-      });
       addBoundaryLayersIfMissing(map, normalized);
-
-      console.log(`[MapView ${mapViewIdRef.current}] site boundary layers added`, {
-        map: getMapLabel(map),
-        hasSource: Boolean(map.getSource(SITE_BOUNDARY_SOURCE)),
-        hasLine: Boolean(map.getLayer(SITE_BOUNDARY_LINE)),
-        hasGlow: Boolean(map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)),
-      });
     };
 
     const addSiteBoundaryWhenReady = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
       if (map.style) {
-        console.log(`[MapView ${mapViewIdRef.current}] boundary add immediate`, {
-          map: getMapLabel(map),
-        });
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
         return;
@@ -3419,9 +3382,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const onStyleData = () => {
         if (!map.isStyleLoaded()) return;
         map.off('styledata', onStyleData);
-        console.log(`[MapView ${mapViewIdRef.current}] boundary add on styledata`, {
-          map: getMapLabel(map),
-        });
         if (!map.style) return;
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
@@ -3434,9 +3394,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (!geometry) return;
       if (map.getLayer(SITE_BOUNDARY_LINE) && map.getSource(SITE_BOUNDARY_SOURCE)) return;
 
-      console.log(`[MapView ${mapViewIdRef.current}] re-adding boundary on styledata`, {
-        map: getMapLabel(map),
-      });
       addSiteBoundaryWhenReady(map, geometry);
     };
 
@@ -3467,10 +3424,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Prefer the latest geometry from props to avoid missing boundaries
     if (siteGeometry) {
       boundaryGeometryRef.current = siteGeometry;
-      console.log(`[MapView ${mapViewIdRef.current}] applying site geometry`, {
-        leftLoaded: leftMap.loaded(),
-        rightLoaded: rightMap.loaded(),
-      });
       const leftUpdated = updateSiteBoundarySource(leftMap, siteGeometry);
       const rightUpdated = updateSiteBoundarySource(rightMap, siteGeometry);
       if (!leftUpdated) addSiteBoundaryWhenReady(leftMap, siteGeometry);
@@ -3484,9 +3437,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ? site.catchmentIds.map((id: unknown) => String(id))
           : [];
         siteCatchmentIdsRef.current = new Set(catchmentIds);
-
-        const catchmentCount = Array.isArray(site?.catchmentIds) ? site.catchmentIds.length : 0;
-        console.log(`[Site Boundary] Site ${siteId} catchments:`, catchmentCount);
 
         const zoomToLoadedSiteBounds = () => {
           if (isBoundaryEditModeRef.current) return;

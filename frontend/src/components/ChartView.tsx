@@ -637,8 +637,8 @@ function ChartView({
       curVal = resolveValue(attribute, 'current', siteIndicators, catchmentData, rangeMode, mapStatistics, leftScenario, rightScenario);
     }
     const attrIdeal = siteIndicators?.ideal?.[attribute];
-    const attrRef = siteIndicators?.reference?.[attribute];
-    const attributeTargetChanged = typeof attrIdeal === 'number' && typeof attrRef === 'number' && attrIdeal !== attrRef;
+    const attrCurrent = siteIndicators?.current?.[attribute];
+    const attributeTargetChanged = typeof attrIdeal === 'number' && typeof attrCurrent === 'number' && attrIdeal !== attrCurrent;
     const idealVal = (targetHasBeenUpdated && attributeTargetChanged) ? attrIdeal : null;
 
     const hasData = [refVal, curVal, idealVal].some(
@@ -705,7 +705,7 @@ function ChartView({
 
       const normalizedRef = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : null;
       const normalizedCur = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : null;
-      const colTargetChanged = typeof siteTarget === 'number' && typeof siteRef === 'number' && siteTarget !== siteRef;
+      const colTargetChanged = typeof siteTarget === 'number' && typeof siteCur === 'number' && siteTarget !== siteCur;
       const normalizedTarget = targetHasBeenUpdated && colTargetChanged && typeof siteTarget === 'number' && Number.isFinite(siteTarget) ? siteTarget : null;
 
       const siteRefUpperRaw = rangeMode === 'site'
@@ -896,132 +896,6 @@ function ChartView({
     }
     return groupedChartData;
   }, [groupedChartData, groupedChartType, boxplotPage, linePage, linePageCount]);
-
-  useEffect(() => {
-    if (!visible || groupedChartType !== 'boxplot') return;
-    const rows = (pagedGroupedChartData ?? groupedChartData ?? []).map((item) => {
-      const ref = item.ref;
-      const refLower = item.refLower ?? ref;
-      const refUpper = item.refUpper ?? ref;
-      const cur = item.cur;
-      const curLower = item.curLower ?? cur;
-      const curUpper = item.curUpper ?? cur;
-      const target = item.target;
-      const targetLower = item.refLower ?? target;
-      const targetUpper = item.refUpper ?? target;
-      return {
-        label: item.label,
-        ref,
-        refLower,
-        refUpper,
-        refCollapsed: ref !== null && refLower === ref && refUpper === ref,
-        cur,
-        curLower,
-        curUpper,
-        curCollapsed: cur !== null && curLower === cur && curUpper === cur,
-        target,
-        targetLower,
-        targetUpper,
-        targetCollapsed: target !== null && targetLower === target && targetUpper === target,
-      };
-    });
-
-    console.groupCollapsed('[ChartView] Boxplot trace debug');
-    console.log('boxplotMeta', {
-      rangeMode,
-      chartGroup,
-      chartAxisLabelFilter,
-      page: boxplotPage + 1,
-      pageCount: boxplotPageCount,
-      plottedRows: rows.length,
-      hasWhiskerBounds: Boolean(whiskerBounds),
-      hasSiteCatchments: Boolean(siteCatchments && siteCatchments.length > 0),
-      siteCatchmentCount: siteCatchments?.length ?? 0,
-      refUpperCols: whiskerBounds ? Object.keys(whiskerBounds.referenceUpper || {}).length : 0,
-      refLowerCols: whiskerBounds ? Object.keys(whiskerBounds.referenceLower || {}).length : 0,
-      curUpperCols: whiskerBounds ? Object.keys(whiskerBounds.currentUpper || {}).length : 0,
-      curLowerCols: whiskerBounds ? Object.keys(whiskerBounds.currentLower || {}).length : 0,
-    });
-    console.table(rows.slice(0, 20));
-    if (rows.length > 20) {
-      console.log(`truncated ${rows.length - 20} additional rows`);
-    }
-    console.groupEnd();
-  }, [
-    visible,
-    groupedChartType,
-    pagedGroupedChartData,
-    groupedChartData,
-    rangeMode,
-    chartGroup,
-    chartAxisLabelFilter,
-    boxplotPage,
-    boxplotPageCount,
-    whiskerBounds,
-    siteCatchments,
-  ]);
-
-  useEffect(() => {
-    if (!visible || !chartGroup || !chartAxisLabelFilter) return;
-
-    const debugRows = groupedDisplayColumns.slice(0, 40).map((col) => {
-      const siteRef = resolveMapValueForColumn(siteIndicators?.reference, col);
-      const siteCur = resolveMapValueForColumn(siteIndicators?.current, col);
-      const siteTarget = resolveMapValueForColumn(siteIndicators?.ideal, col);
-
-      const refVal = rangeMode === 'site'
-        ? (typeof siteRef === 'number'
-          ? siteRef
-          : resolveMapValueForColumn(catchmentData?.reference ?? null, col))
-        : resolveMapValueForColumn(groupedRangeData?.reference ?? null, col);
-      const curVal = rangeMode === 'site'
-        ? (typeof siteCur === 'number'
-          ? siteCur
-          : resolveMapValueForColumn(catchmentData?.current ?? null, col))
-        : resolveMapValueForColumn(groupedRangeData?.current ?? null, col);
-
-      return {
-        column: col,
-        label: resolveAxisLabelForColumn(col, xAxisLabels) ?? col,
-        variableType: resolveVariableTypeForColumn(col, variableTypes),
-        groupingVariable: resolveGroupingVariableForColumn(col, groupingVariables),
-        ref: refVal ?? null,
-        cur: curVal ?? null,
-        target: siteTarget ?? null,
-      };
-    });
-
-    // Debug chart data resolution for grouped views (e.g. Fire/Season, Fire/Total).
-    console.groupCollapsed('[ChartView] Grouped chart debug');
-    console.log('selection', {
-      chartGroup,
-      chartAxisLabelFilter,
-      rangeMode,
-      filteredColumnCount: groupedDisplayColumns.length,
-      hasGroupedRangeData: Boolean(groupedRangeData),
-      hasCatchmentData: Boolean(catchmentData),
-      hasSiteIndicators: Boolean(siteIndicators),
-      hasGroupedChartData: Boolean(groupedChartData),
-    });
-    console.table(debugRows);
-    if (groupedDisplayColumns.length > 40) {
-      console.log(`truncated ${groupedDisplayColumns.length - 40} additional columns`);
-    }
-    console.groupEnd();
-  }, [
-    visible,
-    chartGroup,
-    chartAxisLabelFilter,
-    rangeMode,
-    groupedDisplayColumns,
-    groupedRangeData,
-    catchmentData,
-    siteIndicators,
-    groupedChartData,
-    xAxisLabels,
-    variableTypes,
-    groupingVariables,
-  ]);
 
   // Responsive sizing
   useEffect(() => {

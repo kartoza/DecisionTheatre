@@ -813,6 +813,9 @@ func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
 		for k, v := range c.Reference {
 			ideal[k] = v
 		}
+		for k, v := range c.Current {
+			ideal[k] = v
+		}
 		persisted = append(persisted, sites.SiteCatchment{
 			ID:          c.ID,
 			AreaKm2:     c.AreaKm2,
@@ -1288,6 +1291,9 @@ func (h *Handler) doSiteExtraction(id string) error {
 		for k, v := range c.Reference {
 			ideal[k] = v
 		}
+		for k, v := range c.Current {
+			ideal[k] = v
+		}
 		freshCatchments = append(freshCatchments, sites.SiteCatchment{
 			ID:          c.ID,
 			AreaKm2:     c.AreaKm2,
@@ -1501,10 +1507,14 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		// Store the weighted values; only write Current when at least one catchment
 		// had current data for this key — otherwise curSum stays 0 which is misleading
 		// (e.g. a column that only exists in reference would appear as current=0).
+		// Ideal starts as a copy of Current (falling back to Reference for keys with
+		// no current data) since the target state is user-editable from that baseline.
 		indicators.Reference[key] = refSum
-		indicators.Ideal[key] = refSum
 		if hadCur {
 			indicators.Current[key] = curSum
+			indicators.Ideal[key] = curSum
+		} else {
+			indicators.Ideal[key] = refSum
 		}
 	}
 

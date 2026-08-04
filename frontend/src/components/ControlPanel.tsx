@@ -1111,13 +1111,13 @@ function ControlPanel({
                   >
                     Rainbow
                   </Button> */}
-                  <Button
+                  {/* <Button
                     onClick={() => onColorScaleModeChange('metadata')}
                     variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
                     bg={colorScaleMode === 'metadata' ? colors.pastelDarkGreen : undefined}
                   >
                     Single
-                  </Button>
+                  </Button> */}
                 </ButtonGroup>
               </HStack>
               <HStack justify="space-between" align="center" mb={2}>
@@ -1132,7 +1132,7 @@ function ControlPanel({
                   >
                     Linear
                   </Button>
-                  <Button
+                  {/* <Button
                     onClick={() => onColorScaleTypeChange('logistic')}
                     variant={colorScaleType === 'logistic' ? 'solid' : 'outline'}
                     bg={colorScaleType === 'logistic' ? colors.pastelDarkGreen : undefined}
@@ -1145,7 +1145,7 @@ function ControlPanel({
                     bg={colorScaleType === 'logarithmic' ? colors.pastelDarkGreen : undefined}
                   >
                     Log
-                  </Button>
+                  </Button> */}
                 </ButtonGroup>
               </HStack>
               <Box

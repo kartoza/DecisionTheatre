@@ -212,9 +212,9 @@ const dashboardCapabilities: { label: string; color: string }[] = [
 // for" alongside the "what you can explore" button.
 const dashboardAudiences: { image: string; audience: string; cta: string; event: string }[] = [
   { image: landOwnerImage, audience: 'Land owners & conservation managers', cta: 'Explore Conservation Futures', event: 'dt:start-munywana-demo' },
-  { image: ruralCommunityImage, audience: 'Rural communities', cta: 'Explore Shared Landscapes', event: 'dt:start-africa-demo' },
+  { image: ruralCommunityImage, audience: 'Rural communities', cta: 'Explore Shared Landscapes', event: 'dt:start-viphya-demo' },
   { image: localGovernmentImage, audience: 'Local government agencies and traditional leadership', cta: 'Explore Policy Impacts', event: 'dt:start-shaihills-demo' },
-  { image: futurePossibilitiesImage, audience: 'School learners, artists and members of the public', cta: 'Explore Future Possibilities', event: 'dt:start-viphya-demo' },
+  { image: futurePossibilitiesImage, audience: 'School learners, artists and members of the public', cta: 'Explore Future Possibilities', event: 'dt:start-africa-demo' },
 ];
 
 // Reuse the app's own reference/current/future colour coding (the same hues
@@ -389,16 +389,6 @@ function LandingPage({ onNavigate }: LandingPageProps) {
       <Box bg={colors.darkGray} py={10} pb={20} px={6}>
         <Container maxW="1000px">
           <Box textAlign="center" mb={9}>
-            <Text
-              fontSize="xs"
-              fontWeight="bold"
-              letterSpacing="0.14em"
-              textTransform="uppercase"
-              color={colors.brightGreen}
-              mb={3}
-            >
-              What you can do
-            </Text>
             <Heading
               {...headingProps}
               as="h2"
@@ -406,13 +396,9 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               fontWeight="bold"
               color="white"
             >
-              From Data to Progress
+              Use the Landscape Decision Dashboard to:
             </Heading>
           </Box>
-
-          <Text textAlign="center" fontSize="md" color="whiteAlpha.800" lineHeight="1.75" mb={5}>
-            Use the Landscape Decision Dashboard to:
-          </Text>
 
           {/* Capability strip — the six things the tool does, as a scannable
               row of tags rather than a legalistic bulleted list. */}

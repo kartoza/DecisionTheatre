@@ -775,7 +775,7 @@ export default function IndicatorEditorPage({
           .map(entry => {
             const refVal = localIndicators.reference?.[entry.key] ?? null;
             const curVal = localIndicators.current?.[entry.key] ?? null;
-            const idealVal = localIndicators.ideal?.[entry.key] ?? refVal ?? 0;
+            const idealVal = localIndicators.ideal?.[entry.key] ?? curVal ?? refVal ?? 0;
             return {
               key: entry.key,
               label: attributeDetails[entry.key] ?? getIndicatorLabel(entry.key),

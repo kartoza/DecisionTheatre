@@ -147,21 +147,13 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
   const [isDraggingThumbnail, setIsDraggingThumbnail] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
-  const boundaryLoadedAtRef = useRef<number | null>(null);
   const toast = useToast();
-
-  const logPerf = useCallback((stage: string, startedAt: number, extra?: Record<string, unknown>) => {
-    const durationMs = Math.round(performance.now() - startedAt);
-    console.info('[perf] site-create', { stage, durationMs, ...(extra || {}) });
-  }, []);
 
   const inferCatchmentIdsForGeometry = useCallback(async (
     sourceGeometry: GeoJSON.Geometry,
     sourceBBox?: BoundingBox | null,
   ): Promise<{ ids: string[]; truncated: boolean }> => {
-    const inferStart = performance.now();
     const bbox = sourceBBox ?? computeBoundingBox(sourceGeometry);
-    const idPrefetchStart = performance.now();
     const idsResponse = await fetch('/api/catchments/in-bbox', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -184,27 +176,16 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
     };
     const candidateIds = Array.isArray(idsData.catchmentIds) ? idsData.catchmentIds : [];
     const preflightTruncated = Boolean(idsData.truncated);
-    logPerf('inferCatchmentIds.prefetchIds', idPrefetchStart, {
-      candidateCount: candidateIds.length,
-      truncated: preflightTruncated,
-    });
 
     if (candidateIds.length === 0) {
-      logPerf('inferCatchmentIds.total', inferStart, { resultCount: 0, mode: 'none' });
       return { ids: [], truncated: preflightTruncated };
     }
 
     // For very large candidate sets, skip expensive client geometry overlap checks.
     if (candidateIds.length > EXACT_GEOMETRY_INFERENCE_LIMIT) {
-      logPerf('inferCatchmentIds.total', inferStart, {
-        resultCount: candidateIds.length,
-        mode: 'ids-only',
-        truncated: true,
-      });
       return { ids: candidateIds, truncated: true };
     }
 
-    const geometryFetchStart = performance.now();
     const response = await fetch('/api/catchments/in-bbox', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -221,9 +202,6 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
     if (!response.ok) {
       throw new Error('Failed to query catchments for boundary');
     }
-    logPerf('inferCatchmentIds.fetchGeometries', geometryFetchStart, {
-      requested: candidateIds.length,
-    });
 
     const data = await response.json() as {
       features?: GeoJSON.Feature[];
@@ -251,7 +229,6 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     const candidates = Array.isArray(data.features) ? data.features : [];
     const matchedIds = new Set<string>();
 
-    const overlapLoopStart = performance.now();
     for (let i = 0; i < candidates.length; i++) {
       // Yield every iteration for the geometry-check path (<= EXACT_GEOMETRY_INFERENCE_LIMIT).
       // This guarantees the main thread stays responsive regardless of how long
@@ -315,19 +292,8 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       }
     }
 
-    logPerf('inferCatchmentIds.overlapLoop', overlapLoopStart, {
-      candidateCount: candidates.length,
-      matchedCount: matchedIds.size,
-    });
-
-    logPerf('inferCatchmentIds.total', inferStart, {
-      resultCount: matchedIds.size,
-      mode: 'geometry-overlap',
-      truncated: preflightTruncated,
-    });
-
     return { ids: Array.from(matchedIds), truncated: preflightTruncated };
-  }, [logPerf]);
+  }, []);
 
   const cardBg = useColorModeValue('rgba(255,255,255,0.05)', 'rgba(0,0,0,0.3)');
   const inputBg = useColorModeValue('rgba(255,255,255,0.08)', 'rgba(0,0,0,0.4)');
@@ -375,22 +341,17 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     if (!file) return;
 
     setIsProcessing(true);
-    const uploadStart = performance.now();
 
     try {
       let geojson: GeoJSON.FeatureCollection | GeoJSON.Feature | GeoJSON.Geometry;
 
       if (selectedMethod === 'shapefile') {
         const shp = await import('shpjs');
-        const parseStart = performance.now();
         const buffer = await file.arrayBuffer();
         geojson = await shp.default(buffer) as GeoJSON.FeatureCollection;
-        logPerf('upload.parseShapefile', parseStart, { sizeBytes: file.size });
       } else {
-        const parseStart = performance.now();
         const text = await file.text();
         geojson = JSON.parse(text);
-        logPerf('upload.parseGeoJson', parseStart, { sizeBytes: file.size });
       }
 
       let extractedGeometry: GeoJSON.Geometry;
@@ -408,12 +369,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
       setGeometry(extractedGeometry);
       setBoundingBox(computeBoundingBox(extractedGeometry));
-      boundaryLoadedAtRef.current = performance.now();
       setStep('geometry');
-      logPerf('upload.total', uploadStart, {
-        method: selectedMethod,
-        geometryType: extractedGeometry.type,
-      });
 
       toast({ title: 'Boundary loaded!', status: 'success', duration: 2000 });
     } catch (error) {
@@ -437,7 +393,6 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
   ) => {
     setGeometry(newGeometry);
     setBoundingBox(computeBoundingBox(newGeometry));
-    boundaryLoadedAtRef.current = performance.now();
     if (catchmentIds) setSelectedCatchmentIds(catchmentIds);
     if (mapThumbnail && !thumbnail) setThumbnail(mapThumbnail);
     setStep('details');
@@ -455,7 +410,6 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     }
 
     setIsSubmitting(true);
-    const submitStart = performance.now();
 
     try {
       let catchmentIdsToPersist = selectedCatchmentIds;
@@ -499,19 +453,6 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       const site = isEditMode
         ? await updateSite(editSite.id, siteData as Partial<Site>)
         : await createSite(siteData as Partial<Site>);
-      logPerf('submit.createOrUpdateSite', submitStart, {
-        method: isEditMode ? 'update' : 'create',
-        catchmentCount: catchmentIdsToPersist.length,
-      });
-
-      if (getAppRuntime() === 'browser' && boundaryLoadedAtRef.current !== null) {
-        const totalMs = Math.round(performance.now() - boundaryLoadedAtRef.current);
-        console.info('[perf] site-create.fromBoundaryLoad', {
-          totalMs,
-          catchmentCount: catchmentIdsToPersist.length,
-          method: isEditMode ? 'update' : 'create',
-        });
-      }
 
       toast({
         title: isEditMode ? 'Site updated!' : 'Site created!',
@@ -530,7 +471,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       setIsSubmitting(false);
     }
   }, [siteTitle, siteDescription, geometry, boundingBox, selectedCatchmentIds, selectedMethod,
-      isEditMode, editSite, thumbnail, inferCatchmentIdsForGeometry, onSiteCreated, logPerf, toast]);
+      isEditMode, editSite, thumbnail, inferCatchmentIdsForGeometry, onSiteCreated, toast]);
 
   const handleSubmitSite = (e: React.FormEvent) => {
     e.preventDefault();

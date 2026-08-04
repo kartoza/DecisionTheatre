@@ -524,6 +524,7 @@ function DialChart({
     };
   }, [greenCenter, min, max, radius, arcWidth, centerX, centerY, compact, isQuadCompactLayout]);
 
+  const legendReferenceLabel = `Reference: ${referenceValue !== undefined ? formatValue(referenceValue) : 'N/A'}`;
   const legendCurrentLabel = `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`;
   const legendTargetLabel = `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`;
   const legendYOffset = compact
@@ -536,12 +537,16 @@ function DialChart({
   const centerHubCoreRadius = isQuadCompactLayout ? 7 : 10;
   const centerCapRadius = isQuadCompactLayout ? 9 : 12;
   const compactLegendGroupWidth = denseLayout ? 360 : 400;
-  const compactLegendStartX = centerX - compactLegendGroupWidth / 2;
-  const legendCurrentX = compact
+  const compactReferenceColWidth = denseLayout ? 150 : 170;
+  const compactLegendStartX = centerX - (compactLegendGroupWidth + compactReferenceColWidth) / 2;
+  const legendReferenceX = compact
     ? Math.max(8, compactLegendStartX)
+    : centerX - 330;
+  const legendCurrentX = compact
+    ? legendReferenceX + compactReferenceColWidth
     : centerX - 160;
   const legendTargetX = compact
-    ? Math.max(legendCurrentX + (denseLayout ? 188 : 210), compactLegendStartX + (denseLayout ? 188 : 210))
+    ? legendCurrentX + (denseLayout ? 188 : 210)
     : centerX + 60;
 
   return (
@@ -768,7 +773,7 @@ function DialChart({
               {/* Verification marker: final target tip position (helps confirm arrow alignment) */}
               {targetTip && (
                 <g opacity={Math.min(1, 0.6 + 0.4 * needleProgress)}>
-                  <circle cx={targetTip.x} cy={targetTip.y} r={7} fill={SCENARIO_COLORS.future} stroke="#fff" strokeWidth={1.5} />
+                  <circle cx={targetTip.x} cy={targetTip.y} r={7} fill="#fff" stroke={SCENARIO_COLORS.future} strokeWidth={1.5} />
                 </g>
               )}
 
@@ -795,6 +800,14 @@ function DialChart({
 
               {/* Legend */}
               <g opacity={needleProgress}>
+                {/* Reference */}
+                <g transform={`translate(${legendReferenceX}, ${legendY})`}>
+                  <circle cx={8} cy={0} r={8} fill="#2ecc40" stroke="#fff" strokeWidth={1.5} />
+                  <text x={24} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
+                    {legendReferenceLabel}
+                  </text>
+                </g>
+
                 {/* Current */}
                 <g transform={`translate(${legendCurrentX}, ${legendY})`}>
                   <rect x={0} y={-8} width={35} height={16} rx={3} fill={SCENARIO_COLORS.current} />

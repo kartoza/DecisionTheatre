@@ -580,20 +580,33 @@ func gridCellKeyFor(lat, long, cellSizeDegrees float64) gridCellKey {
 	}
 }
 
-// buildGridGeometryCache dissolves every catchment's simplified geometry into
-// its cell, for every tier in gridTiersDegrees, once for the lifetime of the
-// store. This is the expensive part of grid aggregation (~150k small polygon
-// unions per tier); doing it here means a choropleth request only has to do a
-// cheap SQL aggregation over attribute values and look up the matching
-// pre-built geometry.
+// buildGridGeometryCache dissolves every catchment's geometry into its cell,
+// for every tier in gridTiersDegrees, once for the lifetime of the store.
+// This is the expensive part of grid aggregation (~150k small polygon unions
+// per tier); doing it here means a choropleth request only has to do a cheap
+// SQL aggregation over attribute values and look up the matching pre-built
+// geometry.
+//
+// Geometries are unioned from the full-precision "geojson" column, not the
+// precomputed "geojson_simplified" column (built by scripts/build-geopackage.sh
+// via ogr2ogr -simplify -makevalid), even though that costs some build time:
+// ogr2ogr's simplifier runs per-feature, so it doesn't preserve the shared
+// boundary between two adjacent catchments - each one's edge shifts slightly
+// differently, and the union of the two no longer closes cleanly along what
+// used to be an exact shared edge, leaving thin sliver gaps scattered across
+// the dissolved cell (visible as the basemap showing through). Unioning the
+// unsimplified geometries first means adjacent catchments still share exact
+// boundary coordinates, so those edges cancel out perfectly in the union;
+// the result is simplified once, as a whole, after dissolving (see the
+// simplifyPolygonsForComputation call below).
 func (s *GpkgStore) buildGridGeometryCache() {
 	start := time.Now()
 	defer close(s.gridGeometryReady)
 
 	rows, err := s.db.Query(`
-		SELECT lat, long, geojson_simplified
+		SELECT lat, long, geojson
 		FROM catchments_lev12
-		WHERE lat IS NOT NULL AND long IS NOT NULL AND geojson_simplified IS NOT NULL
+		WHERE lat IS NOT NULL AND long IS NOT NULL AND geojson IS NOT NULL
 	`)
 	if err != nil {
 		log.Printf("Warning: failed to build grid geometry cache: %v", err)
@@ -601,26 +614,71 @@ func (s *GpkgStore) buildGridGeometryCache() {
 	}
 	defer rows.Close()
 
+	// Dissolving and simplifying each cell is independent of every other
+	// cell, and there are up to ~136k of them at the finest tier - fan both
+	// this parsing pass and the dissolve pass below out across CPU cores
+	// rather than doing them one row/cell at a time on a single goroutine,
+	// which is what made the cache (and so the first zoomed-out request
+	// after every server start) take tens of seconds.
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
 	polygonsByTierCell := make(map[float64]map[gridCellKey][]polyclip.Polygon, len(gridTiersDegrees))
 	for _, tier := range gridTiersDegrees {
 		polygonsByTierCell[tier] = make(map[gridCellKey][]polyclip.Polygon)
 	}
 
-	for rows.Next() {
-		var lat, long float64
-		var geojsonStr string
-		if err := rows.Scan(&lat, &long, &geojsonStr); err != nil {
-			continue
-		}
+	// database/sql requires rows.Next()/Scan() to be called serially, so a
+	// single producer goroutine reads rows and hands the (still-unparsed)
+	// geometry strings to a worker pool; only the cheap map insert needs to
+	// be serialised, not the expensive JSON-to-polygon parse.
+	type rawRow struct {
+		lat, long  float64
+		geojsonStr string
+	}
+	rowsCh := make(chan rawRow, 1000)
+	var polygonsMu sync.Mutex
+	var parseWg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		parseWg.Add(1)
+		go func() {
+			defer parseWg.Done()
+			for r := range rowsCh {
+				polys, err := geometryRawToPolygons(json.RawMessage(r.geojsonStr))
+				if err != nil || len(polys) == 0 {
+					continue
+				}
+				polygonsMu.Lock()
+				for _, tier := range gridTiersDegrees {
+					key := gridCellKeyFor(r.lat, r.long, tier)
+					polygonsByTierCell[tier][key] = append(polygonsByTierCell[tier][key], polys...)
+				}
+				polygonsMu.Unlock()
+			}
+		}()
+	}
 
-		polys, err := geometryRawToPolygons(json.RawMessage(geojsonStr))
-		if err != nil || len(polys) == 0 {
+	for rows.Next() {
+		var r rawRow
+		if err := rows.Scan(&r.lat, &r.long, &r.geojsonStr); err != nil {
 			continue
 		}
-		for _, tier := range gridTiersDegrees {
-			key := gridCellKeyFor(lat, long, tier)
-			polygonsByTierCell[tier][key] = append(polygonsByTierCell[tier][key], polys...)
-		}
+		rowsCh <- r
+	}
+	close(rowsCh)
+	parseWg.Wait()
+
+	log.Printf("[perf] grid geometry cache scan+parse done in %dms", time.Since(start).Milliseconds())
+
+	type cellJob struct {
+		key   gridCellKey
+		polys []polyclip.Polygon
+	}
+	type cellResult struct {
+		key          gridCellKey
+		geometryJSON json.RawMessage
 	}
 
 	cache := make(map[float64]map[gridCellKey]json.RawMessage, len(gridTiersDegrees))
@@ -628,25 +686,60 @@ func (s *GpkgStore) buildGridGeometryCache() {
 		tierPolygons := polygonsByTierCell[tier]
 		tierCache := make(map[gridCellKey]json.RawMessage, len(tierPolygons))
 
+		jobs := make(chan cellJob, len(tierPolygons))
+		results := make(chan cellResult, len(tierPolygons))
+		var wg sync.WaitGroup
+		for w := 0; w < numWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range jobs {
+					if len(j.polys) == 0 {
+						continue
+					}
+
+					dissolved := j.polys[0]
+					for i := 1; i < len(j.polys); i++ {
+						dissolved = dissolved.Construct(polyclip.UNION, j.polys[i])
+					}
+
+					// Simplify once, after dissolving, rather than simplifying
+					// each catchment independently beforehand (see the comment
+					// on buildGridGeometryCache) - this is what keeps a
+					// full-continent response from ballooning to hundreds of
+					// MB. Safe against polyclipPolygonToGeoJSON's ring-nesting
+					// check misfiring on a shifted vertex now that it samples
+					// several points per ring (see ringContainedIn) rather
+					// than trusting a single one.
+					simplifiedDissolved := simplifyPolygonsForComputation([]polyclip.Polygon{dissolved})
+					if len(simplifiedDissolved) == 0 {
+						continue
+					}
+
+					geometryJSON, _, err := polyclipPolygonToGeoJSON(simplifiedDissolved[0])
+					if err != nil {
+						continue
+					}
+					results <- cellResult{key: j.key, geometryJSON: geometryJSON}
+				}
+			}()
+		}
+
 		for key, polys := range tierPolygons {
-			if len(polys) == 0 {
-				continue
-			}
+			jobs <- cellJob{key: key, polys: polys}
+		}
+		close(jobs)
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
 
-			dissolved := polys[0]
-			for i := 1; i < len(polys); i++ {
-				dissolved = dissolved.Construct(polyclip.UNION, polys[i])
-			}
-
-			geometryJSON, _, err := polyclipPolygonToGeoJSON(dissolved)
-			if err != nil {
-				continue
-			}
-			tierCache[key] = geometryJSON
+		for r := range results {
+			tierCache[r.key] = r.geometryJSON
 		}
 
 		cache[tier] = tierCache
-		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells", tier, len(tierCache))
+		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells (candidates=%d)", tier, len(tierCache), len(tierPolygons))
 	}
 
 	s.mu.Lock()
@@ -1161,6 +1254,18 @@ func geojsonToPolyclipPolygon(rings []interface{}) polyclip.Polygon {
 	return poly
 }
 
+// roundCoord truncates a lon/lat degree value to 6 decimal places (~11cm at
+// the equator). json.Marshal on an untruncated float64 emits its shortest
+// round-trip representation, which for these coordinates runs to 15-17
+// significant digits - on a dissolved grid cell unioned from dozens of
+// catchments, that bloats a single choropleth response to 100MB+ (millions
+// of vertices x ~40 bytes/point), which is far more precision than a grid
+// cell spanning 0.08-0.5 degrees needs and risks exhausting the browser
+// tab's memory while parsing/tessellating it for WebGL.
+func roundCoord(v float64) float64 {
+	return math.Round(v*1e6) / 1e6
+}
+
 // polyclipPolygonToGeoJSON converts polyclip.Polygon to GeoJSON
 func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, error) {
 	if len(poly) == 0 {
@@ -1180,7 +1285,7 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 
 		ring := make([][2]float64, 0, len(contour)+1)
 		for _, pt := range contour {
-			ring = append(ring, [2]float64{pt.X, pt.Y})
+			ring = append(ring, [2]float64{roundCoord(pt.X), roundCoord(pt.Y)})
 		}
 		if ring[0] != ring[len(ring)-1] {
 			ring = append(ring, ring[0])
@@ -1207,7 +1312,6 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 	}
 
 	for i := range rings {
-		pt := rings[i].coords[0]
 		bestParent := -1
 		bestArea := math.MaxFloat64
 		for j := range rings {
@@ -1217,7 +1321,7 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 			if rings[j].absArea <= rings[i].absArea {
 				continue
 			}
-			if pointInRing(pt, rings[j].coords) && rings[j].absArea < bestArea {
+			if ringContainedIn(rings[i].coords, rings[j].coords) && rings[j].absArea < bestArea {
 				bestParent = j
 				bestArea = rings[j].absArea
 			}
@@ -1311,6 +1415,46 @@ func pointInRing(point [2]float64, ring [][2]float64) bool {
 	}
 
 	return inside
+}
+
+// ringContainedIn reports whether ring inner is nested inside ring outer, by
+// checking several points spread across inner (not just its first vertex)
+// against outer. A single test point is fragile for real hydrological-basin
+// shapes: after dissolving dozens of catchments, a resulting ring's first
+// vertex can coincide with (or sit right next to) the boundary of a nearby,
+// unrelated ring from the same union - which would make polyclipPolygonToGeoJSON
+// misclassify a legitimate, separate catchment cluster as a "hole" of that
+// unrelated ring, silently cutting it out of the rendered polygon as a
+// phantom gap. Requiring multiple, spread-out points to agree makes that
+// misclassification far less likely, since it would take a coincidence at
+// every sampled point rather than just one.
+func ringContainedIn(inner, outer [][2]float64) bool {
+	n := len(inner)
+	if n > 1 && inner[0] == inner[n-1] {
+		n-- // ring is closed (first == last); don't sample the duplicate
+	}
+	if n <= 0 {
+		return false
+	}
+
+	const maxSamples = 5
+	sampleCount := maxSamples
+	if n < sampleCount {
+		sampleCount = n
+	}
+	step := n / sampleCount
+	if step < 1 {
+		step = 1
+	}
+
+	checked := 0
+	for i := 0; i < n && checked < sampleCount; i += step {
+		if !pointInRing(inner[i], outer) {
+			return false
+		}
+		checked++
+	}
+	return checked > 0
 }
 
 // GetCatchmentAttributes returns all attributes for a specific catchment across both scenarios

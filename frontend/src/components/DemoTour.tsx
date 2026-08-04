@@ -182,12 +182,12 @@ export default function DemoTour({
       site = { ...await response.json() as Site, source: 'walkthrough' as const };
     }
 
-    // Reset ideal (target) values to match reference each time the tour starts
+    // Reset ideal (target) values to match current each time the tour starts
     // so that any changes from a previous run do not carry over.
-    if (site.indicators?.reference) {
+    if (site.indicators?.current) {
       site = {
         ...site,
-        indicators: { ...site.indicators, ideal: { ...site.indicators.reference } },
+        indicators: { ...site.indicators, ideal: { ...site.indicators.current } },
       };
     }
 
