@@ -11,9 +11,11 @@ import {
   IconButton,
   Image,
   Text,
+  Tooltip,
   VStack,
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
 import { SCENARIOS, type AppPage } from '../types';
 import { colors } from '../styles/colors';
 
@@ -35,7 +37,10 @@ import partnerWits from '../assets/partners/witslogo_nb 1.png';
 import backgroundImage1 from '../assets/CattleLubangoAngola2_1.png';
 import rewildLogo from '../assets/logo-vertical-white-3x 1.png';
 import fefaLogog from '../assets/JM_FEFA_Logo_Dark_RGB_72dpi_aw.png';
-import ourMissionImage from '../assets/our_mission.png';
+import dialsScreenshot from '../assets/Dials_screenshot.png';
+import graphScreenshot from '../assets/Graph_screenshot.png';
+import mapScreenshot from '../assets/Map_screenshot.png';
+import sitesScreenshot from '../assets/sites_screenshot.png';
 import landOwnerImage from '../assets/land_owner.png';
 import localGovernmentImage from '../assets/local_government.png';
 import futurePossibilitiesImage from '../assets/future_possibilities.png';
@@ -170,6 +175,105 @@ function PartnersCarousel() {
   );
 }
 
+interface LandscapeSlide {
+  image: string;
+  alt: string;
+  title: string;
+  description: string;
+}
+
+const landscapeSlides: LandscapeSlide[] = [
+  {
+    image: dialsScreenshot,
+    alt: 'Dials screenshot',
+    title: 'Visualise trends and trade-offs',
+    description: 'Compare variables with interactive dials to support informed decision-making.',
+  },
+  {
+    image: graphScreenshot,
+    alt: 'Graph/chart screenshot',
+    title: 'Compare landscape states',
+    description: 'View detailed data across the reference, current and target landscape states.',
+  },
+  {
+    image: mapScreenshot,
+    alt: 'Map screenshot',
+    title: 'Explore spatial patterns',
+    description: 'Map ecosystem variables across your landscape and compare between the different landscape states.',
+  },
+  {
+    image: sitesScreenshot,
+    alt: 'Sites screenshot',
+    title: 'Create your own sites',
+    description: 'Define an area of interest and explore different possibilities for your landscape.',
+  },
+];
+
+const LANDSCAPE_AUTO_PLAY_MS = 5000;
+
+function LandscapeManagementCarousel() {
+  const [index, setIndex] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const advance = useCallback(() => {
+    setIndex(i => (i + 1) % landscapeSlides.length);
+  }, []);
+
+  useEffect(() => {
+    timerRef.current = setInterval(advance, LANDSCAPE_AUTO_PLAY_MS);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [advance]);
+
+  const reset = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(advance, LANDSCAPE_AUTO_PLAY_MS);
+  };
+
+  const slide = landscapeSlides[index];
+
+  return (
+    <Box maxW="700px" mx="auto" textAlign="center">
+      <Image
+        src={slide.image}
+        alt={slide.alt}
+        w="100%"
+        objectFit="contain"
+        mx="auto"
+        mb={6}
+        borderRadius="lg"
+      />
+      <Heading
+        {...headingProps}
+        as="h3"
+        fontSize={{ base: 'xl', md: '2xl' }}
+        fontWeight="bold"
+        color="white"
+        mb={3}
+      >
+        {slide.title}
+      </Heading>
+      <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
+        {slide.description}
+      </Text>
+      <HStack justify="center" spacing={2}>
+        {landscapeSlides.map((s, i) => (
+          <Box
+            key={s.alt}
+            as="button"
+            aria-label={`Show ${s.alt}`}
+            onClick={() => { setIndex(i); reset(); }}
+            w="8px"
+            h="8px"
+            borderRadius="full"
+            bg={i === index ? colors.orange : 'whiteAlpha.400'}
+            transition="background-color 0.2s"
+          />
+        ))}
+      </HStack>
+    </Box>
+  );
+}
+
 const buttonOverlayStyle: React.CSSProperties = {
   position: 'absolute',
   bottom: '5%',
@@ -210,11 +314,35 @@ const dashboardCapabilities: { label: string; color: string }[] = [
 // Who each explore card speaks to — this used to be written but commented
 // out and never shown; surfacing it gives every card a clear "who this is
 // for" alongside the "what you can explore" button.
-const dashboardAudiences: { image: string; audience: string; cta: string; event: string }[] = [
-  { image: landOwnerImage, audience: 'Land owners & conservation managers', cta: 'Explore Conservation Futures', event: 'dt:start-munywana-demo' },
-  { image: ruralCommunityImage, audience: 'Rural communities', cta: 'Explore Shared Landscapes', event: 'dt:start-viphya-demo' },
-  { image: localGovernmentImage, audience: 'Local government agencies and traditional leadership', cta: 'Explore Policy Impacts', event: 'dt:start-shaihills-demo' },
-  { image: futurePossibilitiesImage, audience: 'School learners, artists and members of the public', cta: 'Explore Future Possibilities', event: 'dt:start-africa-demo' },
+const dashboardAudiences: { image: string; audience: string; cta: string; event: string; tooltip?: string }[] = [
+  {
+    image: landOwnerImage,
+    audience: 'Land owners & conservation managers',
+    cta: 'Explore Conservation Futures',
+    event: 'dt:start-munywana-demo',
+    tooltip: 'Visualise the opportunities and challenges of conserving biodiversity while exploring carbon financing opportunities.\n\nThe dashboard can help users consider different options for financing land management activities, providing ecosystem services and conserving biodiversity within their ecological and social context.',
+  },
+  {
+    image: ruralCommunityImage,
+    audience: 'Rural communities',
+    cta: 'Explore Shared Landscapes',
+    event: 'dt:start-viphya-demo',
+    tooltip: 'Explore how different landscape futures may affect nature’s contributions to people, including grazing, food, fuelwood, thatching grass, hunting and honey gathering.\n\nThe dashboard can support discussion about different desired ecosystem states and the priorities and tensions that may exist within communities.',
+  },
+  {
+    image: localGovernmentImage,
+    audience: 'Local government agencies and traditional leadership',
+    cta: 'Explore Policy Impacts',
+    event: 'dt:start-shaihills-demo',
+    tooltip: 'Examine the consequences of different policies for landscapes and people.\n\nAcademics and practitioners working on carbon and biodiversity finance\n\nInvestigate the potential pitfalls and unintended outcomes of different carbon and biodiversity credit schemes, and explore mechanisms that may work in African contexts.',
+  },
+  {
+    image: futurePossibilitiesImage,
+    audience: 'School learners, artists and members of the public',
+    cta: 'Explore Future Possibilities',
+    event: 'dt:start-africa-demo',
+    tooltip: 'Explore and reimagine African landscapes guided by different ideas about what people value and need in the future',
+  },
 ];
 
 // Reuse the app's own reference/current/future colour coding (the same hues
@@ -340,15 +468,16 @@ function LandingPage({ onNavigate }: LandingPageProps) {
           >
             Supporting landscape management 
           </Heading>
-          <Flex gap="10" align="center" justify="center" wrap="wrap">
+          <Flex gap="10" align="center" justify="center" wrap="wrap" mb={10}>
             <Box flex="1" minW="260px">
-              <Image src={ourMissionImage} w="100%" objectFit="contain" mx="auto" mb={6} />
+              <LandscapeManagementCarousel />
             </Box>
             <Box flex="1" minW="260px" textAlign="left">
-              <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-                Users can assess the current state of a landscape, compare it with ecological reference conditions and explore how different interventions may alter ecosystem functioning. This allows them to examine the consequences and trade-offs associated with different land management and conservation choices.
+              <Text fontSize="md" color="white" lineHeight="1.75">
+                Users can assess the current state of a landscape, compare it with ecological reference conditions and explore how different interventions may alter ecosystem functioning. This allows them to examine the consequences and trade-offs associated with different land management and conservation choices. 
               </Text>
-              <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
+              <br></br>
+              <Text fontSize="md" color="white" lineHeight="1.75">
                 The dashboard supports exploration at multiple scales, from individual catchments to the African continent as a whole
               </Text>
             </Box>
@@ -448,12 +577,37 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                   </Text>
                 </Box> */}
                 <Box style={buttonOverlayStyle}>
-                  <Button
-                    {...outlinedButtonProps}
-                    onClick={() => window.dispatchEvent(new Event(card.event))}
+                  <motion.div
+                    style={{ display: 'inline-block' }}
+                    initial={{ scale: 1 }}
+                    whileInView={{ scale: [1, 1.25, 1] }}
+                    viewport={{ once: true, amount: 0.8 }}
+                    transition={{ duration: 1.4, times: [0, 0.5, 1], ease: 'easeInOut' }}
                   >
-                    {card.cta}
-                  </Button>
+                    <Tooltip
+                      label={card.tooltip?.split('\n\n').map((paragraph, i) => (
+                        <Text key={i} mt={i > 0 ? 2 : 0}>{paragraph}</Text>
+                      ))}
+                      isDisabled={!card.tooltip}
+                      placement="right"
+                      hasArrow
+                      bg="whiteAlpha.800"
+                      color="gray.800"
+                      borderRadius="12px 12px 12px 0"
+                      px={4}
+                      py={3}
+                      fontSize="sm"
+                      lineHeight="1.6"
+                      maxW="320px"
+                    >
+                      <Button
+                        {...outlinedButtonProps}
+                        onClick={() => window.dispatchEvent(new Event(card.event))}
+                      >
+                        {card.cta}
+                      </Button>
+                    </Tooltip>
+                  </motion.div>
                 </Box>
               </Box>
             ))}
@@ -464,27 +618,43 @@ function LandingPage({ onNavigate }: LandingPageProps) {
       {/* ── GETTING STARTED ───────────────────────────────────── */}
       <Box bg={colors.darkGray} py={16} px={6}>
         <Container maxW="1200px">
-          <Box textAlign="center" mb={12}>
-            <Text
-              fontSize="xs"
-              fontWeight="bold"
-              letterSpacing="0.14em"
-              textTransform="uppercase"
-              color={colors.pastelLightBlue}
-              mb={3}
+          <Flex gap="12" align="flex-start" justify="center" wrap="wrap">
+            <Box textAlign="center" mb={12}>
+              <Heading
+                {...headingProps}
+                as="h2"
+                fontSize={{ base: '3xl', md: '4xl' }}
+                fontWeight="bold"
+                color="white"
+              >
+                How does it work?
+              </Heading>
+              
+            </Box>
+            <motion.div
+              style={{ display: 'inline-block' }}
+              initial={{ scale: 1 }}
+              whileInView={{ scale: [1, 1.25, 1] }}
+              viewport={{ once: true, amount: 0.8 }}
+              transition={{ duration: 1.4, times: [0, 0.5, 1], ease: 'easeInOut' }}
             >
-              Three lenses, one landscape
-            </Text>
-            <Heading
-              {...headingProps}
-              as="h2"
-              fontSize={{ base: '3xl', md: '4xl' }}
-              fontWeight="bold"
-              color="white"
-            >
-              How does it work?
-            </Heading>
-          </Box>
+              <Button
+                bg={colors.orange}
+                color="white"
+                borderRadius="full"
+                px={8}
+                h="46px"
+                fontSize="sm"
+                fontWeight="semibold"
+                onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
+                _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
+                transition="all 0.2s"
+                boxShadow="md"
+              >
+                Guided Tour
+              </Button>
+            </motion.div>
+          </Flex>
 
           <Flex gap="12" align="flex-start" justify="center" wrap="wrap">
             <Box flex="1" minW="260px" maxW="480px" mx="auto">
@@ -563,22 +733,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
                 <Text fontSize="md" color="white"  mb={1}>
                   By comparing these scenarios, users can visualise how vegetation structure, biodiversity, productivity, carbon sequestration and other ecosystem processes are connected, and examine the trade-offs associated with different land management and conservation strategies.
                 </Text>
-                <br></br>
-                <Button
-                  bg={colors.orange}
-                  color="white"
-                  borderRadius="full"
-                  px={8}
-                  h="46px"
-                  fontSize="sm"
-                  fontWeight="semibold"
-                  onClick={() => window.dispatchEvent(new Event('dt:restart-tour'))}
-                  _hover={{ bg: '#D8832A', transform: 'translateY(-1px)' }}
-                  transition="all 0.2s"
-                  boxShadow="md"
-                >
-                  From A to Z
-                </Button>
+                
               </Box>
           </Box>
         </Container>
@@ -650,7 +805,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               An Africa-led, Africa-centred program to influence thinking and action in new ways.
             </Heading>
 
-            <Button
+            {/* <Button
               bg={colors.orange}
               color="white"
               borderRadius="full"
@@ -664,7 +819,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               boxShadow="md"
             >
               Explore Our Library of Resources
-            </Button>
+            </Button> */}
           </Flex>
         </Box>
 
