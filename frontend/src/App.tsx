@@ -68,7 +68,7 @@ function App() {
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
-  const [colorScaleMode, setColorScaleMode] = useState<ColorScaleMode>('metadata');
+  const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
   const [swiperPosition, setSwiperPosition] = useState<number>(50); // Synchronized slider position
@@ -1054,7 +1054,6 @@ function App() {
               ? viewModes[indicatorPaneIndex] === 'table'
               : viewModes[0] === 'table'))}
           colorScaleMode={colorScaleMode}
-          onColorScaleModeChange={setColorScaleMode}
           colorScaleType={colorScaleType}
           onColorScaleTypeChange={setColorScaleType}
           rangeMode={rangeMode}

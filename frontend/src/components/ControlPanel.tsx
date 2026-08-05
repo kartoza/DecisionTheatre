@@ -40,7 +40,6 @@ interface ControlPanelProps {
   hideScenarioSelectors?: boolean;
   hideColorScale?: boolean;
   colorScaleMode: ColorScaleMode;
-  onColorScaleModeChange: (mode: ColorScaleMode) => void;
   colorScaleType: ColorScaleType;
   onColorScaleTypeChange: (scaleType: ColorScaleType) => void;
   rangeMode?: RangeMode;
@@ -393,7 +392,6 @@ function ControlPanel({
   hideScenarioSelectors = false,
   hideColorScale = false,
   colorScaleMode,
-  onColorScaleModeChange,
   colorScaleType,
   onColorScaleTypeChange,
   rangeMode = 'domain',
