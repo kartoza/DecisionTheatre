@@ -23,11 +23,21 @@ var targetStateWarningRules = []targetStateWarningRule{
 				return false
 			}
 			herbs, hasHerbs := ideal["herbs_totGRAZING_DMI_kgkm2"]
-			npp, hasNPP := current[colNPP]
+			herbsCurrent, hasHerbsCurrent := current["herbs_totGRAZING_DMI_kgkm2"]
+			if !hasHerbs || !hasHerbsCurrent {
+				return false
+			}
+
+			npp, hasNPP := ideal[colNPP]
+
 			if !hasHerbs || !hasNPP {
 				return false
 			}
-			return herbs > npp*1000
+
+			if herbsCurrent != herbs {
+				return herbs > npp*10
+			}
+			return false
 		},
 	},
 }

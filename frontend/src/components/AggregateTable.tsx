@@ -244,7 +244,7 @@ function AggregateTable({
                       {formatNumber(calculations.hasData ? calculations.totalArea : (siteIndicators?.totalAreaKm2 ?? 0), 1)}
                     </Text>
                     <Text color="gray.500" fontSize="sm">
-                      hectares
+                      km²
                     </Text>
                   </VStack>
                 </Box>
@@ -370,7 +370,7 @@ function AggregateTable({
                       <Thead>
                         <Tr bg="whiteAlpha.100">
                           <Th color="gray.300" borderColor="whiteAlpha.200" py={4}>Catchment ID</Th>
-                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (ha)</Th>
+                          <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Area (km²)</Th>
                           <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Fraction Covered</Th>
                           <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>{attributeLabel}</Th>
                           <Th color="gray.300" borderColor="whiteAlpha.200" isNumeric>Valid Area</Th>
