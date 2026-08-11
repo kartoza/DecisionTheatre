@@ -3,6 +3,13 @@ import {
   Button,
   HStack,
   IconButton,
+  Input,
+  InputGroup,
+  InputLeftElement,
+  InputRightElement,
+  List,
+  ListItem,
+  Spinner,
   Text,
   Tooltip,
   VStack,
@@ -10,13 +17,44 @@ import {
 } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { FiCheck, FiGlobe, FiRotateCcw, FiSquare, FiTrash2 } from 'react-icons/fi';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FiCheck, FiGlobe, FiMapPin, FiRotateCcw, FiSearch, FiSquare, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
 import { SITE_COLORS } from '../hooks/usePhysicsPolygon';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { getAppRuntime } from '../types/runtime';
+import places from '../data/places.json';
+
+const MAX_SEARCH_RESULTS = 8;
+const SEARCH_FLY_ZOOM = 10;
+const SEARCH_MIN_CHARS = 3;
+const SEARCH_DEBOUNCE_MS = 400;
+const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
+
+interface PlaceResult {
+  name: string;
+  lng: number;
+  lat: number;
+}
+
+// Nominatim covers small towns that the bundled gazetteer (major cities only)
+// misses. It's an online-only enhancement — a failed/offline request just
+// leaves the instant local matches in place, so search still works offline.
+async function fetchNominatimPlaces(query: string, signal: AbortSignal): Promise<PlaceResult[]> {
+  const url = `${NOMINATIM_SEARCH_URL}?format=jsonv2&q=${encodeURIComponent(query)}&limit=${MAX_SEARCH_RESULTS}`;
+  const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
+  if (!response.ok) return [];
+
+  const results = await response.json() as Array<{ lat: string; lon: string; display_name: string }>;
+  return results
+    .map((result) => ({
+      name: result.display_name,
+      lng: parseFloat(result.lon),
+      lat: parseFloat(result.lat),
+    }))
+    .filter((place) => Number.isFinite(place.lng) && Number.isFinite(place.lat));
+}
 
 const MotionBox = motion(Box);
 
@@ -94,7 +132,78 @@ function SiteCreationMap({
   const boxStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const isDraggingBoxRef = useRef(false);
   const catchmentGeometryCacheRef = useRef<Map<string, GeoJSON.Feature>>(new Map());
+  const [locationQuery, setLocationQuery] = useState('');
+  const [isLocationDropdownOpen, setIsLocationDropdownOpen] = useState(false);
+  const [onlineLocationResults, setOnlineLocationResults] = useState<PlaceResult[]>([]);
+  const [isSearchingOnline, setIsSearchingOnline] = useState(false);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const toast = useToast();
+
+  const localLocationResults = useMemo<PlaceResult[]>(() => {
+    const query = locationQuery.trim().toLowerCase();
+    if (!query) return [];
+    return (places as PlaceResult[])
+      .filter((place) => place.name.toLowerCase().includes(query))
+      .slice(0, MAX_SEARCH_RESULTS);
+  }, [locationQuery]);
+
+  // Debounced online search — Nominatim's usage policy caps requests to
+  // roughly 1/sec, so only fire once typing pauses, and cancel any request
+  // that's superseded by further typing.
+  useEffect(() => {
+    const query = locationQuery.trim();
+    if (query.length < SEARCH_MIN_CHARS) {
+      searchAbortRef.current?.abort();
+      setOnlineLocationResults([]);
+      setIsSearchingOnline(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      setIsSearchingOnline(true);
+
+      fetchNominatimPlaces(query, controller.signal)
+        .then((results) => {
+          if (!controller.signal.aborted) setOnlineLocationResults(results);
+        })
+        .catch(() => {
+          // Offline or request failed — local matches remain available.
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setIsSearchingOnline(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [locationQuery]);
+
+  const locationResults = useMemo<PlaceResult[]>(() => {
+    if (onlineLocationResults.length === 0) return localLocationResults;
+
+    // Prefer the more thorough online results; fill remaining slots with any
+    // local matches not already covered by them.
+    const merged = [...onlineLocationResults];
+    for (const place of localLocationResults) {
+      const isDuplicate = merged.some(
+        (existing) => Math.abs(existing.lng - place.lng) < 0.01 && Math.abs(existing.lat - place.lat) < 0.01
+      );
+      if (!isDuplicate) merged.push(place);
+    }
+    return merged.slice(0, MAX_SEARCH_RESULTS);
+  }, [localLocationResults, onlineLocationResults]);
+
+  const handleSelectLocation = useCallback((place: PlaceResult) => {
+    searchAbortRef.current?.abort();
+    const map = mapRef.current;
+    if (map) {
+      map.flyTo({ center: [place.lng, place.lat], zoom: SEARCH_FLY_ZOOM, duration: 1200 });
+    }
+    setLocationQuery(place.name);
+    setIsLocationDropdownOpen(false);
+  }, []);
 
   // Capture map as thumbnail
   const captureMapThumbnail = useCallback((): string | undefined => {
@@ -945,7 +1054,7 @@ function SiteCreationMap({
       {/* Map container */}
       <Box ref={mapContainerRef} w="100%" h="100%" />
 
-      {/* Google basemap toggle */}
+      {/* Location search */}
       <AnimatePresence>
         {isMapReady && (
           <MotionBox
@@ -954,6 +1063,81 @@ function SiteCreationMap({
             exit={{ opacity: 0, x: -20 }}
             position="absolute"
             top={4}
+            left={4}
+            w="260px"
+            zIndex={2}
+          >
+            <InputGroup size="sm">
+              <InputLeftElement pointerEvents="none">
+                <FiSearch color="white" />
+              </InputLeftElement>
+              <Input
+                placeholder="Search for a location..."
+                value={locationQuery}
+                onChange={(e) => {
+                  setLocationQuery(e.target.value);
+                  setIsLocationDropdownOpen(true);
+                }}
+                onFocus={() => setIsLocationDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setIsLocationDropdownOpen(false), 150)}
+                bg="blackAlpha.700"
+                color="white"
+                border="1px solid"
+                borderColor="whiteAlpha.300"
+                backdropFilter="blur(10px)"
+                borderRadius="lg"
+                _placeholder={{ color: 'whiteAlpha.700' }}
+                _hover={{ borderColor: 'whiteAlpha.400' }}
+                _focus={{ borderColor: colors.orange, boxShadow: 'none' }}
+              />
+              {isSearchingOnline && (
+                <InputRightElement>
+                  <Spinner size="xs" color="whiteAlpha.700" />
+                </InputRightElement>
+              )}
+            </InputGroup>
+            {isLocationDropdownOpen && locationResults.length > 0 && (
+              <List
+                mt={1}
+                bg="blackAlpha.800"
+                backdropFilter="blur(10px)"
+                borderRadius="lg"
+                border="1px solid"
+                borderColor="whiteAlpha.300"
+                overflow="hidden"
+              >
+                {locationResults.map((place) => (
+                  <ListItem key={`${place.name}-${place.lng}-${place.lat}`}>
+                    <Button
+                      w="100%"
+                      justifyContent="flex-start"
+                      leftIcon={<FiMapPin />}
+                      onClick={() => handleSelectLocation(place)}
+                      variant="ghost"
+                      color="white"
+                      fontWeight="normal"
+                      borderRadius="none"
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                    >
+                      {place.name}
+                    </Button>
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </MotionBox>
+        )}
+      </AnimatePresence>
+
+      {/* Google basemap toggle */}
+      <AnimatePresence>
+        {isMapReady && (
+          <MotionBox
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            position="absolute"
+            top={16}
             left={4}
           >
             <Tooltip
