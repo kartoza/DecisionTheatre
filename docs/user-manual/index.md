@@ -6,26 +6,21 @@ This section covers everything you need to install, configure, and use Landscape
 
 - [Installation](installation.md) -- download and run the application
 - [Data Setup](data-setup.md) -- obtain and prepare the required data files
-- [Projects](projects.md) -- create and manage analysis projects
+- [Sites](sites.md) -- create and manage saved study areas
 - [Using the Map](using-the-map.md) -- navigate the map interface
-- [Scenario Comparison](scenario-comparison.md) -- compare catchment attributes across time periods
+- [Scenario Comparison](scenario-comparison.md) -- compare catchment attributes across reference, current, and target conditions
 
 ## Application Flow
 
-When you start Landscape Decision Theatre, you'll see the **Landing Page** with two main options:
+When you start Landscape Decision Theatre, the landing page offers a few ways in:
 
-1. **About** -- learn about the project, funders, and open source nature
-2. **Projects** -- access your saved projects or create new ones
+1. **Explore the Future of Ecosystem Decision-Making** -- jump straight into the map with the full dataset, no site required (see [Explore mode](sites.md#explore-mode))
+2. Four **guided tour** cards (Munywana, Viphya, Shai Hills, Africa) -- scripted walkthroughs of a pre-built example site, aimed at different audiences
+3. **Guided Tour** -- restart the app's own onboarding walkthrough
+4. **My Sites** (header, pin icon) -- open, create, clone, or delete your saved [sites](sites.md)
 
-From the Projects page, you can:
+Each site saves its state, including:
 
-- **Create** a new project with a title, description, and optional thumbnail image
-- **Open** an existing project to view and edit the map analysis
-- **Clone** a project to create a copy with the same settings
-- **Delete** projects you no longer need
-
-Each project saves its state, including:
-
-- Selected scenarios for left and right map sides
-- Selected attribute for choropleth colouring
-- Map viewport (center, zoom, bearing, pitch)
+- Its boundary geometry and the catchments it covers
+- Layout (single/quad), and each pane's scenario, factor, and view mode selections
+- Its computed indicator values, including any Target State edits you've made
