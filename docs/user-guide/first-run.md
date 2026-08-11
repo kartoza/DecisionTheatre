@@ -1,6 +1,6 @@
 # Tutorial: First Run
 
-This tutorial walks through launching Decision Theatre for the first time.
+This tutorial walks through launching Decision Theatre for the first time and creating your first site.
 
 ## Prerequisites
 
@@ -21,82 +21,86 @@ If you are using Nix:
 nix run
 ```
 
-### 2. Landing Page
+### 2. Landing page
 
-When the application starts, you'll see the **Landing Page** with:
+![The landing page](../assets/images/screenshots/landing-page.jpg)
 
-- **Landscape Decision Theatre** title with a beautiful background landscape image
-- **Strapline**: "Exploring the possibilities of sustainable land use practices"
-- **About** button: Learn more about the project, funders, and open source nature
-- **Projects** button: Access the project management interface
+The landing page ("Welcome to the Landscape Decision Dashboard") gives you a few ways in:
 
-### 3. About Page
+- **Explore the Future of Ecosystem Decision-Making** -- jump into the map with the full dataset and no site loaded (see [Explore mode](../user-manual/sites.md#explore-mode))
+- **The FEFA and Rewild Capital Partnership** -- background on the organisations behind the tool
+- Four audience cards, each launching a scripted **guided tour** through a pre-built example site (see [Guided tours](#3-guided-tours) below)
+- **Guided Tour** -- restarts the app's own onboarding walkthrough, which runs automatically the first time you ever open the app
 
-Click the **About** button to view:
+The first time the app loads in a given browser/profile, the onboarding walkthrough starts automatically. You can skip it with **Skip tour**, or step through it with **Next**.
 
-- Project overview and mission statement
-- Feature highlights (spatial analysis, collaborative decision making, scenario modeling)
-- Funders and partners information
-- Academic citations and references
-- Open source information with links to the GitHub repository
+### 3. Guided tours
 
-Use the **Back to Home** button to return to the landing page.
+Four topic-specific walkthroughs are available from the landing page, each pre-loading one of the built-in read-only demo sites and narrating a sequence of findings:
 
-### 4. Create Your First Project
+| Card | Demo site | Focus |
+|------|-----------|-------|
+| Explore Conservation Futures | Munywana | Woody biomass, tree cover, herbivore grazing pressure |
+| Explore Shared Landscapes | Viphya | Miombo woodland restoration and tree-cover trade-offs |
+| Explore Policy Impacts | Shai Hills | Forest vs. open-savanna restoration, fire and ecosystem processes |
+| Explore Future Possibilities | Africa | Continent-scale herbivore biomass loss, methane/fire/carbon trade-offs, target-setting |
 
-1. Click **Projects** from the landing page
-2. Click **Create New Project**
-3. Fill in the project details:
-   - **Thumbnail**: Drag and drop an image or click to upload (optional)
-   - **Title**: Give your project a descriptive name (required)
-   - **Description**: Add notes about your project (optional)
-4. Click **Create Project**
+These are a good first stop if you want to see the app fully populated with real data before creating your own site.
 
-The application will create your project and navigate to the map view.
+### 4. Create your first site
+
+To work with your own study area instead, click **My Sites** in the header (or **Explore...** then **Create Site** from the indicator panel), then:
+
+1. Click **Create New Site**
+2. Choose a boundary **Method** -- Shapefile, GeoJSON, Draw, or Catchments
+3. Define the boundary on the map (for **Draw**, click at least 3 points; use the location **search box** to fly to a place first if you need to find your area)
+4. Click **Confirm Boundary**
+5. Give the site a **Title** (required) and optional **Description**, confirm the auto-captured thumbnail, then click **Create Site**
+
+Full details are in [Sites](../user-manual/sites.md#creating-a-site).
+
+The application creates your site and takes you directly to the map view.
 
 ### 5. View the map
 
 Once in the map view, you'll see:
 
-- A full-screen vector map of Africa showing catchment boundaries, rivers, lakes, and country borders
-- A header bar with navigation buttons (Home, Projects) and status indicators
-- A slide-out control panel for configuring scenario comparisons
+- A full-screen vector map of Africa showing catchment boundaries, rivers, lakes, and country borders, with your site's boundary outlined
+- A header bar with navigation buttons (Home, My Sites, Indicators) and status indicators
+- A slide-out indicator panel for configuring scenario comparisons
 
 ### 6. Check status indicators
 
-In the header, verify:
+In the header, verify **Tiles** shows green (map tile data loaded).
 
-- **Tiles**: green (map data loaded)
+### 7. Open the indicator panel
 
-### 7. Open the control panel
+In single-pane view the indicator panel opens automatically. It shows:
 
-Click any pane to focus it and open the control panel. The panel slides out from the right edge, showing:
+- **Zone Range** (Full / Extent / Site)
+- A **Factor** selector for the choropleth attribute
+- **Scenario 1 (Left)** and **Scenario 2 (Right)** selectors -- Ecological Reference, Current State, or Target State
+- A **Color Scale** legend
 
-- Scenario selectors (Reference, Current, Future)
-- Attribute selector for choropleth visualization
-- Color scale legend
+You're now ready to explore the data. See [Comparing Scenarios](comparing-scenarios.md) for the next steps.
 
-You are now ready to explore the data. See [Comparing Scenarios](comparing-scenarios.md) for the next steps.
+## Managing Sites
 
-## Managing Projects
+### Opening an existing site
 
-### Opening an Existing Project
+1. Click **My Sites** (pin icon) in the header
+2. Click on any site card to open it -- your saved layout, scenarios, and factor selections are restored
 
-1. Click the **Projects** button (folder icon) in the header or navigate to Projects from the landing page
-2. Click on any project card to open it
-3. Your map state (scenarios, attributes, layout) will be restored
+### Cloning a site
 
-### Cloning a Project
+1. On the Sites page, hover over a site card
+2. Click the **Clone** icon (copy)
+3. Adjust the title and description as needed, then click **Create Site**
 
-1. In the Projects page, hover over a project card
-2. Click the **Clone** button (copy icon)
-3. Modify the title and description as needed
-4. Click **Create Project** to create a copy
+### Deleting a site
 
-### Deleting a Project
-
-1. In the Projects page, hover over a project card
-2. Click the **Delete** button (trash icon)
+1. On the Sites page, hover over a site card
+2. Click the **Delete** icon (trash)
 3. Confirm the deletion
 
-Note: Project deletion is permanent and cannot be undone.
+Deletion is permanent and cannot be undone. Note that the four built-in demo/tour sites cannot be edited, cloned, or deleted.

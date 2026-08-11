@@ -1,60 +1,62 @@
 # Using the Map
 
-The map interface is the primary way to explore catchment data in Landscape Decision Theatre.
+Once you've opened or created a [site](sites.md) (or entered Explore mode), you land in the map view -- the core workspace for comparing scenarios.
+
+![Single-pane map view with the indicator panel open](../assets/images/screenshots/map-single-view.jpg)
+
+## Header
+
+- **Home** -- return to the landing page
+- **My Sites** (pin icon) -- back to Your Sites
+- **Map view** / **Indicators** (bar-chart icon) -- switch between the map workspace and the full [Indicators](scenario-comparison.md#the-indicators-page) page for the open site
+- **Tiles** status badge -- green when map tile data is loaded
+- **Edit site boundary** (pencil, map page only) -- toggles [boundary editing](#editing-a-site-boundary)
+- **Documentation** (help icon) -- opens this documentation panel alongside the app
+
+## Layout: Single and Quad
+
+- **Single view** -- one pane fills the content area. The indicator panel opens automatically on the right for choosing scenarios and a factor. A **grid icon** on the pane's toolbar switches to quad view.
+- **Quad view** -- a 2x2 (or 2x3, via the columns toggle) grid of independent panes, each with its own factor, scenario, and view mode. Click the **maximise icon** on any pane to focus it as a single pane and open its indicator panel; click **Add pane** (+) in the quad toolbar to add more.
+
+![Quad view with four panes on different factors](../assets/images/screenshots/map-quad-view.jpg)
+
+In quad view, a toolbar above the grid lets you set **all panes at once** to Map, Chart, Dial, or Table, and (once a site has indicators with editable targets) opens the **Targets** modal -- see [Setting target values](scenario-comparison.md#setting-target-values).
+
+Each pane's own toolbar (bottom-right) switches that pane between **Map**, **Chart**, **Dial**, and **Table** view -- see [Scenario Comparison](scenario-comparison.md) for what each view shows and how to configure it.
 
 ## Map Controls
 
-- **Pan** -- click and drag to move the map
-- **Zoom** -- scroll wheel, pinch gesture, or double-click to zoom in; shift+double-click to zoom out
-- **Rotate** -- right-click and drag, or use the compass control
-- **Reset bearing** -- click the compass icon to reset north
+Each map pane has its own floating toolbar (left side) and standard zoom/compass controls (bottom-left):
 
-## Map Layers
+| Control | Description |
+|---------|-------------|
+| **Toggle 3D view** (cube icon) | Tilts the camera to a 60&deg; pitch and extrudes catchments as 3D bars scaled to the selected factor's value |
+| **Toggle choropleth layer** (map icon) | Shows or hides the coloured data overlay |
+| **Toggle identify mode** (info icon, hidden in quad view) | Click-to-inspect a catchment -- see [Identifying a catchment](#identifying-a-catchment) |
+| **Toggle Google basemap** (globe icon) | Switches between the default vector basemap and Google satellite imagery |
+| **Toggle map swiper** (columns icon) | Shows or hides the draggable swipe divider between the two compared scenarios |
+| **Zoom to Site** (target icon, only with a site loaded) | Fits the map to the site boundary |
 
-The map displays several vector layers at different zoom levels:
+![3D extruded choropleth with the swipe divider](../assets/images/screenshots/map-3d-view.jpg)
 
-- **African countries** -- country boundaries and labels (visible from zoom 2)
-- **Ecoregions** -- ecological region boundaries (visible from zoom 2)
-- **Rivers** -- major river networks (visible from zoom 6)
-- **Lakes** -- lake boundaries (visible from zoom 6)
-- **Populated places** -- cities and towns (visible from zoom 6)
-- **Catchments** -- level-12 catchment boundaries (visible from zoom 8)
+### The swipe divider
 
-## Swipe View
+Decision Theatre always renders two synchronized map instances -- one per compared scenario. The vertical divider between them is a draggable handle: drag it left or right to reveal more of either side. It snaps ("docks") fully to one edge when dragged within about 3% of it. Floating labels along the top name each scenario and the active factor.
 
-The map supports a side-by-side comparison mode using a vertical swipe divider. The left side shows one scenario and the right side shows another. Drag the divider to reveal more of either side.
+### Identifying a catchment
 
-## Map Tools
+With identify mode on, click any catchment to open a popup showing every attribute for that catchment across the left and right scenarios, plus its departure from the ecological reference. Click the site boundary line itself instead to see site-wide indicator values. Close the popup with its **&times;** button. Identify mode is only available in single-pane view.
 
-When an indicator is selected, a vertical tool bar appears on the left side of the map with the following buttons:
+## Editing a Site Boundary
 
-- **Identify** (i icon) -- toggles identify mode. When active, the cursor changes to a crosshair. Click any catchment to see all its attribute values across all scenarios in a table in the side panel. The currently selected indicator is highlighted in the table. Click the button again to disable identify mode.
-- **3D View** (cube icon) -- toggles 3D extrusion mode. When active, catchment polygons are extruded based on their attribute values, providing a visual height-based comparison. The map pitch tilts to 60 degrees for a perspective view.
+Click the pencil icon (**Edit site boundary**) in the header, on the map page, to enter boundary edit mode. A banner explains the current tool, and a floating panel (top-right of the pane) offers two independent tool pairs:
 
-## Per-Pane Toolbar
+![Boundary edit mode: vertex handles and the catchment/vertex tool panel](../assets/images/screenshots/boundary-edit.jpg)
 
-Each map pane has a floating toolbar in the bottom-right corner with two buttons:
+- **Add / Remove catchments** (green + / red &minus;) -- click a catchment to union or subtract it from the boundary
+- **Add / Delete vertices** (blue + / orange trash) -- click the boundary line to insert a vertex, or click an existing vertex to remove it
 
-- **Map / Chart toggle** (bar chart / map icon) -- switches between the map view and chart view for this pane.
-- **Layout toggle** -- context-dependent:
-    - In **quad view**: shows a maximise icon. Click to focus this pane as a single full-screen map and open its indicator panel.
-    - In **single view**: shows a grid icon. Click to return to the four-pane quad layout.
+With no tool selected, drag the glowing cyan vertex handles directly to reshape the boundary.
 
-## Single and Quad Views
-
-- **Single view** -- one map pane fills the entire content area. The indicator (control) panel automatically opens on the right, letting you choose scenarios and attributes for the focused pane. Use the grid button on the toolbar to switch back to quad view.
-- **Quad view** -- four map panes in a 2×2 grid, each with independent scenarios and indicator settings. Click the maximise button on any pane to focus it and open the indicator panel. The quad layout, focused pane, and per-pane indicator selections are all remembered between sessions.
-
-## Header Status Indicators
-
-The header bar shows the status of application components:
-
-- **Tiles** -- green when map tile data is loaded
-
-## Navigation
-
-The header also provides navigation controls:
-
-- **Home** icon -- return to the Landing Page
-- **Projects** icon -- go directly to the Projects page
-- **Documentation** icon -- open the embedded documentation panel
+!!! warning "No confirm step"
+    Boundary edits apply immediately as you drag or click -- there's no separate Save or Cancel. Click the pencil icon again to exit edit mode when you're done; if the boundary changed, indicators are automatically re-extracted for the new shape.
