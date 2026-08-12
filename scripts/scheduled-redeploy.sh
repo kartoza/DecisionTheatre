@@ -40,7 +40,6 @@ echo "=== Scheduled redeploy started at $(date -u +"%Y-%m-%dT%H:%M:%SZ") ==="
 
 echo "==> Pulling latest changes..."
 cd "$PROJECT_ROOT"
-git stash
 git pull
 
 echo "==> Rebuilding docker compose images..."
