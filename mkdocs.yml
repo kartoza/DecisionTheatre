@@ -52,7 +52,7 @@ nav:
       - Getting Started: user-manual/index.md
       - Installation: user-manual/installation.md
       - Data Setup: user-manual/data-setup.md
-      - Projects: user-manual/projects.md
+      - Sites: user-manual/sites.md
       - Using the Map: user-manual/using-the-map.md
       - Scenario Comparison: user-manual/scenario-comparison.md
   - User Guide:
@@ -71,6 +71,7 @@ nav:
       - Preparing a Release: developer-guide/releasing.md
       - Server Deployment: developer-guide/server-deployment.md
       - API Guide: developer-guide/api.md
+  - FAQ: faq.md
 
 markdown_extensions:
   - admonition
