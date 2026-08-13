@@ -35,7 +35,7 @@ var targetStateWarningRules = []targetStateWarningRule{
 			}
 
 			if herbsCurrent != herbs {
-				return herbs > npp*10
+				return herbs > npp*1000
 			}
 			return false
 		},
