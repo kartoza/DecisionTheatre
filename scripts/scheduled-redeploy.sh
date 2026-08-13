@@ -60,6 +60,10 @@ if ./scripts/check-drive-updates.sh "$DRIVE_FOLDER"; then
     docker compose ps
     echo "==> Deployments stack started."
 
+    cd "$PROJECT_ROOT"
+    echo "==> Building cross-platform installers..."
+    ./scripts/build-cross-docker.sh
+
     echo "=== Scheduled redeploy finished at $(date -u +"%Y-%m-%dT%H:%M:%SZ") (no-op) ==="
     exit 0
 fi
