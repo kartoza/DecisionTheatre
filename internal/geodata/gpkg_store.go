@@ -64,11 +64,27 @@ type GeoJSONFeature struct {
 func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	gpkgPath := filepath.Join(dataDir, "datapack.gpkg")
 
-	// Open with spatialite extension
-	db, err := sql.Open("sqlite3", gpkgPath+"?mode=ro")
+	// Open with spatialite extension.
+	//
+	// immutable=1: SQLite skips all locking and change-detection, giving
+	// faster reads for a static file. _mmap_size enables memory-mapped I/O
+	// so reads go through virtual memory instead of per-read syscalls -
+	// this matters more here than for the (much smaller) mbtiles files
+	// since datapack.gpkg is several GB. cache=shared lets the pooled
+	// connections below share one page cache instead of each paying for
+	// their own. See internal/tiles/mbtiles.go for the same tuning applied
+	// to the basemap tile stores.
+	db, err := sql.Open("sqlite3", gpkgPath+
+		"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000&_mmap_size=1073741824")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open geopackage: %w", err)
 	}
+
+	// Cap the connection pool so concurrent choropleth requests (multiple
+	// users, or quad-view issuing several fetches per pane) reuse a bounded
+	// set of connections instead of each opening its own unshared handle.
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(16)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
