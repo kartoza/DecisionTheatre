@@ -116,6 +116,7 @@ interface DialChartProps {
   denseLayout?: boolean;
   paneCount?: number;
   isLoading?: boolean;
+  zeroCentered?: boolean;
 }
 
 function DialChart({
@@ -134,6 +135,7 @@ function DialChart({
   denseLayout = false,
   paneCount = 1,
   isLoading = false,
+  zeroCentered = false,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -313,6 +315,26 @@ function DialChart({
     }
     return result;
   }, [centerX, centerY, radius, arcWidth, min, max]);
+
+  // dial_0_middle attributes (see metadata.csv) center the scale on zero, but
+  // zero lands on one of the unlabeled minor ticks above - call it out
+  // explicitly so it's clear the dial isn't scaled from a plain positive min.
+  const zeroTick = useMemo(() => {
+    if (!zeroCentered || min >= 0 || max <= 0) return null;
+    const angleDeg = valueToAngle(0, min, max);
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const tickLength = 20;
+    const outerR = radius + arcWidth / 2 + 8;
+    const innerR = outerR + tickLength;
+    return {
+      x1: centerX + Math.cos(angleRad) * outerR,
+      y1: centerY - Math.sin(angleRad) * outerR,
+      x2: centerX + Math.cos(angleRad) * innerR,
+      y2: centerY - Math.sin(angleRad) * innerR,
+      labelX: centerX + Math.cos(angleRad) * (innerR + 25),
+      labelY: centerY - Math.sin(angleRad) * (innerR + 25),
+    };
+  }, [zeroCentered, centerX, centerY, radius, arcWidth, min, max]);
 
   // Create arc path - UPWARD curving half-circle
   const arcPath = useMemo(() => {
@@ -709,6 +731,32 @@ function DialChart({
                   )}
                 </g>
               ))}
+
+              {zeroTick && (
+                <g opacity={arcProgress}>
+                  <line
+                    x1={zeroTick.x1}
+                    y1={zeroTick.y1}
+                    x2={zeroTick.x2}
+                    y2={zeroTick.y2}
+                    stroke="#e2e8f0"
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                  />
+                  <text
+                    x={zeroTick.labelX}
+                    y={zeroTick.labelY}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="#f7fafc"
+                    fontSize={18}
+                    fontFamily="Inter, system-ui, sans-serif"
+                    fontWeight="700"
+                  >
+                    0
+                  </text>
+                </g>
+              )}
 
               {referenceCallout && (
                 <g opacity={arcProgress}>
