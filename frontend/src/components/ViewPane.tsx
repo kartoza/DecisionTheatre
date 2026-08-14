@@ -606,6 +606,7 @@ function ViewPane({
         denseLayout={denseDialLayout}
         paneCount={paneCount}
         isLoading={dialCatchmentLoading || dialRangeLoading}
+        zeroCentered={comparison.attribute ? Boolean(attributeDial0Middle[comparison.attribute]) : false}
       />
 
       {/* Quad dial empty state for panes with no selected factor */}
