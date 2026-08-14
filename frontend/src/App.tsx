@@ -14,6 +14,7 @@ import SiteCreationPage from './components/SiteCreationPage';
 import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
+import ResumeSessionModal from './components/ResumeSessionModal';
 import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
@@ -34,6 +35,8 @@ import {
   saveRangeMode,
   loadQuadColumns,
   saveQuadColumns,
+  markSessionActive,
+  shouldPromptResumeSession,
 } from './types';
 
 function App() {
@@ -51,6 +54,15 @@ function App() {
   });
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
+  // If this is a brand-new tab (not a same-tab refresh) and there's saved
+  // state worth resuming, hold off applying it until the user picks
+  // "resume" or "start fresh" in ResumeSessionModal below.
+  const [resumeChoice, setResumeChoice] = useState<'resume' | 'fresh' | null>(
+    () => (shouldPromptResumeSession() ? null : 'resume')
+  );
+  const sessionDecided = resumeChoice !== null;
+  const [savedPageForPrompt] = useState<AppPage>(currentPage);
+  const [hadSiteForPrompt] = useState<boolean>(currentSiteId !== null);
   const currentSiteIdRef = useRef(currentSiteId);
   useEffect(() => { currentSiteIdRef.current = currentSiteId; }, [currentSiteId]);
   const [currentSite, setCurrentSite] = useState<Site | null>(null);
@@ -124,10 +136,19 @@ function App() {
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
   useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
 
+  // Mark this tab as having an active session, so a same-tab refresh won't
+  // re-trigger the resume-session prompt (only a brand-new tab should ask).
+  useEffect(() => { markSessionActive(); }, []);
+
   // On startup: if a site was open when the app last closed, fetch it from the API
   // so the map has access to geometry/bounds/indicators. Layout/pane state is already
   // restored from localStorage above, so we only need the site object itself.
+  // Waits on the resume-session decision so a "start fresh" choice (which
+  // clears currentSiteId) can pre-empt this fetch.
+  const siteFetchStartedRef = useRef(false);
   useEffect(() => {
+    if (!sessionDecided || siteFetchStartedRef.current) return;
+    siteFetchStartedRef.current = true;
     if (!currentSiteId) return;
     const requestedSiteId = currentSiteId;
     isLoadingSiteRef.current = true;
@@ -152,8 +173,7 @@ function App() {
       .finally(() => {
         isLoadingSiteRef.current = false;
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Intentionally runs only on mount
+  }, [sessionDecided, currentSiteId]);
 
   const stopExtractionPolling = useCallback(() => {
     if (extractionPollRef.current !== null) {
@@ -266,9 +286,10 @@ function App() {
 
   useEffect(() => {
     // Don't save if no site is open, we're loading a site, on create-site page,
-    // or the open site is a read-only walkthrough demo (never persisted, so
-    // this would just 404 against the site store on every debounce tick).
-    if (!currentSiteId || isLoadingSiteRef.current || currentPage === 'create-site'
+    // the open site is a read-only walkthrough demo (never persisted, so
+    // this would just 404 against the site store on every debounce tick),
+    // or the resume-session prompt hasn't been answered yet.
+    if (!sessionDecided || !currentSiteId || isLoadingSiteRef.current || currentPage === 'create-site'
       || currentSite?.source === 'walkthrough') {
       return;
     }
@@ -295,7 +316,23 @@ function App() {
         clearTimeout(siteAutoSaveTimerRef.current);
       }
     };
-  }, [currentSiteId, paneStates, layoutMode, focusedPane, currentPage, currentSite?.source]);
+  }, [sessionDecided, currentSiteId, paneStates, layoutMode, focusedPane, currentPage, currentSite?.source]);
+
+  // Resume-session prompt: user picked "continue where I left off" — proceed
+  // with whatever was already restored from localStorage into state.
+  const handleResumeSession = useCallback(() => {
+    setResumeChoice('resume');
+  }, []);
+
+  // Resume-session prompt: user picked "go to home page" — discard the
+  // restored page/site and land on the landing page instead.
+  const handleStartFresh = useCallback(() => {
+    setCurrentPage('landing');
+    setCurrentSiteId(null);
+    setCurrentSite(null);
+    setIsExploreMode(false);
+    setResumeChoice('fresh');
+  }, []);
 
   // Navigate to a page
   const handleNavigate = useCallback((page: AppPage) => {
@@ -812,6 +849,18 @@ function App() {
   // Voluntary reinstall, reached via the cog icon in the header
   if (currentPage === 'setup' && info) {
     return <SetupGuide info={info} onBack={() => handleNavigate('landing')} />;
+  }
+
+  // New tab, prior session found: ask before silently restoring it.
+  if (resumeChoice === null) {
+    return (
+      <ResumeSessionModal
+        savedPage={savedPageForPrompt}
+        hasSite={hadSiteForPrompt}
+        onResume={handleResumeSession}
+        onStartFresh={handleStartFresh}
+      />
+    );
   }
 
   // Render landing/about/sites/create-site pages

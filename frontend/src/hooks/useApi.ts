@@ -4,6 +4,7 @@ import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
+import { evictExpired } from '../lib/ttlCache';
 
 const API_BASE = '/api';
 const SITES_STORAGE_KEY = 'dt-sites';
@@ -629,6 +630,7 @@ export async function getSite(id: string): Promise<Site | null> {
 
   // Evict on error so next caller retries cleanly.
   promise.catch(() => _siteCache.delete(id));
+  evictExpired(_siteCache, CACHE_TTL_MS, now);
   _siteCache.set(id, { promise, ts: now });
   return promise;
 }
@@ -924,6 +926,7 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
   })();
 
   promise.catch(() => _catchmentsCache.delete(siteId));
+  evictExpired(_catchmentsCache, CACHE_TTL_MS, now);
   _catchmentsCache.set(siteId, { promise, ts: now });
   return promise;
 }
@@ -958,6 +961,7 @@ export async function getSiteAOIFractions(siteId: string): Promise<{ id: string;
   })();
 
   promise.catch(() => _aOIFractionsCache.delete(siteId));
+  evictExpired(_aOIFractionsCache, CACHE_TTL_MS, now);
   _aOIFractionsCache.set(siteId, { promise, ts: now });
   return promise;
 }
@@ -1152,6 +1156,7 @@ export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBound
     (result) => { if (!hasWhiskerData(result)) _whiskerCache.delete(siteId); },
     () => _whiskerCache.delete(siteId)
   );
+  evictExpired(_whiskerCache, WHISKER_CACHE_TTL_MS, now);
   _whiskerCache.set(siteId, { promise, ts: now });
   return promise;
 }
