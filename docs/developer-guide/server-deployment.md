@@ -1,18 +1,18 @@
 # Production Server Deployment
 
-This guide covers deploying Decision Theatre on a production server using the Docker Compose stack in the `deployments/` directory. The stack runs two containers: the application itself (Go binary serving the React frontend) and an Nginx reverse proxy that terminates TLS and forwards requests to the app.
+This guide covers deploying Decision Theatre on a production server using the Docker Compose stack in the `deployments/` directory. The stack runs two containers: the application itself (Go binary serving the React frontend) and an Nginx reverse proxy that forwards requests to the app. Nginx listens on both HTTP and HTTPS at once — neither redirects to the other, so both stay usable independently.
 
 ---
 
 ## Architecture Overview
 
 ```
+Browser  ──HTTP───▶  Nginx :80   ──HTTP──▶  app :8080
 Browser  ──HTTPS──▶  Nginx :443  ──HTTP──▶  app :8080
-                     Nginx :80   ──301──▶  HTTPS
 ```
 
 - **app** — the Decision Theatre binary, built from source inside the container. Runs in `--headless` mode (no GUI window). Serves the web UI, REST API, and tile endpoints on port 8080. Ports 8081–8083 are internal tile-server ports also exposed inside the Docker network.
-- **nginx** — Nginx 1.27 acting as a TLS-terminating reverse proxy. Rewrites internal `http://localhost:808x/` URLs in tile/style JSON responses to the public HTTPS host so that map tiles resolve correctly in the browser. Redirects plain HTTP to HTTPS.
+- **nginx** — Nginx 1.27 acting as a reverse proxy, with an HTTP listener and a TLS-terminating HTTPS listener side by side (same locations, same upstream). Rewrites internal `http://localhost:808x/` URLs in tile/style JSON responses to the public host **and scheme** so that map tiles resolve correctly in the browser regardless of which listener served the page.
 
 ---
 
@@ -61,7 +61,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The application is now accessible at `https://<your-server>/`.
+The application is now accessible at both `http://<your-server>/` and `https://<your-server>/`.
 
 ---
 
@@ -71,7 +71,7 @@ All variables are consumed by `docker-compose.yaml`. Copy `.env.example` to `.en
 
 ### `HTTP_PORT` *(default: `80`)*
 
-The host port that Nginx binds for plain HTTP traffic. All HTTP requests are immediately redirected to HTTPS (HTTP 301); this port exists solely to perform that redirect.
+The host port that Nginx binds for plain HTTP traffic.
 
 Change this if port 80 is already in use on the host or if your firewall/load balancer forwards a non-standard port.
 
@@ -83,7 +83,7 @@ HTTP_PORT=80
 
 ### `HTTPS_PORT` *(default: `443`)*
 
-The host port that Nginx binds for HTTPS traffic. This is the port users connect to.
+The host port that Nginx binds for HTTPS traffic.
 
 ```env
 HTTPS_PORT=443
@@ -378,7 +378,7 @@ chmod 600 certs/tls.key
 ```
 
 !!! warning
-    Self-signed certificates will trigger browser security warnings and should never be used in production.
+    Self-signed certificates will trigger browser security warnings and should never be used in production. The HTTP listener remains available side by side, so testers who don't want to click through a warning can just use `http://` instead.
 
 ---
 
@@ -421,11 +421,12 @@ The `docker-compose.yaml` passes the following flags to the binary. These are fi
 
 The `nginx.conf` in `deployments/` is mounted read-only into the Nginx container. Key behaviours:
 
-- **HTTP → HTTPS redirect** — All HTTP requests on port 80 receive a `301` redirect.
+- **HTTP and HTTPS side by side** — one server block listens on `:80`, another on `:443` with TLS. Neither redirects to the other; both serve the app directly. `$scheme` in `nginx.conf` reflects whichever listener handled the request, so headers and tile-URL rewriting adapt automatically instead of hardcoding a protocol.
 - **TLS** — TLSv1.2 and TLSv1.3 only. Session cache of 10 MB, 1-day timeout.
+- **Compression** — `gzip` is on for `application/json` responses (min 1 KB), which cuts the choropleth payload by roughly 3-4x. Note that `gzip_proxied any` is required here since every response is proxied via `proxy_pass` and Nginx disables gzip for proxied responses by default.
 - **Upload limit** — `client_max_body_size 2g` to accommodate large GeoPackage or shapefile uploads.
 - **WebSocket support** — `Upgrade`/`Connection` headers are forwarded for any WebSocket connections.
-- **Tile/style URL rewriting** — The Go backend generates tile and style JSON with `http://localhost:808x/` URLs (because it sees no TLS at the Go level). Nginx rewrites these back to `https://<host>/` using `sub_filter` so that the browser can fetch tiles over HTTPS. This rewriting applies only to `/data/style.json` and `/data/tiles.json`.
+- **Tile/style URL rewriting** — The Go backend generates tile and style JSON with `http://localhost:808x/` URLs. Nginx rewrites these back to `$scheme://<host>/` using `sub_filter` so that map tiles resolve correctly through the public host over whichever protocol the browser used. This rewriting applies only to `/data/style.json` and `/data/tiles.json`.
 - **Proxy timeouts** — Read and send timeouts are 300 seconds to accommodate large data file uploads.
 
 If you need to change the Nginx behaviour (e.g., add a `server_name`, customise headers, or enable rate limiting), edit `deployments/nginx.conf` directly and restart the nginx container:
@@ -529,9 +530,9 @@ docker compose logs app
 
 The app performs a port scan at startup (it may try ports 8080–8089 if some are taken) and logs the port it ultimately binds to. Nginx is hardcoded to `app:8080`; if the app binds a different port, update `nginx.conf` and the compose `command`.
 
-### Tile URLs are `http://` in the browser
+### Tile URLs point at the wrong host or scheme
 
-If `X-Forwarded-Proto` is not being set correctly, the Go backend falls back to HTTP in its URL generation. Verify the `proxy_set_header X-Forwarded-Proto https;` line is present in `nginx.conf` and that you restarted Nginx after any config change.
+Verify the `sub_filter` rules in `nginx.conf` cover the host/port the Go backend is emitting (check `docker compose logs app` for the bound port), and that you restarted Nginx after any config change. Both server blocks use `$scheme` rather than a hardcoded protocol, so a mismatch usually means the request bypassed Nginx (e.g. hit the app container directly).
 
 ### TLS certificate errors (`ERR_CERT_INCOMPLETE` or chain issues)
 

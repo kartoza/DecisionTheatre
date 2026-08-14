@@ -1,3 +1,5 @@
+import { getAppRuntime } from './runtime';
+
 export type Scenario = 'reference' | 'current' | 'future';
 
 export interface ScenarioInfo {
@@ -227,6 +229,29 @@ export function loadCurrentPage(): AppPage {
 
 export function saveCurrentPage(page: AppPage): void {
   try { localStorage.setItem(STORAGE_CURRENT_PAGE_KEY, page); } catch { /* ignore */ }
+}
+
+// sessionStorage is cleared when a browser tab closes but survives a same-tab
+// refresh, so it's the signal used to tell "reopened the tab" apart from
+// "reloaded the page" for the resume-session prompt below.
+const STORAGE_SESSION_ACTIVE_KEY = 'dt-session-active';
+
+export function markSessionActive(): void {
+  try { sessionStorage.setItem(STORAGE_SESSION_ACTIVE_KEY, '1'); } catch { /* ignore */ }
+}
+
+// Whether to ask the user "resume where you left off, or go home?" on load.
+// Only makes sense in the browser (the desktop webview always starts fresh
+// on 'landing'), only fires for a brand-new tab session, and only when
+// there's actually something worth resuming.
+export function shouldPromptResumeSession(): boolean {
+  if (getAppRuntime() !== 'browser') return false;
+  try {
+    if (sessionStorage.getItem(STORAGE_SESSION_ACTIVE_KEY)) return false;
+  } catch {
+    return false;
+  }
+  return loadCurrentPage() !== 'landing' || Boolean(loadCurrentSite());
 }
 
 export type SiteCreationMethod = 'shapefile' | 'geojson' | 'drawn' | 'catchments';

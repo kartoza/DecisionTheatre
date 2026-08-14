@@ -387,6 +387,7 @@ function ChartView({
   } | null>(null);
   const [summaryRangeLoading, setSummaryRangeLoading] = useState(false);
   const [whiskerBounds, setWhiskerBounds] = useState<WhiskerBoundsResponse | null>(null);
+  const [whiskerLoading, setWhiskerLoading] = useState(false);
   const [boxplotPage, setBoxplotPage] = useState(0);
   const [linePage, setLinePage] = useState(0);
 
@@ -402,19 +403,24 @@ function ChartView({
     let whiskerCancelled = false;
 
     const fetchWhiskersWithRetry = async () => {
-      const maxAttempts = 3;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const bounds = await getSiteWhiskerBounds(siteId);
-        if (whiskerCancelled) return;
-        if (bounds) {
-          setWhiskerBounds(bounds);
-          return;
+      setWhiskerLoading(true);
+      try {
+        const maxAttempts = 3;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          const bounds = await getSiteWhiskerBounds(siteId);
+          if (whiskerCancelled) return;
+          if (bounds) {
+            setWhiskerBounds(bounds);
+            return;
+          }
+          if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 350 * attempt));
+          }
         }
-        if (attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 350 * attempt));
-        }
+        if (!whiskerCancelled) setWhiskerBounds(null);
+      } finally {
+        if (!whiskerCancelled) setWhiskerLoading(false);
       }
-      if (!whiskerCancelled) setWhiskerBounds(null);
     };
 
     void fetchWhiskersWithRetry();
@@ -1911,7 +1917,8 @@ function ChartView({
     );
   };
 
-  const isLoading = groupedRangeLoading || summaryRangeLoading;
+  const isLoading = groupedRangeLoading || summaryRangeLoading
+    || (groupedChartType === 'boxplot' && whiskerLoading);
 
   return (
     <Box

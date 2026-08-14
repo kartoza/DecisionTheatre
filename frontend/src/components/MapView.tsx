@@ -7,10 +7,11 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites, clearSiteWhiskerCache } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
+import { evictExpired } from '../lib/ttlCache';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -665,6 +666,11 @@ async function fetchChoroplethData(
     const hit = _choroplethCache.get(key);
     if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
 
+    // Keys embed the viewport bbox, which changes on nearly every pan/zoom -
+    // sweep stale entries so this cache doesn't grow unbounded for the life
+    // of the tab (see evictExpired).
+    evictExpired(_choroplethCache, CHOROPLETH_CACHE_TTL_MS, now);
+
     const promise = (async (): Promise<ChoroplethData | null> => {
       try {
         const resp = await fetch(`/api/choropleth?${params}`);
@@ -893,7 +899,7 @@ const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
 function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
-  const { colors: attributeColors } = useAttributeColors();
+  const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
@@ -944,6 +950,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   const attributeColorsRef = useRef(attributeColors);
   attributeColorsRef.current = attributeColors;
+  const attributeColorsLoadingRef = useRef(attributeColorsLoading);
+  attributeColorsLoadingRef.current = attributeColorsLoading;
   const attributeDetailsRef = useRef(attributeDetails);
   attributeDetailsRef.current = attributeDetails;
   const siteIndicatorsRef = useRef(siteIndicators);
@@ -1093,6 +1101,21 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           siteStats: null,
         });
       }
+      return;
+    }
+
+    // In metadata color-scale mode, wait for the metadata colors to finish
+    // their initial fetch before rendering anything. Painting while
+    // attributeColorsRef is still the empty `{}` it starts as would make
+    // every attribute look like it has no defined color and fall back to
+    // the rainbow scale (see applyChoroplethLayer's
+    // `useOpacityScale = Boolean(attributeColor)`), which then gets
+    // replaced by the correct single color a moment later - a visible
+    // flash of the wrong scale on every fresh mount (e.g. switching into
+    // quad view, which mounts a new MapView per pane). Skipping here means
+    // nothing renders until we know the real answer; the effect below
+    // re-invokes applyColors once attributeColors finishes loading.
+    if (colorScaleMode === 'metadata' && attributeColorsLoadingRef.current) {
       return;
     }
 
@@ -1292,6 +1315,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Invalidate module-level caches so the new boundary is re-inferred by the
     // first instance to run; subsequent instances will read the fresh result.
     clearSiteComputationCaches(siteId);
+    // Whisker bounds are area-weighted over the site's catchments, so a
+    // boundary change invalidates them too (see useApi.ts).
+    clearSiteWhiskerCache(siteId);
     applyColorsRef.current();
   }, [siteId, siteGeometry]);
 
@@ -2008,9 +2034,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const map = leftMapRef.current;
       if (!map) return;
       // Sync the canvas to the container's current size first: the site-open
-      // action that triggers this zoom also opens the control panel, which
-      // animates the container narrower over 0.3s. If the container is still
-      // mid-transition, fitBounds below would target the pre-transition size.
+      // action that triggers this zoom also opens the control panel (0.3s
+      // transition), and switching layout mode (e.g. single -> quad) resizes
+      // this map's own container via the 0.6s grid-template-columns
+      // transition in ContentArea. If the container is still mid-transition,
+      // fitBounds below would target the pre-transition size.
       map.resize();
       map.fitBounds(padBoundsForFit(resolvedBounds), {
         padding: 50,
@@ -2021,9 +2049,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     fit();
-    // Re-fit once the panel transition above has settled, correcting any
-    // mis-fit from measuring the container mid-transition.
-    window.setTimeout(fit, 400);
+    // Re-fit once the slower of the two transitions above (the 0.6s quad
+    // grid layout change) has settled, correcting any mis-fit from measuring
+    // the container mid-transition. 400ms was long enough for the 0.3s panel
+    // transition alone but fired before a 0.6s grid transition finished,
+    // leaving the zoom stuck at whatever intermediate size it measured -
+    // matches the resize effect's own 650ms buffer for this same transition.
+    window.setTimeout(fit, 650);
   }, [resolveSiteBounds]);
 
   // Toggle 3D mode - smoothly ease pitch between 0 and 60 degrees
@@ -2629,6 +2661,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (docked === sliderDockedRef.current) return;
       sliderDockedRef.current = docked;
 
+      // When docked to an edge, the map on that side is clipped to zero
+      // width, so its scenario label would sit over the other side's map
+      // content and misrepresent it. Hide it while docked.
+      leftLabel.style.display = docked === 'left' ? 'none' : 'block';
+      rightLabel.style.display = docked === 'right' ? 'none' : 'block';
+
       if (docked === 'left') {
         // Docked left - half circle on right side
         slider.style.background = 'transparent';
@@ -3162,6 +3200,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     const leftContainer = container.querySelector('#map-left') as HTMLDivElement | null;
     const rightContainer = container.querySelector('#map-right') as HTMLDivElement | null;
+    const leftLabelEl = container.querySelector('#left-label') as HTMLElement | null;
+    const rightLabelEl = container.querySelector('#right-label') as HTMLElement | null;
     if (!leftContainer || !rightContainer) return;
 
     slider.style.left = `${swiperPosition}%`;
@@ -3183,6 +3223,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (newDockedState !== sliderDockedRef.current) {
       sliderDockedRef.current = newDockedState;
+
+      // Same rationale as updateSliderVisuals: the docked-away side's map
+      // is clipped to zero width, so its scenario label would otherwise
+      // sit over the other side's content.
+      if (leftLabelEl) leftLabelEl.style.display = newDockedState === 'left' ? 'none' : 'block';
+      if (rightLabelEl) rightLabelEl.style.display = newDockedState === 'right' ? 'none' : 'block';
 
       if (newDockedState === 'left') {
         slider.style.background = 'transparent';
@@ -3259,13 +3305,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
       leftLabel.textContent = leftInfo?.label || comparison.leftScenario;
       leftLabel.style.borderLeft = `3px solid ${leftInfo?.color || '#fff'}`;
+      // Keep it hidden if the swiper is docked left (left map clipped to
+      // zero width), unless the swiper is off, in which case dock state is
+      // irrelevant and the left map fills the view.
+      leftLabel.style.display = !isSwiperEnabled || sliderDockedRef.current !== 'left' ? 'block' : 'none';
     }
 
     if (rightLabel) {
       const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
       rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
-      rightLabel.style.display = isSwiperEnabled ? 'block' : 'none';
+      rightLabel.style.display = isSwiperEnabled && sliderDockedRef.current !== 'right' ? 'block' : 'none';
     }
 
     if (indicatorLabel) {
@@ -3461,8 +3511,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             duration: 1000,
             maxZoom: 14,
           });
-          // Re-fit once the panel-open transition has settled, correcting any
-          // mis-fit from measuring the container mid-transition.
+          // Re-fit once the slower of the panel-open (0.3s) and quad grid
+          // layout (0.6s, see ContentArea) transitions has settled,
+          // correcting any mis-fit from measuring the container
+          // mid-transition - see the matching fix in zoomToSite.
           window.setTimeout(() => {
             if (isBoundaryEditModeRef.current) return;
             leftMapRef.current?.resize();
@@ -3471,7 +3523,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
               duration: 1000,
               maxZoom: 14,
             });
-          }, 400);
+          }, 650);
         };
 
         const geometry = site?.geometry;
@@ -3550,9 +3602,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftMap = leftMapRef.current;
       if (!leftMap) return;
       // Sync the canvas to the container's current size first: opening a
-      // site also opens the control panel, which animates the container
-      // narrower over 0.3s. If still mid-transition, fitBounds below would
-      // target the pre-transition size and under/over-zoom.
+      // site also opens the control panel (0.3s transition), and switching
+      // layout mode (e.g. single -> quad) resizes this map's own container
+      // via the 0.6s grid-template-columns transition in ContentArea. If
+      // still mid-transition, fitBounds below would target the pre-transition
+      // size and under/over-zoom.
       leftMap.resize();
       leftMap.fitBounds(padBoundsForFit(siteBounds), {
         padding: 50,
@@ -3576,9 +3630,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       cleanups.push(() => clearTimeout(timer));
     }
 
-    // Re-fit once the panel transition above has settled, correcting any
-    // mis-fit from measuring the container mid-transition.
-    const settleTimer = window.setTimeout(zoomToBounds, 400);
+    // Re-fit once the slower of the two transitions above (the 0.6s quad
+    // grid layout change) has settled, correcting any mis-fit from measuring
+    // the container mid-transition - see the matching fix in zoomToSite.
+    const settleTimer = window.setTimeout(zoomToBounds, 650);
     cleanups.push(() => window.clearTimeout(settleTimer));
 
     return () => cleanups.forEach((cleanup) => cleanup());
