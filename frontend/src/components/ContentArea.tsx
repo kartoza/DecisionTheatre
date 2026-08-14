@@ -157,6 +157,7 @@ function ContentArea({
   const { variableTypes } = useAttributeVariableTypes();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
+  const [isSavingTargets, setIsSavingTargets] = useState(false);
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
@@ -304,6 +305,7 @@ function ContentArea({
       nextIdeal[key] = parsed;
     }
 
+    setIsSavingTargets(true);
     try {
       await onSiteIndicatorsChange({
         ...siteIndicators,
@@ -313,6 +315,8 @@ function ContentArea({
       toast({ title: 'Target values updated', status: 'success', duration: 2000 });
     } catch {
       toast({ title: 'Failed to update target values', status: 'error', duration: 2500 });
+    } finally {
+      setIsSavingTargets(false);
     }
   };
 
@@ -553,11 +557,18 @@ function ContentArea({
       )}
       </Box>
 
-      <Modal isOpen={isTargetModalOpen ?? false} onClose={onCloseTargetModal ?? (() => {})} size="xl" scrollBehavior="inside">
+      <Modal
+        isOpen={isTargetModalOpen ?? false}
+        onClose={onCloseTargetModal ?? (() => {})}
+        size="xl"
+        scrollBehavior="inside"
+        closeOnOverlayClick={!isSavingTargets}
+        closeOnEsc={!isSavingTargets}
+      >
         <ModalOverlay />
         <ModalContent bg="gray.800" color="white">
           <ModalHeader>Edit Target Values</ModalHeader>
-          <ModalCloseButton />
+          <ModalCloseButton isDisabled={isSavingTargets} />
           <ModalBody>
             <Accordion allowMultiple>
               {targetGroups.map((group) => (
@@ -630,8 +641,15 @@ function ContentArea({
             </Accordion>
           </ModalBody>
           <ModalFooter>
-            <Button variant="ghost" mr={3} onClick={onCloseTargetModal}>Cancel</Button>
-            <Button colorScheme="cyan" onClick={saveTargetValues}>Save</Button>
+            <Button variant="ghost" mr={3} onClick={onCloseTargetModal} isDisabled={isSavingTargets}>Cancel</Button>
+            <Button
+              colorScheme="cyan"
+              onClick={saveTargetValues}
+              isLoading={isSavingTargets}
+              loadingText="Recalculating"
+            >
+              Save
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

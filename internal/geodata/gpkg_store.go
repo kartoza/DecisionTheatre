@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -78,8 +79,15 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	// connections below share one page cache instead of each paying for
 	// their own. See internal/tiles/mbtiles.go for the same tuning applied
 	// to the basemap tile stores.
+	//
+	// 4 GiB covers the whole file (datapack.gpkg is ~3.3 GiB, and the
+	// scenario_*_upper/lower tables that back whisker-bound queries alone
+	// account for over a GiB of that - see ComputeWhiskerBounds) with
+	// headroom for growth. The previous 1 GiB cap left most of the file
+	// falling back to regular read() syscalls on every cold page; the host
+	// has tens of GiB of free RAM for the OS to hold this mapping resident.
 	db, err := sql.Open("sqlite3", gpkgPath+
-		"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000&_mmap_size=1073741824")
+		"?mode=ro&immutable=1&cache=shared&_busy_timeout=5000&_mmap_size=4294967296")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open geopackage: %w", err)
 	}
@@ -87,8 +95,14 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	// Cap the connection pool so concurrent choropleth requests (multiple
 	// users, or quad-view issuing several fetches per pane) reuse a bounded
 	// set of connections instead of each opening its own unshared handle.
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(16)
+	// Sized to the host's core count: quad view alone can fire a dozen-plus
+	// concurrent aggregated-path queries (one per pane per scenario), each
+	// holding a connection for the ~1s+ it scans a continent-scale bbox: a
+	// cap well under that count means later requests queue for a free
+	// connection instead of actually running.
+	maxConns := runtime.NumCPU()
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
@@ -384,7 +398,15 @@ const DetailZoomThreshold = 5.0
 // elsewhere. Deciding on the actual match count instead guarantees every
 // catchment in view is represented (falling back to the grid-aggregated
 // choropleth rather than silently truncating and leaving gaps).
-const maxDetailedFeatures = 10000
+//
+// Lowered from 10000: even with truncateCoordinatePrecision (see
+// queryCatchmentsDetailed), each catchment's geometry averages ~1.5 KB, so
+// 10000 of them was a ~15 MB response - multiple seconds to transfer even
+// compressed, and the dominant complaint behind quad-view "choropleth takes
+// forever to load" reports. 5000 keeps the worst case detailed response
+// around half that while still covering every bbox that isn't
+// continent-scale.
+const maxDetailedFeatures = 5000
 
 // gridTiersDegrees lists the aggregation cell sizes available when a bbox
 // matches more than maxDetailedFeatures catchments, finest first. Catchments
@@ -424,41 +446,59 @@ func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
 
-	matched, err := s.countCatchmentsInBounds(tableName, minx, miny, maxx, maxy)
+	// A single lightweight query (lat/long/area/value - no geometry blob)
+	// both decides the render path and, if aggregated, supplies the rows the
+	// aggregation itself needs. This used to be two separate queries - a
+	// COUNT(*) just to pick the path, then this same fetch again in
+	// queryCatchmentsGridAggregated - each doing the identical rtree-bbox
+	// join scan. For a continent-scale bbox (tens of thousands of matched
+	// catchments) that duplicated scan cost ~400ms on its own; merging them
+	// removes it entirely for the aggregated path, which is the one this
+	// budget check exists for in the first place.
+	catchmentRows, err := s.fetchCatchmentGridRows(tableName, attribute, minx, miny, maxx, maxy)
 	if err != nil {
 		return nil, err
 	}
+	matched = len(catchmentRows)
 
 	if matched <= maxDetailedFeatures {
 		path = "detailed"
 		return s.queryCatchmentsDetailed(tableName, attribute, minx, miny, maxx, maxy)
 	}
 	path = "aggregated"
-	return s.queryCatchmentsGridAggregated(tableName, attribute, minx, miny, maxx, maxy)
+	return s.queryCatchmentsGridAggregated(attribute, catchmentRows)
 }
 
-// countCatchmentsInBounds counts how many rows queryCatchmentsDetailed would
-// return for this bbox - same FROM/JOIN/WHERE, minus the geometry/value
-// columns - so QueryCatchments can decide the render path from an exact
-// count rather than an approximation. Cheap enough to run on every request:
-// no geometry parsing, just an indexed bbox lookup and a join.
-func (s *GpkgStore) countCatchmentsInBounds(tableName string, minx, miny, maxx, maxy float64) (int, error) {
-	query := fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM catchments_lev12 c
-		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
-		WHERE c.geojson IS NOT NULL
-		  AND c.fid IN (
-			SELECT id FROM rtree_catchments_lev12_geom
-			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
-		  )
-	`, tableName)
+// coordinateRe matches a JSON floating-point coordinate value (GeoJSON never
+// emits bare integers or exponent notation for lng/lat, so this simple
+// pattern is sufficient without a full JSON parse).
+var coordinateRe = regexp.MustCompile(`-?\d+\.\d+`)
 
-	var count int
-	if err := s.db.QueryRow(query, maxx, minx, maxy, miny).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count query failed: %w", err)
-	}
-	return count, nil
+// truncateCoordinatePrecisionDecimals is how many decimal places
+// truncateCoordinatePrecision keeps - about 1.1 m at the equator, far below
+// anything visible on a map (a screen pixel covers meters to kilometers of
+// ground at any zoom this app renders at) or meaningfully different from the
+// source data's own accuracy.
+const truncateCoordinatePrecisionDecimals = 5
+
+// truncateCoordinatePrecision rounds every coordinate in a GeoJSON geometry
+// string to truncateCoordinatePrecisionDecimals decimal places. The
+// catchments_lev12.geojson column stores full float64 precision (~15
+// significant digits, sub-millimetre) baked in at data-prep time; roughly
+// halving the digits per coordinate cuts a typical catchment's serialized
+// size by ~1.7x with no visible effect on the rendered boundary. Operates on
+// the raw string via regexp rather than a full unmarshal/remarshal round
+// trip, since this runs per-feature on every detailed-path request (up to
+// maxDetailedFeatures of them) and coordinates are the only floats in a
+// geometry's JSON encoding.
+func truncateCoordinatePrecision(geojsonStr string) string {
+	return coordinateRe.ReplaceAllStringFunc(geojsonStr, func(s string) string {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return s
+		}
+		return strconv.FormatFloat(f, 'f', truncateCoordinatePrecisionDecimals, 64)
+	})
 }
 
 // queryCatchmentsDetailed returns one feature per catchment with full-detail geometry.
@@ -516,7 +556,7 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 		features = append(features, GeoJSONFeature{
 			Type:       "Feature",
 			ID:         int64(id),
-			Geometry:   json.RawMessage(geojsonStr),
+			Geometry:   json.RawMessage(truncateCoordinatePrecision(geojsonStr)),
 			Properties: props,
 		})
 	}
@@ -792,18 +832,23 @@ func (s *GpkgStore) buildGridGeometryCache() {
 	log.Printf("[perf] grid geometry cache built: %d tiers in %dms", len(gridTiersDegrees), time.Since(start).Milliseconds())
 }
 
-// queryCatchmentsGridAggregated bins catchments into the finest gridTiersDegrees
-// cell size the current bbox can afford (see gridRenderBudget) and returns one
-// feature per populated cell: the pre-dissolved union of its members' simplified
-// geometries (see buildGridGeometryCache), coloured by the SUB_AREA-weighted
-// average of the attribute across those members. Unioning keeps the cell's
-// outline following real catchment boundaries (rather than a plain square), and
-// picking the finest affordable tier keeps the choropleth as close to the true
-// catchment texture as the feature budget allows - only a genuinely
-// continent-scale view is forced down to the coarsest tier.
-func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
-	s.ensureGridGeometryCache()
+// gridRow is one catchment's contribution to the grid-aggregation path: its
+// centroid (for binning into a cell), area (for weighting), and the
+// attribute value being rendered. fetchCatchmentGridRows and
+// queryCatchmentsGridAggregated share this type so the same fetched rows can
+// serve both the render-path decision in QueryCatchments and, when the
+// aggregated path is chosen, the aggregation itself - see QueryCatchments.
+type gridRow struct {
+	lat, long, area float64
+	value           sql.NullFloat64
+}
 
+// fetchCatchmentGridRows returns each matching catchment's centroid, area,
+// and attribute value for the bbox - no geometry blob, so it's cheap even
+// for a continent-scale match set. QueryCatchments uses the row count alone
+// to pick detailed vs. aggregated, and reuses the rows themselves if
+// aggregated is chosen, rather than re-querying (see QueryCatchments).
+func (s *GpkgStore) fetchCatchmentGridRows(tableName, attribute string, minx, miny, maxx, maxy float64) ([]gridRow, error) {
 	// Every catchment in the bbox is included here, even ones with a null
 	// value for attribute - a cell whose catchments simply lack data for this
 	// particular indicator should still render (falling back to the domain
@@ -827,19 +872,30 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 	}
 	defer rows.Close()
 
-	type catchmentRow struct {
-		lat, long, area float64
-		value           sql.NullFloat64
-	}
-	var catchmentRows []catchmentRow
+	var catchmentRows []gridRow
 	for rows.Next() {
-		var r catchmentRow
+		var r gridRow
 		if err := rows.Scan(&r.lat, &r.long, &r.area, &r.value); err != nil {
 			log.Printf("Warning: failed to scan row: %v", err)
 			continue
 		}
 		catchmentRows = append(catchmentRows, r)
 	}
+	return catchmentRows, nil
+}
+
+// queryCatchmentsGridAggregated bins catchmentRows (see fetchCatchmentGridRows)
+// into the finest gridTiersDegrees cell size the current bbox can afford (see
+// gridRenderBudget) and returns one feature per populated cell: the
+// pre-dissolved union of its members' simplified geometries (see
+// buildGridGeometryCache), coloured by the SUB_AREA-weighted average of the
+// attribute across those members. Unioning keeps the cell's outline
+// following real catchment boundaries (rather than a plain square), and
+// picking the finest affordable tier keeps the choropleth as close to the true
+// catchment texture as the feature budget allows - only a genuinely
+// continent-scale view is forced down to the coarsest tier.
+func (s *GpkgStore) queryCatchmentsGridAggregated(attribute string, catchmentRows []gridRow) (*FeatureCollection, error) {
+	s.ensureGridGeometryCache()
 
 	type cellAccumulator struct {
 		weightedSum float64
@@ -847,13 +903,26 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 		count       int
 	}
 
-	// Try tiers finest-to-coarsest; use the first whose cell count fits the
-	// budget, falling back to the coarsest (last) tier regardless.
-	var chosenTier float64
-	var cells map[gridCellKey]*cellAccumulator
-	for i, tier := range gridTiersDegrees {
-		candidate := make(map[gridCellKey]*cellAccumulator)
-		for _, r := range catchmentRows {
+	// Build all tiers' accumulator maps in a single pass over catchmentRows,
+	// then pick the finest whose cell count fits the budget (falling back to
+	// the coarsest regardless). The previous version looped over
+	// gridTiersDegrees outermost and rescanned the full catchmentRows slice
+	// once per tier, discarding the candidate map on every miss - for a
+	// continent-scale bbox (tens of thousands of rows) that meant up to 3
+	// full passes, 2 of them wasted, on every single request. A bbox that
+	// size always bottoms out at the coarsest tier anyway (see the
+	// quad-view/min-zoom case this budget exists for), so those discarded
+	// passes were pure overhead - and under concurrent load (many panes each
+	// running this at once) the repeated large-map allocation/GC churn
+	// compounded into a measurable slowdown per request, not just wasted CPU
+	// in isolation.
+	candidates := make(map[float64]map[gridCellKey]*cellAccumulator, len(gridTiersDegrees))
+	for _, tier := range gridTiersDegrees {
+		candidates[tier] = make(map[gridCellKey]*cellAccumulator)
+	}
+	for _, r := range catchmentRows {
+		for _, tier := range gridTiersDegrees {
+			candidate := candidates[tier]
 			key := gridCellKeyFor(r.lat, r.long, tier)
 			acc, ok := candidate[key]
 			if !ok {
@@ -866,6 +935,12 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 			}
 			acc.count++
 		}
+	}
+
+	var chosenTier float64
+	var cells map[gridCellKey]*cellAccumulator
+	for i, tier := range gridTiersDegrees {
+		candidate := candidates[tier]
 		if len(candidate) <= gridRenderBudget || i == len(gridTiersDegrees)-1 {
 			chosenTier = tier
 			cells = candidate

@@ -1119,7 +1119,44 @@ function computeWhiskerBoundsFromCSV(
   };
 }
 
+// Module-level cache for whisker bounds, keyed by siteId. ComputeWhiskerBounds
+// on the backend is a full-table scan-and-join across 4 scenario tables for
+// every catchment in the site (several seconds for a large site), and the
+// server only persists its own cache for GET-based (webview) requests - POST
+// requests (browser runtime, see below) are never cached server-side since
+// the site data comes from the request body, not the site store. Without a
+// client-side cache, every ChartView mount - which happens on every quad-view
+// pane switch, since the effect below re-runs whenever `visible` flips true -
+// re-triggers that full computation from scratch. Caching here means only the
+// first mount per site pays the cost; the rest read from memory instantly.
+// TTL is generous since whisker bounds only change if the site's catchment
+// geometry changes (editing the boundary), not on scenario/attribute/target
+// changes, which are comparatively rare mid-session.
+const _whiskerCache = new Map<string, { promise: Promise<WhiskerBoundsResponse | null>; ts: number }>();
+const WHISKER_CACHE_TTL_MS = 5 * 60_000;
+
+export function clearSiteWhiskerCache(siteId: string): void {
+  _whiskerCache.delete(siteId);
+}
+
 export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
+  const now = Date.now();
+  const hit = _whiskerCache.get(siteId);
+  if (hit && now - hit.ts < WHISKER_CACHE_TTL_MS) return hit.promise;
+
+  const promise = fetchSiteWhiskerBounds(siteId);
+  // Only cache genuine successes - an empty/failed result must stay
+  // retryable (see ChartView's fetchWhiskersWithRetry), not get stuck
+  // serving the same failure for the full TTL.
+  promise.then(
+    (result) => { if (!hasWhiskerData(result)) _whiskerCache.delete(siteId); },
+    () => _whiskerCache.delete(siteId)
+  );
+  _whiskerCache.set(siteId, { promise, ts: now });
+  return promise;
+}
+
+async function fetchSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
   const csvFallback = async (): Promise<WhiskerBoundsResponse | null> => {
     const catchments = await getSiteCatchments(siteId).catch(() => []);
     if (!Array.isArray(catchments) || catchments.length === 0) return null;
