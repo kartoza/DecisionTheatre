@@ -31,8 +31,12 @@ type GpkgStore struct {
 	// then cell. It is independent of scenario/attribute - only the
 	// per-request value join changes - so it is computed once in the
 	// background and reused for every grid-aggregated choropleth request.
+	// gridGeometryReady has one channel per tier, closed as soon as that
+	// tier's build finishes, so a request only waits on the specific tier it
+	// needs rather than the slowest tier in the set (see
+	// buildGridGeometryCache's build order and queryCatchmentsGridAggregated).
 	gridGeometryCache map[float64]map[gridCellKey]json.RawMessage
-	gridGeometryReady chan struct{}
+	gridGeometryReady map[float64]chan struct{}
 	gridGeometryOnce  sync.Once
 }
 
@@ -91,10 +95,15 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 		return nil, fmt.Errorf("failed to connect to geopackage: %w", err)
 	}
 
+	gridGeometryReady := make(map[float64]chan struct{}, len(gridTiersDegrees))
+	for _, tier := range gridTiersDegrees {
+		gridGeometryReady[tier] = make(chan struct{})
+	}
+
 	store := &GpkgStore{
 		db:                db,
 		dataDir:           dataDir,
-		gridGeometryReady: make(chan struct{}),
+		gridGeometryReady: gridGeometryReady,
 	}
 
 	// Load column names from scenario_current
@@ -617,7 +626,6 @@ func gridCellKeyFor(lat, long, cellSizeDegrees float64) gridCellKey {
 // simplifyPolygonsForComputation call below).
 func (s *GpkgStore) buildGridGeometryCache() {
 	start := time.Now()
-	defer close(s.gridGeometryReady)
 
 	rows, err := s.db.Query(`
 		SELECT lat, long, geojson
@@ -626,6 +634,9 @@ func (s *GpkgStore) buildGridGeometryCache() {
 	`)
 	if err != nil {
 		log.Printf("Warning: failed to build grid geometry cache: %v", err)
+		for _, tier := range gridTiersDegrees {
+			close(s.gridGeometryReady[tier])
+		}
 		return
 	}
 	defer rows.Close()
@@ -697,8 +708,18 @@ func (s *GpkgStore) buildGridGeometryCache() {
 		geometryJSON json.RawMessage
 	}
 
-	cache := make(map[float64]map[gridCellKey]json.RawMessage, len(gridTiersDegrees))
-	for _, tier := range gridTiersDegrees {
+	// Build coarsest tier first: it's the one queryCatchmentsGridAggregated
+	// falls back to for a continent-scale bbox, which is exactly the view
+	// shown on every fresh page load, so it's the tier a waiting request is
+	// most likely to need first. gridTiersDegrees itself must stay
+	// finest-first (queryCatchmentsGridAggregated's tier selection relies on
+	// that order), so reverse a copy here rather than the shared slice.
+	buildOrder := make([]float64, len(gridTiersDegrees))
+	for i, tier := range gridTiersDegrees {
+		buildOrder[len(gridTiersDegrees)-1-i] = tier
+	}
+
+	for _, tier := range buildOrder {
 		tierPolygons := polygonsByTierCell[tier]
 		tierCache := make(map[gridCellKey]json.RawMessage, len(tierPolygons))
 
@@ -723,11 +744,14 @@ func (s *GpkgStore) buildGridGeometryCache() {
 					// each catchment independently beforehand (see the comment
 					// on buildGridGeometryCache) - this is what keeps a
 					// full-continent response from ballooning to hundreds of
-					// MB. Safe against polyclipPolygonToGeoJSON's ring-nesting
-					// check misfiring on a shifted vertex now that it samples
-					// several points per ring (see ringContainedIn) rather
-					// than trusting a single one.
-					simplifiedDissolved := simplifyPolygonsForComputation([]polyclip.Polygon{dissolved})
+					// MB. Tolerance scales with the tier's cell size (see
+					// renderSimplifyTolerance) rather than reusing the fixed
+					// computation tolerance. Safe against
+					// polyclipPolygonToGeoJSON's ring-nesting check misfiring
+					// on a shifted vertex now that it samples several points
+					// per ring (see ringContainedIn) rather than trusting a
+					// single one.
+					simplifiedDissolved := simplifyPolygons([]polyclip.Polygon{dissolved}, renderSimplifyTolerance(tier))
 					if len(simplifiedDissolved) == 0 {
 						continue
 					}
@@ -754,13 +778,16 @@ func (s *GpkgStore) buildGridGeometryCache() {
 			tierCache[r.key] = r.geometryJSON
 		}
 
-		cache[tier] = tierCache
+		s.mu.Lock()
+		if s.gridGeometryCache == nil {
+			s.gridGeometryCache = make(map[float64]map[gridCellKey]json.RawMessage, len(gridTiersDegrees))
+		}
+		s.gridGeometryCache[tier] = tierCache
+		s.mu.Unlock()
+		close(s.gridGeometryReady[tier])
+
 		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells (candidates=%d)", tier, len(tierCache), len(tierPolygons))
 	}
-
-	s.mu.Lock()
-	s.gridGeometryCache = cache
-	s.mu.Unlock()
 
 	log.Printf("[perf] grid geometry cache built: %d tiers in %dms", len(gridTiersDegrees), time.Since(start).Milliseconds())
 }
@@ -776,7 +803,6 @@ func (s *GpkgStore) buildGridGeometryCache() {
 // continent-scale view is forced down to the coarsest tier.
 func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	s.ensureGridGeometryCache()
-	<-s.gridGeometryReady
 
 	// Every catchment in the bbox is included here, even ones with a null
 	// value for attribute - a cell whose catchments simply lack data for this
@@ -847,6 +873,10 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(tableName, attribute string, m
 		}
 	}
 	log.Printf("[perf] queryCatchmentsGridAggregated catchments=%d tier=%.3f cells=%d", len(catchmentRows), chosenTier, len(cells))
+
+	// Only block on the tier this request actually needs, not the slowest
+	// tier in the set (see buildGridGeometryCache's per-tier readiness).
+	<-s.gridGeometryReady[chosenTier]
 
 	s.mu.RLock()
 	tierCache := s.gridGeometryCache[chosenTier]
@@ -1998,6 +2028,25 @@ func rdpSimplifyContour(pts polyclip.Contour, tol float64) polyclip.Contour {
 // polyclip intersection, which is O(n×m) in vertex counts.
 func simplifyPolygonsForComputation(polygons []polyclip.Polygon) []polyclip.Polygon {
 	const tol = 0.001
+	return simplifyPolygons(polygons, tol)
+}
+
+// renderSimplifyTolerance returns the RDP tolerance used to simplify a
+// dissolved grid cell of the given size before it's sent to the browser (see
+// buildGridGeometryCache). Unlike simplifyPolygonsForComputation's fixed 0.001°
+// - tuned for site-boundary intersection accuracy, not payload size - render
+// tolerance scales with the cell itself: a coarser tier covers proportionally
+// more ground per screen pixel at the zoom level it's chosen for (see
+// gridTiersDegrees), so its cells can shed far more detail before the
+// simplification is visible. Without this, every tier was simplified to the
+// same ~110 m accuracy regardless of cell size, which left the 0.5°
+// (continent-view) tier - the one shown on every initial page load - shipping
+// dissolved polygons with hundreds of vertices each and a ~30 MB response.
+func renderSimplifyTolerance(cellSizeDegrees float64) float64 {
+	return cellSizeDegrees / 25
+}
+
+func simplifyPolygons(polygons []polyclip.Polygon, tol float64) []polyclip.Polygon {
 	out := make([]polyclip.Polygon, 0, len(polygons))
 	for _, poly := range polygons {
 		simplified := make(polyclip.Polygon, 0, len(poly))
