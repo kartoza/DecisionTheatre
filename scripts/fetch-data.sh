@@ -142,6 +142,10 @@ download_csvs() {
     # rclone copy is recursive by default, so subfolders are mirrored.
     local src="${RCLONE_REMOTE}:"
 
+    # --bind 0.0.0.0 pins outgoing connections to IPv4. Some hosts (e.g. ones
+    # with only a Tailscale IPv6 address and no real IPv6 default route)
+    # resolve googleapis.com to an AAAA record and fail with "network is
+    # unreachable" instead of falling back to IPv4.
     rclone copy "$src" "$DATA_DIR" \
         --drive-root-folder-id "$FOLDER_ID" \
         --progress \
@@ -151,7 +155,8 @@ download_csvs() {
         --checkers 8 \
         --retries 3 \
         --low-level-retries 10 \
-        --timeout 5m
+        --timeout 5m \
+        --bind 0.0.0.0
 
     echo
 }
