@@ -2,6 +2,14 @@
 
 A widget-by-widget description of every interface component in Decision Theatre.
 
+
+<figure markdown>
+  ![The four view modes and what each is for](../assets/diagrams/generated/view-modes.svg)
+  <figcaption class="static">
+    Every pane can show any of these for its chosen factor.
+  </figcaption>
+</figure>
+
 ## Landing Page
 
 The entry point of the application.
@@ -11,9 +19,9 @@ The entry point of the application.
 | Component | Description |
 |-----------|-------------|
 | **Header** | Logos (left); **My Sites**, **Download**, **Toggle documentation** icons (right) |
-| **Hero section** | "Welcome to the Landscape Decision Dashboard" title, strapline, and the **Explore the Future of Ecosystem Decision-Making** button, which opens [Explore mode](../user-manual/sites.md#explore-mode) |
+| **Hero section** | "Welcome to the Landscape Decision Dashboard" title, strapline, and the **Explore the Future of Ecosystem Decision-Making** button, which opens [Explore mode](../guide/define-a-site-boundary.md) |
 | **Supporting landscape management** | Auto-advancing screenshot carousel (Dials / Chart / Map / Sites) with descriptive text and **The FEFA and Rewild Capital Partnership** button |
-| **Use the Landscape Decision Dashboard to...** | Capability strip and four audience cards, each launching a scripted [guided tour](../user-guide/first-run.md#3-guided-tours) of a pre-built demo site: **Explore Conservation Futures**, **Explore Shared Landscapes**, **Explore Policy Impacts**, **Explore Future Possibilities** |
+| **Use the Landscape Decision Dashboard to...** | Capability strip and four audience cards, each launching a scripted [guided tour](../guide/take-a-guided-tour.md) of a pre-built demo site: **Explore Conservation Futures**, **Explore Shared Landscapes**, **Explore Policy Impacts**, **Explore Future Possibilities** |
 | **How does it work?** | **Guided Tour** button (replays the app's onboarding walkthrough) plus a reference/current/target explainer |
 | **Members of Our Ecosystem** | Auto-advancing carousel of partner-organisation logos |
 | **Feedback link** | Persistent footer banner linking to a feedback form (if configured) |
@@ -94,11 +102,11 @@ Three steps, tracked by a stepper in the header (**Method &rarr; Boundary &rarr;
 |-----------|-------------|
 | **Logos** | FEFA / Rewild Capital branding; clickable to return to the Landing page |
 | **Site title** | Shown next to a "/" separator once a site is open, with an **Edit site** pencil |
-| **Edit site boundary** (pencil, map page only) | Toggles [boundary edit mode](../user-manual/using-the-map.md#editing-a-site-boundary) |
+| **Edit site boundary** (pencil, map page only) | Toggles [boundary edit mode](../guide/refine-a-boundary.md) |
 | **Home** icon | Returns to the Landing page |
 | **My Sites** icon (pin) | Opens Your Sites |
 | **Map view** icon | Returns to the map from the Indicators page |
-| **Indicators** icon (bar chart) | Opens the [Indicators page](../user-manual/scenario-comparison.md#the-indicators-page) for the open site |
+| **Indicators** icon (bar chart) | Opens the [Indicators page](../guide/review-your-indicators.md) for the open site |
 | **Tiles** status badge | Green when map tile data is loaded, gray when missing |
 | **Download** icon (browser runtime only) | Opens the Download page |
 | **Reinstall data pack** icon (desktop runtime only) | Reopens the Setup Guide |
@@ -133,14 +141,14 @@ Floating vertical toolbar, left edge of each map pane:
 
 ### Per-Pane View-Mode Toolbar
 
-Floating toolbar, bottom-right of each pane -- buttons for every *other* view mode than the one showing (Map / Chart / Dial / Table). In quad view this also offers **Calculation details**, **Focus this pane** (maximise), a **2x2 / 2x3 columns** toggle (first pane only), and **Remove pane** (extra panes only).
+Floating toolbar, bottom-right of each pane -- buttons for every *other* view mode than the one showing (Map / Chart / Dial / Table). In grid view this also offers **Calculation details**, **Focus this pane** (maximise), a **2x2 / 2x3 columns** toggle (first pane only), and **Remove pane** (extra panes only).
 
-### Single and Quad Views
+### Single and Grid Views
 
-- **Single view** -- one pane fills the content area; its indicator panel opens automatically on the right. Use the grid icon to switch to quad view.
-- **Quad view** -- 2x2 or 2x3 grid of independent panes, each with its own factor/scenario/view-mode selections. A shared top toolbar can set **all panes** to one view mode at once, add panes, and open **Targets**.
+- **Single view** -- one pane fills the content area; its indicator panel opens automatically on the right. Use the grid icon to switch to grid view.
+- **Grid view** -- 2x2 or 2x3 grid of independent panes, each with its own factor/scenario/view-mode selections. A shared top toolbar can set **all panes** to one view mode at once, add panes, and open **Targets**.
 
-![Quad view, four panes on different factors](../assets/images/screenshots/map-quad-view.jpg)
+![Grid view, four panes on different factors](../assets/images/screenshots/map-grid-view.jpg)
 
 ## Indicator Panel
 
@@ -158,7 +166,7 @@ Slides in from the right (drag its left edge to resize, 320-720px).
 
 ## View Modes
 
-Switch a pane's view mode from its per-pane toolbar. See [Scenario Comparison](../user-manual/scenario-comparison.md#view-modes) for how to configure each one.
+Switch a pane's view mode from its per-pane toolbar. See [Scenario Comparison](../guide/read-the-data-four-ways.md) for how to configure each one.
 
 | Mode | Shows |
 |------|-------|
@@ -169,7 +177,7 @@ Switch a pane's view mode from its per-pane toolbar. See [Scenario Comparison](.
 
 ## Targets Modal
 
-Opened via the **Targets** button in the quad-view toolbar, once a site has indicators.
+Opened via the **Targets** button in the grid-view toolbar, once a site has indicators.
 
 ![Edit Target Values modal](../assets/images/screenshots/targets-modal.jpg)
 

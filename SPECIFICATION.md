@@ -53,7 +53,7 @@ Sites are geographical areas that save the user's boundary and exploration state
 - Bounding box and area
 - Creation method
 - Pane states (scenarios and attributes)
-- Layout mode (single/quad)
+- Layout mode (single/grid)
 - Map extent (center, zoom)
 
 **Site Gallery (CRUD Operations):**
@@ -220,22 +220,67 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - `GET /data/style.json` - MapBox style
 - `GET /data/tiles.json` - TileJSON metadata
 
+### Fonts
+- `GET /fonts/{fontstack}/{range}.pbf` - Glyph proxy (fetched from CDN once, then served locally)
+
 ### Data
 - `GET /api/scenarios` - Available scenarios
-- `GET /api/columns` - Available attributes
-- `GET /api/choropleth` - GeoJSON for viewport
+- `GET /api/columns` - Available attributes (from the GeoPackage)
+- `GET /api/metadata/{key}` - 15 routes returning lookup maps parsed from `metadata.csv`:
+  `colors`, `details`, `variabletypes`, `inputs`, `targetinputs`, `targetranges`,
+  `canmap`, `cangraph`, `axislabels`, `xaxislabels`, `units`, `charttypes`,
+  `groupingvariables`, `groupingvalues`, `dial0middle`
+- `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
+- `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
+- `GET /api/aggregate` - Area-weighted aggregates for an extent
+- `GET /api/precalculate/full` - Precomputed full-domain means (cached server-side)
+- `GET /api/compare` - Scenario comparison data
+
+### Tilesets
+- `GET /api/tilesets` - Available tileset names
+- `GET /api/tilesets/{name}/metadata` - MBTiles metadata for one tileset
 
 ### Sites
 - `GET /api/sites` - List all sites
 - `POST /api/sites` - Create site
 - `GET /api/sites/{id}` - Get site
-- `PUT /api/sites/{id}` - Update site
+- `PUT|PATCH /api/sites/{id}` - Update site
 - `DELETE /api/sites/{id}` - Delete site
 - `POST /api/sites/dissolve-catchments` - Merge catchments into boundary
 
+### Site Indicators
+- `GET /api/sites/{id}/indicators` - Aggregated indicator values
+- `POST /api/sites/{id}/indicators` - Extract indicators from constituent catchments
+- `PATCH /api/sites/{id}/indicators` - Update user-set values, triggering recalculation
+- `POST /api/sites/{id}/indicators/reset` - Reset ideal values to current
+- `GET|POST /api/sites/{id}/catchments` - Per-catchment breakdown with AOI fractions
+- `GET|POST /api/sites/{id}/whiskers` - Whisker (upper/lower bound) values
+
+### Boundary Editing
+- `POST /api/sites/{id}/boundary/union/{catchmentId}` - Add a catchment to the boundary
+- `POST /api/sites/{id}/boundary/difference/{catchmentId}` - Remove a catchment
+
 ### Catchments
+- `GET /api/catchments/bounds` - Bounding box of the catchment dataset
 - `GET /api/catchments/geometry/{id}` - Get full catchment geometry from GeoPackage
+- `POST /api/catchments/in-bbox` - Catchments intersecting a bounding box
+
+### Data Pack and Downloads
+- `GET /api/datapack/status` - Install state and progress
+- `POST /api/datapack/install` - Install from a local archive path (**destructive**)
+- `GET /api/datapack/download-info` - Metadata for the configured downloadable archive
+- `GET /api/datapack/download` - Stream the archive
+- `GET /api/executables/info` - Per-platform executable availability
+- `GET /api/executables/download/{platform}` - Stream a platform executable
+- `POST /api/dialog/open-file` - Open a native file dialog (desktop runtime only)
+
+### Static Content
+- `/data/images/` - Site thumbnails
+- `/data/walkthroughs/` - Read-only demo site JSON
+- `/data/demo/` - Guided tour assets
+- `/docs/` - Embedded documentation site
+- `/` - SPA fallback
 
 ---
 
@@ -314,7 +359,31 @@ Violet → Indigo → Blue → Cyan → Green → Yellow → Orange → Red
 ### Input Validation
 - Site titles and descriptions are trimmed before storage
 - File uploads are validated for type and size
-- Zip files are checked for zip slip vulnerabilities during extraction
+- Zip files are checked for zip slip vulnerabilities during extraction (both the `.zip`
+  and `.7z` extractors)
+
+### Known gaps (tracked, not yet implemented)
+
+The following are stated here so the specification describes the system as it is, not as
+intended. Each has a corresponding issue.
+
+- **No authentication on any endpoint.** The API is unauthenticated, and
+  `deployments/nginx.conf` proxies every path without a denylist.
+- **The server binds all interfaces**, not loopback, despite a source comment asserting
+  otherwise.
+- **`POST /api/datapack/install` accepts an arbitrary filesystem path** and recursively
+  deletes the data directory before extracting.
+- **`POST /api/dialog/open-file` opens a native desktop window** and is registered in
+  server mode as well as desktop mode.
+- **Thumbnail paths are not validated on write.** A non-`data:image` value is stored
+  verbatim and later joined onto the data directory and deleted with the site.
+- **No request body size limits.** Every JSON handler decodes directly from `r.Body`.
+- **No response compression**, and no `context.Context` on database calls, so a client
+  disconnect does not cancel work.
+
+Attribute names are validated by `isValidColumn()` before interpolation, but SQL is
+assembled with `fmt.Sprintf` throughout `gpkg_store.go`; the pattern is safe by convention
+rather than by construction.
 
 ---
 

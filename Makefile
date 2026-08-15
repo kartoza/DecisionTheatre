@@ -28,7 +28,7 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all
-.PHONY: fmt lint check deps
+.PHONY: fmt lint check deps validate-data
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
 .PHONY: geopackage datapack list-datapack fetch-data
@@ -115,6 +115,10 @@ fmt:
 
 lint:
 	$(GOLINT) run --timeout 5m
+
+## validate-data: Check the data directory for compliance and correctness
+validate-data:
+	./scripts/validate-data.sh $(if $(DATA_DIR),$(DATA_DIR),./data)
 
 check: fmt lint test
 

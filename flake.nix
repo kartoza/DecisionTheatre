@@ -10,7 +10,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.2.0";
+        version = "0.3.0";
 
         # MkDocs environment for requirements documentation
         mkdocsEnv = pkgs.python3.withPackages (ps: with ps; [
@@ -34,12 +34,25 @@
         docs = pkgs.stdenvNoCC.mkDerivation {
           pname = "decision-theatre-docs";
           inherit version;
+          # docs/hooks/generate_diagrams.py reads the Go sources, flake.nix and
+          # frontend/package.json at build time to draw diagrams that track the
+          # real code. Those inputs must therefore be in the docs source tree —
+          # they are all small text files. The hook degrades gracefully if any
+          # are absent, so a narrower filter would silently drop diagrams rather
+          # than fail the build.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             filter = path: type:
-              let baseName = baseNameOf (toString path); in
+              let
+                p = toString path;
+                baseName = baseNameOf p;
+              in
               baseName == "mkdocs.yml" ||
-              pkgs.lib.hasPrefix (toString ./docs) (toString path);
+              baseName == "flake.nix" ||
+              baseName == "main.go" ||
+              pkgs.lib.hasPrefix (toString ./docs) p ||
+              pkgs.lib.hasPrefix (toString ./internal) p ||
+              pkgs.lib.hasPrefix (toString ./frontend) p;
           };
           nativeBuildInputs = [ mkdocsEnv ];
           buildPhase = ''
@@ -176,13 +189,44 @@
           };
         };
 
+        # Data directory validator. The checks live in scripts/validate-data.sh
+        # so that nix, make and a plain shell all run identical logic; this
+        # derivation only supplies the runtime dependencies.
+        validate-data = pkgs.stdenvNoCC.mkDerivation {
+          pname = "decision-theatre-validate-data";
+          inherit version;
+          src = ./scripts/validate-data.sh;
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 $src $out/bin/validate-data
+            wrapProgram $out/bin/validate-data \
+              --prefix PATH : ${pkgs.lib.makeBinPath [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.findutils
+                pkgs.gnugrep
+                pkgs.gnused
+                pkgs.python3
+                pkgs.sqlite
+              ]}
+            runHook postInstall
+          '';
+          meta = with pkgs.lib; {
+            description = "Validate a Decision Theatre data directory";
+            license = licenses.gpl3;
+            mainProgram = "validate-data";
+          };
+        };
+
       in
       {
         # =====================================================
         # Packages
         # =====================================================
         packages = {
-          inherit frontend docs decision-theatre;
+          inherit frontend docs decision-theatre validate-data;
           default = decision-theatre;
         };
 
@@ -359,6 +403,15 @@
         apps.default = {
           type = "app";
           program = "${decision-theatre}/bin/decision-theatre";
+        };
+
+        # nix run .#validate-data -- [DATA_DIR]
+        #
+        # Wraps scripts/validate-data.sh rather than embedding the checks here,
+        # so the same script runs from nix, from make, and from a plain shell.
+        apps.validate-data = {
+          type = "app";
+          program = "${validate-data}/bin/validate-data";
         };
       }
     );

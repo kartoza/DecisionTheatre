@@ -5,17 +5,14 @@ release/
 build-dir/
 coverage.out
 *.exe
-
 # Go
 .go/
 vendor/
-
 # Frontend
 frontend/node_modules/
 frontend/dist/
 internal/server/static/
 internal/server/docs_site/
-
 # Data files (user-provided)
 data/*.csv
 data/*.mbtiles
@@ -24,34 +21,27 @@ data/*.geoparquet
 data/*.json
 data/images/
 data/sites/
-
 # Large resource files
 *.mbtiles
 *.gpkg
-
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
 # OS
 .DS_Store
 Thumbs.db
-
 # Logs
 PROMPT.log
 PROMPTS.log
-
 # Models
 *.gguf
 *.gob
-
 # MkDocs
 site/
 requirements/site/
-
 # Nix
 result
 .direnv/
@@ -60,4 +50,17 @@ diff.txt
 dist/
 docs/CatchmentCalculations.xlsx
 git.sh
+claude.sh
+issue-metadata-mismatch.md
 node_modules
+docs/assets/diagrams/generated/
+docs/hooks/__pycache__/
+site/
+# Stray data content (see data-readme.md)
+data-old/
+data/R scripts/
+data/mbtiles/*.json
+!data/mbtiles/style.json
+pr.sh
+pr-body.md
+issue-*.md

@@ -2,6 +2,14 @@
 
 ## Go
 
+<figure markdown>
+  ![The gates a change passes through before reaching main](../assets/diagrams/generated/quality-gates.svg)
+  <figcaption class="static">
+    Two gates are not fully closed yet — see the notes below.
+  </figcaption>
+</figure>
+
+
 ### Formatting
 
 All Go code must be formatted with `gofmt`. Run:
@@ -20,6 +28,14 @@ make lint
 golangci-lint run --timeout 5m
 ```
 
+!!! warning "Expected to change"
+    There is no `.golangci.yml`, and CI pins the linter to `version: latest`, so the
+    active rule set varies with the release date rather than with a committed
+    configuration. Nothing verifies formatting either — `make fmt` rewrites files but is
+    manual, and CI does not check `gofmt -l`.
+
+    Ticket: *golangci-lint runs on defaults and there is no gofmt gate*.
+
 ### Conventions
 
 - Follow [Effective Go](https://go.dev/doc/effective_go) guidelines
@@ -33,14 +49,17 @@ golangci-lint run --timeout 5m
 
 ```
 internal/
-  api/       # HTTP handlers (thin layer, delegates to domain packages)
-  config/    # Configuration structs
-  geodata/   # GeoPackage data access and processing
-  models/    # Shared data models
-  projects/  # Project CRUD operations
-  server/    # HTTP server setup, static file serving
-  tiles/     # MBTiles reading
+  api/       # HTTP handlers, metadata cache, ecological recalculation
+  config/    # Platform config/data dirs, settings.json
+  geodata/   # GeoPackage data access, choropleth, grid aggregation
+  httputil/  # JSON response helpers
+  server/    # HTTP server setup, routing, embeds, datapack install
+  sites/     # Site CRUD, thumbnails, bounding boxes
+  tiles/     # MBTiles reading and tile cache
 ```
+
+`internal/webview_go/` is a vendored copy whose `replace` directive is commented out in
+`go.mod`; nothing imports it and it is slated for removal.
 
 ## TypeScript / React
 

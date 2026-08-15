@@ -145,7 +145,34 @@ make geopackage
 
 This creates `datapack.gpkg` with scenario tables, domain min/max for color scaling, and precomputed GeoJSON for fast API serving.
 
+### Validate the data directory
+
+Before running the app against a data directory, check it:
+
+```bash
+nix run .#validate-data          # or: make validate-data
+nix run .#validate-data -- /path/to/data
+```
+
+Exit `0` means no errors, `1` means the application will not work correctly, `2` means the
+directory or required tooling is missing — so it can gate a deployment.
+
+Two faults are common enough to be worth knowing about up front:
+
+- **The tileset must be named `africa`.** The name comes from the filename, and
+  `internal/server/server.go` hardcodes `africa`; a file called `africa-002.mbtiles`
+  registers a tileset nothing requests, and the map renders blank.
+- **`metadata.csv` exported from R** may carry `make.names()` dots where the GeoPackage has
+  spaces (`Obligate.grazer` vs `Obligate grazer`). Affected indicators disappear from the
+  UI with nothing logged.
+
+See [The Data Directory](docs/administrator-guide/data-directory.md) and
+[Validating the Data Directory](docs/administrator-guide/validating-data.md).
+
 For detailed documentation on data formats and the GeoPackage schema, see the **Data Preparation** section in the developer documentation.
+
+> **Note:** `data/` is untracked by design. [`data-readme.md`](data-readme.md) at the
+> repository root is the tracked description of its expected contents.
 
 ## Further Reading
 

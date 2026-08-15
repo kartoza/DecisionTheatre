@@ -2,6 +2,14 @@
 
 A **datapack** is the self-contained data bundle that Decision Theatre loads at startup. It provides all scenario metrics, catchment geometries, map tiles, and display metadata that the application needs to run. This page documents every file in a datapack, what it contains, and how the application uses it.
 
+
+<figure markdown>
+  ![Everything the application reads from a data directory](../assets/diagrams/generated/data-requirements.svg)
+  <figcaption class="gen">
+    Extracted from every <code>filepath.Join(dataDir, …)</code> in the Go source.
+  </figcaption>
+</figure>
+
 ## File Structure
 
 A datapack is distributed as a compressed archive (`.zip` or `.7z`) with the following layout:

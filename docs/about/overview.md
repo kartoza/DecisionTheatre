@@ -8,20 +8,29 @@ Freshwater catchments across Africa face growing pressure from climate change, l
 
 Landscape Decision Theatre addresses this by providing:
 
-- **Project-based workflow** -- create, save, and organize multiple analysis projects with custom thumbnails and descriptions
+- **Site-based workflow** -- define a study area once, then reuse it across map, chart, dial and table views
 - **Temporal comparison** -- side-by-side swipe-based comparison of catchment attributes across scenarios
-- **Offline operation** -- designed for use in field settings, workshops, and environments without reliable internet
+- **Editable targets** -- set ideal indicator values and see the ecological recalculation cascade through dependent factors
+- **Local operation** -- designed for use in field settings, workshops, and environments without reliable internet
 - **Single-binary deployment** -- no installation of databases, web servers, or runtime dependencies beyond the binary itself
-- **Beautiful landing experience** -- welcoming landing page with easy access to projects and about information
+- **Guided tours** -- four read-only demo sites that walk new users through the workflow
 
 ## How It Works
+
+<figure markdown>
+  ![Desktop and browser runtimes side by side](../assets/diagrams/generated/runtime-modes.svg)
+  <figcaption class="static">
+    The same binary serves both runtimes; only site storage differs.
+  </figcaption>
+</figure>
+
 
 The application bundles a Go HTTP server with an embedded React frontend. On startup it:
 
 1. Opens a native desktop window (WebView) displaying the landing page
 2. Loads vector map tiles from an MBTiles file (African countries, rivers, lakes, ecoregions, catchment boundaries, populated places)
 3. Loads scenario data from GeoPackage (reference, current catchment attributes)
-4. Provides project management for organizing multiple analyses
+4. Provides site management for organising multiple study areas
 5. All processing happens locally -- no data leaves the user's machine
 
 ## Technology Stack

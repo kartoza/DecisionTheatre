@@ -176,14 +176,52 @@ This makes it available via `--version` and in the UI header badge.
 ## Pre-Release Checklist
 
 1. All CI checks pass on `main`
-2. Update the version in `flake.nix` (`version = "x.y.z"`)
+2. Update the version in `flake.nix` (`version = "x.y.z"`) **and** `frontend/package.json`
 3. Run `nix build` locally to verify the build
-4. Run `nix flake check` to verify tests
+4. Run `make test-all` to verify tests
 5. Build and test the data pack: `make datapack`
-6. Create and push the tag
-7. After the release is published, attach the data pack zip to the release
+6. Update `CHANGELOG.md` with a dated section for the release
+7. Create and push the tag
+8. After the release is published, attach the data pack zip to the release
+
+<figure markdown>
+  ![Each place the version number is declared, coloured by whether the declarations agree](../assets/diagrams/generated/version-state.svg)
+  <figcaption class="gen">
+    read from
+    <code>flake.nix</code>, <code>frontend/package.json</code> and <code>main.go</code>.
+    This diagram turns green by itself once the declarations agree.
+  </figcaption>
+</figure>
+
+!!! warning "Version is not defined in one place"
+    `flake.nix` and `frontend/package.json` carry independent version fields and can
+    drift — they disagree at time of writing. `main.go` defaults to `"dev"`, so any build
+    outside Nix or CI reports `vdev`. Step 2 exists to work around this; it should become
+    unnecessary.
+
+    Ticket: *Version drifts across five sources of truth*.
+
+!!! bug "`nix flake check` does not currently pass"
+    This step previously read "run `nix flake check`". That check cannot succeed: the
+    `frontend-tests` check has an empty `npmDepsHash`, and `go-tests` omits the webkit
+    build inputs. Use `make test-all` until this is fixed.
+
+    Ticket: *flake.nix embeds code inline and nix flake check cannot pass*.
+
+!!! note "No CHANGELOG.md yet"
+    Step 6 describes the intended process. `CHANGELOG.md` does not exist yet; releases
+    currently rely on GitHub's auto-generated notes.
+    Ticket: *No CHANGELOG.md*.
 
 ## Nix Build
+
+<figure markdown>
+  ![Packages, apps and checks exposed by the flake](../assets/diagrams/generated/nix-outputs.svg)
+  <figcaption class="gen">
+    Parsed from <code>flake.nix</code>, so new outputs appear here automatically.
+  </figcaption>
+</figure>
+
 
 For Nix users, `nix build` always produces a current build from source. The Nix flake version is set in `flake.nix` and should be updated to match the Git tag for releases.
 

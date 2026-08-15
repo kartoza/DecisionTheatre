@@ -4,41 +4,85 @@ site_author: Kartoza
 site_url: https://kartoza.github.io/DecisionTheatre/
 repo_url: https://github.com/kartoza/DecisionTheatre
 repo_name: kartoza/DecisionTheatre
+edit_uri: edit/main/docs/
+copyright: >
+  &copy; Kartoza — Made with 💗 by
+  <a href="https://kartoza.com">Kartoza</a>
+  &middot; <a href="https://github.com/sponsors/kartoza">Donate</a>
+  &middot; <a href="https://github.com/kartoza/DecisionTheatre">GitHub</a>
+
+# Diagrams describing code or configuration are generated at build time so they
+# cannot drift from what they describe. See docs/hooks/generate_diagrams.py.
+hooks:
+  - docs/hooks/generate_diagrams.py
+
+# The hook modules live under docs/ so the Nix docs derivation (which copies
+# only mkdocs.yml and docs/) can see them; exclude them from the built site.
+exclude_docs: |
+  hooks/
 
 theme:
   name: material
+  logo: assets/brand/kartoza-symbol-color.svg
+  favicon: assets/brand/favicon.png
+  language: en
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: custom
-      accent: orange
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: custom
-      accent: orange
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
   font:
-    text: Inter
+    text: Nunito
     code: JetBrains Mono
   features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
-    - navigation.top
-    - search.suggest
-    - search.highlight
-    - content.tabs.link
-    - content.code.copy
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
     - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - content.tooltips
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.path
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
   icon:
     repo: fontawesome/brands/github
+    edit: material/file-edit-outline
+    view: material/eye-outline
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kartoza/DecisionTheatre
+      name: GitHub repository
+    - icon: fontawesome/solid/heart
+      link: https://github.com/sponsors/kartoza
+      name: Sponsor on GitHub
+  generator: false
 
 extra_css:
+  - assets/css/kartoza-tokens.css
   - assets/css/custom.css
 
 nav:
@@ -48,20 +92,37 @@ nav:
       - Funders and Partners: about/funders-and-partners.md
       - License: about/license.md
       - Contact: about/contact.md
-  - User Manual:
-      - Getting Started: user-manual/index.md
-      - Installation: user-manual/installation.md
-      - Data Setup: user-manual/data-setup.md
-      - Sites: user-manual/sites.md
-      - Using the Map: user-manual/using-the-map.md
-      - Scenario Comparison: user-manual/scenario-comparison.md
   - User Guide:
-      - Tutorials: user-guide/index.md
-      - First Run: user-guide/first-run.md
-      - Comparing Scenarios: user-guide/comparing-scenarios.md
-      - Reference Guide: user-guide/reference.md
+      - Overview: guide/index.md
+      - Get started:
+          - 1. Open the dashboard: guide/open-the-dashboard.md
+          - 2. Find your way around: guide/find-your-way-around.md
+          - 3. Take a guided tour: guide/take-a-guided-tour.md
+      - Explore the data:
+          - 4. Open the map: guide/open-the-map.md
+          - 5. Choose what to show: guide/choose-what-to-show.md
+          - 6. Compare two scenarios: guide/compare-two-scenarios.md
+          - 7. Identify a catchment: guide/identify-a-catchment.md
+          - 8. Read the data four ways: guide/read-the-data-four-ways.md
+          - 9. Work with several panes: guide/work-with-several-panes.md
+      - Build your own:
+          - 10. Define a site boundary: guide/define-a-site-boundary.md
+          - 11. Name and save your site: guide/name-and-save-your-site.md
+          - 12. Review your indicators: guide/review-your-indicators.md
+          - 13. Set target values: guide/set-target-values.md
+          - 14. Refine a boundary: guide/refine-a-boundary.md
+      - Interface Reference: user-guide/reference.md
+  - Advanced Topics:
+      - Overview: advanced/index.md
+      - Install the application: advanced/install-the-application.md
+      - Install a data pack: advanced/install-a-data-pack.md
+  - Administrator Guide:
+      - Overview: administrator-guide/index.md
+      - The Data Directory: administrator-guide/data-directory.md
+      - Validating the Data Directory: administrator-guide/validating-data.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
+      - Client/Server Boundary: developer-guide/client-server-boundary.md
       - Software Components: developer-guide/components.md
       - Development Environment: developer-guide/dev-environment.md
       - Coding Standards: developer-guide/coding-standards.md

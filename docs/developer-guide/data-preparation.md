@@ -2,6 +2,14 @@
 
 This guide covers how to prepare the data files that Decision Theatre consumes.
 
+
+<figure markdown>
+  ![Source data flowing through to a distributable data pack](../assets/diagrams/generated/data-prep-pipeline.svg)
+  <figcaption class="static">
+    Validate before shipping: <code>nix run .#validate-data</code>.
+  </figcaption>
+</figure>
+
 ## Vector Map Tiles (MBTiles)
 
 ### Source Data
