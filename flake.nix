@@ -38,6 +38,37 @@
           ]
         );
 
+        # webkit2gtk-4.0 compatibility alias.
+        #
+        # github.com/webview/webview_go hardcodes its cgo directive as
+        #   #cgo linux ... pkg-config: gtk+-3.0 webkit2gtk-4.0
+        # with no build tag to select 4.1. nixpkgs ships only the 4.1 ABI, so
+        # pkg-config fails and the build dies at "No package 'webkit2gtk-4.0'".
+        #
+        # This installs the real 4.1 pkg-config file under the 4.0 name, so the
+        # lookup succeeds while still linking libwebkit2gtk-4.1.so — the only
+        # library that exists. The two ABIs are compatible for webview's use.
+        #
+        # Generated from the 4.1 package rather than committed, so it can never
+        # carry a stale store path. A committed .webkit-compat/ shim used to do
+        # this job; it is gitignored, orphaned and now points at a webkitgtk
+        # version no longer in the store.
+        webkitCompat = pkgs.runCommand "webkit2gtk-4.0-compat" { } ''
+          mkdir -p $out/lib/pkgconfig
+          src=""
+          for d in ${pkgs.webkitgtk_4_1.dev} ${pkgs.webkitgtk_4_1}; do
+            if [ -f "$d/lib/pkgconfig/webkit2gtk-4.1.pc" ]; then
+              src="$d/lib/pkgconfig/webkit2gtk-4.1.pc"
+              break
+            fi
+          done
+          if [ -z "$src" ]; then
+            echo "webkit2gtk-4.1.pc not found in the webkitgtk_4_1 outputs" >&2
+            exit 1
+          fi
+          cp "$src" $out/lib/pkgconfig/webkit2gtk-4.0.pc
+        '';
+
         # =====================================================
         # Documentation: built via MkDocs
         # =====================================================
@@ -171,6 +202,8 @@
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               webkitgtk_4_1
+              # Supplies webkit2gtk-4.0.pc; see webkitCompat above.
+              webkitCompat
               gtk3
               glib-networking
               gsettings-desktop-schemas
@@ -376,6 +409,8 @@
             ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               # WebView (embedded browser window)
               webkitgtk_4_1
+              # Supplies webkit2gtk-4.0.pc; see webkitCompat above.
+              webkitCompat
               gtk3
 
               # Windows cross-compilation
