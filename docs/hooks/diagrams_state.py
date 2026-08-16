@@ -407,6 +407,7 @@ def metadata_pipeline(root: Path, p: dict) -> str | None:
 
 
 def licences(root: Path, p: dict) -> str | None:
+<<<<<<< HEAD
     """Count direct dependencies per ecosystem, from the real manifests."""
     go_direct: list[str] = []
     gomod = _read(root, "go.mod")
@@ -429,6 +430,34 @@ def licences(root: Path, p: dict) -> str | None:
             dev = sorted(j.get("devDependencies", {}))
         except ValueError:
             pass
+=======
+    """Count direct dependencies per ecosystem, from the real manifests.
+
+    Requires *both* manifests. A partial read would draw a diagram claiming, say,
+    zero Go dependencies — quietly wrong rather than absent. Returning None makes
+    the omission loud: the page's image reference then fails the strict build.
+    """
+    gomod = _read(root, "go.mod")
+    pkg = _read(root, "frontend/package.json")
+    if not (gomod and pkg):
+        return None
+
+    go_direct: list[str] = []
+    block = re.search(r"require \(\n(.*?)\n\)", gomod, re.S)
+    if block:
+        go_direct = [
+            m.split()[0]
+            for m in block.group(1).strip().splitlines()
+            if m.strip() and "// indirect" not in m
+        ]
+
+    try:
+        j = json.loads(pkg)
+        deps = sorted(j.get("dependencies", {}))
+        dev = sorted(j.get("devDependencies", {}))
+    except ValueError:
+        return None
+>>>>>>> dc1da7a (docs: rebuild documentation around the hosted dashboard and Kartoza brand)
 
     if not (go_direct or deps):
         return None

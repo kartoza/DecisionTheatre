@@ -1,0 +1,130 @@
+name: Documentation
+
+# Builds the documentation with Nix on every pull request, and publishes it to
+# GitHub Pages when a pull request lands on main.
+#
+# The build is the same derivation used locally and by the release — `nix build
+# .#docs` — so what CI publishes is byte-for-byte what a developer gets. The
+# derivation runs mkdocs with --strict, so a broken internal link fails the
+# pull request rather than shipping.
+#
+# Note: docs/hooks/generate_diagrams.py parses the Go sources, flake.nix and
+# frontend/package.json at build time. Nix only sees git-tracked files, so a new
+# source file must be committed before its diagram can be generated in CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allows publishing the current main without waiting for a merge.
+  workflow_dispatch:
+
+# Least privilege by default; the deploy job widens this for itself.
+permissions:
+  contents: read
+
+# Never let two publishes race. In-progress runs are allowed to finish so a
+# deploy is not left half-applied.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ==========================================
+  # Build — runs for pull requests and for main
+  # ==========================================
+  build:
+    name: Build with Nix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-revision plugins and any future "last updated" stamp need
+          # history rather than a shallow clone.
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build documentation
+        run: nix build .#docs --print-build-logs
+
+      - name: Verify the build produced a site
+        run: |
+          test -f result/index.html || { echo "::error::no index.html in the docs output"; exit 1; }
+          pages=$(find result -name index.html | wc -l)
+          diagrams=$(find result/assets/diagrams/generated -name '*.svg' 2>/dev/null | wc -l)
+          echo "pages: $pages"
+          echo "generated diagrams: $diagrams"
+          if [ "$pages" -lt 20 ]; then
+            echo "::error::only $pages pages built; expected the full site"
+            exit 1
+          fi
+          # A generator whose source is missing from the derivation's filter
+          # returns None and is skipped. --strict catches that via the page's
+          # dangling image reference, but this floor makes the cause obvious.
+          if [ "$diagrams" -lt 40 ]; then
+            echo "::error::only $diagrams diagrams generated; expected the full set."
+            echo "::error::A generator's source file is probably missing from the"
+            echo "::error::docs derivation filter in flake.nix."
+            exit 1
+          fi
+
+      - name: Collect the site
+        run: |
+          # `result` is a symlink into the read-only nix store; the upload
+          # actions need a real, writable directory.
+          mkdir -p site && cp -rL result/. site/ && chmod -R u+w site
+
+      - name: Upload site
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: site/
+          retention-days: 7
+
+  # ==========================================
+  # Deploy — only for main
+  # ==========================================
+  deploy:
+    name: Publish to GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build documentation
+        run: nix build .#docs --print-build-logs
+
+      - name: Dereference the nix store symlink
+        run: |
+          # `result` is a symlink into the read-only nix store. The Pages
+          # artefact action needs a real, writable directory.
+          mkdir -p site
+          cp -rL result/. site/
+          chmod -R u+w site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

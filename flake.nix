@@ -6,27 +6,37 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         version = "0.3.0";
 
         # MkDocs environment for requirements documentation
-        mkdocsEnv = pkgs.python3.withPackages (ps: with ps; [
-          mkdocs
-          mkdocs-material
-          mkdocs-minify-plugin
-          pygments
-          pymdown-extensions
-        ]);
+        mkdocsEnv = pkgs.python3.withPackages (
+          ps: with ps; [
+            mkdocs
+            mkdocs-material
+            mkdocs-minify-plugin
+            pygments
+            pymdown-extensions
+          ]
+        );
 
         # Python environment for data tooling (GeoPackage creation)
-        dataToolsEnv = pkgs.python3.withPackages (ps: with ps; [
-          pandas
-          geopandas
-          shapely
-        ]);
+        dataToolsEnv = pkgs.python3.withPackages (
+          ps: with ps; [
+            pandas
+            geopandas
+            shapely
+          ]
+        );
 
         # =====================================================
         # Documentation: built via MkDocs
@@ -42,21 +52,24 @@
           # than fail the build.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
-            filter = path: type:
+            filter =
+              path: type:
               let
                 p = toString path;
                 baseName = baseNameOf p;
               in
-              baseName == "mkdocs.yml" ||
-              baseName == "flake.nix" ||
-              baseName == "main.go" ||
-              pkgs.lib.hasPrefix (toString ./docs) p ||
-              pkgs.lib.hasPrefix (toString ./internal) p ||
-              pkgs.lib.hasPrefix (toString ./frontend) p;
+              baseName == "mkdocs.yml"
+              || baseName == "flake.nix"
+              || baseName == "main.go"
+              || baseName == "go.mod"
+              || pkgs.lib.hasPrefix (toString ./docs) p
+              || pkgs.lib.hasPrefix (toString ./internal) p
+              || pkgs.lib.hasPrefix (toString ./frontend) p
+              || pkgs.lib.hasPrefix (toString ./.github) p;
           };
           nativeBuildInputs = [ mkdocsEnv ];
           buildPhase = ''
-            mkdocs build -d site
+            mkdocs build --strict -d site
           '';
           installPhase = ''
             mkdir -p $out
@@ -74,12 +87,11 @@
           inherit version;
           src = ./frontend;
 
-          # This hash pins the exact npm dependency tree.
-          # After first build attempt, nix will tell you the
-          # correct hash. Set to empty string to get it:
-          #   nix build .#frontend 2>&1 | grep 'got:'
-          # Then paste the sha256 here.
-          npmDepsHash = "sha256-4Ljrrxy3NyZ8kwpzPWg1RISh2UdtQdzU67uv+v1Zchw=";
+          # Pins the exact npm dependency tree. It is derived from
+          # frontend/package-lock.json, so ANY change to that file — including
+          # the version field — changes this hash. Recompute with:
+          #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
+          npmDepsHash = "sha256-xNE0TwmljkvPbb6uLtnLMDnrkrY4eKOBrc2Iu5xu/YU=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -102,26 +114,36 @@
           inherit version;
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
-            filter = path: type:
-              let baseName = baseNameOf (toString path); in
-              ! (
-                baseName == ".go" ||
-                baseName == ".direnv" ||
-                baseName == "result" ||
-                baseName == "node_modules" ||
-                baseName == ".idea" ||
-                baseName == ".vscode" ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
+            filter =
+              path: type:
+              let
+                baseName = baseNameOf (toString path);
+              in
+              !(
+                baseName == ".go"
+                || baseName == ".direnv"
+                || baseName == "result"
+                || baseName == "node_modules"
+                || baseName == ".idea"
+                || baseName == ".vscode"
+                || (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
               );
           };
 
-          # Let nix fetch Go dependencies
-          # After go.mod changes, set to "" to discover the new hash via:
+          # Pins the vendored Go module set. Derived from go.mod and go.sum.
+          # Recompute after changing either, by emptying it and reading the
+          # reported value:
           #   nix build 2>&1 | grep 'got:'
-          vendorHash = "sha256-DgjErcJvY7pvXTAtVMOiAOqODJ7DrzXINBMXJcauiCI=";
+          #
+          # The previous value was stale — it did not match the current go.sum.
+          # It went unnoticed because a fixed-output derivation is only refetched
+          # when its output path changes, and the path embeds the version. The
+          # 0.2.0 output was already in the store, so nothing revalidated it until
+          # the bump to 0.3.0 forced a rebuild.
+          vendorHash = "sha256-4ZfPWJtJfZtF4YsKdMq7Nxo+uSxhna4FzWh/WCC/aY0=";
 
           # The local replace directive (./internal/webview_go) needs the
           # source present during the go-modules download phase.
@@ -143,13 +165,16 @@
             makeWrapper
           ];
 
-          buildInputs = with pkgs; [
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-            webkitgtk_4_1
-            gtk3
-            glib-networking
-            gsettings-desktop-schemas
-          ];
+          buildInputs =
+            with pkgs;
+            [
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              webkitgtk_4_1
+              gtk3
+              glib-networking
+              gsettings-desktop-schemas
+            ];
 
           ldflags = [
             "-s"
@@ -202,15 +227,17 @@
             runHook preInstall
             install -Dm755 $src $out/bin/validate-data
             wrapProgram $out/bin/validate-data \
-              --prefix PATH : ${pkgs.lib.makeBinPath [
-                pkgs.bash
-                pkgs.coreutils
-                pkgs.findutils
-                pkgs.gnugrep
-                pkgs.gnused
-                pkgs.python3
-                pkgs.sqlite
-              ]}
+              --prefix PATH : ${
+                pkgs.lib.makeBinPath [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.findutils
+                  pkgs.gnugrep
+                  pkgs.gnused
+                  pkgs.python3
+                  pkgs.sqlite
+                ]
+              }
             runHook postInstall
           '';
           meta = with pkgs.lib; {
@@ -226,7 +253,12 @@
         # Packages
         # =====================================================
         packages = {
-          inherit frontend docs decision-theatre validate-data;
+          inherit
+            frontend
+            docs
+            decision-theatre
+            validate-data
+            ;
           default = decision-theatre;
         };
 
@@ -237,7 +269,11 @@
           go-tests = pkgs.stdenvNoCC.mkDerivation {
             name = "decision-theatre-go-tests";
             src = ./.;
-            nativeBuildInputs = with pkgs; [ go gcc pkg-config ];
+            nativeBuildInputs = with pkgs; [
+              go
+              gcc
+              pkg-config
+            ];
             buildPhase = ''
               export HOME=$TMPDIR
               export GOPATH=$TMPDIR/go
@@ -261,7 +297,8 @@
             pname = "decision-theatre-frontend-tests";
             inherit version;
             src = ./frontend;
-            npmDepsHash = "";
+            # Same source as the frontend package, so the same hash.
+            npmDepsHash = "sha256-xNE0TwmljkvPbb6uLtnLMDnrkrY4eKOBrc2Iu5xu/YU=";
             buildPhase = ''
               npm test
             '';
@@ -277,70 +314,73 @@
         # All tools available, no internet needed after first eval
         # =====================================================
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            # Go toolchain
-            go
-            gopls
-            golangci-lint
-            gomodifytags
-            gotests
-            impl
-            delve
-            go-tools
-            air
+          buildInputs =
+            with pkgs;
+            [
+              # Go toolchain
+              go
+              gopls
+              golangci-lint
+              gomodifytags
+              gotests
+              impl
+              delve
+              go-tools
+              air
 
-            # Node.js (for frontend dev iteration only)
-            nodejs_22
+              # Node.js (for frontend dev iteration only)
+              nodejs_22
 
-            # CGO build tools
-            gnumake
-            gcc
-            pkg-config
+              # CGO build tools
+              gnumake
+              gcc
+              pkg-config
 
-            # CLI utilities
-            ripgrep
-            fd
-            eza
-            bat
-            fzf
-            tree
-            jq
-            yq
+              # CLI utilities
+              ripgrep
+              fd
+              eza
+              bat
+              fzf
+              tree
+              jq
+              yq
 
-            # Geospatial tools
-            tippecanoe
-            sqlite
-            gdal
+              # Geospatial tools
+              tippecanoe
+              sqlite
+              gdal
 
-            # Documentation
-            mkdocsEnv
+              # Documentation
+              mkdocsEnv
 
-            # Data tooling (GeoPackage creation)
-            dataToolsEnv
+              # Data tooling (GeoPackage creation)
+              dataToolsEnv
 
-            # Nix tooling
-            nil
-            nixpkgs-fmt
-            nixfmt-rfc-style
+              # Nix tooling
+              nil
+              nixpkgs-fmt
+              nixfmt-rfc-style
 
-            # VCS
-            git
-            gh
+              # VCS
+              git
+              gh
 
-            # Packaging
-            nfpm
-            zip
+              # Packaging
+              nfpm
+              zip
 
-            # Security scanning
-            trivy
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-            # WebView (embedded browser window)
-            webkitgtk_4_1
-            gtk3
+              # Security scanning
+              trivy
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              # WebView (embedded browser window)
+              webkitgtk_4_1
+              gtk3
 
-            # Windows cross-compilation
-            pkgs.pkgsCross.mingwW64.stdenv.cc
-          ];
+              # Windows cross-compilation
+              pkgs.pkgsCross.mingwW64.stdenv.cc
+            ];
 
           shellHook = ''
             export EDITOR=nvim

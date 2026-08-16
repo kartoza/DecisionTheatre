@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Guided user path** — 14 atomic step pages, each with a goal, background, context
   diagram, steps, screenshots, achievements and a next-step link.
 - **`CHANGELOG.md`** — this file.
+<<<<<<< HEAD
+=======
+- **Documentation publishing** (`.github/workflows/docs.yml`) — builds the site with
+  `nix build .#docs` on every pull request and publishes it to GitHub Pages on merge to
+  `main`.
+>>>>>>> dc1da7a (docs: rebuild documentation around the hosted dashboard and Kartoza brand)
 
 ### Changed
 
@@ -51,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<<<<<<< HEAD
+=======
+- The docs derivation now runs `mkdocs --strict`, and its source filter includes
+  `.github/` and `go.mod` — without them the CI-pipeline diagram could not be generated
+  and the dependency diagram silently reported zero Go modules under Nix.
+- `npmDepsHash` updated for the version bump, and the previously empty hash in
+  `checks.frontend-tests` filled in — that check can now fetch its dependencies.
+- **`vendorHash` corrected.** The committed value did not match `go.sum` and had been
+  stale on `main`. It went unnoticed because a fixed-output derivation is only refetched
+  when its output path changes, and that path embeds the version — so the cached 0.2.0
+  output was reused and never revalidated. `nix build` now works from a clean store.
+>>>>>>> dc1da7a (docs: rebuild documentation around the hosted dashboard and Kartoza brand)
 - **`docs/about/funders-and-partners.md` named the wrong institution** — it credited the
   University of the Western Cape rather than the University of the Witwatersrand.
 - **`architecture.md` described a renderer the project does not use** (deck.gl) and listed
@@ -65,9 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Documented inline where relevant, and tracked as issues:
 
 - CI's `file-checks` job fails on every run because `frontend/.env` is tracked.
+<<<<<<< HEAD
 - `nix flake check` cannot pass — `checks.frontend-tests` has an empty `npmDepsHash`.
 - The version number is declared in several places that disagree; the production
   deployment reports `dev`.
+=======
+- `nix flake check` still cannot pass: `checks.go-tests` omits the webkit build inputs the
+  package needs, and `go test` requires the frontend embed target to exist first. The
+  `frontend-tests` half is fixed in this release.
+- `main.go` still defaults its version to `dev`, so any build outside Nix or CI reports
+  `vdev` — the production deployment currently does. `flake.nix` and
+  `frontend/package.json` now agree at 0.3.0.
+>>>>>>> dc1da7a (docs: rebuild documentation around the hosted dashboard and Kartoza brand)
 - No `LICENSE` file exists, though GPL-3.0 is declared in three manifests.
 - `--resources-dir` and the `style.json` fallback are slated for removal.
 
