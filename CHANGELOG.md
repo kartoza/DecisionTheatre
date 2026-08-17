@@ -80,6 +80,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Switching sites coloured the map from the previous site.** `applyColors` was
+  memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
+  prop in ten places — the choropleth fetch for both panes, the browser-runtime
+  ideal overrides, and three per-site caches. The effect that calls it does list
+  `siteId`, so on a site switch it invoked a callback still bound to the previous
+  site's id, and the stale value persisted until an unrelated colour-scale change
+  happened to recreate the callback.
+
+  `siteId` is now declared. Everything else the callback reads goes through a ref,
+  which is why it was the only value that could go stale.
+
+  `react-hooks/exhaustive-deps` is the tool for this and the repository has no
+  eslint configuration at all, so nothing would catch a recurrence. A test now
+  asserts, for this one identifier in this one file, that a hook reading it also
+  declares it — and the analyser it uses is itself tested against known input,
+  because a source-level check that is silently broken reports success either way.
+  An audit with it found exactly one genuine case: an earlier throwaway version
+  reported two, the second a false positive from matching a later hook's
+  dependency array.
+
+
 - **The desktop window laid the whole application out at a million times scale, and hung
   the machine doing it.** `--diag` reported a layout viewport of 1 268 000 000 CSS pixels
   for a 1268-pixel window, a root font size of `9000000px`, and a `window.innerWidth` that
