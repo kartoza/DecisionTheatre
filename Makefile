@@ -36,6 +36,7 @@ GOLINT := golangci-lint
 .PHONY: test test-frontend test-all
 .PHONY: fmt lint check deps
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
+.PHONY: protect-branch
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
 .PHONY: check-data validate-data pack-data datapack
@@ -189,6 +190,12 @@ sync-flake:
 ## hooks: Install the git hooks so the checks run before each commit.
 hooks:
 	@./scripts/install-hooks.sh
+
+## protect-branch: Require the CI checks to pass before anything reaches main.
+## The required list is derived from the workflows, so it cannot drift from what
+## CI actually runs. ARGS="--show" to inspect, ARGS="--dry-run" to preview.
+protect-branch:
+	@./scripts/protect-branch.sh $(ARGS)
 
 ## vendor-fonts: Refresh the committed typefaces from nixpkgs. They are
 ## committed rather than fetched because the desktop app is offline by design.

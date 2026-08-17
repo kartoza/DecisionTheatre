@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Nothing reaches `main` with failing checks any more.** `dt protect-branch`
+  requires every pull-request check to pass, requires the branch to be up to date,
+  and **applies to administrators** — pull requests had been merged red, which
+  makes every guard in the repository advisory. Changes must go through a pull
+  request, with zero approvals required by default so a single-maintainer day is
+  not blocked. The required list is derived from the workflow files rather than
+  typed into the script, so it cannot drift from what CI runs, and jobs gated to
+  a push on `main` are excluded rather than left pending forever. `claude.sh`
+  offers to apply it as part of submitting work.
 - **`hp` is gone; `dt` is the only command.** `dt` prints the table, `dt <group>` gives the
   detail for one group, `dt <task>` runs a task. Two commands that did the same job was one
   too many. Where a word names both a task and a group — `run`, `build`, `test`, `docs`,

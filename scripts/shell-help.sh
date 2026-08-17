@@ -59,6 +59,7 @@ COMMANDS=(
 
     "DIAGNOSE|dt run --diag|Report what the desktop window resolved its layout to"
     "DIAGNOSE|dt doctor|Is this checkout healthy? Reports; changes nothing"
+    "DIAGNOSE|dt protect-branch|Require the CI checks before anything reaches main"
     "DIAGNOSE|dt doctor-deep|The same, plus recomputing the real nix hashes"
     "DIAGNOSE|dt check-data|Check ./data and summarise every file in it"
     "DIAGNOSE|dt lint|golangci-lint over the Go sources"
