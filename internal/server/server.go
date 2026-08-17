@@ -136,7 +136,12 @@ func (s *Server) setupRoutes() {
 	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
 	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
 	s.router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
-	s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+	// Desktop-only. In server mode the path is simply absent, so it 404s
+	// through the SPA fallback rather than existing and refusing — there is
+	// nothing for a remote caller to probe. See config.Config.DesktopMode.
+	if s.cfg.DesktopMode {
+		s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+	}
 
 	// Tile routes - served directly for performance
 	if s.tileStore != nil {
@@ -260,8 +265,9 @@ func (s *Server) startAuxTileServers(mainPort int) {
 
 func (s *Server) Start() error {
 	s.httpServer = &http.Server{
-		Addr:        fmt.Sprintf(":%d", s.cfg.Port),
-		Handler:     s.router,
+		Addr: fmt.Sprintf(":%d", s.cfg.Port),
+		// Every request goes through the body limit; see bodylimit.go.
+		Handler:     limitRequestBody(s.router),
 		ReadTimeout: 15 * time.Second,
 		// WriteTimeout is intentionally unset (0 = disabled) — long-running operations
 		// such as datapack extraction can take several minutes on large archives.
@@ -488,7 +494,7 @@ func (s *Server) rebuildRoutes() {
 	s.router = mux.NewRouter()
 	s.setupRoutes()
 	if s.httpServer != nil {
-		s.httpServer.Handler = s.router
+		s.httpServer.Handler = limitRequestBody(s.router)
 	}
 }
 

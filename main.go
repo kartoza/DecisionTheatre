@@ -111,6 +111,8 @@ func main() {
 		DataDir:      resolvedDataDir,
 		ResourcesDir: resolvedResourcesDir,
 		Version:      version,
+		// --headless is the server build; anything else opens the window below.
+		DesktopMode: !*headless,
 	}
 
 	log.Printf("Decision Theatre v%s starting on port %d", version, cfg.Port)
