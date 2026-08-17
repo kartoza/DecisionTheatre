@@ -602,6 +602,65 @@ function loadWalkthroughSites(): Promise<Site[]> {
   return _walkthroughSitesPromise;
 }
 
+// Session-scoped site overrides, held in memory only.
+//
+// Starting a demo tour resets the walkthrough's ideal targets to current, so that
+// changes from a previous run do not carry over. That reset used to be persisted
+// into the `dt-sites` localStorage key "so it is available for the rest of the
+// session" — but the Africa walkthrough is 4,026,496 characters, which is roughly
+// 7.7 MB in UTF-16 against a typical 5 MB quota. The write could never succeed,
+// and it happened on a fresh profile before the user had created anything.
+//
+// It never needed to be durable: it is presentation state for the current
+// session. A Map costs nothing, cannot fail, and is gone on reload — which is
+// exactly the intended lifetime, since the tour resets the targets again next
+// time it runs.
+const _sessionSites = new Map<string, Site>();
+
+// setSessionSite records a site for the rest of this page's lifetime without
+// persisting it. Used for read-only demo sites.
+export function setSessionSite(site: Site): void {
+  _sessionSites.set(site.id, site);
+  // A stale getSite result would otherwise mask this until the TTL expires.
+  _siteCache.delete(site.id);
+}
+
+// Exported for tests: nothing in the application clears these deliberately.
+//
+// The getSite cache is evicted for the same ids, or a later lookup would still
+// hand back the override this just dropped.
+export function clearSessionSites(): void {
+  for (const id of _sessionSites.keys()) _siteCache.delete(id);
+  _sessionSites.clear();
+}
+
+// loadDemoSiteForTour resolves a walkthrough site and resets its ideal targets to
+// match current, so that changes from a previous run of the tour do not carry
+// over.
+//
+// This lives here rather than inside DemoTour because the component had its own
+// copy of the fetch-and-normalise logic that getSite already implements, and
+// because the reset plus the session write is the part worth testing on its own.
+// Nothing is persisted: see the note on _sessionSites.
+export async function loadDemoSiteForTour(siteId: string): Promise<Site> {
+  // getSite resolves a walkthrough from the session store or the static file, so
+  // there is no second fetch to make here. DemoTour previously had one, along
+  // with a "Fetching site data…" progress step for it; both are gone rather than
+  // kept as an unreachable branch.
+  const loaded = await getSite(siteId);
+  if (!loaded) throw new Error('Walkthrough site data not found');
+
+  const site: Site = loaded.indicators?.current
+    ? {
+        ...loaded,
+        indicators: { ...loaded.indicators, ideal: { ...loaded.indicators.current } },
+      }
+    : loaded;
+
+  setSessionSite(site);
+  return site;
+}
+
 export async function listSites(): Promise<Site[]> {
   const [realSites, walkthroughSites] = await Promise.all([
     isBrowserRuntime() ? loadLocalSites() : fetchJSON<Site[]>(`${API_BASE}/sites`),
@@ -645,7 +704,22 @@ export async function getSite(id: string): Promise<Site | null> {
   const promise = (async (): Promise<Site | null> => {
     if (isBrowserRuntime()) {
       const sites = loadLocalSites();
-      return sites.find((site) => site.id === id) || null;
+      const stored = sites.find((site) => site.id === id);
+      if (stored) return stored;
+
+      // A session override, then the static walkthrough JSON. Without these a
+      // demo site resolved only because starting its tour had written the whole
+      // thing into localStorage; that write is gone, so look here instead of
+      // returning null and breaking the tour.
+      const session = _sessionSites.get(id);
+      if (session) return session;
+
+      // Only for a known demo id — fetching /data/walkthroughs/{id}.json for a
+      // real site id would just be a 404 on every lookup of a deleted site.
+      if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
+        return loadWalkthroughSite(id);
+      }
+      return null;
     }
     const response = await fetch(`${API_BASE}/sites/${id}`);
     if (response.status === 404) return null;
