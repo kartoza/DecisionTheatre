@@ -194,6 +194,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swap, concurrent routing during a rebuild, and concurrent style requests
   interleaved with invalidation.
 
+- **Concurrent indicator saves lost each other, and site writes were not atomic.**
+
+  Every write is a read-modify-write — load the JSON, change part of it, write the
+  whole thing back — with no lock. Two concurrent requests both read the original,
+  and the second write silently discarded the first: a user editing indicators in
+  two panes lost one panel's recalculation, with nothing anywhere saying so. A test
+  reproduces it on the first attempt: `title="after" description="before"`.
+
+  Writes are now serialised per site, so unrelated sites do not wait on each other.
+  The lock is exported as `LockSite`, because the read-modify-write that matters is
+  not in the store: the indicator handler loads a site, recalculates cascading
+  targets across a hundred lines, and writes it back — locking only inside `Update`
+  would have left that cycle unprotected.
+
+  Separately, every write used `os.WriteFile`, which truncates the destination
+  before writing. A crash, a full disk or a power loss in between left an empty
+  file — losing the whole site rather than one edit. Site files, thumbnails and
+  `settings.json` are now written to a temporary file in the same directory,
+  flushed, and renamed over the target, so a reader sees either the old contents or
+  the complete new ones. Against the old code a reader polling during rewrites
+  caught it directly: `read a partial site file (0 bytes)`.
+
 ### Security
 
 - **The server bound every network interface while claiming it bound only localhost.**

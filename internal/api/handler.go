@@ -1652,6 +1652,20 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	} else {
+		// Hold the site's lock for the whole read-modify-write below.
+		//
+		// This handler loads a site, recalculates cascading targets from it, and
+		// writes the result back. With no lock, two concurrent requests both read
+		// the original and the second write silently discards the first — a user
+		// editing indicators in two panes loses one panel's recalculation, with no
+		// error anywhere to say so.
+		//
+		// Released by defer, so every early return below is covered. The
+		// browser-runtime branch above does not take it: that path builds the site
+		// from the request body and never touches the store.
+		unlock := h.siteStore.LockSite(id)
+		defer unlock()
+
 		site, err = h.siteStore.Get(id)
 		if err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
@@ -1783,7 +1797,8 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	updated, err := h.siteStore.Update(id, site)
+	// UpdateLocked, not Update: the lock taken above is not reentrant.
+	updated, err := h.siteStore.UpdateLocked(id, site)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update site: "+err.Error())
 		return
