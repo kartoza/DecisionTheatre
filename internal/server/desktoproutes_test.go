@@ -73,10 +73,17 @@ func TestFileDialogPathIsNotHandledInServerMode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.currentRouter().ServeHTTP(rec, req)
 
-	// The SPA fallback answers anything unrouted with HTML, so a JSON body here
-	// would mean the dialog handler ran.
-	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "application/json") {
-		t.Errorf("something answered with JSON: %d %s", rec.Code, rec.Body.String())
+	// Unrouted /api paths now answer 404 in JSON rather than falling through to
+	// the SPA, so "is it JSON" is no longer the signal — what matters is that the
+	// answer is a not-found rather than anything the dialog handler produced.
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an unrouted API path", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "path") {
+		t.Errorf("the response looks like a file dialog result: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no such endpoint") {
+		t.Errorf("body = %s, want the not-found error", rec.Body.String())
 	}
 }
 

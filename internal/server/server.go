@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/api"
 	"github.com/kartoza/decision-theatre/internal/config"
+	"github.com/kartoza/decision-theatre/internal/httputil"
 )
 
 //go:embed all:static
@@ -178,6 +179,20 @@ func (s *Server) buildRouter() *mux.Router {
 		docsFileServer := http.StripPrefix("/docs/", http.FileServer(http.FS(docsContent)))
 		router.PathPrefix("/docs/").Handler(docsFileServer)
 	}
+
+	// Anything under /api that matched no route above is an API request for
+	// something that does not exist, and must be told so in the language it asked
+	// in. Without this it falls through to the SPA handler below and gets 200 with
+	// a page of HTML — so a client sees a successful response it cannot parse.
+	//
+	// Registered after every API route and before the SPA fallback, because mux
+	// matches in order. This matters more since the desktop-only routes were
+	// gated: in server mode those paths are unrouted, and a stale or misdirected
+	// client hitting one deserves a 404 rather than an index page.
+	router.PathPrefix("/api/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httputil.RespondError(w, http.StatusNotFound,
+			"no such endpoint: "+r.Method+" "+r.URL.Path)
+	})
 
 	// Static frontend files (embedded)
 	staticContent, err := fs.Sub(staticFS, "static")

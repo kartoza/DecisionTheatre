@@ -698,9 +698,9 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	queryStart := time.Now()
 	var fc *geodata.FeatureCollection
 	if q.Get("valuesOnly") == "1" {
-		fc, err = h.gpkgStore.QueryCatchmentValues(queryScenario, attribute, minx, miny, maxx, maxy)
+		fc, err = h.gpkgStore.QueryCatchmentValues(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy)
 	} else {
-		fc, err = h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy, zoom)
+		fc, err = h.gpkgStore.QueryCatchments(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy, zoom)
 	}
 	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
 		if fc != nil {

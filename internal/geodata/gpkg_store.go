@@ -1,6 +1,7 @@
 package geodata
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -38,7 +39,70 @@ type GpkgStore struct {
 	gridGeometryCache map[float64]map[gridCellKey]json.RawMessage
 	gridGeometryReady map[float64]chan struct{}
 	gridGeometryOnce  sync.Once
+
+	// closeReady makes closing a tier's channel idempotent. Without it the
+	// failure paths that close every channel would panic on "close of closed
+	// channel" for tiers that had already finished — turning a partial failure
+	// into a crash.
+	closeReady map[float64]*sync.Once
+
+	// gridBuildErr records why a tier has no geometry, so a request can say the
+	// build failed rather than silently returning an empty map. Guarded by mu.
+	gridBuildErr map[float64]error
 }
+
+// closeGridReady marks a tier ready. Safe to call repeatedly and from any path,
+// which is what lets the build close every tier on failure without knowing which
+// ones already succeeded.
+func (s *GpkgStore) closeGridReady(tier float64) {
+	if once, ok := s.closeReady[tier]; ok {
+		once.Do(func() { close(s.gridGeometryReady[tier]) })
+	}
+}
+
+// closeAllGridReady releases every waiter. Deferred by the build so that an early
+// return — or a panic — cannot leave requests blocked forever on a channel nobody
+// will ever close.
+func (s *GpkgStore) closeAllGridReady() {
+	for _, tier := range gridTiersDegrees {
+		s.closeGridReady(tier)
+	}
+}
+
+// recordGridBuildErrForUnbuiltTiers records err against every tier that has no
+// cache yet, leaving tiers that already completed alone.
+func (s *GpkgStore) recordGridBuildErrForUnbuiltTiers(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.gridBuildErr == nil {
+		s.gridBuildErr = make(map[float64]error, len(gridTiersDegrees))
+	}
+	for _, tier := range gridTiersDegrees {
+		if _, built := s.gridGeometryCache[tier]; built {
+			continue
+		}
+		s.gridBuildErr[tier] = err
+	}
+}
+
+// recordGridBuildErr notes that a tier could not be built.
+func (s *GpkgStore) recordGridBuildErr(tier float64, err error) {
+	s.mu.Lock()
+	if s.gridBuildErr == nil {
+		s.gridBuildErr = make(map[float64]error, len(gridTiersDegrees))
+	}
+	s.gridBuildErr[tier] = err
+	s.mu.Unlock()
+}
+
+// gridGeometryWaitTimeout bounds how long a request waits for a tier's geometry.
+//
+// The full build takes about twelve seconds on the reference datapack, and a
+// request arriving during startup legitimately waits for it. This is generous
+// against that and short enough that a wait which is never going to end fails
+// rather than holding a goroutine and its connection indefinitely.
+const gridGeometryWaitTimeout = 60 * time.Second
 
 // gridCellKey identifies one cell of the low-zoom choropleth aggregation grid.
 type gridCellKey struct{ gx, gy int64 }
@@ -108,15 +172,18 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 		return nil, fmt.Errorf("failed to connect to geopackage: %w", err)
 	}
 
+	closeReady := make(map[float64]*sync.Once, len(gridTiersDegrees))
 	gridGeometryReady := make(map[float64]chan struct{}, len(gridTiersDegrees))
 	for _, tier := range gridTiersDegrees {
 		gridGeometryReady[tier] = make(chan struct{})
+		closeReady[tier] = &sync.Once{}
 	}
 
 	store := &GpkgStore{
 		db:                db,
 		dataDir:           dataDir,
 		gridGeometryReady: gridGeometryReady,
+		closeReady:        closeReady,
 	}
 
 	// Load column names from scenario_current
@@ -429,7 +496,7 @@ const gridRenderBudget = 8000
 // returns full per-catchment geometry; otherwise it falls back to a
 // grid-aggregated choropleth (see gridCellSizeDegrees) so a densely-catchmented
 // area never gets silently truncated into a gappy render.
-func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx, maxy, zoom float64) (*FeatureCollection, error) {
+func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy, zoom float64) (*FeatureCollection, error) {
 	start := time.Now()
 	var path string
 	var matched int
@@ -465,7 +532,7 @@ func (s *GpkgStore) QueryCatchments(scenario, attribute string, minx, miny, maxx
 		return s.queryCatchmentsDetailed(tableName, attribute, minx, miny, maxx, maxy)
 	}
 	path = "aggregated"
-	return s.queryCatchmentsGridAggregated(attribute, catchmentRows)
+	return s.queryCatchmentsGridAggregated(ctx, attribute, catchmentRows)
 }
 
 // coordinateRe matches a JSON floating-point coordinate value (GeoJSON never
@@ -574,7 +641,7 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 // Callers never hand this to a map source, so shipping one feature per catchment
 // (with a null geometry) doesn't carry the rendering cost that motivated those
 // other paths.
-func (s *GpkgStore) QueryCatchmentValues(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+func (s *GpkgStore) QueryCatchmentValues(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] QueryCatchmentValues scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
@@ -666,6 +733,25 @@ func gridCellKeyFor(lat, long, cellSizeDegrees float64) gridCellKey {
 func (s *GpkgStore) buildGridGeometryCache() {
 	start := time.Now()
 
+	// Every waiter is released however this returns.
+	//
+	// Requests block on a tier's channel with no timeout, so a build that ends
+	// early — or panics, which polyclip is documented elsewhere in this file as
+	// prone to — left every later low-zoom request blocked forever, accumulating
+	// goroutines until the process died. Closing is idempotent, so tiers that
+	// already finished are unaffected.
+	defer s.closeAllGridReady()
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Error: grid geometry cache build panicked: %v", r)
+			// Only the tiers that never finished. Tiers built before the panic
+			// have a complete cache and must keep serving from it — marking them
+			// failed would turn one bad tier into an outage across all of them.
+			s.recordGridBuildErrForUnbuiltTiers(fmt.Errorf("grid geometry build panicked: %v", r))
+		}
+	}()
+
 	rows, err := s.db.Query(`
 		SELECT lat, long, geojson
 		FROM catchments_lev12
@@ -674,9 +760,9 @@ func (s *GpkgStore) buildGridGeometryCache() {
 	if err != nil {
 		log.Printf("Warning: failed to build grid geometry cache: %v", err)
 		for _, tier := range gridTiersDegrees {
-			close(s.gridGeometryReady[tier])
+			s.recordGridBuildErr(tier, err)
 		}
-		return
+		return // the deferred close releases every waiter
 	}
 	defer rows.Close()
 
@@ -774,32 +860,52 @@ func (s *GpkgStore) buildGridGeometryCache() {
 						continue
 					}
 
-					dissolved := j.polys[0]
-					for i := 1; i < len(j.polys); i++ {
-						dissolved = dissolved.Construct(polyclip.UNION, j.polys[i])
-					}
+					// One cell's failure must not take the worker with it.
+					//
+					// These workers had no recover(), unlike the two other
+					// polyclip call sites in this file — and a panic here did not
+					// merely lose a cell: the goroutine died without sending, so
+					// wg.Wait never returned, the results channel was never
+					// closed, and the tier's ready channel never closed either.
+					// Every subsequent low-zoom request then blocked forever.
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("Warning: dissolving grid cell (%d,%d) panicked: %v",
+									j.key.gx, j.key.gy, r)
+							}
+						}()
 
-					// Simplify once, after dissolving, rather than simplifying
-					// each catchment independently beforehand (see the comment
-					// on buildGridGeometryCache) - this is what keeps a
-					// full-continent response from ballooning to hundreds of
-					// MB. Tolerance scales with the tier's cell size (see
-					// renderSimplifyTolerance) rather than reusing the fixed
-					// computation tolerance. Safe against
-					// polyclipPolygonToGeoJSON's ring-nesting check misfiring
-					// on a shifted vertex now that it samples several points
-					// per ring (see ringContainedIn) rather than trusting a
-					// single one.
-					simplifiedDissolved := simplifyPolygons([]polyclip.Polygon{dissolved}, renderSimplifyTolerance(tier))
-					if len(simplifiedDissolved) == 0 {
-						continue
-					}
+						dissolved := j.polys[0]
+						for i := 1; i < len(j.polys); i++ {
+							dissolved = dissolved.Construct(polyclip.UNION, j.polys[i])
+						}
 
-					geometryJSON, _, err := polyclipPolygonToGeoJSON(simplifiedDissolved[0])
-					if err != nil {
-						continue
-					}
-					results <- cellResult{key: j.key, geometryJSON: geometryJSON}
+						// Simplify once, after dissolving, rather than simplifying
+						// each catchment independently beforehand (see the comment
+						// on buildGridGeometryCache) - this is what keeps a
+						// full-continent response from ballooning to hundreds of
+						// MB. Tolerance scales with the tier's cell size (see
+						// renderSimplifyTolerance) rather than reusing the fixed
+						// computation tolerance. Safe against
+						// polyclipPolygonToGeoJSON's ring-nesting check misfiring
+						// on a shifted vertex now that it samples several points
+						// per ring (see ringContainedIn) rather than trusting a
+						// single one.
+						simplifiedDissolved := simplifyPolygons([]polyclip.Polygon{dissolved}, renderSimplifyTolerance(tier))
+						if len(simplifiedDissolved) == 0 {
+							// return, not continue: this is now a closure, and
+							// `continue` here would have skipped the rest of the
+							// job loop rather than this one cell.
+							return
+						}
+
+						geometryJSON, _, err := polyclipPolygonToGeoJSON(simplifiedDissolved[0])
+						if err != nil {
+							return
+						}
+						results <- cellResult{key: j.key, geometryJSON: geometryJSON}
+					}()
 				}
 			}()
 		}
@@ -823,7 +929,7 @@ func (s *GpkgStore) buildGridGeometryCache() {
 		}
 		s.gridGeometryCache[tier] = tierCache
 		s.mu.Unlock()
-		close(s.gridGeometryReady[tier])
+		s.closeGridReady(tier)
 
 		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells (candidates=%d)", tier, len(tierCache), len(tierPolygons))
 	}
@@ -893,7 +999,7 @@ func (s *GpkgStore) fetchCatchmentGridRows(tableName, attribute string, minx, mi
 // picking the finest affordable tier keeps the choropleth as close to the true
 // catchment texture as the feature budget allows - only a genuinely
 // continent-scale view is forced down to the coarsest tier.
-func (s *GpkgStore) queryCatchmentsGridAggregated(attribute string, catchmentRows []gridRow) (*FeatureCollection, error) {
+func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute string, catchmentRows []gridRow) (*FeatureCollection, error) {
 	s.ensureGridGeometryCache()
 
 	type cellAccumulator struct {
@@ -950,11 +1056,31 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(attribute string, catchmentRow
 
 	// Only block on the tier this request actually needs, not the slowest
 	// tier in the set (see buildGridGeometryCache's per-tier readiness).
-	<-s.gridGeometryReady[chosenTier]
+	//
+	// Bounded three ways. This was a bare receive: if the build ended without
+	// closing the channel, every later request blocked here forever and the
+	// goroutines accumulated until the process died. The build now always closes,
+	// but a request should not depend on that being true — the client going away
+	// or a build that is simply too slow both have to end the wait.
+	select {
+	case <-s.gridGeometryReady[chosenTier]:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(gridGeometryWaitTimeout):
+		return nil, fmt.Errorf("timed out after %s waiting for the %.3f° grid geometry cache",
+			gridGeometryWaitTimeout, chosenTier)
+	}
 
 	s.mu.RLock()
 	tierCache := s.gridGeometryCache[chosenTier]
+	buildErr := s.gridBuildErr[chosenTier]
 	s.mu.RUnlock()
+
+	// A tier that failed to build has an empty cache. Saying so beats returning an
+	// empty map that looks like a study area with no catchments in it.
+	if buildErr != nil {
+		return nil, fmt.Errorf("grid geometry for the %.3f° tier is unavailable: %w", chosenTier, buildErr)
+	}
 
 	features := make([]GeoJSONFeature, 0, len(cells))
 	var nextID int64
@@ -1286,7 +1412,62 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 		return nil, 0, fmt.Errorf("failed to marshal result: %w", err)
 	}
 
-	return resultJSON, 0, nil
+	// The area used to be a hardcoded zero here, and DissolveCatchments handed it
+	// straight to the API, so every dissolve response since this function was
+	// written reported "area": 0.
+	//
+	// The nesting computed above already says which rings are outers and which are
+	// holes — even depth and odd depth — so the total is the outers less the holes.
+	areaKm2 := 0.0
+	for i := range rings {
+		ringArea := sphericalRingAreaKm2(rings[i].coords)
+		if depths[i]%2 == 0 {
+			areaKm2 += ringArea
+		} else {
+			areaKm2 -= ringArea
+		}
+	}
+
+	return resultJSON, areaKm2, nil
+}
+
+// earthRadiusKm is the WGS84 authalic radius — the radius of the sphere with the
+// same surface area as the ellipsoid, which is the right one to use when the
+// quantity being computed is an area.
+const earthRadiusKm = 6371.0072
+
+// sphericalRingAreaKm2 returns the area enclosed by a ring of lon/lat degrees, in
+// square kilometres, always positive.
+//
+// The application already had two area helpers and neither was usable here.
+// signedRingArea is a planar shoelace over degrees, so its unit is degrees² —
+// meaningful for comparing rings and for winding direction, meaningless as an
+// area. calculatePolygonArea converts degrees² to km² by multiplying by 111²,
+// which assumes a degree of longitude is 111 km everywhere; across this dataset's
+// range, −35° to +37°, that overstates east-west distance by up to 20%. It is
+// retained where it is used, because the AOI-overlap code divides one of its
+// results by another and a consistent bias cancels; here the number is shown to a
+// user as the area of their site, so it has to be right.
+//
+// This is the standard spherical-excess formula, the same one turf.area uses:
+// integrate over the ring's edges on a sphere of the authalic radius. It ignores
+// the ellipsoid's flattening, which costs well under a percent.
+func sphericalRingAreaKm2(ring [][2]float64) float64 {
+	if len(ring) < 4 {
+		return 0
+	}
+
+	total := 0.0
+	for i := 0; i < len(ring)-1; i++ {
+		lon1 := ring[i][0] * math.Pi / 180
+		lat1 := ring[i][1] * math.Pi / 180
+		lon2 := ring[i+1][0] * math.Pi / 180
+		lat2 := ring[i+1][1] * math.Pi / 180
+
+		total += (lon2 - lon1) * (2 + math.Sin(lat1) + math.Sin(lat2))
+	}
+
+	return math.Abs(total * earthRadiusKm * earthRadiusKm / 2)
 }
 
 func signedRingArea(ring [][2]float64) float64 {
