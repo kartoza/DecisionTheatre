@@ -148,6 +148,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compressing the choropleth would spend 230ms of CPU per request to speed up a
   transfer that already takes milliseconds.
 
+### Fixed
+
+- **A datapack install mutated the live server from a background goroutine, with no
+  lock held.** It reassigned the tile store, the geopackage store, the site store,
+  two config directories, the router and the running `http.Server`'s `Handler` —
+  one field at a time — while request goroutines were reading them. That was three
+  faults at once: a data race on every field; a nil dereference, because the stores
+  were set to nil first and the tile handler called `GetTile` on whatever it found;
+  and a torn update, because a request arriving mid-swap could see the new tile
+  store alongside the old data directory.
+
+  Everything that changes together is now one immutable value published with a
+  single atomic store. A request reads the pointer once and works from a consistent
+  snapshot for its whole life, so a swap cannot be observed half-applied. The
+  replaced stores are closed after a grace period rather than immediately, so a
+  request already using them finishes against the data it started with.
+
+  Specifics:
+
+    - `handleTileRequest` checks for a missing store and answers **503 with
+      `Retry-After`** instead of dereferencing nil. Removing that check makes the
+      test suite panic with `invalid memory address or nil pointer dereference` —
+      the original crash, reproduced.
+    - The running server's `Handler` is never reassigned. `net/http` reads it for
+      every connection it accepts, so that assignment was itself a race; the
+      handler installed at startup reads the current router through an atomic
+      pointer instead.
+    - The three `http.Dir` file servers for images, walkthroughs and demo assets
+      resolve the data directory **per request**. They were rooted at startup, so
+      after an install they served the replaced datapack's files, or nothing if
+      that directory had been removed.
+    - The auxiliary tile listeners are started once at boot and were never
+      revisited by a route rebuild, so their tile route was missing entirely when
+      no datapack existed at startup and stale afterwards. The route is now
+      registered unconditionally and resolves the current store per request, so
+      there is nothing left for a rebuild to fix.
+    - The style-JSON cache no longer reassigns a `sync.Once` to invalidate itself —
+      which was done from a request goroutine while others could be inside `Do`,
+      and which `sync.Once` must never have done to it. A mutex and an explicit
+      valid flag say the same thing; a failed build is still not cached, so one
+      missing file does not make the style unloadable until restart.
+
+  Twelve tests, run under `-race`, cover concurrent tile requests during a store
+  swap, concurrent routing during a rebuild, and concurrent style requests
+  interleaved with invalidation.
+
 ### Security
 
 - **The server bound every network interface while claiming it bound only localhost.**

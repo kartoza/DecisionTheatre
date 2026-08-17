@@ -44,7 +44,7 @@ func hasRoute(t *testing.T, srv *Server, template string) bool {
 	t.Helper()
 
 	found := false
-	err := srv.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+	err := srv.currentRouter().Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		if tmpl, err := route.GetPathTemplate(); err == nil && tmpl == template {
 			found = true
 		}
@@ -71,7 +71,7 @@ func TestFileDialogPathIsNotHandledInServerMode(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/dialog/open-file", nil)
 	rec := httptest.NewRecorder()
-	srv.router.ServeHTTP(rec, req)
+	srv.currentRouter().ServeHTTP(rec, req)
 
 	// The SPA fallback answers anything unrouted with HTML, so a JSON body here
 	// would mean the dialog handler ran.
