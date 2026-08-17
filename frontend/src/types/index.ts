@@ -1,4 +1,5 @@
 import { getAppRuntime } from './runtime';
+import { safeRemoveItem, safeSetItem } from '../lib/storage';
 
 export type Scenario = 'reference' | 'current' | 'future';
 
@@ -77,7 +78,7 @@ export function loadPaneStates(): PaneStates {
 }
 
 export function savePaneStates(states: PaneStates): void {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(states)); } catch { /* ignore */ }
+  safeSetItem(STORAGE_KEY, JSON.stringify(states));
 }
 
 export function loadLayoutMode(): LayoutMode {
@@ -89,7 +90,7 @@ export function loadLayoutMode(): LayoutMode {
 }
 
 export function saveLayoutMode(mode: LayoutMode): void {
-  try { localStorage.setItem(STORAGE_LAYOUT_KEY, mode); } catch { /* ignore */ }
+  safeSetItem(STORAGE_LAYOUT_KEY, mode);
 }
 
 export function loadFocusedPane(): number {
@@ -104,7 +105,7 @@ export function loadFocusedPane(): number {
 }
 
 export function saveFocusedPane(index: number): void {
-  try { localStorage.setItem(STORAGE_FOCUSED_KEY, String(index)); } catch { /* ignore */ }
+  safeSetItem(STORAGE_FOCUSED_KEY, String(index));
 }
 
 const STORAGE_RANGE_MODE_KEY = 'dt-range-mode';
@@ -118,7 +119,7 @@ export function loadQuadColumns(): QuadColumns {
 }
 
 export function saveQuadColumns(cols: QuadColumns): void {
-  try { localStorage.setItem(STORAGE_QUAD_COLUMNS_KEY, String(cols)); } catch { /* ignore */ }
+  safeSetItem(STORAGE_QUAD_COLUMNS_KEY, String(cols));
 }
 
 export function loadRangeMode(): RangeMode {
@@ -130,7 +131,7 @@ export function loadRangeMode(): RangeMode {
 }
 
 export function saveRangeMode(mode: RangeMode): void {
-  try { localStorage.setItem(STORAGE_RANGE_MODE_KEY, mode); } catch { /* ignore */ }
+  safeSetItem(STORAGE_RANGE_MODE_KEY, mode);
 }
 
 export const SCENARIOS: ScenarioInfo[] = [
@@ -205,13 +206,11 @@ export function loadCurrentSite(): string | null {
 }
 
 export function saveCurrentSite(siteId: string | null): void {
-  try {
-    if (siteId) {
-      localStorage.setItem(STORAGE_CURRENT_SITE_KEY, siteId);
-    } else {
-      localStorage.removeItem(STORAGE_CURRENT_SITE_KEY);
-    }
-  } catch { /* ignore */ }
+  if (siteId) {
+    safeSetItem(STORAGE_CURRENT_SITE_KEY, siteId);
+  } else {
+    safeRemoveItem(STORAGE_CURRENT_SITE_KEY);
+  }
 }
 
 export function loadCurrentPage(): AppPage {
@@ -228,7 +227,7 @@ export function loadCurrentPage(): AppPage {
 }
 
 export function saveCurrentPage(page: AppPage): void {
-  try { localStorage.setItem(STORAGE_CURRENT_PAGE_KEY, page); } catch { /* ignore */ }
+  safeSetItem(STORAGE_CURRENT_PAGE_KEY, page);
 }
 
 // sessionStorage is cleared when a browser tab closes but survives a same-tab
@@ -237,7 +236,7 @@ export function saveCurrentPage(page: AppPage): void {
 const STORAGE_SESSION_ACTIVE_KEY = 'dt-session-active';
 
 export function markSessionActive(): void {
-  try { sessionStorage.setItem(STORAGE_SESSION_ACTIVE_KEY, '1'); } catch { /* ignore */ }
+  safeSetItem(STORAGE_SESSION_ACTIVE_KEY, '1', 'session');
 }
 
 // Whether to ask the user "resume where you left off, or go home?" on load.
@@ -259,19 +258,19 @@ export function shouldPromptResumeSession(): boolean {
 // user's saved sites (there's no server-side persistence to fall back on),
 // not a cache, so a "clear cache" action must leave it alone.
 export function clearBrowserAppCache(): void {
-  try {
-    [
-      STORAGE_KEY,
-      STORAGE_LAYOUT_KEY,
-      STORAGE_FOCUSED_KEY,
-      STORAGE_QUAD_COLUMNS_KEY,
-      STORAGE_RANGE_MODE_KEY,
-      STORAGE_CURRENT_SITE_KEY,
-      STORAGE_CURRENT_PAGE_KEY,
-      'dt-tour-seen', // must match TourGuide.tsx's TOUR_SEEN_KEY
-    ].forEach((key) => localStorage.removeItem(key));
-    sessionStorage.removeItem(STORAGE_SESSION_ACTIVE_KEY);
-  } catch { /* ignore */ }
+  // No try/catch: safeRemoveItem reports its own failures rather than throwing,
+  // so a blocked store no longer makes this a silent no-op.
+  [
+    STORAGE_KEY,
+    STORAGE_LAYOUT_KEY,
+    STORAGE_FOCUSED_KEY,
+    STORAGE_QUAD_COLUMNS_KEY,
+    STORAGE_RANGE_MODE_KEY,
+    STORAGE_CURRENT_SITE_KEY,
+    STORAGE_CURRENT_PAGE_KEY,
+    'dt-tour-seen', // must match TourGuide.tsx's TOUR_SEEN_KEY
+  ].forEach((key) => safeRemoveItem(key));
+  safeRemoveItem(STORAGE_SESSION_ACTIVE_KEY, 'session');
 }
 
 export type SiteCreationMethod = 'shapefile' | 'geojson' | 'drawn' | 'catchments';

@@ -5,6 +5,7 @@ import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
+import { isQuotaExceededError } from '../lib/storage';
 
 const API_BASE = '/api';
 const SITES_STORAGE_KEY = 'dt-sites';
@@ -31,10 +32,7 @@ export function loadLocalSites(): Site[] {
   }
 }
 
-function isQuotaExceededError(err: unknown): boolean {
-  return err instanceof DOMException
-    && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
-}
+
 
 // Returns whether the sites were actually persisted. localStorage has a hard
 // per-origin quota (~5-10MB); every site's per-catchment breakdown (per-species
