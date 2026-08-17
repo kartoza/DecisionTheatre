@@ -344,7 +344,26 @@ func (s *Server) handleDatapackDownload(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	allowLongDownload(w, filename, fi.Size())
 	http.ServeContent(w, r, filename, fi.ModTime(), f)
+}
+
+// allowLongDownload lifts the server's WriteTimeout for a single response.
+//
+// The datapack is hundreds of megabytes; on a slow connection sending it takes
+// far longer than any timeout that is useful against a stalled client. Rather
+// than disable WriteTimeout for every request — which is what the server did
+// before, and which let one stuck client hold a goroutine indefinitely — the two
+// handlers that stream a large file opt out here.
+//
+// A failure is logged and ignored: the download then runs under the default
+// deadline, which is worse for the user but not incorrect, and there is nothing
+// better to do at this point since the response has already begun.
+func allowLongDownload(w http.ResponseWriter, filename string, size int64) {
+	// The zero time means no deadline.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("Could not lift the write deadline for %s (%d bytes): %v", filename, size, err)
+	}
 }
 
 type executableInfo struct {
@@ -424,6 +443,7 @@ func (s *Server) handleExecutableDownload(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	allowLongDownload(w, filename, fi.Size())
 	http.ServeContent(w, r, filename, fi.ModTime(), f)
 }
 

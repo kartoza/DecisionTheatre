@@ -119,6 +119,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The server bound every network interface while claiming it bound only localhost.**
+  `Addr: fmt.Sprintf(":%d", port)` listens on `0.0.0.0`, and the comment three lines
+  below asserted the opposite — then used that false claim to justify disabling
+  `WriteTimeout` entirely. Every endpoint is unauthenticated, so on a desktop install
+  this published the whole API, including the routes that write to disk, to everyone
+  on the user's network. The three auxiliary tile listeners did the same, and set
+  neither a read nor a write timeout.
+
+  The bind address is now `config.Config.BindAddress`, defaulting to `127.0.0.1` for
+  every build, with `--bind` (or `DT_BIND`) to change it. The container deployment
+  passes `--bind 0.0.0.0` explicitly, which is safe there because the `app` service
+  only `expose`s its ports on the Docker network and Nginx is the single way in.
+  Verified with `ss -tlnp`: the default now shows `127.0.0.1` on the main port and all
+  three auxiliary ports.
+
+  All three timeouts are set on every listener. `WriteTimeout` is bounded on its own
+  merits rather than on the old false premise: datapack extraction, the original
+  reason for disabling it, answers 202 immediately and reports progress through
+  `/api/datapack/status`, so no handler blocks on it. The two handlers that genuinely
+  stream a large file lift their own deadline with `http.NewResponseController`
+  instead of leaving every request unbounded.
+
+  Also fixed in passing: the port probe now binds the interface it is about to use,
+  rather than answering a different question, and `--help` for `run-app.sh` derives
+  its line range instead of hardcoding it — adding these knobs to the header had
+  silently truncated the Options section.
+
 - **The hosted deployment exposed an unauthenticated write-to-disk API that nothing
   called.** A user's own sites belong in their browser, and the client honours that: in
   browser runtime every site create, read, update and delete goes to the `dt-sites`
