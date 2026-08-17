@@ -13,6 +13,11 @@ export interface ServerInfo {
   version: string;
   tiles_loaded: boolean;
   geo_loaded: boolean;
+  /** Satellite raster tile template, supplied at runtime so changing provider
+   *  needs no rebuild. See lib/satelliteBasemap.ts. */
+  satellite_tile_url?: string;
+  /** Attribution for the above — a licence condition for most providers. */
+  satellite_attribution?: string;
 }
 
 export interface TilesetMetadata {

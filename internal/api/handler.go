@@ -304,10 +304,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleInfo returns server information
 func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
+	// The satellite basemap is supplied here rather than baked into the bundle:
+	// import.meta.env is inlined by Vite at build time, so a VITE_ variable would
+	// need a rebuild to change. See config.Config.SatelliteTileURL.
+	satelliteURL, satelliteAttribution := h.cfg.Satellite()
+
 	info := map[string]interface{}{
-		"version":      h.cfg.Version,
-		"tiles_loaded": h.tileStore != nil,
-		"geo_loaded":   h.gpkgStore != nil,
+		"version":               h.cfg.Version,
+		"tiles_loaded":          h.tileStore != nil,
+		"geo_loaded":            h.gpkgStore != nil,
+		"satellite_tile_url":    satelliteURL,
+		"satellite_attribution": satelliteAttribution,
 	}
 	respondJSON(w, http.StatusOK, info)
 }

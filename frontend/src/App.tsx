@@ -38,6 +38,7 @@ import {
   markSessionActive,
   shouldPromptResumeSession,
 } from './types';
+import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 
 function App() {
   const toast = useToast();
@@ -89,6 +90,14 @@ function App() {
   const [chartGraphModes, setChartGraphModes] = useState<('line' | 'boxplot' | null)[]>(() => loadPaneStates().map(() => null));
   const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
+
+  // Adopt the server's satellite basemap configuration as soon as it arrives. A
+  // map created before this runs keeps the built-in default, which is the imagery
+  // the application has always shown — so the worst case is unchanged behaviour
+  // rather than a missing basemap. See lib/satelliteBasemap.ts.
+  useEffect(() => {
+    applyServerSatelliteConfig(info);
+  }, [info]);
   const { data: fullDomainData } = useFullDomainPrecalculated();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const extractingIndicatorsRef = useRef(false);

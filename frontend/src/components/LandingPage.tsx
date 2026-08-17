@@ -856,21 +856,21 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               flexShrink={0}
               p={3}
             >
-              <a href='https://futureecosystemsafrica.org/' target="_blank"><Image src={fefaLogog} w={150}  objectFit="contain" /></a>
+              <a href='https://futureecosystemsafrica.org/' target="_blank" rel="noopener noreferrer"><Image src={fefaLogog} w={150}  objectFit="contain" /></a>
             </Box>
 
             <Box
               flexShrink={0}
               p={3}
             >
-              <a href='https://rewild.org/' target="_blank"><Image src={rewildLogo} w={150}  objectFit="contain" /></a>
+              <a href='https://rewild.org/' target="_blank" rel="noopener noreferrer"><Image src={rewildLogo} w={150}  objectFit="contain" /></a>
             </Box>
 
             <Box
               flexShrink={0}
               p={3}
             >
-              <a href='https://kartoza.com/' target="_blank"><Image src={kartozaLogo} w={280}  objectFit="contain" /></a>
+              <a href='https://kartoza.com/' target="_blank" rel="noopener noreferrer"><Image src={kartozaLogo} w={280}  objectFit="contain" /></a>
             </Box>
           </Flex>
       </Box>

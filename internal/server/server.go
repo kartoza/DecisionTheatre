@@ -50,6 +50,10 @@ type Server struct {
 	gpkgStore  *geodata.GpkgStore
 	siteStore  *sites.Store
 
+	// geocode rate-limits and caches place-name lookups so the upstream policy
+	// is honoured once for the whole deployment; see geocode.go.
+	geocode *geocodeLimiter
+
 	// Cached style JSON bytes (rewritten to use local URLs). Protected by styleOnce.
 	styleOnce  sync.Once
 	styleBytes []byte
@@ -108,6 +112,8 @@ func New(cfg config.Config) (*Server, error) {
 		s.siteStore = siteStore
 	}
 
+	s.geocode = newGeocodeLimiter(cfg.Version)
+
 	// Set up routes
 	s.setupRoutes()
 
@@ -136,6 +142,10 @@ func (s *Server) setupRoutes() {
 	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
 	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
 	s.router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
+
+	// Place-name search, proxied so the upstream usage policy can be met at all;
+	// see geocode.go. Public: both builds offer search.
+	s.router.HandleFunc("/api/geocode", s.handleGeocode).Methods("GET")
 	s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
 
 	// Tile routes - served directly for performance

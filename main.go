@@ -30,6 +30,11 @@ func main() {
 	dataDir := flag.String("data-dir", "", "Directory containing data files (mbtiles, geopackage)")
 	resourcesDir := flag.String("resources-dir", "", "Directory containing resource files (mbtiles, styles)")
 	headless := flag.Bool("headless", false, "Run in headless mode (no GUI window)")
+	satelliteTileURL := flag.String("satellite-tile-url", "",
+		"Raster tile template for satellite imagery. Defaults to the endpoint the "+
+			"application has always used; see issue #65.")
+	satelliteAttribution := flag.String("satellite-attribution", "",
+		"Attribution shown for --satellite-tile-url. Required by most providers' licences.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -107,10 +112,12 @@ func main() {
 
 	// Build configuration
 	cfg := config.Config{
-		Port:         availablePort,
-		DataDir:      resolvedDataDir,
-		ResourcesDir: resolvedResourcesDir,
-		Version:      version,
+		Port:                 availablePort,
+		DataDir:              resolvedDataDir,
+		ResourcesDir:         resolvedResourcesDir,
+		Version:              version,
+		SatelliteTileURL:     *satelliteTileURL,
+		SatelliteAttribution: *satelliteAttribution,
 	}
 
 	log.Printf("Decision Theatre v%s starting on port %d", version, cfg.Port)
