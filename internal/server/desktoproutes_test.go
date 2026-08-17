@@ -88,6 +88,47 @@ func TestFileDialogRouteRegisteredInDesktopMode(t *testing.T) {
 	}
 }
 
+// /api/datapack/install takes a path on the host's filesystem and replaces the
+// contents of the data directory with whatever it finds there. The path can only
+// come from the file dialog, which is desktop-only, so there was no way to use
+// this legitimately on a hosted deployment — and no authentication stopping
+// anyone using it otherwise.
+func TestDatapackInstallRouteAbsentInServerMode(t *testing.T) {
+	srv := newTestServer(t, false)
+
+	if hasRoute(t, srv, "/api/datapack/install") {
+		t.Error("the datapack install route is registered in server mode; " +
+			"an unauthenticated caller could replace the data directory")
+	}
+}
+
+func TestDatapackInstallRouteRegisteredInDesktopMode(t *testing.T) {
+	srv := newTestServer(t, true)
+
+	if !hasRoute(t, srv, "/api/datapack/install") {
+		t.Error("the datapack install route is missing in desktop mode; " +
+			"the setup guide needs it")
+	}
+}
+
+// Serving the pack and the installers is what the hosted deployment is for, so
+// gating must not catch them. These read; they do not write.
+func TestPublicDatapackRoutesSurviveInServerMode(t *testing.T) {
+	srv := newTestServer(t, false)
+
+	for _, path := range []string{
+		"/api/datapack/status",
+		"/api/datapack/download-info",
+		"/api/datapack/download",
+		"/api/executables/info",
+		"/api/executables/download/{platform}",
+	} {
+		if !hasRoute(t, srv, path) {
+			t.Errorf("%s is missing in server mode; the hosted deployment serves it", path)
+		}
+	}
+}
+
 // The zero value of Config must give the server build. A caller that forgets to
 // set DesktopMode should not silently get the desktop routes.
 func TestZeroConfigIsServerMode(t *testing.T) {

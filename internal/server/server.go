@@ -129,18 +129,26 @@ func (s *Server) setupRoutes() {
 	apiHandler := api.NewHandler(s.tileStore, s.gpkgStore, s.siteStore, s.cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
-	// Data pack management routes
+	// Data pack management routes. Serving the pack and the installers is the
+	// hosted deployment's job, so those stay public.
 	s.router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
-	s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
 	s.router.HandleFunc("/api/datapack/download-info", s.handleDatapackDownloadInfo).Methods("GET")
 	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
 	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
 	s.router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
-	// Desktop-only. In server mode the path is simply absent, so it 404s
+
+	// Desktop-only. In server mode these paths are simply absent, so they 404
 	// through the SPA fallback rather than existing and refusing — there is
 	// nothing for a remote caller to probe. See config.Config.DesktopMode.
 	if s.cfg.DesktopMode {
 		s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+
+		// Install takes a path on this machine's filesystem and replaces the
+		// contents of the data directory with whatever it finds there. The path
+		// can only come from the file dialog above, which is itself desktop-only,
+		// so on a hosted deployment there was no way to use this route
+		// legitimately and no authentication stopping anyone using it otherwise.
+		s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
 	}
 
 	// Tile routes - served directly for performance
