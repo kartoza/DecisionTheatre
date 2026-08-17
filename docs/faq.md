@@ -12,7 +12,7 @@
 
 ### What is Landscape Decision Theatre?
 
-A cross-platform desktop application for exploring African catchment data across reference, current, and future scenarios. It runs entirely offline, rendering vector map tiles and comparing catchment attributes side-by-side. See the [Overview](about/overview.md) for background.
+A cross-platform desktop application for exploring African catchment data across reference, current, and target scenarios. It runs entirely offline, rendering vector map tiles and comparing catchment attributes side-by-side. See the [Overview](about/overview.md) for background.
 
 ### Does it require an internet connection?
 
@@ -50,7 +50,7 @@ WebKit2GTK 4.1 is required and isn't bundled. Install it with `sudo apt install 
 
 ## Using the Application
 
-### What's the difference between reference, current, and future scenarios?
+### What's the difference between reference, current, and target scenarios?
 
 They represent the same catchment attributes measured (or projected) at different points in time, letting you compare how a factor like rainfall or land cover changes. Select them independently for the left and right side of the swipe view -- see [Scenario Comparison](guide/read-the-data-four-ways.md).
 

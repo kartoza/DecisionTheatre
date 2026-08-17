@@ -15,7 +15,7 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, loadLocalSites, saveLocalSites } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -136,6 +136,20 @@ function App() {
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
   useEffect(() => { saveRangeMode(rangeMode); }, [rangeMode]);
 
+  // Zone range should reflect the current viewing context rather than a
+  // stale cached value: Explore mode has no site to scope to, so it always
+  // defaults to the full domain, while viewing a site — including via a
+  // guided tour, which opens a site under the hood — always defaults to
+  // that site's own range.
+  useEffect(() => {
+    if (!sessionDecided) return;
+    if (currentSiteId) {
+      setRangeMode('site');
+    } else if (isExploreMode) {
+      setRangeMode('domain');
+    }
+  }, [sessionDecided, currentSiteId, isExploreMode]);
+
   // Mark this tab as having an active session, so a same-tab refresh won't
   // re-trigger the resume-session prompt (only a brand-new tab should ask).
   useEffect(() => { markSessionActive(); }, []);
@@ -217,16 +231,19 @@ function App() {
           if (!response.ok) throw new Error('Failed to extract indicators');
           const updatedSiteFromApi: Site = await response.json();
           const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
-          try {
-            const raw = window.localStorage.getItem('dt-sites');
-            const parsed = raw ? JSON.parse(raw) : [];
-            const storedSites: Site[] = Array.isArray(parsed) ? parsed : [];
-            const updatedSites = storedSites.some((s) => s.id === updatedSite.id)
-              ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
-              : [...storedSites, updatedSite];
-            window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
-          } catch (err) {
-            console.warn('Failed to persist indicators to localStorage:', err);
+          const storedSites = loadLocalSites();
+          const updatedSites = storedSites.some((s) => s.id === updatedSite.id)
+            ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
+            : [...storedSites, updatedSite];
+          if (!saveLocalSites(updatedSites)) {
+            toast({
+              title: 'Storage full',
+              description: 'Extracted indicators could not be saved — delete some existing sites to free up space.',
+              status: 'error',
+              duration: 8000,
+              isClosable: true,
+              position: 'top',
+            });
           }
           setCurrentSite((prev) => (prev?.id === siteId ? updatedSite : prev));
         })
@@ -262,7 +279,7 @@ function App() {
         // network hiccup — retry next tick
       }
     }, 1000);
-  }, [stopExtractionPolling]);
+  }, [stopExtractionPolling, toast]);
 
   // Auto-extract indicators when a site is opened that has catchments but no indicators yet
   useEffect(() => {
@@ -665,7 +682,7 @@ function App() {
   }, []);
 
   // Listen for demo pane state updates (used by MunywanaDemoTour to auto-select indicators).
-  // Also switches to single-pane layout so the quad view from a later demo step is cleared.
+  // Also switches to single-pane layout so the grid view from a later demo step is cleared.
   useEffect(() => {
     const handler = (e: Event) => {
       const partial = (e as CustomEvent).detail as Partial<ComparisonState>;

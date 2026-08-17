@@ -674,15 +674,6 @@ function ControlPanel({
     setIsResizing(true);
   };
 
-  // If the user navigates into explore mode and the current range is 'site',
-  // automatically switch to 'extent' because there is no site to base 'site'
-  // range on when exploring.
-  useEffect(() => {
-    if (isExploreMode && rangeMode === 'site' && onRangeModeChange) {
-      onRangeModeChange('extent');
-    }
-  }, [isExploreMode, rangeMode, onRangeModeChange]);
-
   return (
     <Slide
       direction="right"
