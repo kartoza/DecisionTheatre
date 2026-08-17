@@ -59,6 +59,7 @@ COMMANDS=(
 
     "DIAGNOSE|dt run --diag|Report what the desktop window resolved its layout to"
     "DIAGNOSE|dt doctor|Is this checkout healthy? Reports; changes nothing"
+    "DIAGNOSE|dt protect-branch|Require the CI checks before anything reaches main"
     "DIAGNOSE|dt doctor-deep|The same, plus recomputing the real nix hashes"
     "DIAGNOSE|dt check-data|Check ./data and summarise every file in it"
     "DIAGNOSE|dt lint|golangci-lint over the Go sources"
@@ -539,6 +540,32 @@ render_detail() {
 }
 
 # -----------------------------------------------------------------------------
+
+# --markdown emits the same table as markdown, for the documentation to include.
+# The docs are generated from this list rather than restating it, so a command
+# added here appears in dt, in make help and on the website from one edit.
+if [ "${1:-}" = "--markdown" ]; then
+    shift
+    md_filter="$(printf '%s ' "$@" | tr '[:upper:]' '[:lower:]' | sed 's/ *$//')"
+    while IFS= read -r g; do
+        group_matches "$g" "$md_filter" || continue
+        icon="$(icon_for "$g")"
+        printf '### %s%s\n\n' "$icon" "$g"
+        printf '%s\n\n' "${GROUP_BLURB[$g]:-}"
+        printf '| Command | What it does |\n|---|---|\n'
+        for entry in "${COMMANDS[@]}"; do
+            [ "${entry%%|*}" = "$g" ] || continue
+            rest="${entry#*|}"
+            cmd="${rest%%|*}"
+            desc="${rest#*|}"
+            # Escape the pipe that would otherwise split the markdown cell, and
+            # wrap the command as code.
+            printf '| `%s` | %s |\n' "${cmd//|/\\|}" "${desc//|/\\|}"
+        done
+        printf '\n'
+    done < <(groups_in_order)
+    exit 0
+fi
 
 # --groups lists the group names, one per line, for scripts/dt to dispatch on.
 # Keeping the list here means dt cannot invent a group the table does not have.

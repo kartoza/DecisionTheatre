@@ -121,7 +121,7 @@ It bootstraps the record. It cannot discover a wrong hash — follow it with
 
 ```
 ✗ Go modules    changed since vendorHash was computed: go.sum
-                run 'make sync-flake' — otherwise a cold-store build of this flake fails
+                run 'dt sync-flake' — otherwise a cold-store build of this flake fails
 ```
 
 Run `dt sync-flake` and commit both files. If it reports that `flake.nix` was edited

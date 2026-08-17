@@ -112,7 +112,7 @@ This directory must contain the application's runtime data:
 | `mbtiles/style.json` | MapLibre style for the base map tiles |
 | `sites/` | Saved site JSON files (written at runtime) |
 | `projects/` | Saved project JSON files (written at runtime) |
-| `current.csv`, `reference.csv`, `metadata.csv` | Source CSV files (used during data preparation; not required at runtime unless `make geopackage` is re-run inside the container) |
+| `current.csv`, `reference.csv`, `metadata.csv` | Source CSV files (used during data preparation; not required at runtime unless `dt geopackage` is re-run inside the container) |
 
 The app writes `sites/` and `projects/` subdirectories at runtime, so the host path must be **writable** by the container user (UID 0 in the slim image).
 
@@ -220,7 +220,7 @@ Build the scenario GeoPackage from catchment geometries and CSV data:
 #   reference.csv     — reference scenario metrics
 #   metadata.csv      — optional column descriptions
 
-make geopackage
+dt geopackage
 # Output: data/datapack.gpkg
 ```
 

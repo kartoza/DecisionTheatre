@@ -14,7 +14,7 @@
 
 ```bash
 # All tests with race detection and coverage
-make test
+dt test
 
 # Or directly:
 go test -v -race -coverprofile=coverage.out ./...
@@ -24,7 +24,7 @@ go test -v -race -coverprofile=coverage.out ./...
     `internal/server/static/` is a build artefact produced from `frontend/dist/` and is
     not committed. Until it exists, the `//go:embed all:static` directive fails and
     `go build`, `go vet` and `go test` all fail on a clean checkout. Run
-    `make build-frontend` (or a full `make build`) first.
+    `dt build-frontend` (or a full `dt build`) first.
 
 ### Framework
 
@@ -75,7 +75,7 @@ There is no coverage threshold enforced in CI.
 
 ```bash
 # Single run
-make test-frontend
+dt test-frontend
 
 # Or directly:
 cd frontend && npx vitest run
@@ -128,7 +128,7 @@ This passes cleanly under `strict`, `noUnusedLocals` and `noUnusedParameters`.
 ## Running All Tests
 
 ```bash
-make test-all
+dt test-all
 ```
 
 ## CI Integration

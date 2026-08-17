@@ -125,6 +125,7 @@ nav:
       - Client/Server Boundary: developer-guide/client-server-boundary.md
       - Software Components: developer-guide/components.md
       - Development Environment: developer-guide/dev-environment.md
+      - Command Reference: developer-guide/command-reference.md
       - Keeping the Flake Importable: developer-guide/flake-lock-step.md
       - Coding Standards: developer-guide/coding-standards.md
       - Testing: developer-guide/testing.md
@@ -160,5 +161,9 @@ markdown_extensions:
 
 plugins:
   - search
+  # Lets a page call into the scripts for content that would otherwise be
+  # restated by hand — the dt command reference above all. See docs/hooks/macros.py.
+  - macros:
+      module_name: docs/hooks/macros
   - minify:
       minify_html: true

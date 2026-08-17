@@ -73,7 +73,7 @@ The MapBox GL Style JSON at `data/mbtiles/style.json` defines how each layer is 
 
 ## Fetching Data from Google Drive
 
-The script `scripts/fetch-data.sh` downloads all files from a shared Google Drive folder (including subfolders) directly into the `data/` directory, preserving the folder structure. Run this before `make geopackage` to pull the latest source files in one step.
+The script `scripts/fetch-data.sh` downloads all files from a shared Google Drive folder (including subfolders) directly into the `data/` directory, preserving the folder structure. Run this before `dt geopackage` to pull the latest source files in one step.
 
 ### Installation: rclone
 
@@ -140,7 +140,7 @@ The folder must be shared with the Google account you authenticated with rclone,
 
 ```bash
 # Using Make (recommended)
-make fetch-data FOLDER=<folder-id-or-url>
+dt fetch-data FOLDER=<folder-id-or-url>
 
 # Or directly
 ./scripts/fetch-data.sh <folder-id-or-url> [data-dir]
@@ -150,10 +150,10 @@ Both a bare folder ID and a full URL are accepted:
 
 ```bash
 # Bare folder ID
-make fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
+dt fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
 
 # Full shareable URL
-make fetch-data FOLDER="https://drive.google.com/drive/folders/1ABCdef_ghiJKLmnopQRSTuvwXYZ"
+dt fetch-data FOLDER="https://drive.google.com/drive/folders/1ABCdef_ghiJKLmnopQRSTuvwXYZ"
 
 # Custom destination directory
 ./scripts/fetch-data.sh 1ABCdef_ghiJKLmnopQRSTuvwXYZ /path/to/data
@@ -180,13 +180,13 @@ RCLONE_REMOTE=my-drive ./scripts/fetch-data.sh 1ABCdef_ghiJKLmnopQRSTuvwXYZ
 
 ```bash
 # 1. Download the CSV source files from Google Drive
-make fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
+dt fetch-data FOLDER=1ABCdef_ghiJKLmnopQRSTuvwXYZ
 
 # 2. Build the GeoPackage datapack
-make geopackage
+dt geopackage
 
 # 3. Launch the application
-make app
+dt app
 ```
 
 ---
@@ -240,7 +240,7 @@ See the [Datapack Format](datapack-format.md#ecological-lookup-tables) page for 
 
 ```bash
 # Using Make (recommended)
-make geopackage
+dt geopackage
 
 # Or directly
 ./scripts/build-geopackage.sh ./data
