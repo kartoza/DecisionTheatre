@@ -117,6 +117,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cd`-ing into a subdirectory no longer creates a second module cache there. Two had
   accumulated, under `frontend/` and `resources/mbtiles/`.
 
+### Performance
+
+- **No API response was compressed.** Searching the server for compression found
+  exactly one hit — the tile handler, where MBTiles blobs are already gzipped on
+  disk and the header merely declares it. GeoJSON is close to a best case for
+  deflate, and the full-Africa choropleth against the real datapack is 5,760,913
+  bytes.
+
+  Responses are now gzipped in server mode. Measured on that payload:
+
+  | | bytes | ratio |
+  |---|---|---|
+  | before | 5,760,913 | — |
+  | after | 1,794,404 | **3.21x** |
+
+  `/api/columns` goes from 16,642 to 2,779 bytes (6.0x). The compression level was
+  chosen by measurement rather than by default: level 1 gives 2.78x for 100ms of
+  CPU and level 9 gives 3.25x for 294ms, but the level here has to beat nginx's
+  existing `gzip_comp_level 6` — which produced 1,810,329 bytes — because nginx
+  passes a body through untouched once `Content-Encoding` is set. Level 5 does, at
+  230ms, with the remaining levels buying under 2%.
+
+  Small responses (below the 1024-byte threshold, matching `gzip_min_length` in
+  `deployments/nginx.conf`), already-encoded responses such as tiles, and
+  non-text content types are left alone. A test asserts the two thresholds agree.
+
+  **Not applied in desktop mode**, deliberately: the desktop build binds loopback
+  and opens its own WebView onto it, so there is no bandwidth to save and
+  compressing the choropleth would spend 230ms of CPU per request to speed up a
+  transfer that already takes milliseconds.
+
 ### Security
 
 - **The server bound every network interface while claiming it bound only localhost.**
