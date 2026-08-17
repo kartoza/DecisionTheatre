@@ -40,7 +40,7 @@ COPY docs/ ./docs/
 RUN mkdocs build -d /out/docs_site
 
 
-FROM golang:1.24-bookworm AS base
+FROM golang:1.25-bookworm AS base
 WORKDIR /src
 
 RUN apt-get update \
