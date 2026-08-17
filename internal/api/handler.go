@@ -1454,10 +1454,10 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 
 func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *sites.SiteIndicators {
 	indicators := &sites.SiteIndicators{
-		Reference:   make(map[string]float64),
-		Current:     make(map[string]float64),
-		Ideal:       make(map[string]float64),
-		ExtractedAt: time.Now().UTC().Format(time.RFC3339),
+		Reference:      make(map[string]float64),
+		Current:        make(map[string]float64),
+		Ideal:          make(map[string]float64),
+		ExtractedAt:    time.Now().UTC().Format(time.RFC3339),
 		CatchmentCount: len(catchments),
 	}
 

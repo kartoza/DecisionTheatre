@@ -1,0 +1,16 @@
+{
+  "_comment": "Written by scripts/sync-flake.sh. Records which manifests each fixed-output hash in flake.nix was computed from, so drift is caught offline and a cold-store build of this flake cannot fail on a stale hash. Do not edit by hand - run: make sync-flake",
+  "vendorHash": {
+    "value": "sha256-LjBgQc1+ZgCer2aSug9kxSwumsGlp/owVgrUATnqPo8=",
+    "inputs": {
+      "go.mod": "9a7cbcbefb3b6f31b2900dd6b4b9a32afa41644680d36fb2c210f36813177c3f",
+      "go.sum": "98e04323fe0b726d5254af10fa90d252fa6e903b2b15e94b8d9425706dea809b"
+    }
+  },
+  "npmDepsHash": {
+    "value": "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=",
+    "inputs": {
+      "frontend/package-lock.json": "fa1ceb00ba8fd5eccca28a00b383d8c3882114a9565707ad62abdd35bef82c70"
+    }
+  }
+}

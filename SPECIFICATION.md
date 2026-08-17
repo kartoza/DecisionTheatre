@@ -4,6 +4,49 @@
 
 Decision Theatre is a desktop application for comparing and analyzing environmental scenarios across geographical catchments. It provides an intuitive interface for exploring data and creating sites (geographical areas) for analysis.
 
+## Run Modes
+
+One binary, two ways to run it. The server is the same in both cases; the difference is
+only whether a window is opened onto it.
+
+| Mode | Flag | What happens |
+|---|---|---|
+| Desktop | *(default)* | The HTTP server starts in-process and an embedded GTK/WebKit WebView window navigates to it. Closing the window shuts the server down. |
+| Server | `--headless` | The HTTP server runs with no window, for a browser on this or another machine to connect to. Shuts down on SIGINT/SIGTERM. |
+
+The port is chosen by walking forward from `--port` (default 8080) until a free one is
+found, so a second instance never fails to start.
+
+### Launch entry points
+
+Every way of starting the application — `make run`, `make serve`, `nix run`,
+`nix run .#serve`, the editor mappings, and `scripts/run-app.sh` directly — routes through
+**`scripts/run-app.sh`**. That script is the single definition of launch policy: run mode,
+flags, and data directory resolution. The entry points differ only in where the binary
+comes from:
+
+- `nix run` sets `DT_MODE` and `DT_BIN` to a reproducible store build, so the script
+  skips every build step and only applies launch policy.
+- `make run` leaves `DT_BIN` unset, so the script rebuilds whatever is stale (via the
+  shared `scripts/lib-build.sh`) before launching.
+
+Per-machine settings live in a gitignored `.dt-env` read by the script, so no entry point
+needs its own copy of them.
+
+### Data directory resolution
+
+Resolved once, in `main.go`, so every launch path and a packaged install all agree:
+
+1. the `--data-dir` flag, if given
+2. the data pack path recorded in saved settings, if a pack has been installed
+3. `./data` in the working directory, **if it already exists**
+4. the per-user data directory (`config.DataStoreDir()/data`)
+
+Step 3 tests for existence rather than defaulting unconditionally: on Windows, double-
+clicking the executable sets the working directory to the executable's own folder, and an
+unconditional `./data` default previously created an empty `data` folder there on every
+startup.
+
 ## Application Architecture
 
 ### Backend (Go)
@@ -298,6 +341,48 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - `domain_minima` - Minimum values per attribute
 - `domain_maxima` - Maximum values per attribute
 - `rtree_catchments_lev12_geom` - Spatial index
+
+### Data Contract and Tooling
+
+What a valid data directory contains is declared once, in
+`internal/datacheck/spec.go`: every file and GeoPackage table the runtime reads, whether
+it is required, the source location that reads it, and what breaks without it.
+
+Two subcommands of the application consume that declaration:
+
+| Command | Purpose |
+|---|---|
+| `decision-theatre check-data [DIR]` | Validate a data directory and render a report. Exit `0` clean, `1` errors, `2` unreadable. `--json` for tooling. |
+| `decision-theatre pack-data [DIR]` | Run the check, then assemble the runtime files into a distributable zip. Refuses on errors unless `--force`. |
+
+They are subcommands rather than separate tools so that they open the data through the
+same packages the running application uses — `internal/geodata` for the GeoPackage,
+`internal/tiles.NewMBTilesStore` for the tilesets. What the checker can read, the
+application can read.
+
+`internal/datacheck/spec_test.go` reads the runtime packages back and fails the build if
+the code references a table or a data file the spec does not describe, so the contract
+cannot silently fall behind the code.
+
+#### File roles
+
+Every entry in a data directory is classified into one of four roles, which determines
+whether it belongs in a data pack:
+
+| Role | Examples | Packed |
+|---|---|---|
+| Runtime | `datapack.gpkg`, `mbtiles/`, `metadata.csv`, lookups, `walkthroughs/`, `demo/` | Yes |
+| Build input | `catchments.gpkg`, `current*.csv`, `reference*.csv` | No — inputs to `scripts/build-geopackage.sh` |
+| User data | `sites/`, `images/` | No — belongs to the installation |
+| Extraneous | anything else | No — reported as a warning |
+
+#### Data pack manifest
+
+A pack carries `manifest.json` both inside the archive and beside it, recording the
+format, version, packaging timestamp, the tool that built it, the checker's verdict at
+build time, a per-file SHA-256 inventory, and an explanation of everything excluded. The
+installer reads `format`, `version`, `description` and `created`, and ignores the rest, so
+packs remain readable by older builds.
 
 ---
 

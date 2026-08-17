@@ -12,7 +12,7 @@ is stated — those files cannot be renamed.
     Rather than working through this page by hand, run the validator:
 
     ```bash
-    nix run .#validate-data          # or: make validate-data
+    nix run .#check-data          # or: make check-data
     ```
 
     See [Validating the Data Directory](validating-data.md).

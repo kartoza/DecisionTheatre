@@ -423,10 +423,23 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               Explore how land management choices affect biodiversity, carbon storage and ecosystem functioning across African landscapes.
             </Text>
 
+            {/*
+              An explicit width alongside the max-width, matching the pull quote
+              below and the rest of this file. In a column flex with
+              align-items:center a child with only a max-width is sized
+              shrink-to-fit, which is the more fragile of the two spellings.
+
+              This is not what made the paragraph render one character per line
+              in the desktop window — that was the viewport meta tag being
+              honoured by WebKitGTK, and is fixed in main.go where the webview
+              is created. Kept because being explicit is right anyway.
+            */}
             <Text
               fontSize={{ base: 'sm', md: 'md' }}
               color="whiteAlpha.900"
+              w="100%"
               maxW="560px"
+              mx="auto"
               mb={9}
               lineHeight="1.7"
             >

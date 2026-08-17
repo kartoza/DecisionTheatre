@@ -5,7 +5,7 @@
 <figure markdown>
   ![Which channel to use for which kind of question](../assets/diagrams/generated/support-channels.svg)
   <figcaption class="static">
-    Attaching validate-data output usually identifies a data problem immediately.
+    Attaching check-data output usually identifies a data problem immediately.
   </figcaption>
 </figure>
 

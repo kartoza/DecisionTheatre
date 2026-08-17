@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =============================================================================
+# dt — the one command for working on Decision Theatre.
+#
+# Usage:
+#   dt                   the command table
+#   dt <group>           detailed help for one group
+#   dt <task> [args...]  run a task; extra arguments go to the task
+#   dt help [name]       help, unambiguously
+#
+# Every task has three spellings, all reaching the same script:
+#
+#   dt <task>            in any terminal
+#   make <task>          if you prefer make
+#   <leader>p<key>       in neovim
+#
+# and the ones that must work without the development shell also exist as
+# `nix run .#<task>`.
+#
+# `dt` is a dispatcher, not an implementation: each task is a make target, so
+# there is no second list of what the project can do.
+#
+# WHEN A NAME IS BOTH
+#
+# Some words name a task and a group: run, build, test, docs, release. The task
+# wins, because `dt test` should run the tests — that is what anyone typing it
+# means. Use `dt help test` for the group. Names that are only groups —
+# develop, diagnose, flake, data — need no such ceremony.
+# =============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT"
+
+if [ -t 2 ]; then
+    DIM=$'\033[2m'
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    RST=$'\033[0m'
+else
+    DIM='' RED='' GREEN='' RST=''
+fi
+
+# The tasks make actually knows about. Read from the Makefile rather than
+# listed here, so `dt` can never offer a task that does not exist, nor miss one
+# that was just added.
+known_tasks() {
+    # .PHONY lines enumerate every target that is a task rather than a file.
+    grep -hE '^\.PHONY:' "$PROJECT_ROOT/Makefile" \
+        | sed -E 's/^\.PHONY: *//' \
+        | tr ' ' '\n' \
+        | grep -vE '^$' \
+        | sort -u
+}
+
+# The groups the command table is organised into.
+known_groups() {
+    "$SCRIPT_DIR/shell-help.sh" --groups
+}
+
+# No arguments: the command table.
+if [ $# -eq 0 ]; then
+    exec "$SCRIPT_DIR/shell-help.sh"
+fi
+
+case "$1" in
+    help | -h | --help)
+        shift
+        exec "$SCRIPT_DIR/shell-help.sh" "$@"
+        ;;
+esac
+
+task="$1"
+
+# A task beats a group of the same name: `dt test` runs the tests. `dt help
+# test` is there for anyone who wanted the group.
+if ! known_tasks | grep -qxF -- "$task"; then
+    if known_groups | grep -qixF -- "$task"; then
+        exec "$SCRIPT_DIR/shell-help.sh" "$@"
+    fi
+fi
+
+shift
+
+if ! known_tasks | grep -qxF -- "$task"; then
+    printf '%sdt: unknown task %s%s\n' "$RED" "$task" "$RST" >&2
+
+    # Suggest the closest names. Try progressively shorter prefixes, then fall
+    # back to sharing any three characters in order, so a transposition ("buld")
+    # or a half-remembered name ("pack") still lands somewhere useful.
+    suggestions=""
+    for n in 5 4 3 2; do
+        [ ${#task} -lt "$n" ] && continue
+        suggestions="$(known_tasks | grep -iF -- "${task:0:$n}" | head -5 || true)"
+        [ -n "$suggestions" ] && break
+    done
+    if [ -z "$suggestions" ]; then
+        # Letters of the typed name, in order, anywhere in the candidate.
+        loose="$(printf '%s' "$task" | sed -E 's/(.)/\1.*/g')"
+        suggestions="$(known_tasks | grep -iE -- "^${loose}$" | head -5 || true)"
+    fi
+    if [ -n "$suggestions" ]; then
+        printf '\n%sDid you mean:%s\n' "$DIM" "$RST" >&2
+        while IFS= read -r s; do
+            printf '  %s%s%s\n' "$GREEN" "$s" "$RST" >&2
+        done <<<"$suggestions"
+    fi
+    groups="$(known_groups | tr '\n' ' ')"
+    printf '\n%sRun %sdt%s%s for the command table, or %sdt <group>%s%s for one of:%s\n' \
+        "$DIM" "$RST$GREEN" "$RST" "$DIM" "$RST$GREEN" "$RST" "$DIM" "$RST" >&2
+    printf '  %s%s%s\n' "$DIM" "$groups" "$RST" >&2
+    exit 2
+fi
+
+# Split the remaining arguments. NAME=value is a make variable — that is how
+# tasks like fetch-data and check-data take their input — and everything else is
+# a flag for the underlying tool, which the tasks read from ARGS.
+make_vars=()
+tool_args=()
+for arg in "$@"; do
+    if [[ "$arg" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+        make_vars+=("$arg")
+    else
+        tool_args+=("$arg")
+    fi
+done
+
+cmd=(make "$task")
+[ ${#make_vars[@]} -gt 0 ] && cmd+=("${make_vars[@]}")
+[ ${#tool_args[@]} -gt 0 ] && cmd+=("ARGS=${tool_args[*]}")
+
+exec "${cmd[@]}"

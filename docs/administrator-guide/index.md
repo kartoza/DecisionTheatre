@@ -7,7 +7,7 @@ code.
 | Page | Covers |
 |---|---|
 | [The Data Directory](data-directory.md) | What the application reads, what is optional, and what does not belong |
-| [Validating the Data Directory](validating-data.md) | The `validate-data` tool and how to gate a deployment on it |
+| [Checking the Data Directory](validating-data.md) | The `check-data` tool and how to gate a deployment on it |
 | [Server Deployment](../developer-guide/server-deployment.md) | Running the application as a hosted service |
 | [Data Preparation](../developer-guide/data-preparation.md) | Building a GeoPackage and tiles from source data |
 | [Datapack Format](../developer-guide/datapack-format.md) | The distributable archive format |
@@ -15,7 +15,7 @@ code.
 ## Quick start
 
 <figure markdown>
-  ![The groups of checks validate-data performs and its exit codes](../assets/diagrams/generated/validation-flow.svg)
+  ![The groups of checks check-data performs and its exit codes](../assets/diagrams/generated/validation-flow.svg)
   <figcaption class="static">
     Each group corresponds to something the Go runtime actually opens.
   </figcaption>
@@ -25,7 +25,7 @@ code.
 Validate a data directory before running anything against it:
 
 ```bash
-nix run .#validate-data -- /path/to/data
+nix run .#check-data -- /path/to/data
 ```
 
 Exit status `0` means no errors; `1` means the application will not work correctly.

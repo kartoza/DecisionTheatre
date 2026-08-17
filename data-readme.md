@@ -13,12 +13,26 @@ and in source at [`docs/administrator-guide/data-directory.md`](docs/administrat
 ## Check it before you run
 
 ```bash
-nix run .#validate-data          # or: make validate-data
+make check-data               # or: nix run .#check-data
 ```
 
-Exit `0` = no errors, `1` = the application will not work correctly, `2` = directory or
-tooling missing. See
-[Validating the Data Directory](docs/administrator-guide/validating-data.md).
+Exit `0` = no errors, `1` = the application will not work correctly, `2` = the directory
+could not be examined. The report also classifies every file here, so you can see at a
+glance what would go into a data pack and what would not. See
+[Checking the Data Directory](docs/administrator-guide/validating-data.md).
+
+To build a distributable pack — which runs the check first and refuses to package a
+directory with errors:
+
+```bash
+make pack-data
+```
+
+## Where the application looks
+
+With no `--data-dir` flag, the application uses the saved data-pack path if one is set,
+then **this `./data` directory if it exists**, then the per-user data directory. So from a
+checkout, `make run` picks this up with no configuration.
 
 ## Summary
 
@@ -44,7 +58,7 @@ Two faults are common enough to call out here:
   spaces (`Obligate.grazer` vs `Obligate grazer`). Affected indicators vanish from the UI
   with no error logged.
 
-Both are detected by `validate-data`.
+Both are detected by `check-data`.
 
 ## What does not belong here
 

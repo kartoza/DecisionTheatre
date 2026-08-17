@@ -119,12 +119,13 @@ nav:
   - Administrator Guide:
       - Overview: administrator-guide/index.md
       - The Data Directory: administrator-guide/data-directory.md
-      - Validating the Data Directory: administrator-guide/validating-data.md
+      - Checking the Data Directory: administrator-guide/validating-data.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
       - Client/Server Boundary: developer-guide/client-server-boundary.md
       - Software Components: developer-guide/components.md
       - Development Environment: developer-guide/dev-environment.md
+      - Keeping the Flake Importable: developer-guide/flake-lock-step.md
       - Coding Standards: developer-guide/coding-standards.md
       - Testing: developer-guide/testing.md
       - Data Preparation: developer-guide/data-preparation.md

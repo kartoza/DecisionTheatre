@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =============================================================================
+# The pre-commit hook, as a tracked and reviewable file.
+#
+# .git/hooks/pre-commit is a two-line shim that calls this, so what runs before
+# a commit is under version control rather than sitting untracked in .git.
+#
+# It runs the checks that are fast enough to sit in front of every commit and
+# that catch faults which are expensive to discover later. Anything slower
+# belongs in CI.
+#
+# Skip it for one commit with `git commit --no-verify` — but note that the
+# flake lock-step check exists precisely because its failure mode is invisible
+# locally and only breaks other people.
+# =============================================================================
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck source=../lib-ui.sh
+. "$ROOT/scripts/lib-ui.sh"
+
+failed=0
+
+run_check() {
+    local label="$1"
+    shift
+    local output
+    if output="$("$@" 2>&1)"; then
+        ui_ok "$label" "passed"
+    else
+        ui_err "$label" "failed"
+        printf '%s\n' "$output" | sed 's/^/      /'
+        failed=1
+    fi
+}
+
+ui_title "pre-commit" "checks that are cheap now and expensive later"
+ui_group "CHECKS"
+
+# 1. The flake must stay in step with the Go and npm manifests. This is the one
+#    failure that is invisible on the machine that causes it: the local store
+#    already holds the vendored output, so nothing revalidates the hash, and it
+#    surfaces on somebody else's cold build.
+run_check "flake lock step" ./scripts/sync-flake.sh --check
+
+# 2. Go formatting, over the staged files only. Scoping to what is being
+#    committed keeps the hook fast, avoids failing a commit for somebody else's
+#    unformatted file, and skips the vendored module caches that a bare
+#    `gofmt -l .` would walk into (.go/pkg/mod holds upstream source).
+staged_go="$(git diff --cached --name-only --diff-filter=ACM -- '*.go' \
+    | grep -vE '(^|/)(\.go|vendor|node_modules)/' \
+    | grep -v '^internal/webview_go/' || true)"
+
+if [ -n "$staged_go" ]; then
+    # shellcheck disable=SC2086
+    unformatted="$(gofmt -l $staged_go 2>/dev/null || true)"
+    if [ -n "$unformatted" ]; then
+        ui_err "gofmt" "staged files are not formatted"
+        printf '      run: gofmt -w %s\n' "$(printf '%s ' $unformatted)"
+        failed=1
+    else
+        ui_ok "gofmt" "staged Go files formatted"
+    fi
+else
+    ui_ok "gofmt" "no Go files staged"
+fi
+
+# 3. Shell scripts must parse. Catches the half-finished edit before it lands.
+shell_errors=""
+for f in scripts/*.sh scripts/hooks/* scripts/dt; do
+    [ -f "$f" ] || continue
+    if ! bash -n "$f" 2>/dev/null; then
+        shell_errors="$shell_errors $f"
+    fi
+done
+if [ -n "$shell_errors" ]; then
+    ui_err "shell syntax" "scripts do not parse:$shell_errors"
+    failed=1
+else
+    ui_ok "shell syntax" "all scripts parse"
+fi
+
+# 4. No conflict markers. They have reached main in this repository before.
+markers="$(git diff --cached --name-only --diff-filter=ACM \
+    | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        if grep -qE '^(<<<<<<< |>>>>>>> )' "$f" 2>/dev/null; then printf '%s ' "$f"; fi
+      done)"
+if [ -n "$markers" ]; then
+    ui_err "conflict markers" "staged files contain unresolved markers: $markers"
+    failed=1
+else
+    ui_ok "conflict markers" "none in staged files"
+fi
+
+# 5. No environment file may be committed. .gitignore covers it, but a
+#    deliberate `git add -f` would slip past, and this is the one class of file
+#    where the cost of getting it wrong is a leaked credential.
+staged_env="$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '(^|/)\.env$|\.env$|(^|/)\.env\.' \
+    | grep -vE '\.example$' || true)"
+if [ -n "$staged_env" ]; then
+    ui_err "environment files" "staged: $(printf '%s ' $staged_env)"
+    printf '      Environment files are never committed. Supply these values in the\n'
+    printf '      environment of whatever builds or runs the software, and document\n'
+    printf '      them in a .env.example instead.\n'
+    printf '      To unstage: git restore --staged %s\n' "$(printf '%s ' $staged_env)"
+    failed=1
+else
+    ui_ok "environment files" "none staged"
+fi
+
+# 6. flake.nix and nix/manifest-lock.json must move together. Staging one
+#    without the other is how the lock file goes stale.
+staged="$(git diff --cached --name-only)"
+if printf '%s\n' "$staged" | grep -qx 'flake.nix' \
+    && ! printf '%s\n' "$staged" | grep -qx 'nix/manifest-lock.json'; then
+    # Only a problem when the hashes themselves changed.
+    if git diff --cached flake.nix | grep -qE '^[+-].*(vendorHash|npmDepsHash)'; then
+        ui_err "flake.nix" "hashes changed but nix/manifest-lock.json is not staged" \
+            "run 'make sync-flake' and stage both files together"
+        failed=1
+    fi
+fi
+
+ui_summary "commit blocked — fix the above, or use --no-verify if you are certain"
+exit "$failed"

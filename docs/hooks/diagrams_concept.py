@@ -267,7 +267,7 @@ def first_run(p: dict) -> str:
 
 
 def validation_flow(p: dict) -> str:
-    d = Diagram(960, 340, p, title="What validate-data checks",
+    d = Diagram(960, 340, p, title="What check-data checks",
                 subtitle="Each group corresponds to something the Go runtime actually opens")
     groups = [
         ("GeoPackage", ["tables · join keys", "spatial index"], p["status"]["errorTint"], p["status"]["error"]),
@@ -288,7 +288,7 @@ def validation_flow(p: dict) -> str:
     d.box(Box(642, 214, 288, 56, "exit 2 — directory or tool missing",
               fill=p["surface"]["cloud"], stroke=p["brand"]["grey"]))
     d.label(30, 300, "Exit status makes the tool usable as a deployment gate: "
-                     "nix run .#validate-data -- /srv/data || exit 1",
+                     "nix run .#check-data -- /srv/data || exit 1",
             size=11.5, color=p["ink"]["muted"], mono=False)
     return d.render()
 
@@ -389,7 +389,7 @@ def data_prep_pipeline(p: dict) -> str:
     d.arrow(760, 160, 820, 160, label="make datapack")
     d.box(Box(822, 122, 158, 76, "Data pack", [".zip for", "distribution"],
               fill=p["amber"]["100"], stroke=p["amber"]["700"]))
-    d.label(30, 300, "Validate before shipping: nix run .#validate-data — it reports missing "
+    d.label(30, 300, "Validate before shipping: nix run .#check-data — it reports missing "
                      "requirements and content that should not be in a distributed pack.",
             size=11.5, color=p["ink"]["muted"])
     return d.render()
@@ -427,15 +427,15 @@ def support_channels(p: dict) -> str:
                 subtitle="Choosing the right channel gets you an answer faster")
     routes = [
         ("Using the app", ["User Manual", "and User Guide"], p["blue"]["100"], p["blue"]["700"]),
-        ("Data problems", ["Administrator Guide", "run validate-data first"], p["amber"]["100"], p["amber"]["700"]),
-        ("A defect", ["GitHub issues", "include validate-data output"], p["status"]["errorTint"], p["status"]["error"]),
+        ("Data problems", ["Administrator Guide", "run check-data first"], p["amber"]["100"], p["amber"]["700"]),
+        ("A defect", ["GitHub issues", "include check-data output"], p["status"]["errorTint"], p["status"]["error"]),
         ("Contributing", ["Developer Guide", "then open a pull request"], p["status"]["successTint"], p["status"]["success"]),
     ]
     x, w, gap = 30, 200, 20
     for i, (title, lines, fill, stroke) in enumerate(routes):
         d.box(Box(x + i * (w + gap), 96, w, 96, title, lines, fill=fill, stroke=stroke))
     d.label(30, 232, "For anything involving a blank map or missing indicators, the output of "
-                     "validate-data will usually identify the cause on its own.",
+                     "check-data will usually identify the cause on its own.",
             size=11.5, color=p["ink"]["muted"])
     d.label(30, 252, "Attach it to the report — it names the file and the code path involved.",
             size=11.5, color=p["ink"]["muted"])

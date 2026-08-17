@@ -1,7 +1,7 @@
 {
   "name": "decision-theatre-frontend",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,7 +22,7 @@
     "@types/geojson": "^7946.0.16",
     "@types/matter-js": "^0.20.2",
     "deck.gl": "^9.2.6",
-    "fast-xml-parser": "4.5.4",
+    "fast-xml-parser": "4.5.5",
     "framer-motion": "^11.15.0",
     "maplibre-gl": "^4.7.1",
     "matter-js": "^0.20.0",

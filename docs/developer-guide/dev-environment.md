@@ -45,6 +45,110 @@ nix develop
 The first entry downloads and builds the toolchain, which takes a while. Subsequent
 entries are instant.
 
+### One task, three spellings
+
+Every task in the project has the same name whichever way you reach it:
+
+| | |
+|---|---|
+| `dt <task>` | in any terminal inside the development shell |
+| `make <task>` | if you prefer make, or are outside the shell |
+| `<leader>p<key>` | in neovim |
+| `nix run .#<task>` | for the tasks that must work without the shell — CI uses these |
+
+`dt` is a dispatcher, not a second implementation: it reads the task list out of
+the Makefile's `.PHONY` lines, so it cannot offer a task that does not exist, nor miss
+one that was just added. A mistyped task suggests the closest real names.
+
+```bash
+dt run --port 9090          # extra flags reach the underlying tool
+dt check-data DATA_DIR=/srv # NAME=value reaches make as a variable
+dt doctor                   # is this checkout healthy?
+dt                          # the command table
+```
+
+### The command table
+
+The shell greets you with every available command, grouped by intent: **run the app**,
+**live development**, **build**, **test**, **diagnose**, **data pack**, **documentation**,
+**release** and **shortcuts**.
+
+Type `dt` at any time to bring it back, or name a group for the detail:
+
+```bash
+dt              # the overview — every group, one screen
+dt flake        # detail for one group
+dt diagnose     # ditto
+dt help test    # a name that is both a task and a group
+```
+
+Where a word names both a task and a group — `run`, `build`, `test`, `docs`, `release` —
+**the task wins**, because `dt test` should run the tests; that is what anyone typing it
+means. `dt help <name>` is the unambiguous form. Names that are only groups — `develop`,
+`diagnose`, `flake`, `data` — need no such ceremony.
+
+The table is `scripts/shell-help.sh`, and it is the only place commands are listed: the
+shell greeting, `dt`, and `make help` all render it, so none of them can drift. `make help
+GROUP=data` filters the same way. Adding a command means adding one `GROUP|command|what it
+does` line to that file — nothing else needs editing.
+
+The header spans the grid and carries the version and the current branch, with an asterisk
+when the tree is dirty — so a glance tells you what you are working on and against.
+
+Each group carries an icon — including nix's own snowflake on `FLAKE`. They are plain
+single-width Unicode symbols rather than emoji, because emoji are double-width and a
+terminal that measures them differently from lipgloss tears the grid apart. Set
+`DT_HELP_ICONS=0` if your font renders any of them as a missing glyph.
+
+It is rendered with [gum](https://github.com/charmbracelet/gum), which the development
+shell provides: the overview is a grid of cards that reflows to two or one column on a
+narrow terminal, and `dt <group>` renders the same panels with a row per command — the two
+views share one visual language rather than looking like different programs. When gum is absent — `make help` from outside the shell, or CI — the
+script falls back to a plain aligned layout with the same content, so nothing depends on
+gum being there. Either way it drops colour when piped and exits cleanly into `head` or
+`less`.
+
+### Why `dt` is an executable, not a shell function
+
+It lives in **`devbin/`**, which both `.envrc` and `scripts/dev-shell.sh` put on `PATH`.
+
+This matters because of how direnv works. `use flake` evaluates the devShell in a subshell
+and carries back the **environment** — variables — not the shell state. Functions and
+aliases defined in the flake's `shellHook` do not survive it. Since this repository is
+normally entered through direnv rather than an interactive `nix develop`, anything defined
+as a function would silently not be there:
+
+```console
+$ which dt
+which: no dt in (...)
+```
+
+A directory on `PATH` is something direnv can do, so `dt` works identically whether you use
+direnv, `nix develop`, a subshell, or none of them — and `which dt` answers.
+
+The two-letter aliases (`gor`, `gs`, `gd` …) are still aliases and therefore still
+`nix develop`-only. That is a fair trade for conveniences; anything that must work
+everywhere belongs in `devbin/`.
+
+!!! note "After pulling a change to `.envrc`"
+    direnv blocks an `.envrc` it has not seen before. Run `direnv allow` once.
+
+`dt doctor` checks that `dt` is on `PATH`, so this class of problem reports itself.
+
+### Where the shell setup lives
+
+`flake.nix`'s `shellHook` does nothing but source **`scripts/dev-shell.sh`**, which sets
+`GOPATH` and friends, puts `devbin/` on `PATH`, defines the aliases, and renders the table
+once.
+
+Keeping it in a shell file rather than in a Nix string is deliberate, and follows the
+project's rule that Nix files hold no embedded code: the environment is then ordinary
+shell — reviewable with shell tooling, editable without a rebuild, and testable by
+sourcing it in a plain `bash`.
+
+There is deliberately no second help command. `dt` with no arguments *is* the table, so
+there is nothing to keep in sync with it.
+
 ### What the shell provides
 
 | Area | Tools |
@@ -64,38 +168,47 @@ in your home directory.
 
 ## Running the application
 
+The application has two run modes, and one launcher serves both:
+
 ```bash
-nix run                                   # build and launch the desktop app
-nix run . -- --headless                   # no window; browse to localhost:8080
+nix run                                   # desktop app in its own window
+nix run .#serve                           # web server only; browse to localhost:8080
 nix run . -- --data-dir /path/to/data     # point at a specific data directory
 ```
+
+Every entry point — `make run`, `make serve`, `nix run`, `nix run .#serve` and the neovim
+`<leader>pr` mapping — calls **`scripts/run-app.sh`**, which is the single place the launch
+policy is defined. `nix run` supplies a store-built binary through `DT_BIN` so the script
+skips building; `make run` rebuilds only what is stale. The flags, the desktop-vs-server
+decision and the data directory resolution are identical in both cases.
 
 `nix run` builds from the current checkout, including uncommitted work — though note that
 Nix only sees files git knows about, so a brand-new file must be `git add`ed before the
 flake can build it.
+
+For everyday work, prefer `make run`: it is incremental, whereas `nix run` re-runs the
+full reproducible build.
 
 ## `nix run` commands
 
 | Command | What it does |
 |---|---|
 | `nix run` | Build and launch the desktop application |
-| `nix run .#validate-data` | Check a data directory for compliance and correctness |
-| `nix run .#validate-data -- /srv/data` | Check a specific directory |
+| `nix run .#serve` | The same application as a web server, no window |
+| `nix run .#check-data` | Check a data directory and summarise its contents |
+| `nix run .#check-data -- /srv/data` | Check a specific directory |
+| `nix run .#pack-data` | Check, then build a distributable data pack |
+| `nix run .#validate-data` | Deprecated alias for `check-data` |
 
-`validate-data` carries its own `sqlite3` and `python3`, so it runs on a machine with
-nothing else installed — useful as a deployment gate:
+`check-data` and `pack-data` are subcommands of the application binary rather than
+separate tools, so they read a data directory through exactly the same packages the
+running application does. Useful as a deployment gate:
 
 ```bash
-nix run .#validate-data -- /srv/decision-theatre/data || exit 1
+nix run .#check-data -- /srv/decision-theatre/data || exit 1
 ```
 
-See [Validating the Data Directory](../administrator-guide/validating-data.md).
-
-!!! note "The convention asks for more of these"
-    The project convention is for the flake to expose `nix run .#foo` commands covering
-    build, docs, format and test. Only the two above exist today; everything else runs
-    through `make`. Adding them is worthwhile — each should wrap a script under `scripts/`
-    rather than embed shell in `flake.nix`, per the project's "no code in nix files" rule.
+See [Checking the Data Directory](../administrator-guide/validating-data.md).
 
 ## `nix build` targets
 
@@ -105,7 +218,10 @@ See [Validating the Data Directory](../administrator-guide/validating-data.md).
 | `nix build .#decision-theatre` | The same, named explicitly |
 | `nix build .#frontend` | The built SPA only |
 | `nix build .#docs` | This documentation site only |
-| `nix build .#validate-data` | The data validator as a standalone binary |
+| `nix build .#run-app` | The desktop launcher wrapper |
+| `nix build .#serve-app` | The server launcher wrapper |
+| `nix build .#check-data` | The data checker on its own `PATH` name |
+| `nix build .#pack-data` | The data-pack builder on its own `PATH` name |
 
 ```bash
 nix build && ./result/bin/decision-theatre --version
@@ -205,10 +321,17 @@ The docs build generates its diagrams from the codebase — see
 ```bash
 make fetch-data FOLDER=<drive-id>   # pull source data
 make geopackage                     # build datapack.gpkg from source CSVs
-make datapack                       # package data/ into a distributable archive
+make check-data                     # check the data directory and summarise it
+make pack-data                      # check, then package into a distributable archive
 make list-datapack                  # inspect a built pack
-make validate-data                  # check the data directory
 ```
+
+`make pack-data` refuses to build an archive when `check-data` reports errors, so a pack
+that cannot be loaded never leaves the machine. Override with
+`make pack-data ARGS="--force"` — the manifest then records that the pack was forced and
+how many errors were overridden.
+
+`make datapack` and `make validate-data` remain as aliases for the two new names.
 
 See [Data Preparation](data-preparation.md).
 

@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-VERSION="${VERSION:-$(cd "$PROJECT_ROOT" && git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+VERSION="${VERSION:-$("$SCRIPT_DIR/version.sh")}"
 DIST_DIR="$PROJECT_ROOT/dist"
 BINARY_NAME="decision-theatre"
 LDFLAGS="-s -w -X main.version=${VERSION}"
@@ -71,7 +71,8 @@ setup_webkit_compat() {
     mkdir -p "$compat_dir/pkgconfig" "$compat_dir/lib"
 
     # Get the webkit2gtk-4.1 pc file location
-    local pc_file=$(pkg-config --variable=pcfiledir webkit2gtk-4.1)/webkit2gtk-4.1.pc
+    local pc_file
+    pc_file="$(pkg-config --variable=pcfiledir webkit2gtk-4.1)/webkit2gtk-4.1.pc"
     if [ -f "$pc_file" ]; then
         sed 's/webkit2gtk-4.1/webkit2gtk-4.0/g; s/Name: webkit2gtk-4.1/Name: webkit2gtk-4.0/' \
             "$pc_file" > "$compat_dir/pkgconfig/webkit2gtk-4.0.pc"
@@ -79,7 +80,8 @@ setup_webkit_compat() {
     fi
 
     # Find and symlink the library
-    local lib_path=$(pkg-config --variable=libdir webkit2gtk-4.1)
+    local lib_path
+    lib_path="$(pkg-config --variable=libdir webkit2gtk-4.1)"
     if [ -f "$lib_path/libwebkit2gtk-4.1.so" ]; then
         ln -sf "$lib_path/libwebkit2gtk-4.1.so" "$compat_dir/lib/libwebkit2gtk-4.0.so"
     fi
@@ -289,7 +291,8 @@ build_snap() {
     (cd "$PROJECT_ROOT/packaging/snap" && snapcraft --destructive-mode)
 
     # Move the snap to dist
-    local snap_file=$(ls "$PROJECT_ROOT/packaging/snap/"*.snap 2>/dev/null | head -1)
+    local snap_file
+    snap_file="$(ls "$PROJECT_ROOT/packaging/snap/"*.snap 2>/dev/null | head -1)"
     if [ -n "$snap_file" ]; then
         mv "$snap_file" "$DIST_DIR/"
         echo "  -> $DIST_DIR/$(basename "$snap_file")"

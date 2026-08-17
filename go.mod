@@ -1,6 +1,6 @@
 module github.com/kartoza/decision-theatre
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/bodgit/sevenzip v1.6.1
@@ -28,9 +28,9 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/ulikunitz/xz v0.5.12 // indirect
 	go4.org v0.0.0-20200411211856-f5505b9728dd // indirect
-	golang.org/x/image v0.20.0 // indirect
+	golang.org/x/image v0.43.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
 
 // replace github.com/webview/webview_go => ./internal/webview_go

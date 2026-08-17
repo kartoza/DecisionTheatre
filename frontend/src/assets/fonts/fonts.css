@@ -1,0 +1,58 @@
+/*
+ * Self-hosted typefaces.
+ *
+ * These fonts used to be fetched from fonts.googleapis.com at run time, which
+ * was wrong twice over. The desktop application is offline by design, so the
+ * request either failed or blocked first paint — during one investigation it
+ * held a headless render for five minutes — and every launch announced itself
+ * to a third party.
+ *
+ * The files come from nixpkgs (`inter`, `source-sans`) and are committed here,
+ * so a build needs no network and the desktop application and the hosted
+ * dashboard render identically. See scripts/vendor-fonts.sh to refresh them.
+ *
+ * Both families are variable fonts: one file spans the whole weight axis, which
+ * is why there is a single @font-face per style rather than one per weight.
+ *
+ * font-display: swap keeps text visible while the font loads. With the files
+ * served from the same origin that window is now imperceptible, but it remains
+ * the right behaviour if the asset is ever slow.
+ */
+
+/* Inter — body text. SIL Open Font License 1.1. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./InterVariable.woff2') format('woff2-variations'),
+       url('./InterVariable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./InterVariable-Italic.woff2') format('woff2-variations'),
+       url('./InterVariable-Italic.woff2') format('woff2');
+}
+
+/* Source Sans 3 — headings. SIL Open Font License 1.1. */
+@font-face {
+  font-family: 'Source Sans 3';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./SourceSans3VF-Upright.woff2') format('woff2-variations'),
+       url('./SourceSans3VF-Upright.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Source Sans 3';
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./SourceSans3VF-Italic.woff2') format('woff2-variations'),
+       url('./SourceSans3VF-Italic.woff2') format('woff2');
+}

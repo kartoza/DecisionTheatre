@@ -16,7 +16,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.3.0";
+        version = "0.4.0";
 
         # MkDocs environment for requirements documentation
         mkdocsEnv = pkgs.python3.withPackages (
@@ -122,7 +122,7 @@
           # frontend/package-lock.json, so ANY change to that file — including
           # the version field — changes this hash. Recompute with:
           #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
-          npmDepsHash = "sha256-xNE0TwmljkvPbb6uLtnLMDnrkrY4eKOBrc2Iu5xu/YU=";
+          npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -174,7 +174,7 @@
           # when its output path changes, and the path embeds the version. The
           # 0.2.0 output was already in the store, so nothing revalidated it until
           # the bump to 0.3.0 forced a rebuild.
-          vendorHash = "sha256-4ZfPWJtJfZtF4YsKdMq7Nxo+uSxhna4FzWh/WCC/aY0=";
+          vendorHash = "sha256-LjBgQc1+ZgCer2aSug9kxSwumsGlp/owVgrUATnqPo8=";
 
           # The local replace directive (./internal/webview_go) needs the
           # source present during the go-modules download phase.
@@ -247,37 +247,120 @@
           };
         };
 
-        # Data directory validator. The checks live in scripts/validate-data.sh
-        # so that nix, make and a plain shell all run identical logic; this
-        # derivation only supplies the runtime dependencies.
-        validate-data = pkgs.stdenvNoCC.mkDerivation {
-          pname = "decision-theatre-validate-data";
-          inherit version;
-          src = ./scripts/validate-data.sh;
-          dontUnpack = true;
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          installPhase = ''
-            runHook preInstall
-            install -Dm755 $src $out/bin/validate-data
-            wrapProgram $out/bin/validate-data \
-              --prefix PATH : ${
-                pkgs.lib.makeBinPath [
-                  pkgs.bash
-                  pkgs.coreutils
-                  pkgs.findutils
-                  pkgs.gnugrep
-                  pkgs.gnused
-                  pkgs.python3
-                  pkgs.sqlite
-                ]
-              }
-            runHook postInstall
-          '';
-          meta = with pkgs.lib; {
-            description = "Validate a Decision Theatre data directory";
-            license = licenses.gpl3;
-            mainProgram = "validate-data";
+        # Launcher for `nix run`. The launch policy (desktop WebView mode,
+        # flags, data directory resolution) lives in scripts/run-app.sh so that
+        # `nix run`, `make run` and the neovim <leader>pr mapping cannot drift
+        # apart. DT_BIN points the script at the reproducible store binary, so
+        # it skips every build step and only applies that shared policy.
+        # mode is "desktop" or "server"; both wrap the same script and the same
+        # store binary, so the only difference is which window, if any, opens.
+        mkLauncher =
+          mode:
+          pkgs.stdenvNoCC.mkDerivation {
+            pname = "decision-theatre-${mode}";
+            inherit version;
+            # The whole scripts directory, not just run-app.sh: the launcher
+            # sources lib-build.sh from alongside itself, and installing the one
+            # file would leave a launcher that dies on its first source.
+            src = ./scripts;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            installPhase = ''
+              runHook preInstall
+
+              mkdir -p $out/libexec/decision-theatre
+              install -m755 run-app.sh lib-build.sh $out/libexec/decision-theatre/
+
+              makeWrapper $out/libexec/decision-theatre/run-app.sh \
+                $out/bin/decision-theatre-${mode} \
+                --set DT_BIN ${decision-theatre}/bin/decision-theatre \
+                --set-default DT_MODE ${mode} \
+                --prefix PATH : ${
+                  pkgs.lib.makeBinPath [
+                    pkgs.bash
+                    pkgs.coreutils
+                  ]
+                }
+              runHook postInstall
+            '';
+            meta = with pkgs.lib; {
+              description =
+                if mode == "server" then
+                  "Run Decision Theatre as a web server"
+                else
+                  "Launch the Decision Theatre desktop application";
+              license = licenses.gpl3;
+              mainProgram = "decision-theatre-${mode}";
+            };
           };
+
+        run-app = mkLauncher "desktop";
+        serve-app = mkLauncher "server";
+
+        # Data tools. The checks and the packer live in Go, in
+        # internal/datacheck, and reach the data through the same loaders the
+        # application uses — so they cannot describe a different data directory
+        # from the one the app actually reads. These derivations only put the
+        # right subcommand on the PATH under its own name.
+        #
+        # subcommand is "check-data" or "pack-data".
+        mkDataTool =
+          subcommand:
+          pkgs.writeShellApplication {
+            name = subcommand;
+            runtimeInputs = [ decision-theatre ];
+            text = ''
+              exec decision-theatre ${subcommand} "$@"
+            '';
+          };
+
+        check-data = mkDataTool "check-data";
+        pack-data = mkDataTool "pack-data";
+
+        # Developer-workflow scripts exposed as nix apps, so they can be run on
+        # a machine that has not entered the development shell — which is what
+        # CI does. Each wraps the tracked script rather than restating it.
+        mkScriptTool =
+          {
+            name,
+            script,
+            runtimeInputs ? [ ],
+          }:
+          pkgs.writeShellApplication {
+            inherit name runtimeInputs;
+            # The scripts source their siblings from scripts/, so they run from
+            # the checkout rather than a store copy. That is deliberate: a copy
+            # in the store would go stale against the tree being checked.
+            text = ''
+              if [ ! -x "./scripts/${script}" ]; then
+                echo "${name}: run this from the project root (./scripts/${script} not found)" >&2
+                exit 2
+              fi
+              exec "./scripts/${script}" "$@"
+            '';
+          };
+
+        doctor = mkScriptTool {
+          name = "doctor";
+          script = "doctor.sh";
+          runtimeInputs = with pkgs; [
+            jq
+            git
+            gnugrep
+            gnused
+            findutils
+            coreutils
+          ];
+        };
+
+        check-flake = mkScriptTool {
+          name = "check-flake";
+          script = "sync-flake.sh";
+          runtimeInputs = with pkgs; [
+            jq
+            gnugrep
+            gnused
+            coreutils
+          ];
         };
 
       in
@@ -290,7 +373,12 @@
             frontend
             docs
             decision-theatre
-            validate-data
+            run-app
+            serve-app
+            check-data
+            pack-data
+            doctor
+            check-flake
             ;
           default = decision-theatre;
         };
@@ -331,7 +419,7 @@
             inherit version;
             src = ./frontend;
             # Same source as the frontend package, so the same hash.
-            npmDepsHash = "sha256-xNE0TwmljkvPbb6uLtnLMDnrkrY4eKOBrc2Iu5xu/YU=";
+            npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
             buildPhase = ''
               npm test
             '';
@@ -340,6 +428,28 @@
               echo "tests passed" > $out/result
             '';
           };
+        };
+
+        # =====================================================
+        # Tooling shell: nix develop .#tooling
+        #
+        # The checks themselves, without the build toolchain. CI and the
+        # pre-commit hooks use this, so what runs in review is what runs on a
+        # contributor's machine — and a contributor who only wants to run the
+        # checks does not pay for Go, Node and GDAL to be realised first.
+        # =====================================================
+        devShells.tooling = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            pre-commit
+            shellcheck
+            shfmt
+            gitleaks
+            reuse
+            statix
+            nixpkgs-fmt
+            jq
+            git
+          ];
         };
 
         # =====================================================
@@ -395,6 +505,9 @@
               nixpkgs-fmt
               nixfmt-rfc-style
 
+              # Terminal UI for the command table and the report scripts
+              gum
+
               # VCS
               git
               gh
@@ -417,76 +530,86 @@
               pkgs.pkgsCross.mingwW64.stdenv.cc
             ];
 
+          # The whole environment — Go paths, shortcuts, the `dt` command table —
+          # lives in scripts/dev-shell.sh rather than here, so it is ordinary
+          # reviewable shell rather than a string inside nix. This hook only
+          # locates and sources it.
           shellHook = ''
-            export EDITOR=nvim
-            export GOPATH="$PWD/.go"
-            export GOCACHE="$PWD/.go/cache"
-            export GOMODCACHE="$PWD/.go/pkg/mod"
-            export PATH="$GOPATH/bin:$PATH"
+            export DT_PROJECT_ROOT="$PWD"
 
-            export CGO_ENABLED=1
-
-            alias ll='eza -la'
-            alias la='eza -a'
-            alias ls='eza'
-            alias cat='bat --plain'
-
-            alias gor='go run .'
-            alias got='go test -v ./...'
-            alias gob='make build-backend'
-            alias gom='go mod tidy'
-            alias gol='golangci-lint run'
-
-            alias gs='git status'
-            alias ga='git add'
-            alias gc='git commit'
-            alias gl='git log --oneline -10'
-            alias gd='git diff'
-
-            echo ""
-            echo "Decision Theatre Development Environment"
-            echo ""
-            echo "Nix commands:"
-            echo "  nix build             - Build the full application"
-            echo "  nix build .#frontend  - Build only the frontend"
-            echo "  nix flake check       - Run all tests"
-            echo "  nix run               - Build and run the application"
-            echo ""
-            echo "Dev iteration (uses tools from nix store):"
-            echo "  make dev-all          - Go hot-reload + Vite HMR (recommended)"
-            echo "  make dev-backend      - Go backend with air (hot-reload on :8080)"
-            echo "  make dev-frontend     - Vite dev server (HMR on :5173)"
-            echo "  make dev              - Run Go backend once (no hot-reload)"
-            echo "  make test             - Run Go tests"
-            echo "  make test-frontend    - Run frontend tests"
-            echo "  make docs-serve       - Serve requirements docs"
-            echo ""
-            echo "Data & packaging:"
-            echo "  make geopackage       - Build datapack.gpkg from CSVs"
-            echo "  make datapack         - Build data pack zip (geopackage + mbtiles)"
-            echo "  make list-datapack    - List contents of last built data pack"
-            echo "  make packages         - Build release packages (all platforms)"
-            echo "  make packages-linux   - Linux .tar.gz, .deb, .rpm"
-            echo "  make packages-windows - Windows .zip, .msi"
-            echo ""
+            # A locale archive that actually contains the locale LANG names.
+            # NixOS systems frequently set LANG to a locale the system archive
+            # was never built with, and glibc then falls back to "C" — which is
+            # how the desktop window came to lay itself out a million times too
+            # large. See locale.go for the mechanism.
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
+            ''}
+            if [ -r "$DT_PROJECT_ROOT/scripts/dev-shell.sh" ]; then
+              # shellcheck source=scripts/dev-shell.sh
+              . "$DT_PROJECT_ROOT/scripts/dev-shell.sh"
+            else
+              echo "warning: scripts/dev-shell.sh not found under $DT_PROJECT_ROOT;" >&2
+              echo "         enter the shell from the project root for the usual setup." >&2
+            fi
           '';
         };
 
         # =====================================================
         # Apps: nix run
         # =====================================================
+        # Wraps scripts/run-app.sh rather than invoking the binary directly, so
+        # `nix run`, `make run` and neovim all launch the app the same way.
+        # The binary itself is still the pure, reproducible store build.
         apps.default = {
           type = "app";
-          program = "${decision-theatre}/bin/decision-theatre";
+          program = "${run-app}/bin/decision-theatre-desktop";
         };
 
-        # nix run .#validate-data -- [DATA_DIR]
+        # nix run .#serve — the same application without the desktop window,
+        # for a browser to connect to.
+        apps.serve = {
+          type = "app";
+          program = "${serve-app}/bin/decision-theatre-server";
+        };
+
+        # nix run .#check-data -- [DATA_DIR]
         #
-        # Wraps scripts/validate-data.sh rather than embedding the checks here,
-        # so the same script runs from nix, from make, and from a plain shell.
+        # Runs the application's own check-data subcommand, so nix, make and a
+        # plain shell all execute identical logic — the logic the app itself
+        # uses to read the directory.
+        apps.check-data = {
+          type = "app";
+          program = "${check-data}/bin/check-data";
+        };
+
+        # nix run .#pack-data -- [DATA_DIR]
+        apps.pack-data = {
+          type = "app";
+          program = "${pack-data}/bin/pack-data";
+        };
+
+        # Deprecated name for check-data, kept so existing deployment gates and
+        # documentation keep working.
         apps.validate-data = {
           type = "app";
-          program = "${validate-data}/bin/validate-data";
+          program = "${check-data}/bin/check-data";
+        };
+
+        # nix run .#doctor — is this checkout healthy?
+        apps.doctor = {
+          type = "app";
+          program = "${doctor}/bin/doctor";
+        };
+
+        # nix run .#check-flake -- [--check|--verify]
+        #
+        # The lock-step gate. CI runs this before anything else: a flake whose
+        # hashes have fallen behind its manifests fails for every importer, so
+        # it is worth failing fast and saying exactly that.
+        apps.check-flake = {
+          type = "app";
+          program = "${check-flake}/bin/check-flake";
         };
       }
     );

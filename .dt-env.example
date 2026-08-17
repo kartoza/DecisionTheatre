@@ -1,0 +1,29 @@
+# Per-machine launch settings for scripts/run-app.sh.
+#
+# Copy to .dt-env (gitignored) and edit. Every launch path — `make run`,
+# `nix run`, the neovim <leader>pr mapping — reads this same file, so your
+# machine-specific choices apply everywhere without any of them growing its own
+# copy of the launch logic.
+#
+# Anything set in the environment still wins:
+#   DT_PORT=9090 make run
+#
+# This file is sourced by bash, so ordinary shell syntax applies.
+
+# Run mode: "desktop" opens the application window, "server" runs headless for
+# a browser to connect to. Defaults to desktop; `make serve` picks server.
+#DT_MODE=desktop
+
+# Where the data lives. Leave unset to use the app's own resolution: saved
+# settings first, then ./data, then ~/.local/share/decision-theatre/data.
+#DT_DATA_DIR=./data
+#DT_RESOURCES_DIR=./resources
+
+# HTTP port. The app walks forward from here if the port is busy.
+#DT_PORT=8080
+
+# Skip the staleness checks entirely and launch the existing bin/decision-theatre.
+#DT_SKIP_BUILD=1
+
+# Rebuild frontend, docs and binary on every launch.
+#DT_FORCE_BUILD=1

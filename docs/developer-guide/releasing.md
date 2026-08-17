@@ -90,7 +90,7 @@ The script (`scripts/build-packages.sh`) accepts `--platform`, `--arch`, and `--
 
 ### Downloads Page Auto-Configuration
 
-`scripts/package-data.sh`, `scripts/build-windows-installer.sh`, `scripts/build-debian-installer.sh`, the macOS build in `scripts/build-packages.sh`, and `scripts/build-cross-docker.sh` each call `scripts/update-download-config.sh` after producing their artefact. It writes the artefact's path into the local `settings.json` that `internal/config.SettingsDir()` reads (e.g. `~/.config/decision-theatre/settings.json` on Linux), which is what the in-app downloads page serves. Practically: build on the same machine you run the app on, and the download page immediately offers the new files — no manual settings edit needed. Requires `jq`; if it's missing, the update is skipped with a warning rather than failing the build.
+`scripts/pack-data.sh`, `scripts/build-windows-installer.sh`, `scripts/build-debian-installer.sh`, the macOS build in `scripts/build-packages.sh`, and `scripts/build-cross-docker.sh` each call `scripts/update-download-config.sh` after producing their artefact. It writes the artefact's path into the local `settings.json` that `internal/config.SettingsDir()` reads (e.g. `~/.config/decision-theatre/settings.json` on Linux), which is what the in-app downloads page serves. Practically: build on the same machine you run the app on, and the download page immediately offers the new files — no manual settings edit needed. Requires `jq`; if it's missing, the update is skipped with a warning rather than failing the build.
 
 **This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). `scripts/build-cross-docker.sh` handles this automatically: if the `deployments-app` container is running and the artefacts landed under `dist/` (the default `--dest`, bind-mounted into the container at `/app/dist`), it additionally `docker exec`s `update-download-config.sh` inside the container with the container-internal paths, mirroring what `make datapack` already does for data packs.
 
@@ -140,7 +140,7 @@ make datapack
 
 This creates `dist/decision-theatre-data-v{VERSION}.zip` with a SHA256 checksum. Upload the data pack to the GitHub Release manually or distribute it separately.
 
-`make datapack` also updates the downloads page config (see above): `scripts/package-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
+`make datapack` also updates the downloads page config (see above): `scripts/pack-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
 
 ## Packaging Configuration Files
 

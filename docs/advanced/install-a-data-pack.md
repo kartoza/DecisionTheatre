@@ -61,7 +61,7 @@ If you already have an extracted data directory, skip the installer:
     Both have known causes that a validator will identify in seconds:
 
     ```bash
-    nix run .#validate-data -- /path/to/data
+    nix run .#check-data -- /path/to/data
     ```
 
     See [The Data Directory](../administrator-guide/data-directory.md) for what it checks

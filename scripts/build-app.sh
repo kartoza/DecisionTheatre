@@ -10,8 +10,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
-# Get version from git
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Version comes from scripts/version.sh so every build path agrees
+VERSION=$("$SCRIPT_DIR/version.sh")
 
 # Check if webkit2gtk-4.0 already exists
 if pkg-config --exists webkit2gtk-4.0 2>/dev/null; then
