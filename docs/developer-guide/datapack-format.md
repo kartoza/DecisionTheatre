@@ -2,6 +2,14 @@
 
 A **datapack** is the self-contained data bundle that Decision Theatre loads at startup. It provides all scenario metrics, catchment geometries, map tiles, and display metadata that the application needs to run. This page documents every file in a datapack, what it contains, and how the application uses it.
 
+
+<figure markdown>
+  ![Everything the application reads from a data directory](../assets/diagrams/generated/data-requirements.svg)
+  <figcaption class="gen">
+    Extracted from every <code>filepath.Join(dataDir, …)</code> in the Go source.
+  </figcaption>
+</figure>
+
 ## File Structure
 
 A datapack is distributed as a compressed archive (`.zip` or `.7z`) with the following layout:
@@ -181,20 +189,60 @@ A [MapLibre GL Style Specification](https://maplibre.org/maplibre-style-spec/) J
 
 ## Manifest (`manifest.json`)
 
-Declares the pack version and contents. Created by `scripts/package-data.sh`.
+Declares what the pack holds, when it was built, and the state of the data directory at
+the time. Written by `decision-theatre pack-data` (reached through `make pack-data` or
+`scripts/pack-data.sh`), both inside the archive and alongside it as
+`<pack>.zip.manifest.json` — so a download page can describe a pack without fetching
+gigabytes.
 
 ```json
 {
   "format": "decision-theatre-datapack",
-  "version": "v1.0.0",
+  "version": "1.0.0",
   "description": "Decision Theatre Data Pack — catchment scenario data and map tiles",
-  "created": "2026-06-04T10:00:00Z",
-  "contents": {
-    "mbtiles": ["africa.mbtiles"],
-    "geopackage": true
-  }
+  "created": "2026-08-16T20:12:29Z",
+  "built_by": "decision-theatre pack-data 1.0.0",
+  "source_dir": "/home/user/DecisionTheatre/data",
+  "check": {
+    "ok": true,
+    "errors": 0,
+    "warnings": 2
+  },
+  "total_size_bytes": 14446721024,
+  "file_count": 12,
+  "files": [
+    {
+      "path": "datapack.gpkg",
+      "size_bytes": 3453300736,
+      "sha256": "686eef0abb60158de4d7e64a347ea6f5f3653c0b488c9a5782a50b264c2315aa"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "current.csv",
+      "role": "build input",
+      "reason": "input to scripts/build-geopackage.sh; not read at runtime",
+      "size_bytes": 242611712
+    }
+  ]
 }
 ```
+
+| Field | Meaning |
+|---|---|
+| `created` | Packaging timestamp, UTC, RFC 3339 |
+| `built_by` | The tool and version that produced the pack |
+| `check` | The checker's verdict when the pack was built. `forced: true` appears if it was built despite errors |
+| `files` | Every packed file with its size and SHA-256, so an installation can be verified without unpacking |
+| `excluded` | What was deliberately left out and why, so a missing 250 MB CSV is never mistaken for an accident |
+
+A checksum for the archive itself is written to `<pack>.zip.sha256` in the format
+`sha256sum -c` expects.
+
+!!! note "Older packs"
+    Packs built before this format carried only `format`, `version`, `description` and
+    `created`. The installer reads exactly those four fields and ignores the rest, so old
+    and new packs both install.
 
 ---
 

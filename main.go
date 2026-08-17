@@ -19,6 +19,12 @@ import (
 var version = "dev"
 
 func main() {
+	// Subcommands are dispatched before flag parsing, because flag stops at the
+	// first non-flag argument and would otherwise treat "check-data" as one.
+	if handled, code := runSubcommand(os.Args); handled {
+		os.Exit(code)
+	}
+
 	// Parse command-line flags
 	port := flag.Int("port", 8080, "HTTP server port")
 	dataDir := flag.String("data-dir", "", "Directory containing data files (mbtiles, geopackage)")
@@ -60,13 +66,25 @@ func main() {
 		}
 	}
 
+	// Prefer a ./data directory in the working directory when one already
+	// exists. This is what a developer running from a checkout, and an
+	// administrator who unpacked a data pack next to the binary, both expect.
+	//
+	// The test is deliberately "already exists" rather than an unconditional
+	// fallback: on Windows, double-clicking the exe sets cwd to the exe's own
+	// directory, and a bare "./data" default previously caused sites.NewStore
+	// to eagerly MkdirAll an empty "data" folder next to the executable on
+	// every startup, before any data pack had been installed.
 	if resolvedDataDir == "" {
-		// Fall back to the same per-user directory a data pack install would
-		// use (config.DataStoreDir()/data), not a path relative to cwd: on
-		// Windows, double-clicking the exe sets cwd to the exe's own
-		// directory, so a bare "./data" fallback caused sites.NewStore to
-		// eagerly MkdirAll an empty "data" folder next to the executable on
-		// every startup, even before any data pack was installed.
+		if info, err := os.Stat("./data"); err == nil && info.IsDir() {
+			resolvedDataDir = "./data"
+			log.Printf("Using ./data in the working directory")
+		}
+	}
+
+	if resolvedDataDir == "" {
+		// Otherwise use the same per-user directory a data pack install writes
+		// to (config.DataStoreDir()/data). SetupGuide handles it being absent.
 		if dataStoreDir, err := config.DataStoreDir(); err == nil {
 			resolvedDataDir = filepath.Join(dataStoreDir, "data")
 		} else {
@@ -134,12 +152,62 @@ func main() {
 	} else {
 		// GUI mode: open embedded WebView window
 		log.Printf("Opening application window...")
+
+		ensureNumericLocale()
+		ensureUsableDisplayBackend()
+
 		w := webview.New(false)
 		defer w.Destroy()
 
 		w.SetTitle("Decision Theatre")
 		w.SetSize(1280, 800, webview.HintNone)
-		w.Init(`window.__DECISION_THEATRE_WEBVIEW__ = true;`)
+
+		// Injected before any page script runs.
+		//
+		// The viewport meta tag is the important part. index.html carries
+		//     <meta name="viewport" content="width=device-width, initial-scale=1">
+		// which the hosted dashboard needs for phones. Desktop Chrome and
+		// Firefox ignore the tag outright, so it costs nothing there — but
+		// WebKitGTK honours it, and lays the page out against a narrow
+		// device-width viewport scaled to fit the window.
+		//
+		// Everything downstream then goes wrong at once: Chakra's media
+		// queries resolve to their base, phone-sized branch, so the tour
+		// popover picks `calc(100vw - 24px)`; percentage widths resolve
+		// against the narrow viewport, so the hero paragraph wrapped one
+		// character per line; and the whole page renders shrunk because it is
+		// being scaled down to fit. Removing the tag restores the ordinary
+		// desktop behaviour of laying out against the window.
+		//
+		// Done here rather than in index.html so the hosted dashboard keeps
+		// the tag it legitimately needs.
+		w.Init(`
+			window.__DECISION_THEATRE_WEBVIEW__ = true;
+			document.addEventListener('DOMContentLoaded', function () {
+				var meta = document.querySelector('meta[name="viewport"]');
+				if (meta && meta.parentNode) {
+					meta.parentNode.removeChild(meta);
+				}
+			});
+		`)
+
+		// DT_WEBVIEW_DIAG=1 makes the page report what it actually resolved to.
+		//
+		// The desktop window renders through WebKitGTK while `--headless` plus a
+		// browser renders through whatever the developer has, so a layout fault
+		// that appears only in the window cannot be reproduced by looking at the
+		// same URL in a browser. Rather than guess at the difference, ask the
+		// page: this prints the viewport, the media queries Chakra keys off, and
+		// the measured geometry of the elements that looked wrong.
+		if os.Getenv("DT_WEBVIEW_DIAG") == "1" {
+			if err := w.Bind("__dtDiag", func(payload string) {
+				log.Printf("webview diagnostics:\n%s", payload)
+			}); err != nil {
+				log.Printf("Warning: could not bind diagnostics: %v", err)
+			}
+
+			w.Init(diagnosticScript)
+		}
 		w.Navigate(serverURL)
 
 		// When the webview window closes, shut down the server

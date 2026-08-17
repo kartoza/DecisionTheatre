@@ -2,6 +2,14 @@
 
 This guide covers deploying Decision Theatre on a production server using the Docker Compose stack in the `deployments/` directory. The stack runs two containers: the application itself (Go binary serving the React frontend) and an Nginx reverse proxy that forwards requests to the app. Nginx listens on both HTTP and HTTPS at once — neither redirects to the other, so both stay usable independently.
 
+
+<figure markdown>
+  ![Browser, nginx, application and data directory](../assets/diagrams/generated/deployment-topology.svg)
+  <figcaption class="static">
+    Note the unauthenticated destructive endpoints reachable through the proxy.
+  </figcaption>
+</figure>
+
 ---
 
 ## Architecture Overview
@@ -126,8 +134,7 @@ This directory contains shared geospatial resources that are not modified at run
 
 | File | Description |
 |------|-------------|
-| `mbtiles/style.json` | MapLibre style for resource-layer tiles |
-| `mbtiles/uow_tiles.json` | Tile JSON descriptor for UoW catchment tiles |
+| `mbtiles/style.json` | MapLibre style for resource-layer tiles; served via `GET /data/style.json` |
 | `mbtiles/*.gpkg` | Source GeoPackages used during tile generation (not needed at runtime) |
 
 ```env

@@ -8,6 +8,40 @@ on:
 
 jobs:
   # ==========================================
+  # Flake / manifest lock step
+  #
+  # Runs first and gates everything else. A fixed-output hash that has fallen
+  # behind its manifest is invisible to whoever caused it — their store already
+  # holds the vendored output, so nothing revalidates the hash — and it breaks
+  # the build for every consumer importing this flake. Catch it in seconds
+  # rather than at the end of a full build, and say precisely what to run.
+  # ==========================================
+  flake-lock-step:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Fast check — flake.nix matches the recorded manifests
+        run: |
+          nix run .#check-flake -- --check || {
+            echo "::error::flake.nix is out of step with go.mod, go.sum or frontend/package-lock.json."
+            echo "::error::Run 'make sync-flake' and commit flake.nix with nix/manifest-lock.json."
+            exit 1
+          }
+
+      - name: Deep verify — recompute the real hashes
+        run: |
+          nix run .#check-flake -- --verify || {
+            echo "::error::A hash recorded in flake.nix is wrong. Anyone importing this flake will fail to build."
+            echo "::error::Run 'make sync-flake' and commit the result."
+            exit 1
+          }
+
+  # ==========================================
   # Secrets & security scanning
   # ==========================================
   secrets-scan:
@@ -22,10 +56,17 @@ jobs:
         with:
           extra_args: --only-verified
 
+      # The gitleaks *action* requires a paid licence key for organisation
+      # repositories and fails without one. The CLI has no such restriction and
+      # is the same scanner, so run that instead — and it matches what
+      # .pre-commit-config.yaml runs locally.
       - name: Gitleaks secrets scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=8.21.2
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --verbose --no-banner
 
   # ==========================================
   # Check for large or unwanted files
@@ -72,7 +113,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Create stub dirs for embed
         run: |
@@ -82,7 +123,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+
+      # webview_go asks pkg-config for webkit2gtk-4.0, which no current
+      # distribution ships. Without the shim every cgo-touching command fails
+      # with "could not import github.com/webview/webview_go" — which is what
+      # broke this job and test-go. The same script runs locally, so CI and a
+      # developer machine resolve the dependency identically.
+      - name: webkit2gtk-4.0 compatibility shim
+        run: ./scripts/webkit-compat.sh --github-env
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -120,7 +169,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Create stub dirs for embed
         run: |
@@ -130,7 +179,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+
+      - name: webkit2gtk-4.0 compatibility shim
+        run: ./scripts/webkit-compat.sh --github-env
 
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
@@ -168,7 +220,7 @@ jobs:
   # ==========================================
   nix-build:
     runs-on: ubuntu-latest
-    needs: [test-go, test-frontend, lint-go, lint-frontend]
+    needs: [flake-lock-step, test-go, test-frontend, lint-go, lint-frontend]
     steps:
       - uses: actions/checkout@v4
 
@@ -197,3 +249,44 @@ jobs:
           scan-ref: '.'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          # An advisory with no released fix is not something a pull request
+          # can act on; failing every build for it trains people to ignore the
+          # job. Anything deliberately accepted goes in .trivyignore with a
+          # reason and an expiry date.
+          ignore-unfixed: true
+          trivyignores: '.trivyignore'
+
+  # ==========================================
+  # Importability
+  #
+  # The lock-step job proves the hashes are right; this proves the conclusion
+  # that matters — that a third party can import this flake and build it. It
+  # runs with the store cold for our derivations, so a stale fixed-output hash
+  # fails here exactly as it would for them.
+  # ==========================================
+  import-flake:
+    runs-on: ubuntu-latest
+    needs: [flake-lock-step]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build this flake as an external consumer would
+        run: |
+          mkdir -p /tmp/consumer
+          cat > /tmp/consumer/flake.nix <<EOF
+          {
+            inputs.dt.url = "path:${GITHUB_WORKSPACE}";
+            outputs = { self, dt }: {
+              packages.x86_64-linux.default = dt.packages.x86_64-linux.decision-theatre;
+            };
+          }
+          EOF
+          cd /tmp/consumer
+          nix --extra-experimental-features 'nix-command flakes' \
+            build .#default --no-link 2>&1 | tail -20
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}

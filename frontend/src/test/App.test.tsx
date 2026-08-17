@@ -12,6 +12,9 @@ describe('App', () => {
       </ChakraProvider>
     );
 
-    expect(screen.getByText('Decision Theatre')).toBeInTheDocument();
+    // Assert on the header landmark rather than a brand string: the title text
+    // has since been replaced by partner logos, and this test only claims that
+    // the app mounts. A landmark survives rebranding; a text node does not.
+    expect(screen.getByRole('banner')).toBeInTheDocument();
   });
 });

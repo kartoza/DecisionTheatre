@@ -1,0 +1,43 @@
+{
+  "_comment": "Single source of truth for diagram colours. Mirrors docs/assets/css/kartoza-tokens.css. docs/hooks/generate_diagrams.py reads this file so generated SVGs and page chrome cannot drift apart.",
+  "brand": {
+    "blue": "#54a2cc",
+    "amber": "#eeb348",
+    "grey": "#8a8b8b"
+  },
+  "blue": {
+    "100": "#e4f1f8",
+    "300": "#9ccae2",
+    "500": "#54a2cc",
+    "700": "#2f7ba5",
+    "900": "#1b526f"
+  },
+  "amber": {
+    "100": "#fcf3e0",
+    "300": "#f5d18f",
+    "500": "#eeb348",
+    "700": "#c68f2b",
+    "900": "#8a611a"
+  },
+  "ink": {
+    "default": "#383939",
+    "muted": "#676869",
+    "rule": "#d1d1d1"
+  },
+  "surface": {
+    "cloud": "#f5f5f2",
+    "white": "#ffffff"
+  },
+  "status": {
+    "success": "#3c7d54",
+    "successTint": "#eaf3ec",
+    "warn": "#eeb348",
+    "warnTint": "#fcf3e0",
+    "error": "#b0473c",
+    "errorTint": "#fbefef"
+  },
+  "font": {
+    "sans": "Nunito, 'Helvetica Neue', Arial, sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  }
+}

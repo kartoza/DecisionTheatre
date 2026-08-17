@@ -49,7 +49,7 @@ case "$PLATFORM" in
         ;;
 esac
 
-VERSION="${VERSION:-$(cd "$PROJECT_ROOT" && git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+VERSION="${VERSION:-$("$SCRIPT_DIR/version.sh")}"
 
 mkdir -p "$DEST"
 

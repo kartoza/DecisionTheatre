@@ -32,15 +32,30 @@ Decision Theatre is a desktop application for exploring and comparing environmen
 **Key Features**
 
 - **Swiper Comparison** — Slide between reference and current scenarios with synchronized 3D terrain
-- **Choropleth Mapping** — Visualize any indicator across 19,000+ catchments with consistent color scaling
-- **Quad View** — Compare up to four scenario combinations simultaneously
+- **Choropleth Mapping** — Visualize any indicator across ~148,000 catchments with consistent color scaling
+- **Grid View** — Up to six independent panes, each with its own factor, scenario and view mode
+- **Four View Modes** — Map choropleth, line and boxplot charts, dial gauges, and an aggregate catchment table
+- **Editable Targets** — Set ideal indicator values and watch the ecological recalculation cascade through dependent factors
 - **Identify Tool** — Click any catchment for detailed attribute inspection
 - **Zone Statistics** — Real-time min/max/mean for visible catchments
-- **Project Workspaces** — Save and share exploration sessions
+- **Sites** — Define a study area once by drawing, uploading a shapefile or GeoJSON, or selecting catchments, then reuse it everywhere
+- **Guided Tours** — Four read-only demo sites that walk new users through the workflow
 
 ## Quick Start
 
-Download the latest release for your platform from [Releases](https://github.com/kartoza/DecisionTheatre/releases).
+Download the latest release for your platform from [Releases](https://github.com/kartoza/DecisionTheatre/releases), or build with Nix:
+
+```bash
+nix run github:kartoza/DecisionTheatre
+```
+
+Useful flags: `--data-dir` (tiles, GeoPackage, metadata and lookups — the one that matters),
+`--port` (default `8080`), `--headless`, `--version`. There is also a `--resources-dir`,
+but its only effect is to supply `mbtiles/style.json` when the data directory has none.
+
+A **data pack** containing map tiles and scenario data is distributed separately — the
+application shows a setup guide on first launch if it cannot find one. See
+[Data Setup](https://kartoza.github.io/DecisionTheatre/user-manual/data-setup/).
 
 ## Documentation
 
@@ -48,12 +63,14 @@ Download the latest release for your platform from [Releases](https://github.com
 |----------|-------------|
 | [User Guide](https://kartoza.github.io/DecisionTheatre/) | Complete documentation |
 | [Developer Guide](README.dev.md) | Get started contributing |
+| [Architecture](https://kartoza.github.io/DecisionTheatre/developer-guide/architecture/) | How the pieces fit together |
+| [Client/Server Boundary](https://kartoza.github.io/DecisionTheatre/developer-guide/client-server-boundary/) | What belongs in the browser and what belongs in Go |
 | [Data Preparation](https://kartoza.github.io/DecisionTheatre/developer-guide/data-preparation/) | Prepare scenario data |
 
 ---
 
 <p align="center">
-  <strong>Funders</strong>
+  <strong>Funders and Partners</strong>
 </p>
 
 <p align="center">
@@ -69,5 +86,17 @@ Download the latest release for your platform from [Releases](https://github.com
 </p>
 
 <p align="center">
-  <sub>Built with care by <a href="https://kartoza.com">Kartoza</a> for the <a href="https://www.wits.ac.za/">University of the Witwatersrand</a></sub>
+  <strong>
+    A research tool of the <a href="https://www.wits.ac.za/">University of the Witwatersrand</a>,<br>
+    developed within <a href="https://futureecosystemsafrica.org/">Future Ecosystems for Africa</a>
+    in partnership with <a href="https://www.rewildcapital.com/">Rewild Capital</a>.
+  </strong>
+</p>
+
+<p align="center">
+  <sub>
+    Software made with 💗 by <a href="https://kartoza.com">Kartoza</a> under contract to Wits
+    &middot; <a href="https://github.com/sponsors/kartoza">Donate!</a>
+    &middot; <a href="https://github.com/kartoza/DecisionTheatre">GitHub</a>
+  </sub>
 </p>

@@ -573,10 +573,10 @@ func TestShapefileParserOutput(t *testing.T) {
 	cases := []struct {
 		name         string
 		zipFile      string
-		wantType     string   // "Polygon" or "MultiPolygon"
-		wantMinVerts int      // minimum total vertex count
-		wantBBoxMinX float64  // rough westmost longitude
-		wantBBoxMaxX float64  // rough eastmost longitude
+		wantType     string  // "Polygon" or "MultiPolygon"
+		wantMinVerts int     // minimum total vertex count
+		wantBBoxMinX float64 // rough westmost longitude
+		wantBBoxMaxX float64 // rough eastmost longitude
 	}{
 		{
 			name:         "munywana",

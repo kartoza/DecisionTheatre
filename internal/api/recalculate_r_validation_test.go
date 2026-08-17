@@ -49,11 +49,11 @@ type rLookup struct {
 type rCascadeRequest struct {
 	Ideal                 map[string]float64 `json:"ideal"`
 	OldIdeal              map[string]float64 `json:"old_ideal"`
-	ChangedTargets        []string            `json:"changed_targets"`
-	ChangedSpeciesCounts  []string            `json:"changed_species_counts"`
-	ChangedSpeciesBiomass []string            `json:"changed_species_biomass"`
-	PropClassChanged      bool                `json:"prop_class_changed"`
-	Lookup                *rLookup            `json:"lookup,omitempty"`
+	ChangedTargets        []string           `json:"changed_targets"`
+	ChangedSpeciesCounts  []string           `json:"changed_species_counts"`
+	ChangedSpeciesBiomass []string           `json:"changed_species_biomass"`
+	PropClassChanged      bool               `json:"prop_class_changed"`
+	Lookup                *rLookup           `json:"lookup,omitempty"`
 }
 
 func toRLookup(l *LookupData) *rLookup {
@@ -196,7 +196,7 @@ func baseCascadeIdeal() map[string]float64 {
 		"AGBwd_Mgha": 40, "LitterBiomass_gm2": 150,
 		"NPP_gm2": 300, "flamNPP_gm2": 200,
 		"deltaSOC_Mgha_trees": 1, "deltaSOC_Mgha_grazers": 0.5, "deltaSOC_Mgha": 1.5,
-		"SOC_Mgha_0_30": 50,
+		"SOC_Mgha_0_30":   50,
 		"herbs_tot_kgkm2": 1000, "herbs_tot_DMI_kgkm2": 500, "herbs_tot_CH4_kgkm2": 5,
 		"herbs_totGRAZING_kgkm2": 700, "herbs_totGRAZING_DMI_kgkm2": 350, "herbs_totGRAZING_CH4_kgkm2": 3,
 		"fracGrazing": 0.7, "grazing_intensity": 0.1,

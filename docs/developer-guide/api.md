@@ -1,22 +1,57 @@
 # API Guide
 
-Landscape Decision Theatre exposes a REST API on the same port as the web UI. All endpoints are prefixed with `/api/` or serve tiles.
+Landscape Decision Theatre exposes a REST API on the same port as the web UI. Application
+endpoints are prefixed with `/api/`; tiles, fonts, static data and the documentation site
+are served from their own prefixes.
+
+<figure markdown>
+  ![Route map showing every registered HTTP route grouped by path prefix](../assets/diagrams/generated/api-routes.svg)
+  <figcaption class="gen">
+    parsed from
+    <code>internal/api/handler.go</code> and <code>internal/server/server.go</code>.
+    Add or remove a route and this redraws on the next docs build.
+  </figcaption>
+</figure>
+
+!!! danger "Unauthenticated by design — review before exposing"
+    No endpoint requires authentication, and several are destructive
+    (`POST /api/datapack/install` removes the data directory before extracting). The
+    server currently binds all interfaces, and `deployments/nginx.conf` proxies every path
+    without a denylist.
+
+    Do not expose this API to an untrusted network until the hardening tickets are
+    resolved: *Unauthenticated datapack install destroys the data directory*,
+    *handleFileDialog opens a native OS modal in response to an HTTP request*,
+    *HTTP server binds 0.0.0.0 while the code claims it binds localhost*,
+    *No request body size limits on any JSON handler*.
+
+!!! warning "Expected to change"
+    Responses are not compressed today, and `valuesOnly` responses use a per-feature
+    GeoJSON wrapper with null geometry. Both are being changed — compression will be
+    negotiated via `Accept-Encoding`, and `valuesOnly` is expected to move to a columnar
+    `{ids, values}` shape.
+
+    Tickets: *No HTTP compression on any API response*, *Full-dataset stat fetches ship
+    16.1 MB of feature wrappers, twice, concurrently*.
 
 ## Server Information
 
+### `GET /api/health`
+
+Liveness check. Returns `200` with a minimal JSON body.
+
 ### `GET /api/info`
 
-Returns the current server status and available features.
+Returns the current server status and available features. The frontend uses this on
+startup to decide whether to show the Setup Guide.
 
 **Response:**
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tiles_loaded": true,
-  "geo_loaded": true,
-  "scenarios": ["reference", "current", "future"],
-  "attributes": ["rainfall", "temperature", "land_cover"]
+  "geo_loaded": true
 }
 ```
 
@@ -25,208 +60,300 @@ Returns the current server status and available features.
 | `version` | string | Application version |
 | `tiles_loaded` | boolean | Whether MBTiles data was found and opened |
 | `geo_loaded` | boolean | Whether GeoPackage scenario data is available |
-| `scenarios` | string[] | List of available scenario names |
-| `attributes` | string[] | List of available catchment attributes |
 
-## Projects
+## Tilesets
 
-### `GET /api/projects`
+### `GET /api/tilesets`
 
-Returns a list of all projects, sorted by creation date (newest first).
+Returns the list of available tileset names.
+
+### `GET /api/tilesets/{name}/metadata`
+
+Returns the MBTiles metadata for one tileset as JSON.
 
 **Response:**
+
+```json
+{
+  "name": "africa",
+  "format": "pbf",
+  "minzoom": "2",
+  "maxzoom": "15",
+  "bounds": "-17.5,-34.8,63.5,37.4",
+  "center": "22.977,1.258,4"
+}
+```
+
+## Metadata and Columns
+
+### `GET /api/columns`
+
+The authoritative list of attribute columns present in the GeoPackage. Sourced from the
+data, not from `metadata.csv`.
+
+### `GET /api/scenarios`
+
+Returns the available scenario names.
+
+### `GET /api/metadata/{key}`
+
+Fifteen routes, each returning one lookup map parsed from `metadata.csv`, keyed by column
+name:
+
+| Route | Contents |
+|---|---|
+| `colors` | Preferred display colour per column |
+| `details` | Human-readable descriptions |
+| `variabletypes` | Highest-level grouping per column |
+| `inputs` | User-input flags |
+| `targetinputs` | Target-input flags |
+| `targetranges` | Acceptable target ranges |
+| `canmap` | `MapthisYN` — eligible for map/dial/table view |
+| `cangraph` | `graphthisYN` — eligible for chart view |
+| `axislabels` | Y-axis labels |
+| `xaxislabels` | X-axis tick labels |
+| `units` | Display units |
+| `charttypes` | `typeofgraph` — line, boxplot, dial |
+| `groupingvariables` | Grouping variable per column |
+| `groupingvalues` | Values available per grouping variable |
+| `dial0middle` | Whether the dial centres on zero |
+
+See [Datapack Format](datapack-format.md#metadatacsv-column-reference) for column
+semantics, and [Architecture](architecture.md#factor-selection-metadatacsv-to-chart-view)
+for how these drive the selectors.
+
+## Scenario and Catchment Data
+
+### `GET /api/scenario/{scenario}/{attribute}`
+
+Returns attribute values for all catchments in a scenario.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scenario` | path | `reference`, `current` or `future` |
+| `attribute` | path | Attribute column name |
+
+Returns a map of catchment IDs (HYBAS_ID) to values:
+
+```json
+{ "1121879850": 45.2, "1121881430": 62.8 }
+```
+
+### `GET /api/catchment/{id}`
+
+Returns all attribute values for one catchment across all loaded scenarios. Returns `404`
+if the ID is not found.
+
+### `GET /api/choropleth`
+
+The main map data endpoint. Returns a GeoJSON `FeatureCollection` of catchment polygons
+with the requested attribute in each feature's properties.
+
+| Query parameter | Description |
+|---|---|
+| `scenario` | `reference`, `current` or `future` |
+| `attribute` | Attribute column name |
+| `minx`, `miny`, `maxx`, `maxy` | Viewport bounding box |
+| `zoom` | Current map zoom; selects the server-side aggregation tier |
+| `siteId` | Optional; applies site-specific ideal overrides |
+| `valuesOnly` | `1` bypasses zoom aggregation and returns every catchment's raw value with null geometry |
+
+### `GET /api/aggregate`
+
+Area-weighted aggregate values for the requested extent and columns.
+
+### `GET /api/precalculate/full`
+
+Precomputed full-domain area-weighted means for all attributes, for reference and current.
+Cached server-side after the first computation.
+
+### `GET /api/compare`
+
+Comparison data between two scenarios.
+
+### `GET /api/catchments/bounds`
+
+Returns the bounding box of the catchment dataset.
+
+### `GET /api/catchments/geometry/{id}`
+
+Returns the geometry for a single catchment.
+
+### `POST /api/catchments/in-bbox`
+
+Returns catchments intersecting a bounding box.
+
+**Request body:**
+
+```json
+{ "minX": 30.0, "minY": -26.0, "maxX": 32.0, "maxY": -24.0, "limit": 500 }
+```
+
+## Sites
+
+A **site** is a saved study area: a boundary, its view layout, and its indicator values.
+In the WebView runtime these are JSON files under `data/sites/`; in the browser runtime
+they live in `localStorage` and these endpoints are largely bypassed.
+
+### `GET /api/sites`
+
+Returns all sites, sorted by creation date, newest first.
 
 ```json
 [
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "title": "Catchment Analysis Q1",
-    "description": "Analysis of rainfall patterns",
-    "thumbnail": "/images/projects/550e8400-e29b-41d4-a716-446655440000.jpg",
+    "title": "Munywana Conservancy",
+    "description": "Catchments across the conservancy",
+    "thumbnail": "/data/images/550e8400-e29b-41d4-a716-446655440000.jpg",
     "createdAt": "2026-02-03T10:15:30Z",
     "updatedAt": "2026-02-03T14:22:15Z"
   }
 ]
 ```
 
-### `GET /api/projects/{id}`
+### `GET /api/sites/{id}`
 
-Returns a single project by ID.
+Returns a single site. `404` if not found.
 
-**Parameters:**
+### `POST /api/sites`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `id` | path | Project UUID |
-
-**Response:** Project object (see above)
-
-### `POST /api/projects`
-
-Creates a new project.
-
-**Request Body:**
-
-```json
-{
-  "title": "My New Project",
-  "description": "Optional description",
-  "thumbnail": "data:image/jpeg;base64,/9j/4AAQ..."
-}
-```
+Creates a site.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `title` | string | Yes | Project title |
-| `description` | string | No | Project description |
-| `thumbnail` | string | No | Base64-encoded image data URI |
+| `title` | string | Yes | Site title |
+| `description` | string | No | Site description |
+| `geometry` | GeoJSON | Yes | Site boundary |
+| `creationMethod` | string | Yes | `shapefile`, `geojson`, `drawn` or `catchments` |
+| `catchmentIds` | string[] | No | Present when created from catchment selection |
+| `thumbnail` | string | No | Base64 data URI, saved to `data/images/` |
 
-**Response:** Created project object with generated ID
+### `PUT` / `PATCH /api/sites/{id}`
 
-### `PUT /api/projects/{id}`
+Updates a site. Accepts the same fields as `POST`.
 
-Updates an existing project.
+!!! danger "Input validation gap"
+    A `thumbnail` value that is not a `data:image` URI is currently stored verbatim and
+    is later joined onto the data directory and deleted when the site is deleted.
+    Ticket: *Thumbnail path traversal allows arbitrary file deletion*.
 
-**Parameters:**
+### `DELETE /api/sites/{id}`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `id` | path | Project UUID |
+Deletes a site and its thumbnail. `204 No Content` on success.
 
-**Request Body:** Same as POST
+### `POST /api/sites/dissolve-catchments`
 
-**Response:** Updated project object
+Dissolves a set of catchments into a single boundary. This is the correct pattern for
+deriving geometry from the study area — the client sends identifiers and receives geometry.
 
-### `DELETE /api/projects/{id}`
+**Request body:**
 
-Deletes a project and its associated thumbnail image.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `id` | path | Project UUID |
-
-**Response:** `204 No Content` on success
-
-## Scenario Data
-
-### `GET /api/scenarios/{scenario}/{attribute}`
-
-Returns attribute values for all catchments in a scenario.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `scenario` | path | Scenario name (`reference`, `current`, `future`) |
-| `attribute` | path | Attribute name to retrieve |
+```json
+{ "catchmentIds": ["1121879850", "1121881430"] }
+```
 
 **Response:**
 
 ```json
-{
-  "1234567890": 45.2,
-  "1234567891": 62.8,
-  "1234567892": 31.5
-}
+{ "geometry": { "type": "MultiPolygon", "coordinates": [] }, "boundingBox": {}, "area": 0 }
 ```
 
-Returns a map of catchment IDs (HYBAS_ID) to attribute values.
+!!! bug "`area` is always zero"
+    The `area` field is currently hardcoded to `0` upstream in `DissolveCatchments` and
+    has never returned a real value. Do not rely on it.
+    Ticket: *Dissolved catchment area is always reported as zero*.
 
-### `GET /api/catchment/{id}`
+## Site Indicators
 
-Returns all attribute values for a specific catchment across all loaded scenarios.
+### `GET /api/sites/{id}/indicators`
 
-**Parameters:**
+Returns the site's aggregated indicator values.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `id` | path | Catchment HYBAS_ID |
+### `POST /api/sites/{id}/indicators`
 
-**Response:**
+Extracts indicators for the site from its constituent catchments. In the browser runtime
+the request body carries the site object, since the server has no stored copy.
+
+### `PATCH /api/sites/{id}/indicators`
+
+Updates user-set indicator values (ideal values and their bounds) and triggers ecological
+recalculation.
+
+!!! warning "Expected to change"
+    This handler currently reads, mutates and writes the site with no per-site lock, so
+    two concurrent updates lose one of the results.
+    Ticket: *Concurrent indicator saves lose updates, and site writes are not atomic*.
+
+### `POST /api/sites/{id}/indicators/reset`
+
+Resets ideal values back to current.
+
+### `GET` / `POST /api/sites/{id}/catchments`
+
+Returns the per-catchment breakdown for a site, including `areaKm2` and `aoiFraction`.
+`POST` accepts a site body for browser-runtime sites the server has never stored.
+
+### `GET` / `POST /api/sites/{id}/whiskers`
+
+Returns whisker (upper/lower bound) values for the site.
+
+## Boundary Editing
+
+### `POST /api/sites/{id}/boundary/union/{catchmentId}`
+
+Adds a catchment to the site boundary and returns the updated geometry.
+
+### `POST /api/sites/{id}/boundary/difference/{catchmentId}`
+
+Removes a catchment from the site boundary and returns the updated geometry.
+
+Both return:
 
 ```json
-{
-  "reference": {
-    "herbs_tot_kgkm2": 45.2,
-    "trees_tot_kgkm2": 120.5
-  },
-  "current": {
-    "herbs_tot_kgkm2": 38.1,
-    "trees_tot_kgkm2": 95.3
-  },
-  "future": {
-    "herbs_tot_kgkm2": 42.0,
-    "trees_tot_kgkm2": 110.8
-  }
-}
+{ "geometry": {}, "boundingBox": {}, "area": 0.0 }
 ```
 
-Returns a map of scenario names to attribute maps. Each scenario contains all available attributes and their values for that catchment. Returns `404` if the catchment ID is not found.
+## Data Pack Management
 
-## Vector Tiles
+### `GET /api/datapack/status`
 
-### `GET /tiles/{z}/{x}/{y}.pbf`
+Returns the current install state — idle, installing (with progress), or failed.
 
-Serves Mapbox Vector Tiles from the loaded MBTiles file.
+### `POST /api/datapack/install`
 
-**Parameters:**
+Installs a data pack from a local archive path.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `z` | path | Zoom level |
-| `x` | path | Tile column |
-| `y` | path | Tile row |
+!!! danger "Destructive and unauthenticated"
+    This handler accepts an arbitrary filesystem path, validates only the `.zip`/`.7z`
+    suffix, and recursively deletes the data directory before extracting. It must not be
+    reachable from an untrusted network.
+    Ticket: *Unauthenticated datapack install destroys the data directory*.
 
-**Response:** Protocol Buffer (application/x-protobuf) with gzip encoding.
+### `POST /api/dialog/open-file`
 
-Returns `404` if the tile does not exist.
+Opens a native file-picker dialog on the host and returns the chosen path. Intended for
+the desktop runtime only.
 
-### `GET /tiles/metadata`
-
-Returns the MBTiles metadata as JSON.
-
-**Response:**
-
-```json
-{
-  "name": "catchments",
-  "format": "pbf",
-  "minzoom": "2",
-  "maxzoom": "15",
-  "bounds": "-25.3,-46.9,63.5,37.5",
-  "center": "19.1,-4.7,6"
-}
-```
-
-## Map Style
-
-### `GET /styles/uow_tiles.json`
-
-Returns the MapBox GL Style JSON used to render the vector tiles.
-
-## Images
-
-### `GET /images/{path}`
-
-Serves uploaded images (project thumbnails).
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `path` | path | Image file path relative to `data/images/` |
+!!! danger "Desktop-only endpoint, currently always registered"
+    In server mode this opens a window on the host's desktop and blocks a request
+    goroutine until a human responds.
+    Ticket: *handleFileDialog opens a native OS modal in response to an HTTP request*.
 
 ## Browser Downloads
 
-These endpoints serve the distributable datapack archive and platform executables for direct browser download. They are only relevant in **browser runtime** (server deployment); the desktop app installs the data pack via the setup guide from a local file.
+These endpoints serve the distributable datapack archive and platform executables for
+direct browser download. They are only relevant in **browser runtime** (server deployment);
+the desktop app installs the data pack via the setup guide from a local file.
 
-All paths are configured in `settings.json`. See [Server Deployment — Enabling Browser Downloads](server-deployment.md#3-enabling-browser-downloads-executables-and-data-pack) for full setup instructions.
+All paths are configured in `settings.json`. See
+[Server Deployment — Enabling Browser Downloads](server-deployment.md#3-enabling-browser-downloads-executables-and-data-pack)
+for full setup instructions.
 
 ### `GET /api/datapack/download-info`
 
-Returns metadata about the configured downloadable archive. The frontend uses this endpoint on page load to decide whether to show the download button.
+Returns metadata about the configured downloadable archive. The frontend uses this
+endpoint on page load to decide whether to show the download button.
 
 **Response when an archive is configured:**
 
@@ -277,7 +404,8 @@ Streams the configured archive file to the client as an attachment.
 
 ### `GET /api/executables/info`
 
-Returns availability metadata for each platform executable. The frontend uses this on the Download page to decide which platform cards to show as downloadable.
+Returns availability metadata for each platform executable. The frontend uses this on the
+Download page to decide which platform cards to show as downloadable.
 
 **Response:**
 
@@ -327,6 +455,54 @@ Streams the executable for the requested platform as a file attachment.
 
 ---
 
+## Vector Tiles
+
+### `GET /tiles/{name}/{z}/{x}/{y}.pbf`
+
+Serves Mapbox Vector Tiles from the named MBTiles tileset.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | path | Tileset name, e.g. `africa` |
+| `z` | path | Zoom level |
+| `x` | path | Tile column |
+| `y` | path | Tile row |
+
+**Response:** Protocol Buffer (`application/x-protobuf`) with `Content-Encoding: gzip`
+and `Access-Control-Allow-Origin: *`. Returns `404` if the tile does not exist.
+
+Up to three auxiliary listeners on the following ports serve this same route, to work
+around per-origin connection limits in grid view. See
+[Architecture](architecture.md#auxiliary-tile-servers).
+
+## Style, TileJSON and Fonts
+
+### `GET /data/style.json`
+
+Returns the MapLibre GL style used to render the vector tiles, read from
+`data/mbtiles/style.json` (currently falling back to the resources directory — a fallback
+that is being removed) with tile URLs
+rewritten to match the running host and port.
+
+### `GET /data/tiles.json`
+
+Returns TileJSON for the loaded tileset.
+
+### `GET /fonts/{fontstack}/{range}.pbf`
+
+Proxies MapLibre font glyphs, fetching from the upstream CDN once and serving locally
+thereafter. This avoids repeated external requests from each map instance in grid view.
+
+## Static Data
+
+| Prefix | Serves from | Contents |
+|---|---|---|
+| `/data/images/` | `data/images/` | Site thumbnails |
+| `/data/walkthroughs/` | `data/walkthroughs/` | Read-only demo site JSON |
+| `/data/demo/` | `data/demo/` | Demo assets used by the guided tours |
+| `/docs/` | embedded | This documentation site |
+
 ## Static Assets
 
-All other routes serve the embedded React SPA. The server implements SPA routing by returning `index.html` for any path not matching the above patterns.
+All other routes serve the embedded React SPA. The server implements SPA routing by
+returning `index.html` for any path not matching the above patterns.

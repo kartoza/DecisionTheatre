@@ -4,6 +4,12 @@
 # This Makefile is a convenience wrapper for use inside `nix develop`.
 # All tools (go, node, gcc, etc.) come from the nix store.
 #
+# Launching the app goes through scripts/run-app.sh, the single source of
+# truth shared by `make run`, `nix run` and the neovim <leader>pr mapping.
+#
+# `make help` renders scripts/shell-help.sh — the same command table shown on
+# entry to `nix develop` and re-rendered by `dt`.
+#
 # For reproducible builds and releases, use nix directly:
 #   nix build             - Build the full application
 #   nix build .#frontend  - Build only the frontend
@@ -13,7 +19,7 @@
 # Platform-specific release binaries are built in CI (see .github/workflows/release.yml).
 
 BINARY_NAME := decision-theatre
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION ?= $(shell ./scripts/version.sh)
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 
 BIN_DIR := bin
@@ -26,12 +32,14 @@ GOFMT := gofmt
 GOLINT := golangci-lint
 
 .PHONY: all app build build-backend build-frontend clean
-.PHONY: dev dev-backend dev-frontend dev-all
+.PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all
 .PHONY: fmt lint check deps
+.PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
-.PHONY: geopackage datapack list-datapack fetch-data
+.PHONY: check-data validate-data pack-data datapack
+.PHONY: geopackage list-datapack fetch-data
 .PHONY: design-export design-import design-preview
 .PHONY: release
 .PHONY: help info
@@ -69,11 +77,30 @@ build-docs:
 	mkdocs build -d $(DOCS_SITE_DIR)
 
 # ============================
+# Run
+# ============================
+
+# Launch the standalone desktop app.
+#
+# scripts/run-app.sh is the single source of truth for how the app is
+# launched: `nix run` and the neovim <leader>pr mapping call the very same
+# script, so the three cannot drift apart. It rebuilds only what is stale.
+#
+# Pass flags through with ARGS, e.g.  make run ARGS="--port 9090"
+run:
+	./scripts/run-app.sh --desktop $(ARGS)
+
+# Launch the same application as a web server, with no desktop window, for a
+# browser to connect to. Same script, same build, only the mode differs.
+serve:
+	./scripts/run-app.sh --server $(ARGS)
+
+# ============================
 # Development
 # ============================
 
-dev: build-backend
-	$(BIN_DIR)/$(BINARY_NAME) --port 8080 --data-dir ./data
+# `dev` is an alias for `run` — there is deliberately no second launch path.
+dev: run
 
 # Go backend with air hot-reload on :8080 (port configured in .air.toml)
 dev-backend:
@@ -116,7 +143,58 @@ fmt:
 lint:
 	$(GOLINT) run --timeout 5m
 
+## check-data: Check the data directory and print a summary of its contents
+##
+## The checks live in Go (internal/datacheck) and run through
+## `decision-theatre check-data`, so they use the same loaders the application
+## does. Exit 0 = no errors, 1 = errors, 2 = the directory is unreadable.
+check-data:
+	./scripts/check-data.sh $(if $(DATA_DIR),$(DATA_DIR),./data)
+
+## validate-data: deprecated name for check-data, kept so existing scripts,
+## deployment gates and documentation keep working.
+validate-data: check-data
+
 check: fmt lint test
+
+# ============================
+# Health and flake lock step
+# ============================
+
+## doctor: Is this checkout healthy? Reports; never changes anything.
+doctor:
+	@./scripts/doctor.sh
+
+## doctor-deep: The same, plus recomputing the real nix hashes (needs network).
+doctor-deep:
+	@./scripts/doctor.sh --deep
+
+## check-flake: Fast, offline check that flake.nix is in step with go.mod,
+## go.sum and frontend/package-lock.json. This is what the pre-commit hook and
+## CI run — a stale hash here means anyone importing this flake fails to build.
+check-flake:
+	@./scripts/sync-flake.sh --check
+
+## verify-flake: Authoritative check — recomputes the real hashes. Slow.
+verify-flake:
+	@./scripts/sync-flake.sh --verify
+
+## sync-flake: Recompute both fixed-output hashes and write them into
+## flake.nix, recording which manifests they belong to. Run this whenever
+## go.mod, go.sum or frontend/package-lock.json changes, and commit flake.nix
+## and nix/manifest-lock.json together.
+sync-flake:
+	@./scripts/sync-flake.sh
+
+## hooks: Install the git hooks so the checks run before each commit.
+hooks:
+	@./scripts/install-hooks.sh
+
+## vendor-fonts: Refresh the committed typefaces from nixpkgs. They are
+## committed rather than fetched because the desktop app is offline by design.
+## ARGS="--check" verifies the committed files are current.
+vendor-fonts:
+	@./scripts/vendor-fonts.sh $(ARGS)
 
 # ============================
 # Dependencies
@@ -198,15 +276,21 @@ fetch-data:
 geopackage:
 	./scripts/build-geopackage.sh ./data
 
-# Package data files into distributable .zip (mbtiles + geopackage)
-datapack:
-	./scripts/package-data.sh $(VERSION)
+# Check the data directory, then package it into a distributable .zip.
+# Refuses to build the pack if the check reports errors; pass ARGS="--force"
+# to override.
+pack-data:
+	./scripts/pack-data.sh $(VERSION) $(ARGS)
 	@APP_CID=$$(cd deployments && docker compose ps -q app 2>/dev/null); \
 	if [ -n "$$APP_CID" ] && [ "$$(docker inspect -f '{{.State.Running}}' "$$APP_CID" 2>/dev/null)" = "true" ]; then \
 		echo "==> Updating downloads config inside the running deployments-app container..."; \
 		docker exec "$$APP_CID" /app/scripts/update-download-config.sh \
 			--datapack "/app/dist/decision-theatre-data-v$(VERSION).zip"; \
 	fi
+
+# datapack: deprecated name for pack-data, kept so existing release scripts
+# and documentation keep working.
+datapack: pack-data
 
 # List contents of the most recently built data pack
 list-datapack:
@@ -276,58 +360,12 @@ info:
 	@echo "  nix build             Full application"
 	@echo "  nix build .#frontend  Frontend only"
 	@echo "  nix flake check       Run all tests"
-	@echo "  nix run               Build and run"
+	@echo "  nix run               Build and run (via scripts/run-app.sh)"
 
+## help: Show the command table.
+##
+## Rendered by scripts/shell-help.sh, the same script `nix develop` runs on
+## entry and that `dt` re-renders — so the three can never
+## list different commands. Filter by group: make help GROUP=data
 help:
-	@echo "Decision Theatre - Makefile (dev iteration inside nix develop)"
-	@echo ""
-	@echo "Build:"
-	@echo "  app             Full app build (frontend + docs + backend)"
-	@echo "  build           Same as app"
-	@echo "  build-backend   Backend only"
-	@echo "  build-frontend  Frontend only"
-	@echo "  clean           Remove artifacts"
-	@echo ""
-	@echo "Dev:"
-	@echo "  dev-all         Go hot-reload + Vite HMR (recommended)"
-	@echo "  dev-backend     Go backend with air (hot-reload)"
-	@echo "  dev-frontend    Vite dev server (HMR)"
-	@echo "  dev             Run backend once (no hot-reload)"
-	@echo ""
-	@echo "Test:"
-	@echo "  test            Go tests + coverage"
-	@echo "  test-frontend   Frontend tests"
-	@echo "  test-all        Both"
-	@echo ""
-	@echo "Quality:"
-	@echo "  fmt / lint / check"
-	@echo ""
-	@echo "Packaging:"
-	@echo "  packages          All platforms (linux + windows cross-compile)"
-	@echo "  packages-linux    Linux .tar.gz, .deb, .rpm"
-	@echo "  packages-windows  Windows .zip (needs mingw-w64)"
-	@echo "  packages-darwin   macOS .tar.gz / .dmg (macOS only)"
-	@echo "  packages-flatpak  Flatpak .flatpak (needs flatpak-builder)"
-	@echo "  packages-snap     Snap .snap (needs snapcraft)"
-	@echo "  release           Build all packages and show release instructions"
-	@echo ""
-	@echo "Data Preparation:"
-	@echo "  fetch-data        Download CSVs from Google Drive (FOLDER=<id-or-url>)"
-	@echo "  geopackage        Build datapack.gpkg from CSVs + catchments"
-	@echo "  datapack          Package data into distributable .zip"
-	@echo "  list-datapack     List contents of last built data pack"
-	@echo ""
-	@echo "Design System:"
-	@echo "  design-export     Show files to send to designer (Figma)"
-	@echo "  design-import     Import updated tokens from Figma"
-	@echo "  design-preview    Preview import without changes (dry run)"
-	@echo "                    Use TOKENS=path/to/file.json to specify input"
-	@echo ""
-	@echo "Docs:"
-	@echo "  docs / docs-serve"
-	@echo ""
-	@echo "Reproducible builds (use nix, not make):"
-	@echo "  nix build             Full application"
-	@echo "  nix build .#frontend  Frontend only"
-	@echo "  nix flake check       Run all tests"
-	@echo "  nix run               Build and run"
+	@./scripts/shell-help.sh $(GROUP) || true

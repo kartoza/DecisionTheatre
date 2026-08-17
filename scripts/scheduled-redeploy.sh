@@ -82,9 +82,13 @@ docker compose up -d
 docker compose ps
 echo "==> Deployments stack started."
 
-echo "==> Building datapack..."
+echo "==> Checking the data directory and building the datapack..."
 cd "$PROJECT_ROOT"
-make datapack
+# pack-data checks the data directory first and refuses to build a pack that the
+# application could not load. That is deliberate for an unattended job: a failed
+# redeploy is recoverable, a silently broken pack served to users is not. Add
+# ARGS="--force" here only if you would rather ship a known-broken pack.
+make pack-data
 
 echo "==> Building cross-platform installers..."
 ./scripts/build-cross-docker.sh

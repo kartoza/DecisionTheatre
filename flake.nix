@@ -6,27 +6,68 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.2.0";
+        version = "0.4.0";
 
         # MkDocs environment for requirements documentation
-        mkdocsEnv = pkgs.python3.withPackages (ps: with ps; [
-          mkdocs
-          mkdocs-material
-          mkdocs-minify-plugin
-          pygments
-          pymdown-extensions
-        ]);
+        mkdocsEnv = pkgs.python3.withPackages (
+          ps: with ps; [
+            mkdocs
+            mkdocs-material
+            mkdocs-minify-plugin
+            pygments
+            pymdown-extensions
+          ]
+        );
 
         # Python environment for data tooling (GeoPackage creation)
-        dataToolsEnv = pkgs.python3.withPackages (ps: with ps; [
-          pandas
-          geopandas
-          shapely
-        ]);
+        dataToolsEnv = pkgs.python3.withPackages (
+          ps: with ps; [
+            pandas
+            geopandas
+            shapely
+          ]
+        );
+
+        # webkit2gtk-4.0 compatibility alias.
+        #
+        # github.com/webview/webview_go hardcodes its cgo directive as
+        #   #cgo linux ... pkg-config: gtk+-3.0 webkit2gtk-4.0
+        # with no build tag to select 4.1. nixpkgs ships only the 4.1 ABI, so
+        # pkg-config fails and the build dies at "No package 'webkit2gtk-4.0'".
+        #
+        # This installs the real 4.1 pkg-config file under the 4.0 name, so the
+        # lookup succeeds while still linking libwebkit2gtk-4.1.so — the only
+        # library that exists. The two ABIs are compatible for webview's use.
+        #
+        # Generated from the 4.1 package rather than committed, so it can never
+        # carry a stale store path. A committed .webkit-compat/ shim used to do
+        # this job; it is gitignored, orphaned and now points at a webkitgtk
+        # version no longer in the store.
+        webkitCompat = pkgs.runCommand "webkit2gtk-4.0-compat" { } ''
+          mkdir -p $out/lib/pkgconfig
+          src=""
+          for d in ${pkgs.webkitgtk_4_1.dev} ${pkgs.webkitgtk_4_1}; do
+            if [ -f "$d/lib/pkgconfig/webkit2gtk-4.1.pc" ]; then
+              src="$d/lib/pkgconfig/webkit2gtk-4.1.pc"
+              break
+            fi
+          done
+          if [ -z "$src" ]; then
+            echo "webkit2gtk-4.1.pc not found in the webkitgtk_4_1 outputs" >&2
+            exit 1
+          fi
+          cp "$src" $out/lib/pkgconfig/webkit2gtk-4.0.pc
+        '';
 
         # =====================================================
         # Documentation: built via MkDocs
@@ -34,16 +75,32 @@
         docs = pkgs.stdenvNoCC.mkDerivation {
           pname = "decision-theatre-docs";
           inherit version;
+          # docs/hooks/generate_diagrams.py reads the Go sources, flake.nix and
+          # frontend/package.json at build time to draw diagrams that track the
+          # real code. Those inputs must therefore be in the docs source tree —
+          # they are all small text files. The hook degrades gracefully if any
+          # are absent, so a narrower filter would silently drop diagrams rather
+          # than fail the build.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
-            filter = path: type:
-              let baseName = baseNameOf (toString path); in
-              baseName == "mkdocs.yml" ||
-              pkgs.lib.hasPrefix (toString ./docs) (toString path);
+            filter =
+              path: type:
+              let
+                p = toString path;
+                baseName = baseNameOf p;
+              in
+              baseName == "mkdocs.yml"
+              || baseName == "flake.nix"
+              || baseName == "main.go"
+              || baseName == "go.mod"
+              || pkgs.lib.hasPrefix (toString ./docs) p
+              || pkgs.lib.hasPrefix (toString ./internal) p
+              || pkgs.lib.hasPrefix (toString ./frontend) p
+              || pkgs.lib.hasPrefix (toString ./.github) p;
           };
           nativeBuildInputs = [ mkdocsEnv ];
           buildPhase = ''
-            mkdocs build -d site
+            mkdocs build --strict -d site
           '';
           installPhase = ''
             mkdir -p $out
@@ -61,12 +118,11 @@
           inherit version;
           src = ./frontend;
 
-          # This hash pins the exact npm dependency tree.
-          # After first build attempt, nix will tell you the
-          # correct hash. Set to empty string to get it:
-          #   nix build .#frontend 2>&1 | grep 'got:'
-          # Then paste the sha256 here.
-          npmDepsHash = "sha256-4Ljrrxy3NyZ8kwpzPWg1RISh2UdtQdzU67uv+v1Zchw=";
+          # Pins the exact npm dependency tree. It is derived from
+          # frontend/package-lock.json, so ANY change to that file — including
+          # the version field — changes this hash. Recompute with:
+          #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
+          npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -89,26 +145,36 @@
           inherit version;
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
-            filter = path: type:
-              let baseName = baseNameOf (toString path); in
-              ! (
-                baseName == ".go" ||
-                baseName == ".direnv" ||
-                baseName == "result" ||
-                baseName == "node_modules" ||
-                baseName == ".idea" ||
-                baseName == ".vscode" ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName) ||
-                (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
+            filter =
+              path: type:
+              let
+                baseName = baseNameOf (toString path);
+              in
+              !(
+                baseName == ".go"
+                || baseName == ".direnv"
+                || baseName == "result"
+                || baseName == "node_modules"
+                || baseName == ".idea"
+                || baseName == ".vscode"
+                || (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName)
+                || (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
               );
           };
 
-          # Let nix fetch Go dependencies
-          # After go.mod changes, set to "" to discover the new hash via:
+          # Pins the vendored Go module set. Derived from go.mod and go.sum.
+          # Recompute after changing either, by emptying it and reading the
+          # reported value:
           #   nix build 2>&1 | grep 'got:'
-          vendorHash = "sha256-DgjErcJvY7pvXTAtVMOiAOqODJ7DrzXINBMXJcauiCI=";
+          #
+          # The previous value was stale — it did not match the current go.sum.
+          # It went unnoticed because a fixed-output derivation is only refetched
+          # when its output path changes, and the path embeds the version. The
+          # 0.2.0 output was already in the store, so nothing revalidated it until
+          # the bump to 0.3.0 forced a rebuild.
+          vendorHash = "sha256-LjBgQc1+ZgCer2aSug9kxSwumsGlp/owVgrUATnqPo8=";
 
           # The local replace directive (./internal/webview_go) needs the
           # source present during the go-modules download phase.
@@ -130,13 +196,18 @@
             makeWrapper
           ];
 
-          buildInputs = with pkgs; [
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-            webkitgtk_4_1
-            gtk3
-            glib-networking
-            gsettings-desktop-schemas
-          ];
+          buildInputs =
+            with pkgs;
+            [
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              webkitgtk_4_1
+              # Supplies webkit2gtk-4.0.pc; see webkitCompat above.
+              webkitCompat
+              gtk3
+              glib-networking
+              gsettings-desktop-schemas
+            ];
 
           ldflags = [
             "-s"
@@ -176,13 +247,139 @@
           };
         };
 
+        # Launcher for `nix run`. The launch policy (desktop WebView mode,
+        # flags, data directory resolution) lives in scripts/run-app.sh so that
+        # `nix run`, `make run` and the neovim <leader>pr mapping cannot drift
+        # apart. DT_BIN points the script at the reproducible store binary, so
+        # it skips every build step and only applies that shared policy.
+        # mode is "desktop" or "server"; both wrap the same script and the same
+        # store binary, so the only difference is which window, if any, opens.
+        mkLauncher =
+          mode:
+          pkgs.stdenvNoCC.mkDerivation {
+            pname = "decision-theatre-${mode}";
+            inherit version;
+            # The whole scripts directory, not just run-app.sh: the launcher
+            # sources lib-build.sh from alongside itself, and installing the one
+            # file would leave a launcher that dies on its first source.
+            src = ./scripts;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            installPhase = ''
+              runHook preInstall
+
+              mkdir -p $out/libexec/decision-theatre
+              install -m755 run-app.sh lib-build.sh $out/libexec/decision-theatre/
+
+              makeWrapper $out/libexec/decision-theatre/run-app.sh \
+                $out/bin/decision-theatre-${mode} \
+                --set DT_BIN ${decision-theatre}/bin/decision-theatre \
+                --set-default DT_MODE ${mode} \
+                --prefix PATH : ${
+                  pkgs.lib.makeBinPath [
+                    pkgs.bash
+                    pkgs.coreutils
+                  ]
+                }
+              runHook postInstall
+            '';
+            meta = with pkgs.lib; {
+              description =
+                if mode == "server" then
+                  "Run Decision Theatre as a web server"
+                else
+                  "Launch the Decision Theatre desktop application";
+              license = licenses.gpl3;
+              mainProgram = "decision-theatre-${mode}";
+            };
+          };
+
+        run-app = mkLauncher "desktop";
+        serve-app = mkLauncher "server";
+
+        # Data tools. The checks and the packer live in Go, in
+        # internal/datacheck, and reach the data through the same loaders the
+        # application uses — so they cannot describe a different data directory
+        # from the one the app actually reads. These derivations only put the
+        # right subcommand on the PATH under its own name.
+        #
+        # subcommand is "check-data" or "pack-data".
+        mkDataTool =
+          subcommand:
+          pkgs.writeShellApplication {
+            name = subcommand;
+            runtimeInputs = [ decision-theatre ];
+            text = ''
+              exec decision-theatre ${subcommand} "$@"
+            '';
+          };
+
+        check-data = mkDataTool "check-data";
+        pack-data = mkDataTool "pack-data";
+
+        # Developer-workflow scripts exposed as nix apps, so they can be run on
+        # a machine that has not entered the development shell — which is what
+        # CI does. Each wraps the tracked script rather than restating it.
+        mkScriptTool =
+          {
+            name,
+            script,
+            runtimeInputs ? [ ],
+          }:
+          pkgs.writeShellApplication {
+            inherit name runtimeInputs;
+            # The scripts source their siblings from scripts/, so they run from
+            # the checkout rather than a store copy. That is deliberate: a copy
+            # in the store would go stale against the tree being checked.
+            text = ''
+              if [ ! -x "./scripts/${script}" ]; then
+                echo "${name}: run this from the project root (./scripts/${script} not found)" >&2
+                exit 2
+              fi
+              exec "./scripts/${script}" "$@"
+            '';
+          };
+
+        doctor = mkScriptTool {
+          name = "doctor";
+          script = "doctor.sh";
+          runtimeInputs = with pkgs; [
+            jq
+            git
+            gnugrep
+            gnused
+            findutils
+            coreutils
+          ];
+        };
+
+        check-flake = mkScriptTool {
+          name = "check-flake";
+          script = "sync-flake.sh";
+          runtimeInputs = with pkgs; [
+            jq
+            gnugrep
+            gnused
+            coreutils
+          ];
+        };
+
       in
       {
         # =====================================================
         # Packages
         # =====================================================
         packages = {
-          inherit frontend docs decision-theatre;
+          inherit
+            frontend
+            docs
+            decision-theatre
+            run-app
+            serve-app
+            check-data
+            pack-data
+            doctor
+            check-flake
+            ;
           default = decision-theatre;
         };
 
@@ -193,7 +390,11 @@
           go-tests = pkgs.stdenvNoCC.mkDerivation {
             name = "decision-theatre-go-tests";
             src = ./.;
-            nativeBuildInputs = with pkgs; [ go gcc pkg-config ];
+            nativeBuildInputs = with pkgs; [
+              go
+              gcc
+              pkg-config
+            ];
             buildPhase = ''
               export HOME=$TMPDIR
               export GOPATH=$TMPDIR/go
@@ -217,7 +418,8 @@
             pname = "decision-theatre-frontend-tests";
             inherit version;
             src = ./frontend;
-            npmDepsHash = "";
+            # Same source as the frontend package, so the same hash.
+            npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
             buildPhase = ''
               npm test
             '';
@@ -229,136 +431,185 @@
         };
 
         # =====================================================
+        # Tooling shell: nix develop .#tooling
+        #
+        # The checks themselves, without the build toolchain. CI and the
+        # pre-commit hooks use this, so what runs in review is what runs on a
+        # contributor's machine — and a contributor who only wants to run the
+        # checks does not pay for Go, Node and GDAL to be realised first.
+        # =====================================================
+        devShells.tooling = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            pre-commit
+            shellcheck
+            shfmt
+            gitleaks
+            reuse
+            statix
+            nixpkgs-fmt
+            jq
+            git
+          ];
+        };
+
+        # =====================================================
         # Dev shell: nix develop
         # All tools available, no internet needed after first eval
         # =====================================================
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            # Go toolchain
-            go
-            gopls
-            golangci-lint
-            gomodifytags
-            gotests
-            impl
-            delve
-            go-tools
-            air
+          buildInputs =
+            with pkgs;
+            [
+              # Go toolchain
+              go
+              gopls
+              golangci-lint
+              gomodifytags
+              gotests
+              impl
+              delve
+              go-tools
+              air
 
-            # Node.js (for frontend dev iteration only)
-            nodejs_22
+              # Node.js (for frontend dev iteration only)
+              nodejs_22
 
-            # CGO build tools
-            gnumake
-            gcc
-            pkg-config
+              # CGO build tools
+              gnumake
+              gcc
+              pkg-config
 
-            # CLI utilities
-            ripgrep
-            fd
-            eza
-            bat
-            fzf
-            tree
-            jq
-            yq
+              # CLI utilities
+              ripgrep
+              fd
+              eza
+              bat
+              fzf
+              tree
+              jq
+              yq
 
-            # Geospatial tools
-            tippecanoe
-            sqlite
-            gdal
+              # Geospatial tools
+              tippecanoe
+              sqlite
+              gdal
 
-            # Documentation
-            mkdocsEnv
+              # Documentation
+              mkdocsEnv
 
-            # Data tooling (GeoPackage creation)
-            dataToolsEnv
+              # Data tooling (GeoPackage creation)
+              dataToolsEnv
 
-            # Nix tooling
-            nil
-            nixpkgs-fmt
-            nixfmt-rfc-style
+              # Nix tooling
+              nil
+              nixpkgs-fmt
+              nixfmt-rfc-style
 
-            # VCS
-            git
-            gh
+              # Terminal UI for the command table and the report scripts
+              gum
 
-            # Packaging
-            nfpm
-            zip
+              # VCS
+              git
+              gh
 
-            # Security scanning
-            trivy
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-            # WebView (embedded browser window)
-            webkitgtk_4_1
-            gtk3
+              # Packaging
+              nfpm
+              zip
 
-            # Windows cross-compilation
-            pkgs.pkgsCross.mingwW64.stdenv.cc
-          ];
+              # Security scanning
+              trivy
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              # WebView (embedded browser window)
+              webkitgtk_4_1
+              # Supplies webkit2gtk-4.0.pc; see webkitCompat above.
+              webkitCompat
+              gtk3
 
+              # Windows cross-compilation
+              pkgs.pkgsCross.mingwW64.stdenv.cc
+            ];
+
+          # The whole environment — Go paths, shortcuts, the `dt` command table —
+          # lives in scripts/dev-shell.sh rather than here, so it is ordinary
+          # reviewable shell rather than a string inside nix. This hook only
+          # locates and sources it.
           shellHook = ''
-            export EDITOR=nvim
-            export GOPATH="$PWD/.go"
-            export GOCACHE="$PWD/.go/cache"
-            export GOMODCACHE="$PWD/.go/pkg/mod"
-            export PATH="$GOPATH/bin:$PATH"
+            export DT_PROJECT_ROOT="$PWD"
 
-            export CGO_ENABLED=1
-
-            alias ll='eza -la'
-            alias la='eza -a'
-            alias ls='eza'
-            alias cat='bat --plain'
-
-            alias gor='go run .'
-            alias got='go test -v ./...'
-            alias gob='make build-backend'
-            alias gom='go mod tidy'
-            alias gol='golangci-lint run'
-
-            alias gs='git status'
-            alias ga='git add'
-            alias gc='git commit'
-            alias gl='git log --oneline -10'
-            alias gd='git diff'
-
-            echo ""
-            echo "Decision Theatre Development Environment"
-            echo ""
-            echo "Nix commands:"
-            echo "  nix build             - Build the full application"
-            echo "  nix build .#frontend  - Build only the frontend"
-            echo "  nix flake check       - Run all tests"
-            echo "  nix run               - Build and run the application"
-            echo ""
-            echo "Dev iteration (uses tools from nix store):"
-            echo "  make dev-all          - Go hot-reload + Vite HMR (recommended)"
-            echo "  make dev-backend      - Go backend with air (hot-reload on :8080)"
-            echo "  make dev-frontend     - Vite dev server (HMR on :5173)"
-            echo "  make dev              - Run Go backend once (no hot-reload)"
-            echo "  make test             - Run Go tests"
-            echo "  make test-frontend    - Run frontend tests"
-            echo "  make docs-serve       - Serve requirements docs"
-            echo ""
-            echo "Data & packaging:"
-            echo "  make geopackage       - Build datapack.gpkg from CSVs"
-            echo "  make datapack         - Build data pack zip (geopackage + mbtiles)"
-            echo "  make list-datapack    - List contents of last built data pack"
-            echo "  make packages         - Build release packages (all platforms)"
-            echo "  make packages-linux   - Linux .tar.gz, .deb, .rpm"
-            echo "  make packages-windows - Windows .zip, .msi"
-            echo ""
+            # A locale archive that actually contains the locale LANG names.
+            # NixOS systems frequently set LANG to a locale the system archive
+            # was never built with, and glibc then falls back to "C" — which is
+            # how the desktop window came to lay itself out a million times too
+            # large. See locale.go for the mechanism.
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
+            ''}
+            if [ -r "$DT_PROJECT_ROOT/scripts/dev-shell.sh" ]; then
+              # shellcheck source=scripts/dev-shell.sh
+              . "$DT_PROJECT_ROOT/scripts/dev-shell.sh"
+            else
+              echo "warning: scripts/dev-shell.sh not found under $DT_PROJECT_ROOT;" >&2
+              echo "         enter the shell from the project root for the usual setup." >&2
+            fi
           '';
         };
 
         # =====================================================
         # Apps: nix run
         # =====================================================
+        # Wraps scripts/run-app.sh rather than invoking the binary directly, so
+        # `nix run`, `make run` and neovim all launch the app the same way.
+        # The binary itself is still the pure, reproducible store build.
         apps.default = {
           type = "app";
-          program = "${decision-theatre}/bin/decision-theatre";
+          program = "${run-app}/bin/decision-theatre-desktop";
+        };
+
+        # nix run .#serve — the same application without the desktop window,
+        # for a browser to connect to.
+        apps.serve = {
+          type = "app";
+          program = "${serve-app}/bin/decision-theatre-server";
+        };
+
+        # nix run .#check-data -- [DATA_DIR]
+        #
+        # Runs the application's own check-data subcommand, so nix, make and a
+        # plain shell all execute identical logic — the logic the app itself
+        # uses to read the directory.
+        apps.check-data = {
+          type = "app";
+          program = "${check-data}/bin/check-data";
+        };
+
+        # nix run .#pack-data -- [DATA_DIR]
+        apps.pack-data = {
+          type = "app";
+          program = "${pack-data}/bin/pack-data";
+        };
+
+        # Deprecated name for check-data, kept so existing deployment gates and
+        # documentation keep working.
+        apps.validate-data = {
+          type = "app";
+          program = "${check-data}/bin/check-data";
+        };
+
+        # nix run .#doctor — is this checkout healthy?
+        apps.doctor = {
+          type = "app";
+          program = "${doctor}/bin/doctor";
+        };
+
+        # nix run .#check-flake -- [--check|--verify]
+        #
+        # The lock-step gate. CI runs this before anything else: a flake whose
+        # hashes have fallen behind its manifests fails for every importer, so
+        # it is worth failing fast and saying exactly that.
+        apps.check-flake = {
+          type = "app";
+          program = "${check-flake}/bin/check-flake";
         };
       }
     );

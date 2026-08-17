@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Real executable so `dt` works however the environment was entered — direnv,
+# `nix develop`, or neither. Shell functions cannot do that: direnv's `use
+# flake` exports environment variables only, so a function defined in the
+# flake's shellHook never reaches an interactive shell.
+set -euo pipefail
+root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+exec "$root/scripts/dt" "$@"

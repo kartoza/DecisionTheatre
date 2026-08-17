@@ -761,9 +761,9 @@ function ViewPane({
             )}
           </>
         ) : (
-          <Tooltip label="Quad view" placement="top">
+          <Tooltip label="Grid view" placement="top">
             <IconButton
-              aria-label="Switch to quad view"
+              aria-label="Switch to grid view"
               icon={<FiGrid />}
               onClick={onGoQuad}
               variant="ghost"
