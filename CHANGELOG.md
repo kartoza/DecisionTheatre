@@ -134,9 +134,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three tracked Go files were not gofmt-clean** (`internal/api/handler.go` and two test
   files). Now formatted, and the pre-commit hook keeps them that way.
 - **Every shell script under `scripts/` is now shellcheck-clean** at warning severity.
+- **Starting a demo tour tried to write a multi-megabyte site to localStorage and blew
+  the quota.** The tour resets the walkthrough's ideal targets to current, then
+  persisted the whole site object into the `dt-sites` key "so it is available for the
+  rest of the session". The Africa walkthrough is 4,026,496 characters — roughly
+  7.7 MB in UTF-16 against a typical 5 MB per-origin quota — so the write could never
+  succeed, and it happened on a completely fresh profile before the user had created
+  anything of their own. The return value was ignored, so it failed silently.
+
+  The reset is presentation state for the current session and never needed to be
+  durable, so it now lives in an in-memory map that cannot fail and is gone on reload
+  — which is the intended lifetime, since the tour resets the targets again next time
+  it runs.
+
+  `getSite` gained a fallback to the session store and then the static walkthrough
+  JSON, because a demo site previously resolved *only* as a side effect of that
+  localStorage write; removing the write without this would have broken the tours.
+  The fallback is limited to known walkthrough ids so that looking up a deleted site
+  does not cost a 404. `DemoTour` also had its own copy of the fetch-and-normalise
+  logic `getSite` already implements, along with a progress step for a fetch that no
+  longer happens; both are gone rather than left as an unreachable branch.
+
+- **localStorage failures were discarded, so saves appeared to succeed and did
+  not.** Every write path ended in an empty catch block. Once the quota was
+  exhausted the user saw their change reflected in React state and lost it on
+  reload — which reaches us as "the app is flaky" or "it lost my work" rather than
+  as a storage complaint, and hid the underlying problem from anyone debugging it.
+
+  Writes now go through `frontend/src/lib/storage.ts`, which reports rather than
+  swallows. `QuotaExceededError` is told apart from a blocked store (private
+  browsing, a privacy setting) because the advice differs: delete something, versus
+  nothing you save will survive this tab.
+
+  The two kinds of write are treated differently on purpose. Losing a **site** is
+  losing the user's work, and `saveLocalSites` already reported that so the caller
+  could say so. Losing a **pane layout** is losing a preference, and a toast per
+  failed write would be several a minute about something the user cannot act on
+  per-write — so preference failures surface **once per kind of failure per
+  session**, and always log.
+
+  A startup health check warns at 80% of the typical 5 MB quota, while writes still
+  succeed, rather than after something is lost. It probes with a real
+  write-read-remove round trip, because in private mode some browsers expose a
+  `localStorage` whose `setItem` throws — testing that the object exists proves
+  nothing.
+
+  The duplicate `isQuotaExceededError` in `hooks/useApi.ts` now comes from the same
+  module, and the two `sessionStorage` catch blocks in `types/index.ts` were
+  converted too, so nothing in that file swallows a storage error any more.
+
 - `GOPATH` is set from the project root rather than `$PWD`, so running a Go command after
   `cd`-ing into a subdirectory no longer creates a second module cache there. Two had
   accumulated, under `frontend/` and `resources/mbtiles/`.
+
+### Security
+
+- **The hosted deployment exposed an unauthenticated write-to-disk API that nothing
+  called.** A user's own sites belong in their browser, and the client honours that: in
+  browser runtime every site create, read, update and delete goes to the `dt-sites`
+  localStorage key, with no fallthrough to the API. The server registered the site CRUD
+  for everyone anyway, and nginx proxies every path.
+
+  Nine site routes plus `POST /api/datapack/install` are now registered **only** in the
+  desktop build, gated on `config.Config.DesktopMode`. Seven of the nine reach
+  `sites.Store` Create/Update/Delete; two are reads that disclosed every site on the
+  host; `datapack/install` replaced the contents of the data directory with whatever it
+  found at a caller-supplied path. In server mode they are absent from the route table
+  entirely, so no handler code is reachable.
+
+  This was the door behind two other reported faults — arbitrary file deletion via a
+  thumbnail path, and the datapack install — which is why it is recorded here rather than
+  under *Fixed*. The routes a browser session genuinely calls (`/indicators`,
+  `/catchments`, `/whiskers`, `/dissolve-catchments`, `/boundary/*`) are unchanged and
+  stay public: they take `runtime: "browser"` with the site in the request body and
+  return before touching the store.
+
+  The gate depends on `--headless`, which is a launch flag rather than code, so a test
+  asserts that `deployments/Dockerfile` and `deployments/docker-compose.yaml` still pass
+  it. `docs/developer-guide/client-server-boundary.md` now states the persistence split
+  alongside the computation split it already covered — the gap that let this drift.
+
+- **A thumbnail path from the client could delete any file the process could reach.**
+  `Store.Update` stored the string verbatim and `Store.Delete` later joined it onto the
+  data directory and called `os.Remove`, guarded only by a `/data/images/` prefix check
+  that `/data/images/../../etc/passwd` satisfies. The `os.Remove` error was discarded, so
+  nothing was logged either. Paths are now validated against the only shape the store
+  writes, on write and again on delete, and resolved through `filepath.Rel` rather than a
+  string prefix.
+
+- **A file dialog could be opened on the host's desktop by an HTTP request.**
+  `POST /api/dialog/open-file` called `zenity.SelectFile`, which opens a native picker on
+  whatever session the process is attached to and blocks until a human answers, holding a
+  goroutine meanwhile. It is now desktop-only, and bounded by a two-minute timeout tied to
+  the request context.
+
+- **No request body size limits on any JSON handler**, with nginx passing bodies up to
+  2 GB, so one POST could make the process buffer two gigabytes. Every request is now
+  capped — 1 MiB by default, 32 MiB for the handlers carrying geometry or an inline image
+  — and `client_max_body_size` drops to `40m` to match, with a test asserting the
+  application limit stays below the proxy's.
+
+- **A TLS private key was committed** because `certs/` was commented out in
+  `deployments/.gitignore`. The pattern is active again, alongside `*.key`, `*.pem`,
+  `*.crt`, `*.p12` and `*.pfx`, and secret scanning runs in pre-commit and CI.
 
 ## [0.4.0] — 2026-08-16
 

@@ -15,6 +15,21 @@ type Config struct {
 	DataDir      string
 	ResourcesDir string
 	Version      string
+
+	// DesktopMode is true only when the process owns a desktop session and has
+	// opened the embedded WebView window.
+	//
+	// It gates routes that are meaningless — and dangerous — without one.
+	// /api/dialog/open-file calls zenity, which opens a native file picker on
+	// whatever desktop the process is attached to and blocks until a human
+	// answers it. On the hosted deployment nginx proxies every path, so that
+	// endpoint was internet-reachable: a stranger could pop a window on the
+	// server's desktop, and every call held a server goroutine for as long as
+	// the dialog stood open.
+	//
+	// The zero value is the safe one. A caller that forgets to set it gets the
+	// server build, without the desktop-only routes.
+	DesktopMode bool
 }
 
 // Settings holds persistent user settings saved to disk

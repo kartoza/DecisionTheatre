@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -428,13 +429,38 @@ func (s *Server) handleExecutableDownload(w http.ResponseWriter, r *http.Request
 
 // handleFileDialog opens a native OS file picker and returns the selected path.
 // This is needed because the webview cannot expose native file paths to JavaScript.
+// fileDialogTimeout bounds how long a file picker may stand open.
+//
+// zenity blocks until a human answers. Without a bound, a dialog nobody notices
+// holds its request goroutine — and the HTTP connection — indefinitely. Two
+// minutes is long enough to find a file on a slow filesystem and short enough
+// that a forgotten dialog frees itself.
+const fileDialogTimeout = 2 * time.Minute
+
+// handleFileDialog opens a native file picker. Registered only in desktop mode;
+// see config.Config.DesktopMode for why.
 func (s *Server) handleFileDialog(w http.ResponseWriter, r *http.Request) {
+	// Tied to the request as well as the timeout, so a client that gives up
+	// takes the dialog with it.
+	ctx, cancel := context.WithTimeout(r.Context(), fileDialogTimeout)
+	defer cancel()
+
 	path, err := zenity.SelectFile(
+		zenity.Context(ctx),
 		zenity.Title("Select Data Pack"),
 		zenity.FileFilters{
 			{Name: "Data Packs", Patterns: []string{"*.zip", "*.7z"}},
 		},
 	)
+
+	// A timeout and a cancelled request both arrive as a context error. Neither
+	// is a server fault, and neither should be reported as one.
+	if ctx.Err() != nil {
+		httputil.RespondError(w, http.StatusRequestTimeout,
+			"the file dialog was closed without a selection")
+		return
+	}
+
 	if err == zenity.ErrCanceled {
 		httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{"path": ""})
 		return
