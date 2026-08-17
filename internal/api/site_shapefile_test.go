@@ -250,8 +250,13 @@ func openIntegrationStores(t *testing.T) *geodata.GpkgStore {
 }
 
 // buildRouter assembles a Handler + mux.Router using the provided stores.
+//
+// DesktopMode is set because these tests create and update sites through the
+// store, which is the desktop build's job — in the browser runtime the same work
+// happens in localStorage and those routes are not registered at all. See
+// registerDesktopSiteRoutes.
 func buildRouter(gpkg *geodata.GpkgStore, siteStore *sites.Store, dataDir string) *mux.Router {
-	cfg := config.Config{Port: 0, DataDir: dataDir, Version: "test"}
+	cfg := config.Config{Port: 0, DataDir: dataDir, Version: "test", DesktopMode: true}
 	h := NewHandler(nil, gpkg, siteStore, cfg)
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
