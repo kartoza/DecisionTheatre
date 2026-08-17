@@ -134,6 +134,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logic `getSite` already implements, along with a progress step for a fetch that no
   longer happens; both are gone rather than left as an unreachable branch.
 
+- **localStorage failures were discarded, so saves appeared to succeed and did
+  not.** Every write path ended in an empty catch block. Once the quota was
+  exhausted the user saw their change reflected in React state and lost it on
+  reload — which reaches us as "the app is flaky" or "it lost my work" rather than
+  as a storage complaint, and hid the underlying problem from anyone debugging it.
+
+  Writes now go through `frontend/src/lib/storage.ts`, which reports rather than
+  swallows. `QuotaExceededError` is told apart from a blocked store (private
+  browsing, a privacy setting) because the advice differs: delete something, versus
+  nothing you save will survive this tab.
+
+  The two kinds of write are treated differently on purpose. Losing a **site** is
+  losing the user's work, and `saveLocalSites` already reported that so the caller
+  could say so. Losing a **pane layout** is losing a preference, and a toast per
+  failed write would be several a minute about something the user cannot act on
+  per-write — so preference failures surface **once per kind of failure per
+  session**, and always log.
+
+  A startup health check warns at 80% of the typical 5 MB quota, while writes still
+  succeed, rather than after something is lost. It probes with a real
+  write-read-remove round trip, because in private mode some browsers expose a
+  `localStorage` whose `setItem` throws — testing that the object exists proves
+  nothing.
+
+  The duplicate `isQuotaExceededError` in `hooks/useApi.ts` now comes from the same
+  module, and the two `sessionStorage` catch blocks in `types/index.ts` were
+  converted too, so nothing in that file swallows a storage error any more.
+
 - `GOPATH` is set from the project root rather than `$PWD`, so running a Go command after
   `cd`-ing into a subdirectory no longer creates a second module cache there. Two had
   accumulated, under `frontend/` and `resources/mbtiles/`.
