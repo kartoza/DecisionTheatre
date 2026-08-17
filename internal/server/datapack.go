@@ -97,7 +97,12 @@ func (s *Server) handleDatapackStatus(w http.ResponseWriter, r *http.Request) {
 	var manifest datapackManifest
 	manifestPath := filepath.Join(settings.DataPackPath, "manifest.json")
 	if data, err := os.ReadFile(manifestPath); err == nil {
-		json.Unmarshal(data, &manifest)
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			// The pack is installed and usable; only its description is
+			// unreadable. Report the version as unknown rather than failing the
+			// status endpoint, but say why in the log.
+			log.Printf("Warning: %s is not valid JSON: %v", manifestPath, err)
+		}
 	}
 
 	httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{
@@ -644,7 +649,9 @@ func extractDatapack(zipPath, destDir string, onProgress func(percent float64)) 
 		}
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(destPath, 0o755)
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
+				return fmt.Errorf("could not create %s: %w", destPath, err)
+			}
 			continue
 		}
 
@@ -682,7 +689,7 @@ func extract7zDatapack(archivePath, destDir string, onProgress func(percent floa
 	if err != nil {
 		return fmt.Errorf("could not open 7z archive: %w", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	if len(r.File) == 0 {
 		return fmt.Errorf("empty 7z archive")
@@ -701,7 +708,9 @@ func extract7zDatapack(archivePath, destDir string, onProgress func(percent floa
 		}
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(destPath, 0o755)
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
+				return fmt.Errorf("could not create %s: %w", destPath, err)
+			}
 			continue
 		}
 

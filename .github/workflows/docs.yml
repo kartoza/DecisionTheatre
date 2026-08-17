@@ -54,8 +54,12 @@ jobs:
       - name: Verify the build produced a site
         run: |
           test -f result/index.html || { echo "::error::no index.html in the docs output"; exit 1; }
-          pages=$(find result -name index.html | wc -l)
-          diagrams=$(find result/assets/diagrams/generated -name '*.svg' 2>/dev/null | wc -l)
+          # -L is load-bearing: `nix build` leaves `result` as a symlink, and
+          # find does not descend one by default. Without it this counted zero
+          # pages for a perfectly good site, while the test -f above passed
+          # because stat does follow symlinks.
+          pages=$(find -L result -name index.html | wc -l)
+          diagrams=$(find -L result/assets/diagrams/generated -name '*.svg' 2>/dev/null | wc -l)
           echo "pages: $pages"
           echo "generated diagrams: $diagrams"
           if [ "$pages" -lt 20 ]; then

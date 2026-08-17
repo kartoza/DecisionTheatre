@@ -134,9 +134,12 @@ jobs:
         run: ./scripts/webkit-compat.sh --github-env
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # golangci-lint v2 needs action v7 or later; v6 with a v2 binary exits
+        # with code 3 before linting anything. The version is pinned to the one
+        # in the development shell so `dt lint` and CI agree.
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.8.0
           args: --timeout 5m
 
   # ==========================================

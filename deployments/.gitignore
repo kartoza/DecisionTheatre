@@ -1,5 +1,11 @@
 # Local deployment config — contains server paths and secrets
 .env
 
-# TLS certificates
-# certs/
+# TLS certificates and keys. This was commented out, which is how a private
+# key reached the history of a public repository in 3ac8333. It stays active.
+certs/
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx

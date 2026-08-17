@@ -476,7 +476,7 @@ func (h *Handler) handlePrecalculateFull(w http.ResponseWriter, r *http.Request)
 	if cached != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
-		json.NewEncoder(w).Encode(cached)
+		_ = json.NewEncoder(w).Encode(cached)
 		return
 	}
 
@@ -510,7 +510,7 @@ func (h *Handler) handlePrecalculateFull(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // handleComparisonData returns comparison data for two scenarios
@@ -713,7 +713,7 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // ============================================================================

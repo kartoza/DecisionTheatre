@@ -76,14 +76,8 @@ func toRLookup(l *LookupData) *rLookup {
 		rl.CurrentProps = l.CurrentProps[:]
 	}
 	for name, trait := range l.HerbTraits {
-		rl.HerbTraits[name] = rHerbTrait{
-			BodyMass:     trait.BodyMass,
-			Diet:         trait.Diet,
-			HFTBII:       trait.HFTBII,
-			PropGrass:    trait.PropGrass,
-			DMIKgIndivYr: trait.DMIKgIndivYr,
-			CH4KgIndivYr: trait.CH4KgIndivYr,
-		}
+		// Identical field set; a conversion says so more plainly than a literal.
+		rl.HerbTraits[name] = rHerbTrait(trait)
 	}
 	return rl
 }
