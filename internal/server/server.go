@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -193,10 +194,24 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
-	var z, x, y int
-	fmt.Sscanf(vars["z"], "%d", &z)
-	fmt.Sscanf(vars["x"], "%d", &x)
-	fmt.Sscanf(vars["y"], "%d", &y)
+	// Reject a malformed coordinate rather than letting it default to zero:
+	// Sscanf leaves the target untouched on failure, so /tiles/africa/a/b/c.pbf
+	// was silently served as tile 0/0/0.
+	z, err := strconv.Atoi(vars["z"])
+	if err != nil {
+		http.Error(w, "Invalid tile coordinate", http.StatusBadRequest)
+		return
+	}
+	x, err := strconv.Atoi(vars["x"])
+	if err != nil {
+		http.Error(w, "Invalid tile coordinate", http.StatusBadRequest)
+		return
+	}
+	y, err := strconv.Atoi(vars["y"])
+	if err != nil {
+		http.Error(w, "Invalid tile coordinate", http.StatusBadRequest)
+		return
+	}
 
 	tileData, err := s.tileStore.GetTile(name, z, x, y)
 	if err != nil {
@@ -404,7 +419,7 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(tileJSON)
+	_ = json.NewEncoder(w).Encode(tileJSON)
 }
 
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for

@@ -1,0 +1,48 @@
+# Findings gitleaks has already reported, each with the reason it is allowed.
+#
+# Fingerprints are commit:path:rule:line. They pin one finding in one commit, so
+# a new occurrence of the same pattern is still reported — an entry here cannot
+# quietly become a blanket exemption.
+#
+# Nothing belongs here because it was inconvenient. Every entry below is either
+# a credential that is public by design, or a historical commit whose secret has
+# been dealt with by rotation, because git history cannot be edited.
+
+# ---------------------------------------------------------------------------
+# MapTiler client key — public by design, restricted at MapTiler
+# ---------------------------------------------------------------------------
+#
+# The key appears in a glyph URL that the browser fetches directly, so it is
+# necessarily visible to anyone using the dashboard; hiding it in the repository
+# would not make it secret. It is restricted to the deployment's own domains at
+# MapTiler, which is the control that actually protects it.
+#
+# Still tracked, deliberately, in internal/server/server.go and the two
+# style.json files. If that restriction is ever lifted, this exemption stops
+# being valid and the key must move to runtime configuration instead.
+e5f0ac7a86649bbe302bc7823f2a33fdc793bc3e:data/mbtiles/style.json:generic-api-key:14
+aa38bd4aa669babea620de9d9b65f1737741eea0:data/mbtiles/style.json:generic-api-key:14
+cd698f36e0c876fd1af77ab4efe835e490fdf0aa:resources/mbtiles/uow_tiles.json:generic-api-key:14
+062ff0a5d8650051c8e706c39374d31e3fe54b61:internal/server/server.go:generic-api-key:402
+
+# ---------------------------------------------------------------------------
+# TLS private key committed in 3ac8333 (2026-05-28) — ROTATED
+# ---------------------------------------------------------------------------
+#
+# deployments/certs/tls.key was committed and later removed from the tree, but
+# it remains in the history of a public repository and is therefore permanently
+# disclosed. The certificate and key have been reissued; this entry records the
+# historical finding so the scan does not fail on a commit nobody can change.
+#
+# The current deployment must not be using the disclosed key. deployments/
+# .gitignore excludes certs/ so it cannot recur, and the pre-commit hook rejects
+# staged environment files.
+3ac83334224a6274cb0a35f100b53430bd9719af:deployments/certs/tls.key:private-key:1
+
+# ---------------------------------------------------------------------------
+# False positive
+# ---------------------------------------------------------------------------
+#
+# A long opaque string in a React component that the generic-api-key heuristic
+# matched on shape alone. The line no longer exists in the current tree.
+4ce85609a94ff8b123eb6956d34d6c6d4b2a8fdf:frontend/src/components/IndicatorEditorPage.tsx:generic-api-key:1061

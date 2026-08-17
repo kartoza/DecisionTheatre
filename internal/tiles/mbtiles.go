@@ -191,9 +191,16 @@ func (s *MBTilesStore) GetMetadata(name string) (*TileMetadata, error) {
 		case "description":
 			meta.Description = value
 		case "minzoom":
-			fmt.Sscanf(value, "%d", &meta.MinZoom)
+			// A malformed value leaves the zoom at its zero default, which is a
+			// usable fallback — but say so, because a silently wrong zoom range
+			// looks like a data problem much later.
+			if _, err := fmt.Sscanf(value, "%d", &meta.MinZoom); err != nil {
+				log.Printf("Warning: %s has an unparseable minzoom %q: %v", name, value, err)
+			}
 		case "maxzoom":
-			fmt.Sscanf(value, "%d", &meta.MaxZoom)
+			if _, err := fmt.Sscanf(value, "%d", &meta.MaxZoom); err != nil {
+				log.Printf("Warning: %s has an unparseable maxzoom %q: %v", name, value, err)
+			}
 		case "center":
 			meta.Center = value
 		case "bounds":

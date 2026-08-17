@@ -240,7 +240,8 @@ func waitForServer(url string, timeout time.Duration) {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			// A reachability probe; nothing depends on the close succeeding.
+			_ = conn.Close()
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -256,7 +257,8 @@ func findAvailablePort(startPort int, maxAttempts int) (int, error) {
 		addr := fmt.Sprintf(":%d", port)
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
-			listener.Close()
+			// Opened only to see whether the port is free.
+			_ = listener.Close()
 			return port, nil
 		}
 	}

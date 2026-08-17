@@ -1,0 +1,79 @@
+# golangci-lint configuration.
+#
+# The version is pinned in .github/workflows/ci.yml and provided by the
+# development shell, so `dt lint` and CI run the same linter over the same rules.
+#
+# The exclusions below are deliberate and narrow. Each one covers a call whose
+# error genuinely cannot be acted on — not "this was noisy". Anything whose
+# error changes behaviour if dropped stays enforced: json decoding, Sscanf,
+# MkdirAll and friends are all checked.
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  #
+  # Deliberately not adding more here. Turning on further linters is worth
+  # doing, but it is its own change with its own backlog — bundling it into a
+  # build fix would mean neither gets reviewed properly.
+  default: standard
+
+  settings:
+    staticcheck:
+      # golangci-lint's default set, restated so the one deliberate removal is
+      # visible. A bare "all" would additionally switch on the ST style checks,
+      # which are off by default and are a separate piece of work.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # QF1001 rewrites `if !(a && b && c && d)` into a four-term
+        # disjunction. The guard it flags reads "unless all four bounds were
+        # provided", which is the condition as a person states it; the expanded
+        # form is harder to check by eye. Style opinion, declined deliberately.
+        - -QF1001
+
+    errcheck:
+      # Reported by name so the list is auditable, rather than switching the
+      # linter off for whole files.
+      exclude-functions:
+        # Close on something opened for reading: the read has already happened,
+        # and there is no recovery available at the point of closing.
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (*os.File).Close
+        - (*archive/zip.ReadCloser).Close
+
+        # Writing to an HTTP response: if the client has gone, the status is
+        # already sent and there is nothing left to tell anyone.
+        - (net/http.ResponseWriter).Write
+
+        # Best-effort cleanup of a temporary path. Failing here would replace a
+        # useful error with a misleading one.
+        - os.RemoveAll
+        - os.Remove
+
+  exclusions:
+    # Generated and vendored code is not ours to lint.
+    #
+    # These are regexes, anchored deliberately: an unanchored ".go" matches
+    # every Go file in the repository and silently disables linting altogether.
+    paths:
+      - ^internal/webview_go/
+      - ^\.go/
+
+    rules:
+      # Table-driven tests routinely ignore errors from their own fixtures,
+      # where a failure surfaces immediately as a failing assertion.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

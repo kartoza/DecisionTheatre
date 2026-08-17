@@ -143,14 +143,6 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 	}
 
 	// x axis
-	iXAxis := col("x axis")
-	if iXAxis == -1 {
-		iXAxis = col("x_axis")
-	}
-	if iXAxis == -1 {
-		iXAxis = col("x-axis")
-	}
-
 	iUnits := col("Units")
 
 	// chartType / typeofgraph
