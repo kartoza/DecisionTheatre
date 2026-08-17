@@ -44,7 +44,7 @@ interface MapViewProps {
 }
 
 // Module-level style cache: fetch style.json exactly once across all MapView instances.
-// In quad view this cuts 8 identical HTTP requests down to 1.
+// In grid view this cuts 8 identical HTTP requests down to 1.
 // _cachedStyle holds the resolved object so staggered panes can use it synchronously.
 let _cachedStyle: maplibregl.StyleSpecification | null = null;
 let _stylePromise: Promise<maplibregl.StyleSpecification> | null = null;
@@ -608,7 +608,7 @@ const CHOROPLETH_CACHE_TTL_MS = 60_000;
 // Module-level caches for the two expensive synchronous intersection routines.
 // inferCatchmentIdsFromBoundary / inferNearbyCatchmentIdsFromBoundary each do an
 // O(n_catchments × poly_complexity) turf.intersect loop on the main thread.
-// In quad view 12 map instances (6 panes × 2 maps) all call these independently,
+// In grid view 12 map instances (6 panes × 2 maps) all call these independently,
 // serialising up to 24 × ~500 ms = 12 s of blocking computation.
 // Caching by siteId means only the FIRST instance computes; the rest read from
 // memory with zero blocking time.  Caches are cleared whenever the site or its
@@ -1112,7 +1112,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // `useOpacityScale = Boolean(attributeColor)`), which then gets
     // replaced by the correct single color a moment later - a visible
     // flash of the wrong scale on every fresh mount (e.g. switching into
-    // quad view, which mounts a new MapView per pane). Skipping here means
+    // grid view, which mounts a new MapView per pane). Skipping here means
     // nothing renders until we know the real answer; the effect below
     // re-invokes applyColors once attributeColors finishes loading.
     if (colorScaleMode === 'metadata' && attributeColorsLoadingRef.current) {
@@ -1180,7 +1180,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ?? extractBoundaryGeometryFromStyleSource(leftMap.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE]);
 
         // Check module-level cache first — avoids recomputing for every map instance
-        // in quad view (12 instances would otherwise each run the full turf loop).
+        // in grid view (12 instances would otherwise each run the full turf loop).
         // Skip entirely for large datasets — the stats block populates siteCatchmentIdsRef
         // shortly via getSiteAOIFractions, avoiding the expensive intersection loop.
         const cachedInferred = _inferredIdsSiteCache.get(siteId);
@@ -2885,7 +2885,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // effect always runs with both maps in a fully styled state.
     // reapplyBoundaryLayers() is also called directly here to avoid relying on
     // the React effect cycle, which can be delayed for freshly-mounted panes
-    // (e.g. panes 1-3 when switching from single to quad view).
+    // (e.g. panes 1-3 when switching from single to grid view).
     // Force tile re-evaluation after resize — resize() alone doesn't always
     // trigger maplibre to re-request tiles for a newly-sized viewport.
     function resizeAndRefresh(map: maplibregl.Map) {

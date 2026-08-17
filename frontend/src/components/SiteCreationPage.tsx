@@ -122,6 +122,10 @@ const bounceConfig = { type: 'spring' as const, stiffness: 400, damping: 25 };
 // Keeping it low prevents the JS main thread from blocking ("Page Unresponsive")
 // when processing large shapefiles with hundreds of catchments.
 const EXACT_GEOMETRY_INFERENCE_LIMIT = 150;
+// Below this fraction of the drawn boundary actually overlapping known catchments,
+// warn the user that most of their site falls outside covered catchment data —
+// indicators and comparisons will be sparse or missing for the uncovered area.
+const LOW_DATA_COVERAGE_THRESHOLD = 0.2;
 
 function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }: SiteCreationPageProps) {
   const isEditMode = !!editSite;
@@ -152,7 +156,10 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
   const inferCatchmentIdsForGeometry = useCallback(async (
     sourceGeometry: GeoJSON.Geometry,
     sourceBBox?: BoundingBox | null,
-  ): Promise<{ ids: string[]; truncated: boolean }> => {
+    // coverageFraction is null when it wasn't cheap/safe to compute (e.g. the
+    // candidate set was too large for exact geometry checks) rather than
+    // implying zero coverage — callers should treat null as "unknown".
+  ): Promise<{ ids: string[]; truncated: boolean; coverageFraction: number | null }> => {
     const bbox = sourceBBox ?? computeBoundingBox(sourceGeometry);
     const idsResponse = await fetch('/api/catchments/in-bbox', {
       method: 'POST',
@@ -178,12 +185,14 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
     const preflightTruncated = Boolean(idsData.truncated);
 
     if (candidateIds.length === 0) {
-      return { ids: [], truncated: preflightTruncated };
+      return { ids: [], truncated: preflightTruncated, coverageFraction: 0 };
     }
 
     // For very large candidate sets, skip expensive client geometry overlap checks.
+    // A large candidate count means the boundary sits well within covered catchment
+    // data, so coverage is unknown-but-not-a-concern here rather than actually low.
     if (candidateIds.length > EXACT_GEOMETRY_INFERENCE_LIMIT) {
-      return { ids: candidateIds, truncated: true };
+      return { ids: candidateIds, truncated: true, coverageFraction: null };
     }
 
     const response = await fetch('/api/catchments/in-bbox', {
@@ -213,7 +222,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
     const boundaryFeatures = geometryToPolygonFeatures(sourceGeometry);
     if (boundaryFeatures.length === 0) {
-      return { ids: [], truncated: Boolean(data.truncated) };
+      return { ids: [], truncated: Boolean(data.truncated), coverageFraction: null };
     }
 
     // Simplify boundary features for intersection computation only.
@@ -228,6 +237,13 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
     const candidates = Array.isArray(data.features) ? data.features : [];
     const matchedIds = new Set<string>();
+    // Sum of each matched catchment's overlap area with the boundary, used as an
+    // approximation of how much of the boundary is covered by known catchments.
+    // Catchments don't overlap each other, so this sum doesn't double-count area.
+    let coveredArea = 0;
+    const totalBoundaryArea = simplifiedBoundaryFeatures.reduce(
+      (sum, f) => sum + turfArea(f.geometry), 0,
+    );
 
     for (let i = 0; i < candidates.length; i++) {
       // Yield every iteration for the geometry-check path (<= EXACT_GEOMETRY_INFERENCE_LIMIT).
@@ -269,6 +285,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       if (!Number.isFinite(catchmentArea) || catchmentArea <= 0) continue;
 
       let satisfiesOverlapThreshold = false;
+      let bestOverlapArea = 0;
       for (const boundaryFeature of simplifiedBoundaryFeatures) {
         try {
           const overlap = intersect(featureCollection([catchmentFeature, boundaryFeature]));
@@ -276,6 +293,8 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
           const overlapArea = turfArea(overlap.geometry);
           if (!Number.isFinite(overlapArea) || overlapArea <= 0) continue;
+
+          if (overlapArea > bestOverlapArea) bestOverlapArea = overlapArea;
 
           const overlapFraction = Math.max(0, Math.min(1, overlapArea / catchmentArea));
           if (overlapFraction >= MIN_CATCHMENT_OVERLAP_FRACTION) {
@@ -289,10 +308,15 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
       if (satisfiesOverlapThreshold) {
         matchedIds.add(catchmentId);
+        coveredArea += bestOverlapArea;
       }
     }
 
-    return { ids: Array.from(matchedIds), truncated: preflightTruncated };
+    const coverageFraction = totalBoundaryArea > 0
+      ? Math.max(0, Math.min(1, coveredArea / totalBoundaryArea))
+      : null;
+
+    return { ids: Array.from(matchedIds), truncated: preflightTruncated, coverageFraction };
   }, []);
 
   const cardBg = useColorModeValue('rgba(255,255,255,0.05)', 'rgba(0,0,0,0.3)');
@@ -420,6 +444,17 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
           if (inferred.ids.length > 0) {
             catchmentIdsToPersist = inferred.ids;
             setSelectedCatchmentIds(inferred.ids);
+          }
+          if (inferred.coverageFraction !== null && inferred.coverageFraction < LOW_DATA_COVERAGE_THRESHOLD) {
+            toast({
+              title: 'Limited catchment coverage',
+              description: `Only ${Math.round(inferred.coverageFraction * 100)}% of this site overlaps `
+                + 'known catchments. The app may not work correctly for the uncovered area.',
+              status: 'warning',
+              duration: 8000,
+              isClosable: true,
+              position: 'top',
+            });
           }
           // if (inferred.truncated) {
           //   toast({

@@ -55,14 +55,14 @@ type Server struct {
 
 	// In-process glyph cache: key = "fontstack/range", value = []byte.
 	// Glyphs fetched from the external CDN on first use are served locally
-	// for all subsequent requests, eliminating external HTTPS latency in quad view.
+	// for all subsequent requests, eliminating external HTTPS latency in grid view.
 	glyphCache      sync.Map
 	glyphCacheSizeB atomic.Int64
 
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
 	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
 	// servers on sequential ports gives the browser N extra 6-connection pools
-	// so that the ~80 tile requests in quad view are served in parallel instead
+	// so that the ~80 tile requests in grid view are served in parallel instead
 	// of being forced through a narrow bottleneck.
 	auxServers []*http.Server
 	auxPorts   []int
@@ -148,7 +148,7 @@ func (s *Server) setupRoutes() {
 	s.router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
 
 	// Glyph proxy: serves MapLibre font glyphs locally after fetching from CDN once.
-	// Eliminates repeated external HTTPS requests from each map instance in quad view.
+	// Eliminates repeated external HTTPS requests from each map instance in grid view.
 	s.router.HandleFunc("/fonts/{fontstack}/{range}.pbf", s.handleGlyphProxy).Methods("GET")
 
 	// Serve site images from data/images directory
@@ -293,7 +293,7 @@ func baseURL(r *http.Request) string {
 // handleStyleJSON serves the MapLibre style JSON, rewriting tile source URLs to
 // use the local server and the glyphs URL to use the local caching proxy.
 // The result is built once and cached for the lifetime of the server; all
-// subsequent requests (e.g. the 4 panes in quad view) are served from memory.
+// subsequent requests (e.g. the 4 panes in grid view) are served from memory.
 func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
 
@@ -328,7 +328,7 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Rewrite glyphs to use the local caching proxy instead of the external
-		// CDN. In quad view this eliminates 7 duplicate external HTTPS round-trips
+		// CDN. In grid view this eliminates 7 duplicate external HTTPS round-trips
 		// (only the first request per glyph range ever leaves the machine).
 		style["glyphs"] = base + "/fonts/{fontstack}/{range}.pbf"
 
@@ -356,7 +356,7 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 // handleTileJSON serves TileJSON metadata. It returns multiple tile URL variants
 // (localhost ↔ 127.0.0.1 plus aux ports) so the browser treats them as separate
 // origins and opens independent HTTP/1.1 connection pools (6 each), maximising
-// parallel tile loading in quad view.
+// parallel tile loading in grid view.
 func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
 
@@ -410,7 +410,7 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
 // each {fontstack}/{range} pair is fetched from the upstream MapTiler CDN and
 // stored in an in-process cache; all subsequent requests (from other map
-// instances in quad view) are served instantly from memory.
+// instances in grid view) are served instantly from memory.
 func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	fontstack := vars["fontstack"]

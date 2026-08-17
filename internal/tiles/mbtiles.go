@@ -90,7 +90,7 @@ func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 				continue
 			}
 
-			// Allow up to 32 concurrent read connections. Quad view can generate
+			// Allow up to 32 concurrent read connections. Grid view can generate
 			// ~80 simultaneous tile requests (8 maps × ~10 tiles at initial zoom);
 			// a pool of 8 serialised most of them. 32 keeps the SQLite reader
 			// busy without hitting OS file-descriptor limits on typical systems.

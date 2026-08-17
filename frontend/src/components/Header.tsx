@@ -8,9 +8,19 @@ import {
   Text,
   useColorModeValue,
   Tooltip,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalCloseButton,
+  ModalBody,
+  ModalFooter,
+  Button,
+  useDisclosure,
 } from '@chakra-ui/react';
 import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload, FiSettings } from 'react-icons/fi';
 import { useServerInfo } from '../hooks/useApi';
+import { clearBrowserAppCache } from '../types';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
 import rewildLogo from '../assets/logo-vertical-white-3x 1.png';
@@ -35,6 +45,12 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
   const bgColor = useColorModeValue('white', colors.darkGray);
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const siteTitleColor = useColorModeValue('gray.700', 'gray.200');
+  const { isOpen: isClearCacheOpen, onOpen: onOpenClearCache, onClose: onCloseClearCache } = useDisclosure();
+
+  const handleClearCache = () => {
+    clearBrowserAppCache();
+    window.location.reload();
+  };
 
   return (
     <Flex
@@ -183,6 +199,19 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
           </Tooltip>
         )}
 
+        {isBrowser && (
+          <Tooltip label="Clear cache">
+            <IconButton
+              aria-label="Clear cache"
+              icon={<FiSettings />}
+              onClick={onOpenClearCache}
+              variant="ghost"
+              colorScheme="brand"
+              size="sm"
+            />
+          </Tooltip>
+        )}
+
         {!isBrowser && onNavigate && (
           <Tooltip label="Reinstall data pack">
             <IconButton
@@ -208,6 +237,25 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
           />
         </Tooltip>
       </HStack>
+
+      <Modal isOpen={isClearCacheOpen} onClose={onCloseClearCache} size="md" isCentered>
+        <ModalOverlay />
+        <ModalContent bg="gray.800" color="white">
+          <ModalHeader>Clear cache</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <Text fontSize="sm" color="gray.300">
+              This clears display and session settings stored in this browser (layout,
+              last-viewed page, tour progress) and reloads the app. Your saved sites are
+              not affected.
+            </Text>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={onCloseClearCache}>Cancel</Button>
+            <Button colorScheme="red" onClick={handleClearCache}>Clear cache</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </Flex>
   );
 }
