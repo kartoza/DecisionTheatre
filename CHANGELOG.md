@@ -117,6 +117,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cd`-ing into a subdirectory no longer creates a second module cache there. Two had
   accumulated, under `frontend/` and `resources/mbtiles/`.
 
+### Security
+
+- **The hosted deployment exposed an unauthenticated write-to-disk API that nothing
+  called.** A user's own sites belong in their browser, and the client honours that: in
+  browser runtime every site create, read, update and delete goes to the `dt-sites`
+  localStorage key, with no fallthrough to the API. The server registered the site CRUD
+  for everyone anyway, and nginx proxies every path.
+
+  Nine site routes plus `POST /api/datapack/install` are now registered **only** in the
+  desktop build, gated on `config.Config.DesktopMode`. Seven of the nine reach
+  `sites.Store` Create/Update/Delete; two are reads that disclosed every site on the
+  host; `datapack/install` replaced the contents of the data directory with whatever it
+  found at a caller-supplied path. In server mode they are absent from the route table
+  entirely, so no handler code is reachable.
+
+  This was the door behind two other reported faults — arbitrary file deletion via a
+  thumbnail path, and the datapack install — which is why it is recorded here rather than
+  under *Fixed*. The routes a browser session genuinely calls (`/indicators`,
+  `/catchments`, `/whiskers`, `/dissolve-catchments`, `/boundary/*`) are unchanged and
+  stay public: they take `runtime: "browser"` with the site in the request body and
+  return before touching the store.
+
+  The gate depends on `--headless`, which is a launch flag rather than code, so a test
+  asserts that `deployments/Dockerfile` and `deployments/docker-compose.yaml` still pass
+  it. `docs/developer-guide/client-server-boundary.md` now states the persistence split
+  alongside the computation split it already covered — the gap that let this drift.
+
+- **A thumbnail path from the client could delete any file the process could reach.**
+  `Store.Update` stored the string verbatim and `Store.Delete` later joined it onto the
+  data directory and called `os.Remove`, guarded only by a `/data/images/` prefix check
+  that `/data/images/../../etc/passwd` satisfies. The `os.Remove` error was discarded, so
+  nothing was logged either. Paths are now validated against the only shape the store
+  writes, on write and again on delete, and resolved through `filepath.Rel` rather than a
+  string prefix.
+
+- **A file dialog could be opened on the host's desktop by an HTTP request.**
+  `POST /api/dialog/open-file` called `zenity.SelectFile`, which opens a native picker on
+  whatever session the process is attached to and blocks until a human answers, holding a
+  goroutine meanwhile. It is now desktop-only, and bounded by a two-minute timeout tied to
+  the request context.
+
+- **No request body size limits on any JSON handler**, with nginx passing bodies up to
+  2 GB, so one POST could make the process buffer two gigabytes. Every request is now
+  capped — 1 MiB by default, 32 MiB for the handlers carrying geometry or an inline image
+  — and `client_max_body_size` drops to `40m` to match, with a test asserting the
+  application limit stays below the proxy's.
+
+- **A TLS private key was committed** because `certs/` was commented out in
+  `deployments/.gitignore`. The pattern is active again, alongside `*.key`, `*.pem`,
+  `*.crt`, `*.p12` and `*.pfx`, and secret scanning runs in pre-commit and CI.
+
 ## [0.4.0] — 2026-08-16
 
 ### Added
