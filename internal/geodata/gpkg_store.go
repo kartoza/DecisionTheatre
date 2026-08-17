@@ -94,7 +94,7 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	// Cap the connection pool so concurrent choropleth requests (multiple
 	// users, or quad-view issuing several fetches per pane) reuse a bounded
 	// set of connections instead of each opening its own unshared handle.
-	// Sized to the host's core count: quad view alone can fire a dozen-plus
+	// Sized to the host's core count: grid view alone can fire a dozen-plus
 	// concurrent aggregated-path queries (one per pane per scenario), each
 	// holding a connection for the ~1s+ it scans a continent-scale bbox: a
 	// cap well under that count means later requests queue for a free

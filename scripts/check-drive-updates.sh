@@ -93,7 +93,8 @@ info "Comparing Google Drive folder ${BOLD}${FOLDER_ID}${RESET} against ${BOLD}$
 # part of the source data set and must not be treated as "drift".
 if rclone check "${RCLONE_REMOTE}:" "$DATA_DIR" \
     --drive-root-folder-id "$FOLDER_ID" \
-    --one-way; then
+    --one-way \
+    --bind 0.0.0.0; then
     info "No changes found."
     exit 0
 fi

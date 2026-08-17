@@ -31,13 +31,38 @@ export function loadLocalSites(): Site[] {
   }
 }
 
-export function saveLocalSites(sites: Site[]): void {
-  if (typeof window === 'undefined') return;
+function isQuotaExceededError(err: unknown): boolean {
+  return err instanceof DOMException
+    && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+}
+
+// Returns whether the sites were actually persisted. localStorage has a hard
+// per-origin quota (~5-10MB); every site's per-catchment breakdown (per-species
+// biomass etc. for each catchment) can make this add up, and once the quota is
+// hit every write throws and silently no-ops unless callers check this return
+// value. On quota failure, retry once with that breakdown stripped from every
+// site — it's the largest field and is regenerable on demand from the server —
+// before giving up and reporting failure so the caller can tell the user.
+export function saveLocalSites(sites: Site[]): boolean {
+  if (typeof window === 'undefined') return true;
 
   try {
     window.localStorage.setItem(SITES_STORAGE_KEY, JSON.stringify(sites));
-  } catch {
-    // Ignore localStorage write errors
+    return true;
+  } catch (err) {
+    if (!isQuotaExceededError(err)) return false;
+
+    try {
+      const slimmed = sites.map((site) => {
+        const { catchments, catchmentIndicators, catchmentData, ...rest } = site as SiteWithCatchments;
+        void catchments; void catchmentIndicators; void catchmentData;
+        return rest;
+      });
+      window.localStorage.setItem(SITES_STORAGE_KEY, JSON.stringify(slimmed));
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -656,7 +681,9 @@ export async function createSite(
 
     const sites = loadLocalSites();
     sites.push(site);
-    saveLocalSites(sortSitesByCreatedAtDesc(sites));
+    if (!saveLocalSites(sortSitesByCreatedAtDesc(sites))) {
+      throw new Error('Browser storage is full — delete some existing sites and try again.');
+    }
 
     // Preload and persist per-catchment scenario details so site aggregate
     // views can render immediately from localStorage.
@@ -720,7 +747,9 @@ export async function updateSite(
     };
 
     sites[siteIndex] = updatedSite;
-    saveLocalSites(sortSitesByCreatedAtDesc(sites));
+    if (!saveLocalSites(sortSitesByCreatedAtDesc(sites))) {
+      throw new Error('Browser storage is full — delete some existing sites and try again.');
+    }
     return updatedSite;
   }
 

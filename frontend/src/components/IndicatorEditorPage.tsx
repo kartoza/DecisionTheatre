@@ -50,8 +50,8 @@ import {
 } from 'react-icons/fi';
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
-import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes } from '../hooks/useApi';
-import { showTargetWarningsPopup } from '../utils/warnings';
+import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { showTargetWarningsPopup, showLowDataAvailabilityWarning } from '../utils/warnings';
 import { colors } from '../styles/colors';
 
 const MotionTr = motion(Tr);
@@ -275,9 +275,9 @@ export default function IndicatorEditorPage({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const lastCatchmentCountRef = useRef<number | null>(null);
   const toast = useToast();
-  const { details: attributeDetails } = useAttributeDetails();
-  const { userInputs } = useAttributeUserInputs();
-  const { variableTypes } = useAttributeVariableTypes();
+  const { details: attributeDetails, loading: attributeDetailsLoading } = useAttributeDetails();
+  const { userInputs, loading: userInputsLoading } = useAttributeUserInputs();
+  const { variableTypes, loading: variableTypesLoading } = useAttributeVariableTypes();
 
   const headerBg = useColorModeValue('gray.900', 'gray.900');
   const tableBg = useColorModeValue('gray.850', 'gray.850');
@@ -323,20 +323,24 @@ export default function IndicatorEditorPage({
           if (!r.ok) throw new Error('Failed');
           const updatedSiteFromApi: Site = await r.json();
           const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
-          try {
-            const raw = window.localStorage.getItem('dt-sites');
-            const parsed: unknown = raw ? JSON.parse(raw) : [];
-            if (Array.isArray(parsed)) {
-              const storedSites = parsed as Site[];
-              const next = storedSites.some((s) => s.id === updatedSite.id)
-                ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
-                : [...storedSites, updatedSite];
-              window.localStorage.setItem('dt-sites', JSON.stringify(next));
-            }
-          } catch { /* ignore */ }
+          const storedSites = loadLocalSites();
+          const next = storedSites.some((s) => s.id === updatedSite.id)
+            ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
+            : [...storedSites, updatedSite];
           setLocalIndicators(updatedSite.indicators ?? null);
           onSiteUpdated(updatedSite);
-          toast({ title: 'Indicators extracted', description: `Aggregated ${updatedSite.indicators?.catchmentCount || 0} catchments`, status: 'success', duration: 3000 });
+          if (saveLocalSites(next)) {
+            toast({ title: 'Indicators extracted', description: `Aggregated ${updatedSite.indicators?.catchmentCount || 0} catchments`, status: 'success', duration: 3000 });
+          } else {
+            toast({
+              title: 'Storage full',
+              description: 'Indicators were extracted but could not be saved — delete some existing sites to free up space.',
+              status: 'error',
+              duration: 8000,
+              isClosable: true,
+              position: 'top',
+            });
+          }
         })
         .catch(() => toast({ title: 'Extraction failed', status: 'error', duration: 5000 }))
         .finally(() => setIsLoading(false));
@@ -434,23 +438,12 @@ export default function IndicatorEditorPage({
           indicators: localIndicators,
         };
 
-        try {
-          const raw = window.localStorage.getItem('dt-sites');
-          if (!raw) {
-            window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
-          } else {
-            const parsed: unknown = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-              const storedSites = parsed as Site[];
-              const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
-                ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
-                : [...storedSites, updatedSite];
-              window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
-            }
-          }
-        } catch (error) {
-          console.warn('Failed to persist saved indicator changes to localStorage:', error);
-          throw new Error('Failed to save locally');
+        const storedSites = loadLocalSites();
+        const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
+          ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
+          : [...storedSites, updatedSite];
+        if (!saveLocalSites(updatedSites)) {
+          throw new Error('Browser storage is full — delete some existing sites and try again.');
         }
 
         onSiteUpdated(updatedSite);
@@ -521,9 +514,10 @@ export default function IndicatorEditorPage({
     } catch (error) {
       toast({
         title: 'Save failed',
-        description: 'Could not save indicator changes',
+        description: error instanceof Error ? error.message : 'Could not save indicator changes',
         status: 'error',
-        duration: 5000,
+        duration: 8000,
+        isClosable: true,
       });
     } finally {
       setIsSaving(false);
@@ -603,23 +597,12 @@ export default function IndicatorEditorPage({
           indicators: resetIndicators,
         };
 
-        try {
-          const raw = window.localStorage.getItem('dt-sites');
-          if (!raw) {
-            window.localStorage.setItem('dt-sites', JSON.stringify([updatedSite]));
-          } else {
-            const parsed: unknown = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-              const storedSites = parsed as Site[];
-              const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
-                ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
-                : [...storedSites, updatedSite];
-              window.localStorage.setItem('dt-sites', JSON.stringify(updatedSites));
-            }
-          }
-        } catch (error) {
-          console.warn('Failed to persist reset indicator values to localStorage:', error);
-          throw new Error('Failed to reset locally');
+        const storedSites = loadLocalSites();
+        const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
+          ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
+          : [...storedSites, updatedSite];
+        if (!saveLocalSites(updatedSites)) {
+          throw new Error('Browser storage is full — delete some existing sites and try again.');
         }
 
         setLocalIndicators(resetIndicators);
@@ -654,8 +637,10 @@ export default function IndicatorEditorPage({
     } catch (error) {
       toast({
         title: 'Reset failed',
+        description: error instanceof Error ? error.message : undefined,
         status: 'error',
-        duration: 5000,
+        duration: 8000,
+        isClosable: true,
       });
     } finally {
       setIsLoading(false);
@@ -882,6 +867,26 @@ export default function IndicatorEditorPage({
 
     return { total: keys.length, improved, degraded, unchanged };
   }, [localIndicators, availableIndicatorKeys]);
+
+  // Warn once per site when few of the app's known indicators actually have
+  // reference-period data for it (mirrors the Above/Below/At Reference tiles
+  // above: their combined count over the total is exactly this fraction).
+  // Fires whether indicators were just extracted or were already cached from
+  // an earlier visit, since either way this is the first time this component
+  // has seen this site's real coverage. Gated on the attribute catalog hooks
+  // having finished loading — until then availableIndicatorKeys only reflects
+  // this site's own keys, understating the true (much larger) catalog total
+  // and producing a falsely reassuring ratio.
+  const dataAvailabilityWarnedSiteRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (attributeDetailsLoading || userInputsLoading || variableTypesLoading) return;
+    if (!summaryStats || summaryStats.total === 0) return;
+    if (dataAvailabilityWarnedSiteRef.current === site.id) return;
+    dataAvailabilityWarnedSiteRef.current = site.id;
+
+    const availableFraction = (summaryStats.improved + summaryStats.degraded + summaryStats.unchanged) / summaryStats.total;
+    showLowDataAvailabilityWarning(availableFraction, toast);
+  }, [summaryStats, site.id, toast, attributeDetailsLoading, userInputsLoading, variableTypesLoading]);
 
   if (isLoading && !localIndicators) {
     return (

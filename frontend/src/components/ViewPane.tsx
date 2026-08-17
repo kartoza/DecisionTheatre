@@ -151,7 +151,7 @@ function ViewPane({
 
   // Stagger WebGL context creation across panes so the browser/GPU isn't hit with
   // 8 simultaneous map initializations. Pane 0 starts immediately; each subsequent
-  // pane waits an extra 250 ms, spreading the load over ~750 ms in quad view.
+  // pane waits an extra 250 ms, spreading the load over ~750 ms in grid view.
   const [mapMountReady, setMapMountReady] = useState(paneIndex === 0);
   useEffect(() => {
     if (paneIndex === 0) { setMapMountReady(true); return; }

@@ -254,6 +254,26 @@ export function shouldPromptResumeSession(): boolean {
   return loadCurrentPage() !== 'landing' || Boolean(loadCurrentSite());
 }
 
+// Resets transient display/session state stored in this browser. Deliberately
+// excludes 'dt-sites': in the browser runtime that's the only copy of the
+// user's saved sites (there's no server-side persistence to fall back on),
+// not a cache, so a "clear cache" action must leave it alone.
+export function clearBrowserAppCache(): void {
+  try {
+    [
+      STORAGE_KEY,
+      STORAGE_LAYOUT_KEY,
+      STORAGE_FOCUSED_KEY,
+      STORAGE_QUAD_COLUMNS_KEY,
+      STORAGE_RANGE_MODE_KEY,
+      STORAGE_CURRENT_SITE_KEY,
+      STORAGE_CURRENT_PAGE_KEY,
+      'dt-tour-seen', // must match TourGuide.tsx's TOUR_SEEN_KEY
+    ].forEach((key) => localStorage.removeItem(key));
+    sessionStorage.removeItem(STORAGE_SESSION_ACTIVE_KEY);
+  } catch { /* ignore */ }
+}
+
 export type SiteCreationMethod = 'shapefile' | 'geojson' | 'drawn' | 'catchments';
 
 export interface BoundingBox {
