@@ -113,6 +113,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three tracked Go files were not gofmt-clean** (`internal/api/handler.go` and two test
   files). Now formatted, and the pre-commit hook keeps them that way.
 - **Every shell script under `scripts/` is now shellcheck-clean** at warning severity.
+- **Starting a demo tour tried to write a multi-megabyte site to localStorage and blew
+  the quota.** The tour resets the walkthrough's ideal targets to current, then
+  persisted the whole site object into the `dt-sites` key "so it is available for the
+  rest of the session". The Africa walkthrough is 4,026,496 characters — roughly
+  7.7 MB in UTF-16 against a typical 5 MB per-origin quota — so the write could never
+  succeed, and it happened on a completely fresh profile before the user had created
+  anything of their own. The return value was ignored, so it failed silently.
+
+  The reset is presentation state for the current session and never needed to be
+  durable, so it now lives in an in-memory map that cannot fail and is gone on reload
+  — which is the intended lifetime, since the tour resets the targets again next time
+  it runs.
+
+  `getSite` gained a fallback to the session store and then the static walkthrough
+  JSON, because a demo site previously resolved *only* as a side effect of that
+  localStorage write; removing the write without this would have broken the tours.
+  The fallback is limited to known walkthrough ids so that looking up a deleted site
+  does not cost a 404. `DemoTour` also had its own copy of the fetch-and-normalise
+  logic `getSite` already implements, along with a progress step for a fetch that no
+  longer happens; both are gone rather than left as an unreachable branch.
+
 - **localStorage failures were discarded, so saves appeared to succeed and did
   not.** Every write path ended in an empty catch block. Once the quota was
   exhausted the user saw their change reflected in React state and lost it on
