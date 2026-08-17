@@ -8,7 +8,7 @@ deploying to a server.
 
 !!! info "Renamed from `validate-data`"
     The tool was called `validate-data` and was written in shell. It is now a subcommand
-    of the application itself. Every old invocation still works: `make validate-data`,
+    of the application itself. Every old invocation still works: `dt validate-data`,
     `nix run .#validate-data` and `./scripts/validate-data.sh`'s successor
     `./scripts/check-data.sh` all reach the same code.
 
@@ -40,12 +40,14 @@ a silently wrong report.
 
     The Nix app is the application binary, so it needs nothing else installed.
 
-=== "Make"
+=== "dt"
 
     ```bash
-    make check-data
-    make check-data DATA_DIR=/srv/dt/data
+    dt check-data
+    dt check-data DATA_DIR=/srv/dt/data
     ```
+
+    `make check-data` is the same target.
 
 === "Directly"
 
@@ -71,8 +73,9 @@ This makes it usable as a deployment gate:
 nix run .#check-data -- /srv/dt/data || exit 1
 ```
 
-!!! warning "Do not gate on `make check-data`"
-    GNU `make` reports its own exit status `2` whenever a recipe fails, so it collapses
+!!! warning "Do not gate a deployment on `dt check-data`"
+    `dt` dispatches through `make`, and GNU `make` reports its own exit status `2`
+    whenever a recipe fails, so it collapses
     "the data has errors" and "the directory is unreadable" into one code. Use
     `nix run .#check-data`, `./scripts/check-data.sh` or the binary directly when the
     distinction matters.
@@ -163,7 +166,7 @@ The report ends with an inventory that puts each top-level entry into one of fou
 | Role | Meaning | In a data pack? |
 |---|---|---|
 | **Read by the app** | Opened at runtime | Yes |
-| **Build inputs** | Consumed by `make geopackage` to produce `datapack.gpkg` | No |
+| **Build inputs** | Consumed by `dt geopackage` to produce `datapack.gpkg` | No |
 | **User data** | `sites/` and `images/`, written by the application | No |
 | **Extraneous** | Nothing in the project reads it | No |
 
@@ -202,7 +205,7 @@ is reported as extraneous, and then only as a warning.
       datapack.gpkg                3.2 GiB
       …
 
-    BUILD INPUTS  1.9 GiB · inputs to 'make geopackage'; excluded from a data pack
+    BUILD INPUTS  1.9 GiB · inputs to 'dt geopackage'; excluded from a data pack
       reference_upper.csv          429.7 MiB
       …
 

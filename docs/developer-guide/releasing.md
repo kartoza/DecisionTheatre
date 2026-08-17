@@ -62,16 +62,16 @@ All artifacts are collected and published as a GitHub Release with:
 
 ## Building Packages Locally
 
-You can build release packages locally using `make packages`. This builds the frontend and docs, then cross-compiles for each platform:
+You can build release packages locally using `dt packages`. This builds the frontend and docs, then cross-compiles for each platform:
 
 ```bash
 # All platforms (linux native + windows cross-compile)
-make packages
+dt packages
 
 # Single platform
-make packages-linux
-make packages-windows
-make packages-darwin   # macOS only (requires running on macOS)
+dt packages-linux
+dt packages-windows
+dt packages-darwin   # macOS only (requires running on macOS)
 ```
 
 Output in `dist/`:
@@ -92,7 +92,7 @@ The script (`scripts/build-packages.sh`) accepts `--platform`, `--arch`, and `--
 
 `scripts/pack-data.sh`, `scripts/build-windows-installer.sh`, `scripts/build-debian-installer.sh`, the macOS build in `scripts/build-packages.sh`, and `scripts/build-cross-docker.sh` each call `scripts/update-download-config.sh` after producing their artefact. It writes the artefact's path into the local `settings.json` that `internal/config.SettingsDir()` reads (e.g. `~/.config/decision-theatre/settings.json` on Linux), which is what the in-app downloads page serves. Practically: build on the same machine you run the app on, and the download page immediately offers the new files — no manual settings edit needed. Requires `jq`; if it's missing, the update is skipped with a warning rather than failing the build.
 
-**This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). `scripts/build-cross-docker.sh` handles this automatically: if the `deployments-app` container is running and the artefacts landed under `dist/` (the default `--dest`, bind-mounted into the container at `/app/dist`), it additionally `docker exec`s `update-download-config.sh` inside the container with the container-internal paths, mirroring what `make datapack` already does for data packs.
+**This is the host's settings.json, not the Docker deployment's.** If you're serving the downloads page via `deployments/docker-compose.yaml`, the `app` container has its own, separate `settings.json` under `/root/.config/decision-theatre` (a named volume, `decision-theatre-settings`, so it survives container recreation). `scripts/build-cross-docker.sh` handles this automatically: if the `deployments-app` container is running and the artefacts landed under `dist/` (the default `--dest`, bind-mounted into the container at `/app/dist`), it additionally `docker exec`s `update-download-config.sh` inside the container with the container-internal paths, mirroring what `dt datapack` already does for data packs.
 
 If you used a custom `--dest` outside `dist/`, or need to update the container's config by hand for another reason, point it at the container-internal paths by running the same script *inside* the container instead:
 
@@ -128,19 +128,19 @@ This produces the bare executables only — not installers (`.deb`, `.msi`, etc.
 
 If you need the raw `docker build --output` invocation directly (e.g. for a custom pipeline), see the `export-linux-amd64`, `export-windows-amd64`, and `export-all` targets in `deployments/Dockerfile.cross` — just remember to run `scripts/update-download-config.sh` yourself afterwards.
 
-**macOS is not available in Docker.** The app links against Cocoa/WebKit via CGO, which requires Apple's SDK and toolchain. That SDK isn't redistributable and there's no reliable open cross-toolchain for it, so macOS binaries must be built natively on macOS via `make packages-darwin` (see the table above).
+**macOS is not available in Docker.** The app links against Cocoa/WebKit via CGO, which requires Apple's SDK and toolchain. That SDK isn't redistributable and there's no reliable open cross-toolchain for it, so macOS binaries must be built natively on macOS via `dt packages-darwin` (see the table above).
 
 ## Building a Data Pack
 
 Data packs are built locally (not in CI) because they contain large binary data files:
 
 ```bash
-make datapack
+dt datapack
 ```
 
 This creates `dist/decision-theatre-data-v{VERSION}.zip` with a SHA256 checksum. Upload the data pack to the GitHub Release manually or distribute it separately.
 
-`make datapack` also updates the downloads page config (see above): `scripts/pack-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
+`dt datapack` also updates the downloads page config (see above): `scripts/pack-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
 
 ## Packaging Configuration Files
 
@@ -178,8 +178,8 @@ This makes it available via `--version` and in the UI header badge.
 1. All CI checks pass on `main`
 2. Update the version in `flake.nix` (`version = "x.y.z"`) **and** `frontend/package.json`
 3. Run `nix build` locally to verify the build
-4. Run `make test-all` to verify tests
-5. Build and test the data pack: `make datapack`
+4. Run `dt test-all` to verify tests
+5. Build and test the data pack: `dt datapack`
 6. Update `CHANGELOG.md` with a dated section for the release
 7. Create and push the tag
 8. After the release is published, attach the data pack zip to the release
@@ -204,7 +204,7 @@ This makes it available via `--version` and in the UI header badge.
 !!! bug "`nix flake check` does not currently pass"
     This step previously read "run `nix flake check`". That check cannot succeed: the
     `frontend-tests` check has an empty `npmDepsHash`, and `go-tests` omits the webkit
-    build inputs. Use `make test-all` until this is fixed.
+    build inputs. Use `dt test-all` until this is fixed.
 
     Ticket: *flake.nix embeds code inline and nix flake check cannot pass*.
 

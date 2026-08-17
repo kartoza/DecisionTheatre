@@ -134,7 +134,7 @@ Aep_mela,Aepyceros melampus,Impala,49.1,Browser-grazer intermediate,Gregarious,H
 
 ```bash
 # Place all input files in data/ then run:
-make geopackage
+dt geopackage
 
 # Or directly:
 ./scripts/build-geopackage.sh ./data
@@ -153,7 +153,7 @@ The build script produces `data/datapack.gpkg` by:
 To package the final distributable archive:
 
 ```bash
-make datapack        # Produces dist/decision-theatre-data-v{VERSION}.zip
+dt datapack        # Produces dist/decision-theatre-data-v{VERSION}.zip
 ```
 
 ---
@@ -190,7 +190,7 @@ A [MapLibre GL Style Specification](https://maplibre.org/maplibre-style-spec/) J
 ## Manifest (`manifest.json`)
 
 Declares what the pack holds, when it was built, and the state of the data directory at
-the time. Written by `decision-theatre pack-data` (reached through `make pack-data` or
+the time. Written by `decision-theatre pack-data` (reached through `dt pack-data` or
 `scripts/pack-data.sh`), both inside the archive and alongside it as
 `<pack>.zip.manifest.json` — so a download page can describe a pack without fetching
 gigabytes.

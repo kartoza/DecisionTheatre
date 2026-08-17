@@ -88,7 +88,7 @@ means. `dt help <name>` is the unambiguous form. Names that are only groups — 
 `diagnose`, `flake`, `data` — need no such ceremony.
 
 The table is `scripts/shell-help.sh`, and it is the only place commands are listed: the
-shell greeting, `dt`, and `make help` all render it, so none of them can drift. `make help
+shell greeting, `dt`, and `dt help` all render it, so none of them can drift. `dt help
 GROUP=data` filters the same way. Adding a command means adding one `GROUP|command|what it
 does` line to that file — nothing else needs editing.
 
@@ -103,7 +103,7 @@ terminal that measures them differently from lipgloss tears the grid apart. Set
 It is rendered with [gum](https://github.com/charmbracelet/gum), which the development
 shell provides: the overview is a grid of cards that reflows to two or one column on a
 narrow terminal, and `dt <group>` renders the same panels with a row per command — the two
-views share one visual language rather than looking like different programs. When gum is absent — `make help` from outside the shell, or CI — the
+views share one visual language rather than looking like different programs. When gum is absent — `dt help` from outside the shell, or CI — the
 script falls back to a plain aligned layout with the same content, so nothing depends on
 gum being there. Either way it drops colour when piped and exits cleanly into `head` or
 `less`.
@@ -159,7 +159,7 @@ there is nothing to keep in sync with it.
 | **Geospatial** | `tippecanoe`, `gdal`, `sqlite` |
 | **Packaging** | `nfpm`, `zip`, `gnumake`, `gcc`, `pkg-config` |
 | **Desktop runtime** | `webkitgtk_4_1`, `gtk3` |
-| **Nix** | `nil`, `nixpkgs-fmt`, `nixfmt-rfc-style` |
+| **Nix** | `nil`, `nixpkgs-fmt` |
 | **Security** | `trivy` |
 | **General** | `git`, `gh`, `ripgrep`, `fd`, `eza`, `bat`, `fzf`, `tree`, `jq`, `yq` |
 
@@ -176,17 +176,17 @@ nix run .#serve                           # web server only; browse to localhost
 nix run . -- --data-dir /path/to/data     # point at a specific data directory
 ```
 
-Every entry point — `make run`, `make serve`, `nix run`, `nix run .#serve` and the neovim
+Every entry point — `dt run`, `dt serve`, `nix run`, `nix run .#serve` and the neovim
 `<leader>pr` mapping — calls **`scripts/run-app.sh`**, which is the single place the launch
 policy is defined. `nix run` supplies a store-built binary through `DT_BIN` so the script
-skips building; `make run` rebuilds only what is stale. The flags, the desktop-vs-server
+skips building; `dt run` rebuilds only what is stale. The flags, the desktop-vs-server
 decision and the data directory resolution are identical in both cases.
 
 `nix run` builds from the current checkout, including uncommitted work — though note that
 Nix only sees files git knows about, so a brand-new file must be `git add`ed before the
 flake can build it.
 
-For everyday work, prefer `make run`: it is incremental, whereas `nix run` re-runs the
+For everyday work, prefer `dt run`: it is incremental, whereas `nix run` re-runs the
 full reproducible build.
 
 ## `nix run` commands
@@ -240,114 +240,36 @@ This runs the `go-tests` and `frontend-tests` checks in isolated build environme
 !!! bug "This does not currently pass"
     `checks.frontend-tests` has an empty `npmDepsHash`, which is not a valid fixed-output
     hash, and `checks.go-tests` omits the webkit build inputs that the package itself
-    needs. Use `make test-all` until this is fixed.
+    needs. Use `dt test-all` until this is fixed.
 
     Ticket: *flake.nix embeds code inline and nix flake check cannot pass*.
 
 ## Everyday commands
 
-These run inside `nix develop`.
+`dt` is the primary spelling for every task; `make <task>` and the neovim
+`<leader>p` mappings reach the same targets, and the `nix run` entry points above
+exist for the tasks CI must run without entering this shell.
 
-### Live development
+The full list, with a description per command, is on
+[Command Reference](command-reference.md) — generated from
+`scripts/shell-help.sh` at build time so it cannot drift from what `dt` offers.
+The groups you will use most often:
 
-```bash
-make dev-all          # backend and frontend together, with reload
-make dev-backend      # Go server only, via air
-make dev-frontend     # Vite dev server only
-make dev              # build the backend once and run it on port 8080
-```
+{{ dt_commands("run develop") }}
 
-`make dev-all` is the usual choice: the Vite dev server proxies `/api`, `/tiles`, `/data`
-and `/docs` to the Go server, so the frontend hot-reloads while the backend restarts on
-change.
+{{ dt_commands("build test") }}
 
-### Building
+For everything else — diagnosing a problem, keeping the flake importable,
+preparing a data pack, building the documentation, cutting a release — see the
+[Command Reference](command-reference.md), or run `dt` for the same table in the
+terminal.
 
-```bash
-make build            # frontend, then docs, then the backend binary
-make build-frontend   # npm ci && vite build → internal/server/static/
-make build-docs       # mkdocs build → internal/server/docs_site/
-make build-backend    # go build (assumes the embed targets exist)
-make app              # frontend + docs only
-```
-
-!!! warning "Build order matters"
-    `internal/server/static/` and `internal/server/docs_site/` are `//go:embed` targets
-    produced by the frontend and docs builds. They are not committed, so on a clean
-    checkout `go build`, `go vet` and `go test` all fail until you have run
-    `make build-frontend` and `make build-docs` at least once.
-
-### Testing
-
-```bash
-make test             # go test -race -coverprofile=coverage.out ./...
-make test-frontend    # vitest run
-make test-all         # both
-```
-
-See [Testing](testing.md) for what is and is not covered.
-
-### Formatting and linting
-
-```bash
-make fmt              # gofmt -w
-make lint             # golangci-lint run --timeout 5m
-make check            # fmt, lint, then test
-```
-
-Frontend type checking:
-
-```bash
-cd frontend && npx tsc --noEmit
-```
-
-!!! warning "Frontend lint does not run"
-    `npm run lint` cannot start — ESLint is installed but no configuration file exists.
-    See [Coding Standards](coding-standards.md).
-
-### Documentation
-
-```bash
-make docs             # build the site into internal/server/docs_site/
-make docs-serve       # live-reloading preview on localhost:8000
-mkdocs serve          # the same, directly
-```
-
-The docs build generates its diagrams from the codebase — see
-[the diagram pipeline](#diagrams-and-provenance) below.
-
-### Data
-
-```bash
-make fetch-data FOLDER=<drive-id>   # pull source data
-make geopackage                     # build datapack.gpkg from source CSVs
-make check-data                     # check the data directory and summarise it
-make pack-data                      # check, then package into a distributable archive
-make list-datapack                  # inspect a built pack
-```
-
-`make pack-data` refuses to build an archive when `check-data` reports errors, so a pack
-that cannot be loaded never leaves the machine. Override with
-`make pack-data ARGS="--force"` — the manifest then records that the pack was forced and
-how many errors were overridden.
-
-`make datapack` and `make validate-data` remain as aliases for the two new names.
-
-See [Data Preparation](data-preparation.md).
-
-### Packaging and release
-
-```bash
-make packages           # all platforms buildable from here
-make packages-linux     # .tar.gz, .deb, .rpm
-make packages-windows   # .zip, .msi (via mingw-w64 and WiX)
-make packages-darwin    # .dmg — macOS only
-make packages-flatpak
-make packages-snap
-make release            # full release build
-```
-
-See [Preparing a Release](releasing.md).
+!!! tip "These tables are generated"
+    Adding a command to `scripts/shell-help.sh` makes it appear here, in `dt`, in
+    `dt help` and in the shell greeting from one edit. This section used to list
+    the `make` targets by hand, and went on describing `dt dev` as "build the
+    backend once and run it on port 8080" long after it became an alias for
+    `dt run`.
 
 ## Continuous integration
 
@@ -381,7 +303,7 @@ parallel packaging jobs, then a published GitHub Release.
 To reproduce CI locally:
 
 ```bash
-make check          # fmt, lint, test
+dt check          # fmt, lint, test
 nix build && ./result/bin/decision-theatre --version
 trivy fs --severity CRITICAL,HIGH .
 ```

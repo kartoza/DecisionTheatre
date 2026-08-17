@@ -24,6 +24,9 @@
             mkdocs
             mkdocs-material
             mkdocs-minify-plugin
+            # Lets the documentation call into scripts/ for content rather than
+            # restating it; see docs/hooks/macros.py.
+            mkdocs-macros
             pygments
             pymdown-extensions
           ]
@@ -93,6 +96,10 @@
               || baseName == "flake.nix"
               || baseName == "main.go"
               || baseName == "go.mod"
+              # docs/hooks/command_reference.py renders the command reference by
+              # running scripts/shell-help.sh, so the docs cannot restate the
+              # command list and fall behind it.
+              || pkgs.lib.hasPrefix (toString ./scripts) p
               || pkgs.lib.hasPrefix (toString ./docs) p
               || pkgs.lib.hasPrefix (toString ./internal) p
               || pkgs.lib.hasPrefix (toString ./frontend) p
@@ -503,7 +510,6 @@
               # Nix tooling
               nil
               nixpkgs-fmt
-              nixfmt-rfc-style
 
               # Terminal UI for the command table and the report scripts
               gum

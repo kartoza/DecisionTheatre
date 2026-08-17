@@ -15,7 +15,7 @@
 All Go code must be formatted with `gofmt`. Run:
 
 ```bash
-make fmt
+dt fmt
 ```
 
 ### Linting
@@ -23,7 +23,7 @@ make fmt
 We use [golangci-lint](https://golangci-lint.run/) with default settings and a 5-minute timeout:
 
 ```bash
-make lint
+dt lint
 # or directly:
 golangci-lint run --timeout 5m
 ```
@@ -31,7 +31,7 @@ golangci-lint run --timeout 5m
 !!! warning "Expected to change"
     There is no `.golangci.yml`, and CI pins the linter to `version: latest`, so the
     active rule set varies with the release date rather than with a committed
-    configuration. Nothing verifies formatting either — `make fmt` rewrites files but is
+    configuration. Nothing verifies formatting either — `dt fmt` rewrites files but is
     manual, and CI does not check `gofmt -l`.
 
     Ticket: *golangci-lint runs on defaults and there is no gofmt gate*.
