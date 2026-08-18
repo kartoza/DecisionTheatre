@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`scripts/protect-branch.sh --no-strict`**, for batch merges. Strict protection
+  requires a branch to be up to date with `main` before it can merge, so with several
+  green pull requests waiting, merging the first makes every other one stale: five
+  ready pull requests become five sequential update-and-wait-for-CI cycles.
+
+  `--no-strict` drops only the up-to-dateness requirement. Every check is still
+  required and must still have passed — the only thing given up is the demand that it
+  passed against the newest `main`. That is a real if small risk, since two changes can
+  each be green alone and broken together, so it is meant for a deliberate batch with
+  `main` checked afterwards, never as a standing setting. Running the script with no
+  arguments restores strictness, which is what the batch caller relies on.
+
+  `--help` no longer reads a hardcoded line range, which the new paragraph would have
+  silently truncated.
+
 - **The flake can no longer fall out of step with the Go and npm manifests.** `flake.nix`
   pins two fixed-output hashes — `vendorHash` from `go.mod`/`go.sum`, `npmDepsHash` from
   `frontend/package-lock.json`. A fixed-output derivation is only revalidated when its
