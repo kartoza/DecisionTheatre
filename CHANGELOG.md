@@ -99,13 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The container images built against a different WebKit than everything else ships.**
-  `deployments/Dockerfile` installed `libwebkit2gtk-4.0-dev` and
-  `deployments/Dockerfile.cross` did the same, while the flake, CI, the Debian
+  `deployments/Dockerfile`, `deployments/Dockerfile.cross` and
+  `deployments/Dockerfile.builder` all installed `libwebkit2gtk-4.0-dev`, while the
+  flake, CI, the Debian
   packaging and the documented runtime dependency all target 4.1. The container was
   therefore the one build nobody else's environment matched, and WebKit 4.0 has been
   dropped from current Debian, so it was borrowed time rather than a stable choice.
 
-  Both files now install 4.1 and run `scripts/webkit-compat.sh`, the same shim the
+  All three now install 4.1 and run `scripts/webkit-compat.sh`, the same shim the
   flake and CI use, which derives a `webkit2gtk-4.0.pc` from the installed 4.1 one so
   that `webview_go`'s hardcoded `#cgo pkg-config: webkit2gtk-4.0` resolves. Verified
   by building both files: the binary links `libwebkit2gtk-4.1.so.0`, the container
