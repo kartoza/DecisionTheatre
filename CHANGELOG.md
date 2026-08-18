@@ -113,6 +113,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three tracked Go files were not gofmt-clean** (`internal/api/handler.go` and two test
   files). Now formatted, and the pre-commit hook keeps them that way.
 - **Every shell script under `scripts/` is now shellcheck-clean** at warning severity.
+- **Starting a demo tour tried to write a multi-megabyte site to localStorage and blew
+  the quota.** The tour resets the walkthrough's ideal targets to current, then
+  persisted the whole site object into the `dt-sites` key "so it is available for the
+  rest of the session". The Africa walkthrough is 4,026,496 characters — roughly
+  7.7 MB in UTF-16 against a typical 5 MB per-origin quota — so the write could never
+  succeed, and it happened on a completely fresh profile before the user had created
+  anything of their own. The return value was ignored, so it failed silently.
+
+  The reset is presentation state for the current session and never needed to be
+  durable, so it now lives in an in-memory map that cannot fail and is gone on reload
+  — which is the intended lifetime, since the tour resets the targets again next time
+  it runs.
+
+  `getSite` gained a fallback to the session store and then the static walkthrough
+  JSON, because a demo site previously resolved *only* as a side effect of that
+  localStorage write; removing the write without this would have broken the tours.
+  The fallback is limited to known walkthrough ids so that looking up a deleted site
+  does not cost a 404. `DemoTour` also had its own copy of the fetch-and-normalise
+  logic `getSite` already implements, along with a progress step for a fetch that no
+  longer happens; both are gone rather than left as an unreachable branch.
+
+- **localStorage failures were discarded, so saves appeared to succeed and did
+  not.** Every write path ended in an empty catch block. Once the quota was
+  exhausted the user saw their change reflected in React state and lost it on
+  reload — which reaches us as "the app is flaky" or "it lost my work" rather than
+  as a storage complaint, and hid the underlying problem from anyone debugging it.
+
+  Writes now go through `frontend/src/lib/storage.ts`, which reports rather than
+  swallows. `QuotaExceededError` is told apart from a blocked store (private
+  browsing, a privacy setting) because the advice differs: delete something, versus
+  nothing you save will survive this tab.
+
+  The two kinds of write are treated differently on purpose. Losing a **site** is
+  losing the user's work, and `saveLocalSites` already reported that so the caller
+  could say so. Losing a **pane layout** is losing a preference, and a toast per
+  failed write would be several a minute about something the user cannot act on
+  per-write — so preference failures surface **once per kind of failure per
+  session**, and always log.
+
+  A startup health check warns at 80% of the typical 5 MB quota, while writes still
+  succeed, rather than after something is lost. It probes with a real
+  write-read-remove round trip, because in private mode some browsers expose a
+  `localStorage` whose `setItem` throws — testing that the object exists proves
+  nothing.
+
+  The duplicate `isQuotaExceededError` in `hooks/useApi.ts` now comes from the same
+  module, and the two `sessionStorage` catch blocks in `types/index.ts` were
+  converted too, so nothing in that file swallows a storage error any more.
+
 - `GOPATH` is set from the project root rather than `$PWD`, so running a Go command after
   `cd`-ing into a subdirectory no longer creates a second module cache there. Two had
   accumulated, under `frontend/` and `resources/mbtiles/`.
