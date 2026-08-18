@@ -1,10 +1,10 @@
 name: decision-theatre
 version: git
-summary: Offline catchment data exploration with embedded AI
+summary: Offline exploration of African catchment data with scenario comparison
 description: |
   Decision Theatre is an offline-first desktop application for exploring
-  African catchment data with scenario comparison, embedded AI chat,
-  and neural network predictions.
+  African catchment data: comparing restoration scenarios side by side,
+  drawing a study area, and reading the indicators that result.
 
 base: core24
 confinement: strict

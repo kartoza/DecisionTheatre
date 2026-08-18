@@ -39,7 +39,7 @@ GOLINT := golangci-lint
 .PHONY: protect-branch
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
-.PHONY: check-data validate-data pack-data datapack
+.PHONY: check-data validate-data pack-data datapack walkthrough-manifest
 .PHONY: geopackage list-datapack fetch-data
 .PHONY: design-export design-import design-preview
 .PHONY: release
@@ -151,6 +151,12 @@ lint:
 ## does. Exit 0 = no errors, 1 = errors, 2 = the directory is unreadable.
 check-data:
 	./scripts/check-data.sh $(if $(DATA_DIR),$(DATA_DIR),./data)
+
+## walkthrough-manifest: rebuild data/walkthroughs/manifest.json from the
+## walkthrough documents. The sites list reads the manifest rather than five
+## megabytes of demo content; a test fails if the two fall out of step.
+walkthrough-manifest:
+	node ./scripts/build-walkthrough-manifest.mjs
 
 ## validate-data: deprecated name for check-data, kept so existing scripts,
 ## deployment gates and documentation keep working.
