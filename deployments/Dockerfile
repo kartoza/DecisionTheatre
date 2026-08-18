@@ -22,18 +22,16 @@ RUN apt-get update \
         gcc \
         git \
         libgtk-3-dev \
-        libwebkit2gtk-4.0-dev \
+        libwebkit2gtk-4.1-dev \
         pkg-config \
         python3 \
         python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
-RUN go mod edit -dropreplace github.com/webview/webview_go \
-    && go mod download
+RUN go mod download
 
 COPY . .
-RUN go mod edit -dropreplace github.com/webview/webview_go
 
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 RUN rm -rf internal/server/static \
@@ -45,13 +43,19 @@ RUN python3 -m venv /tmp/mkdocs \
         mkdocs \
         mkdocs-material \
         mkdocs-minify-plugin \
+        mkdocs-macros-plugin \
         pygments \
         pymdown-extensions \
     && /tmp/mkdocs/bin/mkdocs build -d internal/server/docs_site
 
-RUN CGO_ENABLED=1 go build \
-    -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/decision-theatre .
+# webview_go hardcodes `pkg-config: gtk+-3.0 webkit2gtk-4.0` with no build tag
+# for 4.1, so with only 4.1 installed every cgo command fails to import it. The
+# shim writes a 4.0 .pc derived from the real 4.1 one — the same script CI and a
+# developer machine run, so all three resolve the dependency identically.
+RUN eval "$(./scripts/webkit-compat.sh)" \
+    && CGO_ENABLED=1 go build \
+        -ldflags "-s -w -X main.version=${VERSION}" \
+        -o /out/decision-theatre .
 
 
 FROM debian:bookworm-slim AS runtime
@@ -63,7 +67,7 @@ RUN apt-get update \
         ca-certificates \
         jq \
         libgtk-3-0 \
-        libwebkit2gtk-4.0-37 \
+        libwebkit2gtk-4.1-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
