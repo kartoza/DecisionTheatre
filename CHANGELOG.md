@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every pull request now publishes the container image, its SBOM and its
+  vulnerability scan**, and annotates the pull request with both tables. The image
+  is a `container-image` artefact kept for 7 days, so a change can be run before it
+  merges without building anything locally.
+
+- **Every release publishes the image to GHCR** as
+  `ghcr.io/kartoza/decisiontheatre:<version>` and `:latest`, with the image
+  tarball, SPDX SBOM and Grype scan attached as release assets and the same tables
+  appended to the release notes.
+
+  The scan does not fail the build. A CVE in a system library is a fact to weigh,
+  not automatically a defect here, and a gate that trips on every Negligible
+  finding in glibc trains people to ignore it — gating belongs to an agreed
+  severity policy. `scripts/sbom_table.py` and `scripts/cve_table.py` render the
+  reports, with 18 tests covering deduplication, licence shapes, severity ordering
+  and the empty cases.
+
+### Removed
+
+- **The `container-build` CI job.** Building the image from the flake is the only
+  path now tested, so a pull request builds one image instead of two.
+  `deployments/Dockerfile` remains for the moment because compose still builds
+  from it and the nightly redeploy depends on the toolchain image beside it;
+  it is no longer built or tested in CI.
+
 - **The container image can be built from the flake.** `nix build .#container`,
   `./scripts/build-container.sh` or `make container` produce a Docker image whose
   contents are the runtime closure of the binary the flake already builds.
