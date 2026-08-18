@@ -118,6 +118,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported two, the second a false positive from matching a later hook's
   dependency array.
 
+- **The production page injected stack traces into itself.** `index.html`
+  installed `window.onerror` and `unhandledrejection` handlers that appended a
+  fixed, full-width red block containing the message, file, line, column and full
+  stack to the live document — internal paths and frame details shown to whoever
+  happened to be using the application, in every build.
+
+  The handlers now live in `src/main.tsx` behind `import.meta.env.DEV`, which is a
+  compile-time constant, so the block is **removed from a production bundle**
+  rather than merely skipped — verified by grepping the built assets. In
+  production the React error boundary is the recovery path, and anything outside
+  React reaches the console.
+
+- **Analytics loaded unconditionally in the desktop application.** The Google tag
+  sat three lines below a comment in the same file saying nothing there may fetch
+  from a third party, because in the offline desktop build an external request
+  either fails or blocks first paint. It also reported desktop usage to Google as
+  though it were a web visit.
+
+  It now loads only when `__DECISION_THEATRE_WEBVIEW__` is absent — a marker the
+  webview injects before any page script runs, so the check is reliable rather
+  than a guess — and is appended by script rather than being a bare tag that
+  executes before any guard can run. This is **not** consent: opt-in telemetry
+  with a visible toggle, and supplying the measurement ID at runtime, both remain
+  open.
+
 - **Two thirds of the indicators were invisible.** `metadata.csv` is exported from
   R, whose `make.names()` rewrites spaces and hyphens to dots, so
   `herbs_diet_kgkm2_Obligate grazer` in the GeoPackage is

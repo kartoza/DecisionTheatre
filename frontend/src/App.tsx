@@ -15,9 +15,9 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
-import { showTargetWarningsPopup } from './utils/warnings';
+import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
@@ -42,6 +42,14 @@ import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
 function App() {
   const toast = useToast();
+  const { details: attributeDetails, loading: attributeDetailsLoading } = useAttributeDetails();
+  const { variableTypes, loading: variableTypesLoading } = useAttributeVariableTypes();
+  const { userInputs, loading: userInputsLoading } = useAttributeUserInputs();
+  const catalogLoadingRef = useRef(true);
+  catalogLoadingRef.current = attributeDetailsLoading || variableTypesLoading || userInputsLoading;
+  const catalogRef = useRef({ attributeDetails, variableTypes, userInputs });
+  catalogRef.current = { attributeDetails, variableTypes, userInputs };
+  const dataAvailabilityWarnedSiteRef = useRef<string | null>(null);
   const { isOpen: isDocsOpen, onToggle: onToggleDocs, onClose: onCloseDocs } = useDisclosure({ defaultIsOpen: false });
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
   const [quadColumns, setQuadColumns] = useState<QuadColumns>(loadQuadColumns);
@@ -252,6 +260,17 @@ function App() {
     setIsExtractingIndicators(false);
   }, []);
 
+  // Warn once per site, right when its indicators first finish extracting (which
+  // happens immediately after site creation), rather than waiting for the user to
+  // visit the indicator editor page.
+  const maybeWarnLowDataAvailability = useCallback((site: Site) => {
+    if (!site.indicators || dataAvailabilityWarnedSiteRef.current === site.id || catalogLoadingRef.current) return;
+    dataAvailabilityWarnedSiteRef.current = site.id;
+    const { attributeDetails, variableTypes, userInputs } = catalogRef.current;
+    const fraction = computeIndicatorAvailabilityFraction(site.indicators, attributeDetails, variableTypes, userInputs);
+    showLowDataAvailabilityWarning(fraction, toast);
+  }, [toast]);
+
   const startBackgroundIndicatorExtraction = useCallback((site: Site | null, options?: { force?: boolean }) => {
     const force = options?.force ?? false;
     if (!site || (!force && site.indicators) || !site.catchmentIds?.length) return;
@@ -296,6 +315,7 @@ function App() {
             });
           }
           setCurrentSite((prev) => (prev?.id === siteId ? updatedSite : prev));
+          maybeWarnLowDataAvailability(updatedSite);
         })
         .catch((err) => console.error('Browser indicator extraction failed:', err))
         .finally(stopExtractionPolling);
@@ -323,13 +343,15 @@ function App() {
         const updatedSite = await r.json() as Site;
         if (updatedSite.indicators) {
           stopExtractionPolling();
-          setCurrentSite((prev) => (prev?.id === siteId ? { ...updatedSite, thumbnail } : prev));
+          const siteWithThumbnail = { ...updatedSite, thumbnail };
+          setCurrentSite((prev) => (prev?.id === siteId ? siteWithThumbnail : prev));
+          maybeWarnLowDataAvailability(siteWithThumbnail);
         }
       } catch {
         // network hiccup — retry next tick
       }
     }, 1000);
-  }, [stopExtractionPolling, toast]);
+  }, [stopExtractionPolling, toast, maybeWarnLowDataAvailability]);
 
   // Auto-extract indicators when a site is opened that has catchments but no indicators yet
   useEffect(() => {
