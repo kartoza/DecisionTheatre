@@ -133,6 +133,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported two, the second a false positive from matching a later hook's
   dependency array.
 
+- **Two thirds of the indicators were invisible.** `metadata.csv` is exported from
+  R, whose `make.names()` rewrites spaces and hyphens to dots, so
+  `herbs_diet_kgkm2_Obligate grazer` in the GeoPackage is
+  `herbs_diet_kgkm2_Obligate.grazer` in the metadata. The lookup is an exact string
+  comparison, and a row matching nothing was silently discarded — nothing logged
+  it, and the indicator simply never appeared.
+
+  Measured against the supplied datapack: of **502** GeoPackage columns, **158**
+  carried metadata and **344** did not, so two thirds of the dataset had no colour,
+  no detailed name, no units, no axis label and no chart type, and was missing from
+  every selector that reads those maps. After the fix, **502 of 502**.
+
+  Each metadata entry is now also keyed by the real column name. The alias is built
+  from the GeoPackage side rather than by reversing the substitution, because the
+  reverse is ambiguous — `make.names()` maps both `' '` and `'-'` to `'.'`, so
+  `Browser.grazer.intermediate` could be either, and in this dataset it is
+  `Browser-grazer intermediate`. Normalising the real column forward has exactly
+  one answer. An entry the CSV already provides is never overwritten, and a `false`
+  flag is not aliased, because those maps carry meaning by presence.
+
 
 - **The desktop window laid the whole application out at a million times scale, and hung
   the machine doing it.** `--diag` reported a layout viewport of 1 268 000 000 CSS pixels
