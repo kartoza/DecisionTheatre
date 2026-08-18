@@ -403,7 +403,6 @@ export default function IndicatorEditorPage({
         ...prev,
         catchmentCount: site.indicators?.catchmentCount ?? prev.catchmentCount,
         totalAreaKm2: site.indicators?.totalAreaKm2 ?? prev.totalAreaKm2,
-        catchmentIds: site.indicators?.catchmentIds ?? prev.catchmentIds,
         extractedAt: site.indicators?.extractedAt ?? prev.extractedAt,
       };
     });
@@ -559,7 +558,6 @@ export default function IndicatorEditorPage({
           extractedAt: localIndicators.extractedAt,
           catchmentCount: localIndicators.catchmentCount,
           totalAreaKm2: localIndicators.totalAreaKm2,
-          catchmentIds: localIndicators.catchmentIds,
         };
         const updatedSite: Site = {
           ...site,
@@ -590,7 +588,6 @@ export default function IndicatorEditorPage({
           extractedAt: localIndicators.extractedAt,
           catchmentCount: localIndicators.catchmentCount,
           totalAreaKm2: localIndicators.totalAreaKm2,
-          catchmentIds: localIndicators.catchmentIds,
         };
         const updatedSite: Site = {
           ...site,
