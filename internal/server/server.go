@@ -239,6 +239,21 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(tileData)
 }
 
+// newAuxTileServer configures one auxiliary tile listener.
+//
+// These previously set IdleTimeout only, so a client that opened a connection and
+// then stalled mid-request held it indefinitely. Tiles are small and read from a
+// local mbtiles file, so nothing here streams for long and WriteTimeout needs no
+// exemption, unlike the main server's downloads.
+func newAuxTileServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:      handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+}
+
 // startAuxTileServers opens up to 3 extra listeners on the ports immediately
 // following the main port. Each listener runs a minimal router that only
 // handles tile requests, giving the browser additional HTTP/1.1 connection
@@ -251,11 +266,8 @@ func (s *Server) startAuxTileServers(mainPort int) {
 			r.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
 				s.handleTileRequest).Methods("GET")
 		}
-		srv := &http.Server{
-			Handler:     r,
-			IdleTimeout: 120 * time.Second,
-		}
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		srv := newAuxTileServer(r)
+		ln, err := net.Listen("tcp", s.cfg.ListenAddressForPort(port))
 		if err != nil {
 			log.Printf("Aux tile server: port %d unavailable, skipping: %v", port, err)
 			continue
@@ -272,21 +284,39 @@ func (s *Server) startAuxTileServers(mainPort int) {
 }
 
 func (s *Server) Start() error {
-	s.httpServer = &http.Server{
-		Addr: fmt.Sprintf(":%d", s.cfg.Port),
-		// Every request goes through the body limit; see bodylimit.go.
-		Handler:     limitRequestBody(s.router),
-		ReadTimeout: 15 * time.Second,
-		// WriteTimeout is intentionally unset (0 = disabled) — long-running operations
-		// such as datapack extraction can take several minutes on large archives.
-		// This is safe because the server only listens on localhost.
-		IdleTimeout: 120 * time.Second,
-	}
+	s.httpServer = s.newHTTPServer()
 
 	s.startAuxTileServers(s.cfg.Port)
 
-	log.Printf("Server listening on http://localhost:%d", s.cfg.Port)
+	log.Printf("Server listening on http://%s", s.cfg.ListenAddress())
 	return s.httpServer.ListenAndServe()
+}
+
+// newHTTPServer builds the main listener's configuration.
+//
+// Separate from Start so a test can inspect the address and the timeouts without
+// binding a port or blocking in ListenAndServe.
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
+		Addr: s.cfg.ListenAddress(),
+		// Every request goes through the body limit; see bodylimit.go.
+		Handler:     limitRequestBody(s.router),
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout used to be disabled entirely, justified by a claim that
+		// the server "only listens on localhost" — which was not true: it bound
+		// 0.0.0.0. The binding is fixed now, but a disabled write timeout still
+		// means a stalled client holds a connection and its goroutine forever, so
+		// it is bounded here on its own merits.
+		//
+		// Nothing needs minutes. Datapack extraction, the original reason given,
+		// answers 202 immediately and reports progress through
+		// /api/datapack/status, so no handler blocks on it. The two handlers that
+		// genuinely stream a large file — the datapack and executable downloads —
+		// extend their own deadline with http.NewResponseController rather than
+		// forcing every request to be unbounded. See datapack.go.
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 }
 
 // Stop gracefully shuts down the server.

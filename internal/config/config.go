@@ -2,16 +2,38 @@ package config
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 )
 
 const appName = "decision-theatre"
 
+// DefaultBindAddress is the interface the server listens on unless told
+// otherwise.
+//
+// Loopback, deliberately. Every endpoint is unauthenticated, so binding all
+// interfaces puts the whole API — including the routes that write to disk in the
+// desktop build — in reach of everyone on the user's network. A desktop
+// application has no reason to accept a connection from another machine, and a
+// container needs the opposite, so the container asks for it explicitly rather
+// than being served by an unsafe default.
+const DefaultBindAddress = "127.0.0.1"
+
 // Config holds the application configuration
 type Config struct {
-	Port         int
+	Port int
+
+	// BindAddress is the interface to listen on. Empty means
+	// DefaultBindAddress: the zero value must be the safe one, so a caller that
+	// forgets the field does not accidentally publish to the network.
+	//
+	// Use "0.0.0.0" to accept connections from anywhere, which is what the
+	// container deployment does — see deployments/docker-compose.yaml.
+	BindAddress string
+
 	DataDir      string
 	ResourcesDir string
 	Version      string
@@ -30,6 +52,35 @@ type Config struct {
 	// The zero value is the safe one. A caller that forgets to set it gets the
 	// server build, without the desktop-only routes.
 	DesktopMode bool
+}
+
+// ListenAddress returns the host:port to bind, applying the safe default.
+func (c Config) ListenAddress() string {
+	return c.ListenAddressForPort(c.Port)
+}
+
+// ListenAddressForPort is ListenAddress for a port other than the configured
+// one, used by the auxiliary tile listeners.
+func (c Config) ListenAddressForPort(port int) string {
+	host := c.BindAddress
+	if host == "" {
+		host = DefaultBindAddress
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// LocalURL returns a URL this process can use to reach its own server: the
+// address the webview loads and the readiness probe polls.
+//
+// A wildcard bind is not a usable destination, so it becomes localhost. Any other
+// address is used as given, because a bind to one specific interface means
+// localhost is not listening.
+func (c Config) LocalURL() string {
+	host := c.BindAddress
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(c.Port))
 }
 
 // Settings holds persistent user settings saved to disk
