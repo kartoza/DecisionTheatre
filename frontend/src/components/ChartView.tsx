@@ -1,7 +1,25 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, Button, HStack, Spinner, Text } from '@chakra-ui/react';
+import { Box, Button, Center, HStack, Spinner, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import Plot from 'react-plotly.js';
+import { Suspense, lazy } from 'react';
+
+// plotly is roughly 3.5 MB and sat in the main bundle because this import was
+// static: every user downloaded it before first paint, including those who never
+// opened a chart. Loading it on demand moves it off the critical path.
+//
+// A wrapper rather than a Suspense boundary around each of the four render sites,
+// or around the component's return, which has several branches.
+const PlotlyChart = lazy(() => import('react-plotly.js'));
+
+type PlotProps = React.ComponentProps<typeof PlotlyChart>;
+
+function Plot(props: PlotProps) {
+  return (
+    <Suspense fallback={<Center h="100%" w="100%"><Spinner size="lg" /></Center>}>
+      <PlotlyChart {...props} />
+    </Suspense>
+  );
+}
 import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
@@ -402,7 +420,11 @@ function ChartView({
     reference: Record<string, number>;
     current: Record<string, number>;
   } | null>(null);
-  const [siteCatchments, setSiteCatchments] = useState<CatchmentIndicators[] | null>(null);
+  // Write-only state: setSiteCatchments is called in three places and the value is
+  // never read. The binding is elided rather than removed, because setting state
+  // still triggers a re-render — deleting the writes would change when this
+  // component re-renders, which is a different change from enabling the linter.
+  const [, setSiteCatchments] = useState<CatchmentIndicators[] | null>(null);
   const [groupedRangeData, setGroupedRangeData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
@@ -887,7 +909,7 @@ function ChartView({
       curLower: p.curLower,
     }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, siteCatchments, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds, targetHasBeenUpdated]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds, targetHasBeenUpdated]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
@@ -915,7 +937,7 @@ function ChartView({
     if (chartGraphMode === 'boxplot') return canRenderBoxplot ? 'boxplot' : 'line';
     if (chartGraphMode === 'line') return 'line';
     return canRenderBoxplot ? 'boxplot' : 'line';
-  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, rangeMode, chartGraphMode]);
+  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, chartGraphMode]);
 
   const canSummaryBoxplot = useMemo(() => {
     if (!attribute) return false;

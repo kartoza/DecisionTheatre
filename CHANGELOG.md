@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The frontend is linted.** The repository has shipped an eslint dependency, a
+  `lint` script and a CI job called `lint-frontend` since it was written, and none
+  of them ever linted anything: there was no configuration file, so eslint exited
+  with an error rather than a result, and the CI job ran `npx tsc --noEmit` alone.
+  No TypeScript in this project had ever been linted.
+
+  `frontend/eslint.config.js` is built from the `@typescript-eslint` parser and
+  plugin already in `package.json` rather than the `typescript-eslint`
+  meta-package, so linting the code we have costs no new npm dependency. The rule
+  set is deliberately narrow — faults rather than style — because enabling
+  everything at once produces findings that get silenced rather than fixed. CI
+  runs it, and `--report-unused-disable-directives` means a suppression left
+  behind after a fix fails the build.
+
+  The first run found 25 problems, including a **conditionally called hook**:
+  `useColorModeValue` inside a `viewMode !== 'chart'` branch in `ControlPanel`,
+  which changes the number of hooks between renders — React's "rendered fewer
+  hooks than expected". It now uses the value the component already computes.
+
+  Also fixed: a `!=` that should be `!==`, five deliberately-unused destructuring
+  bindings that now say so with an underscore instead of a `void` statement, and
+  two dependencies a hook never used. The remaining fifteen
+  `react-hooks/exhaustive-deps` findings are recorded in place with a reason and
+  tracked, rather than fixed blind: adding a dependency changes when an effect
+  runs, and in a 4,000-line component with no rendering tests that can produce a
+  render loop nothing here would catch.
+
 - **`scripts/protect-branch.sh --no-strict`**, for batch merges. Strict protection
   requires a branch to be up to date with `main` before it can merge, so with several
   green pull requests waiting, merging the first makes every other one stale: five
@@ -82,6 +109,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A datapack without a manifest falls back to the old path rather than showing no
   demos.
 
+- **Map rendering is capped at 1.5x device pixel ratio.** Both MapLibre instances
+  were created without `pixelRatio`, so each rendered at the display's native
+  ratio. Fragment shading cost scales with the *square* of that: a 2x display does
+  four times the per-pixel work, a 3x display nine times — and quad view keeps up
+  to twelve map instances live. The clamp only ever lowers the ratio, so a 1x
+  display is untouched, and 1.5x is visually near-indistinguishable on a map at
+  these zoom levels. The existing `fadeDuration: 0` is left alone.
+
+- **`prefers-reduced-motion` is honoured.** There are 157 framer-motion call sites
+  across 14 files and not one consulted the setting, which the project's WCAG 2.2
+  AA target requires independently of the performance argument. A single
+  `<MotionConfig reducedMotion="user">` at the root covers all of them, and covers
+  any animation added later without anyone having to remember. It sits outside the
+  error boundary so the guided tours, which animate too, are included.
+
+- **The application shipped 6.85 MB of JavaScript before first paint, and 18 MB of
+  images.** plotly was imported statically at the top of the chart component, so
+  every visitor downloaded roughly 4.6 MB of plotting library whether or not they
+  ever opened a chart.
+
+  It is now imported with `React.lazy` behind a `Suspense` boundary. The critical
+  path drops from **6.85 MB to 1.96 MB** of JavaScript — the entry chunk alone goes
+  from 5.50 MB to 0.61 MB — and plotly is fetched when a chart is first rendered.
+  Total JavaScript is unchanged at ~6.97 MB; this moves weight off first paint
+  rather than removing it. Both figures come from building this branch and current
+  `main` from the same base, so the comparison is not confounded by other work.
+
+  Naming plotly in `manualChunks` looked like the right accompaniment and is
+  actively wrong: it puts the module back in the static graph, Vite emits a
+  `<link rel="modulepreload">` for it, and the browser fetches all 4.6 MB before
+  first paint regardless of the lazy import. Measured both ways; the entry is
+  deliberately absent, with a comment saying why.
+
+  Eight referenced images were converted from PNG to webp — **7.63 MB to 0.90 MB**,
+  an 88% reduction, at quality 82 for photographs and 90 for screenshots where
+  text legibility matters. `frontend/src/image.png` is deleted: 1.6 MB, imported by
+  nothing, and byte-identical to `assets/Map_screenshot.png`. Two superseded logos
+  went with it.
+
+  Repository image weight falls from 18.65 MB to 5.31 MB — 71% — measured
+  against git's tracked blobs rather than a filesystem walk.
+
 
 - **Nothing reaches `main` with failing checks any more.** `dt protect-branch`
   requires every pull-request check to pass, requires the branch to be up to date,
@@ -112,6 +181,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both families are OFL-1.1.
 
 ### Fixed
+
+- **`SPECIFICATION.md` documented fixed vulnerabilities as present.** Its "known gaps"
+  section still said the server binds all interfaces, that `POST /api/datapack/install`
+  accepts an arbitrary filesystem path, that `POST /api/dialog/open-file` is registered
+  in server mode, that thumbnail paths are unvalidated, that there are no request body
+  size limits and no response compression. Five of those seven were closed on `main`
+  weeks ago. A specification that describes fixed defects as current is worse than one
+  that omits them: it is read as a threat assessment.
+
+  Each claim was rechecked against the code and the section rewritten to what is
+  actually true. Two gaps remain and are stated as such: there is still no
+  authentication on any endpoint and `deployments/nginx.conf` still proxies every path
+  without a denylist, and there is still no `context.Context` on database calls.
+
+- **The endpoint list did not say which routes are desktop-only.** A user's sites live
+  in their browser — the design brief, and what the client does — so the server's site
+  CRUD exists only in the desktop build, where the WebView has no persistent storage of
+  its own. The specification listed those routes as ordinary API, which reads as though
+  a hosted deployment stores users' sites. All seven gated routes are now marked, and
+  the reason is stated where the list begins.
+
+- **A local build and a nix build of the same commit reported different release
+  numbers.** `scripts/version.sh` — which the Makefile and every packaging script
+  use, so that they cannot disagree — reported `git describe` alone, and
+  `git describe` names the newest *tag*. `flake.nix` declares **0.4.0** and the
+  newest tag is **v0.2.2**, so `make build` produced a binary calling itself
+  `0.2.2-115-g1311b8a` while `nix build`, which takes its version from
+  `flake.nix`, called the identical source `0.4.0`.
+
+  The declared version now leads and git's position follows it —
+  `0.4.0-115-g1311b8a`, `0.4.0-115-g1311b8a-dirty`, or plain `0.4.0` on a clean
+  checkout of the matching tag or outside a git checkout entirely. `flake.nix`
+  remains the one place a release number is written; `version.sh --declared`
+  reports it without the suffix, and `scripts/doctor.sh` now asks for it rather
+  than growing a second grep of `flake.nix`.
+
+  `dt doctor` also reports when the declared version has no tag — the condition
+  that caused this, and one that is otherwise invisible until two binaries are
+  compared. `scripts/tests/version-test.sh` covers the behaviour in throwaway
+  repositories; 8 of its 11 cases fail against the previous script.
 
 - **Switching sites coloured the map from the previous site.** `applyColors` was
   memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
@@ -266,6 +375,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accumulated, under `frontend/` and `resources/mbtiles/`.
 
 ### Performance
+
+- **The browser stored three to eight times more than it needed to, and rewrote all
+  of it on every save.** A user's sites live in their browser — that is the design
+  brief — so this is the system of record, not a cache. Three things made it
+  expensive, and they had one cause: everything lived in a single `dt-sites` blob.
+
+  Sites are now stored one record per site, so a save touches one record:
+
+  | parse + serialise per save | |
+  |---|---:|
+  | the whole store, as it was | 38.8 ms |
+  | the largest single record | 14.8 ms |
+  | a typical record (65,691 B) | **0.51 ms** |
+
+  The full per-catchment breakdown is no longer persisted at all. At 27–56 KB per
+  catchment against a ~5 MB quota, a site of 90–185 catchments filled the browser on
+  its own — and it is not the client's to hold: the server computes it, and
+  `getSiteCatchments` already refetched it behind a 30-second cache whenever it was
+  missing. It now goes to that cache and never to disk.
+
+  `catchmentIds` was also stored twice, once on the site and once inside
+  `indicators`. For the Africa walkthrough those were byte-identical arrays of
+  147,837 IDs — 3.84 MB of a 4.0 MB document.
+
+  | stored bytes, walkthrough documents as representative sites | before | after | |
+  |---|---:|---:|---:|
+  | 7 catchments | 455,923 | 65,691 | −86% |
+  | 2 catchments | 168,539 | 57,879 | −66% |
+  | 11 catchments | 374,388 | 78,448 | −79% |
+  | the 147,837-id site | 4,026,496 | 2,104,598 | −48% |
+  | **total** | **5,025,346** | **2,306,616** | **−54%** |
+
+  `lib/siteStore.ts` owns the format and migrates an existing blob on first read,
+  normalising as it goes so an old record cannot resurrect either the breakdown or
+  the duplicated ID list. If any record fails to write the blob is left alone, so a
+  full quota cannot lose data. Five places that read the whole list to change one
+  site now call `saveLocalSite`.
 
 - **No API response was compressed.** Searching the server for compression found
   exactly one hit — the tile handler, where MBTiles blobs are already gzipped on

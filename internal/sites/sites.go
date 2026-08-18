@@ -99,8 +99,13 @@ type SiteIndicators struct {
 	ExtractedAt    string   `json:"extractedAt"`    // When indicators were extracted
 	CatchmentCount int      `json:"catchmentCount"` // Number of catchments used
 	TotalAreaKm2   float64  `json:"totalAreaKm2"`   // Total area in km²
-	CatchmentIDs   []string `json:"catchmentIds"`   // IDs of catchments used
 	Warnings       []string `json:"warnings,omitempty"`
+
+	// CatchmentIDs deliberately does not live here. It is on Site, and it was
+	// on both: for the Africa walkthrough that was the same 147,837-element
+	// array written twice, 3.84 MB of a 4.0 MB document. Nothing ever read this
+	// copy. Documents that still carry it are simply ignored on decode, so old
+	// files keep loading.
 }
 
 // Store handles site persistence
