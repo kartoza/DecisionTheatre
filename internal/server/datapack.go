@@ -16,10 +16,7 @@ import (
 	sevenzip "github.com/bodgit/sevenzip"
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/config"
-	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/httputil"
-	"github.com/kartoza/decision-theatre/internal/sites"
-	"github.com/kartoza/decision-theatre/internal/tiles"
 	"github.com/ncruces/zenity"
 )
 
@@ -186,15 +183,23 @@ func (s *Server) handleDatapackInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Close existing data stores before removing files (required on Windows)
-	if s.tileStore != nil {
-		s.tileStore.Close()
-		s.tileStore = nil
-	}
-	if s.gpkgStore != nil {
-		s.gpkgStore.Close()
-		s.gpkgStore = nil
-	}
+	// Close the existing stores before removing their files, which Windows
+	// requires — an open handle blocks the delete.
+	//
+	// Unpublish first, then close. The old code closed the stores and set the
+	// fields to nil while request goroutines were reading them, which was both a
+	// data race and a nil dereference waiting to happen in the tile handler.
+	// Swapping in an empty set means a request either sees the old stores, or sees
+	// none and is told the server is busy — never a half-updated server.
+	//
+	// The close is immediate rather than deferred here, unlike a reload: these
+	// files are about to be deleted, so waiting out the grace period would defeat
+	// the point.
+	previous := s.swapStores(&dataStores{
+		dataDir:      s.data().dataDir,
+		resourcesDir: s.data().resourcesDir,
+	})
+	previous.close()
 
 	// Acknowledge immediately — extraction runs in the background
 	httputil.RespondJSON(w, http.StatusAccepted, map[string]interface{}{
@@ -497,46 +502,29 @@ func (s *Server) reloadDataStores(packDir string) {
 	dataDir := filepath.Join(packDir, "data")
 	resourcesDir := filepath.Join(packDir, "resources")
 
-	// Close existing stores
-	if s.tileStore != nil {
-		s.tileStore.Close()
-		s.tileStore = nil
-	}
-	if s.gpkgStore != nil {
-		s.gpkgStore.Close()
-		s.gpkgStore = nil
+	if !dataDirExists(dataDir) {
+		log.Printf("Warning: reload target %s is not a directory", dataDir)
 	}
 
-	// Reinitialize
-	dataMBTilesDir := filepath.Join(dataDir, "mbtiles")
-	tileStore, err := tiles.NewMBTilesStore(dataDir, dataMBTilesDir)
-	if err != nil {
-		log.Printf("Warning: MBTiles store not available after reload: %v", err)
-	} else {
-		s.tileStore = tileStore
-	}
+	// Open everything first, then publish it in one atomic step.
+	//
+	// This used to assign six fields one at a time, unsynchronised, from this
+	// background goroutine while requests were reading them — so a request
+	// arriving mid-reload could see the new tile store alongside the old data
+	// directory. Building the whole set before publishing means there is no
+	// moment at which a half-updated server is visible.
+	next := openDataStores(dataDir, resourcesDir)
+	previous := s.swapStores(next)
 
-	gpkgStore, err := geodata.NewGpkgStore(dataDir)
-	if err != nil {
-		log.Printf("Warning: GeoPackage store not available after reload: %v", err)
-	} else {
-		s.gpkgStore = gpkgStore
-	}
-
-	siteStore, err := sites.NewStore(dataDir)
-	if err != nil {
-		log.Printf("Warning: Sites store not available after reload: %v", err)
-	} else {
-		s.siteStore = siteStore
-	}
-
-	// Update config for style JSON serving
-	s.cfg.DataDir = dataDir
-	s.cfg.ResourcesDir = resourcesDir
-
-	// Rebuild routes so the new apiHandler gets the updated store references
-	// (gorilla/mux does not support updating routes in place)
+	// The route table holds the stores it was built with, so it is rebuilt to
+	// pick up the new ones. Publishing the router is likewise a single store, and
+	// the running http.Server's Handler is not touched: reassigning it while the
+	// server was accepting connections was itself a race.
 	s.rebuildRoutes()
+
+	// A request that read the old pointer just before the swap is still using
+	// those stores. Closing them now would fail its query for no reason it caused.
+	closeAfterGrace(previous)
 }
 
 // checkWritable verifies the current process can create files in dir by

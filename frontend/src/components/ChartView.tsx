@@ -1,7 +1,25 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, Button, HStack, Spinner, Text } from '@chakra-ui/react';
+import { Box, Button, Center, HStack, Spinner, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import Plot from 'react-plotly.js';
+import { Suspense, lazy } from 'react';
+
+// plotly is roughly 3.5 MB and sat in the main bundle because this import was
+// static: every user downloaded it before first paint, including those who never
+// opened a chart. Loading it on demand moves it off the critical path.
+//
+// A wrapper rather than a Suspense boundary around each of the four render sites,
+// or around the component's return, which has several branches.
+const PlotlyChart = lazy(() => import('react-plotly.js'));
+
+type PlotProps = React.ComponentProps<typeof PlotlyChart>;
+
+function Plot(props: PlotProps) {
+  return (
+    <Suspense fallback={<Center h="100%" w="100%"><Spinner size="lg" /></Center>}>
+      <PlotlyChart {...props} />
+    </Suspense>
+  );
+}
 import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';

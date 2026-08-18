@@ -97,6 +97,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any animation added later without anyone having to remember. It sits outside the
   error boundary so the guided tours, which animate too, are included.
 
+- **The application shipped 6.85 MB of JavaScript before first paint, and 18 MB of
+  images.** plotly was imported statically at the top of the chart component, so
+  every visitor downloaded roughly 4.6 MB of plotting library whether or not they
+  ever opened a chart.
+
+  It is now imported with `React.lazy` behind a `Suspense` boundary. The critical
+  path drops from **6.85 MB to 1.96 MB** of JavaScript — the entry chunk alone goes
+  from 5.50 MB to 0.61 MB — and plotly is fetched when a chart is first rendered.
+  Total JavaScript is unchanged at ~6.97 MB; this moves weight off first paint
+  rather than removing it. Both figures come from building this branch and current
+  `main` from the same base, so the comparison is not confounded by other work.
+
+  Naming plotly in `manualChunks` looked like the right accompaniment and is
+  actively wrong: it puts the module back in the static graph, Vite emits a
+  `<link rel="modulepreload">` for it, and the browser fetches all 4.6 MB before
+  first paint regardless of the lazy import. Measured both ways; the entry is
+  deliberately absent, with a comment saying why.
+
+  Eight referenced images were converted from PNG to webp — **7.63 MB to 0.90 MB**,
+  an 88% reduction, at quality 82 for photographs and 90 for screenshots where
+  text legibility matters. `frontend/src/image.png` is deleted: 1.6 MB, imported by
+  nothing, and byte-identical to `assets/Map_screenshot.png`. Two superseded logos
+  went with it.
+
+  Repository image weight falls from 18.65 MB to 5.31 MB — 71% — measured
+  against git's tracked blobs rather than a filesystem walk.
+
 
 - **Nothing reaches `main` with failing checks any more.** `dt protect-branch`
   requires every pull-request check to pass, requires the branch to be up to date,
@@ -127,6 +154,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both families are OFL-1.1.
 
 ### Fixed
+
+- **A local build and a nix build of the same commit reported different release
+  numbers.** `scripts/version.sh` — which the Makefile and every packaging script
+  use, so that they cannot disagree — reported `git describe` alone, and
+  `git describe` names the newest *tag*. `flake.nix` declares **0.4.0** and the
+  newest tag is **v0.2.2**, so `make build` produced a binary calling itself
+  `0.2.2-115-g1311b8a` while `nix build`, which takes its version from
+  `flake.nix`, called the identical source `0.4.0`.
+
+  The declared version now leads and git's position follows it —
+  `0.4.0-115-g1311b8a`, `0.4.0-115-g1311b8a-dirty`, or plain `0.4.0` on a clean
+  checkout of the matching tag or outside a git checkout entirely. `flake.nix`
+  remains the one place a release number is written; `version.sh --declared`
+  reports it without the suffix, and `scripts/doctor.sh` now asks for it rather
+  than growing a second grep of `flake.nix`.
+
+  `dt doctor` also reports when the declared version has no tag — the condition
+  that caused this, and one that is otherwise invisible until two binaries are
+  compared. `scripts/tests/version-test.sh` covers the behaviour in throwaway
+  repositories; 8 of its 11 cases fail against the previous script.
 
 - **Switching sites coloured the map from the previous site.** `applyColors` was
   memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
@@ -310,6 +357,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and opens its own WebView onto it, so there is no bandwidth to save and
   compressing the choropleth would spend 230ms of CPU per request to speed up a
   transfer that already takes milliseconds.
+
+### Fixed
+
+- **A datapack install mutated the live server from a background goroutine, with no
+  lock held.** It reassigned the tile store, the geopackage store, the site store,
+  two config directories, the router and the running `http.Server`'s `Handler` —
+  one field at a time — while request goroutines were reading them. That was three
+  faults at once: a data race on every field; a nil dereference, because the stores
+  were set to nil first and the tile handler called `GetTile` on whatever it found;
+  and a torn update, because a request arriving mid-swap could see the new tile
+  store alongside the old data directory.
+
+  Everything that changes together is now one immutable value published with a
+  single atomic store. A request reads the pointer once and works from a consistent
+  snapshot for its whole life, so a swap cannot be observed half-applied. The
+  replaced stores are closed after a grace period rather than immediately, so a
+  request already using them finishes against the data it started with.
+
+  Specifics:
+
+    - `handleTileRequest` checks for a missing store and answers **503 with
+      `Retry-After`** instead of dereferencing nil. Removing that check makes the
+      test suite panic with `invalid memory address or nil pointer dereference` —
+      the original crash, reproduced.
+    - The running server's `Handler` is never reassigned. `net/http` reads it for
+      every connection it accepts, so that assignment was itself a race; the
+      handler installed at startup reads the current router through an atomic
+      pointer instead.
+    - The three `http.Dir` file servers for images, walkthroughs and demo assets
+      resolve the data directory **per request**. They were rooted at startup, so
+      after an install they served the replaced datapack's files, or nothing if
+      that directory had been removed.
+    - The auxiliary tile listeners are started once at boot and were never
+      revisited by a route rebuild, so their tile route was missing entirely when
+      no datapack existed at startup and stale afterwards. The route is now
+      registered unconditionally and resolves the current store per request, so
+      there is nothing left for a rebuild to fix.
+    - The style-JSON cache no longer reassigns a `sync.Once` to invalidate itself —
+      which was done from a request goroutine while others could be inside `Do`,
+      and which `sync.Once` must never have done to it. A mutex and an explicit
+      valid flag say the same thing; a failed build is still not cached, so one
+      missing file does not make the style unloadable until restart.
+
+  Twelve tests, run under `-race`, cover concurrent tile requests during a store
+  swap, concurrent routing during a rebuild, and concurrent style requests
+  interleaved with invalidation.
 
 ### Security
 
