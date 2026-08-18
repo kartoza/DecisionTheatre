@@ -117,12 +117,8 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	// Choropleth endpoint - returns GeoJSON filtered by bbox
 	r.HandleFunc("/choropleth", h.handleChoropleth).Methods("GET")
 
-	// Site management
-	r.HandleFunc("/sites", h.handleListSites).Methods("GET")
-	r.HandleFunc("/sites", h.handleCreateSite).Methods("POST")
-	r.HandleFunc("/sites/{id}", h.handleGetSite).Methods("GET")
-	r.HandleFunc("/sites/{id}", h.handleUpdateSite).Methods("PUT", "PATCH")
-	r.HandleFunc("/sites/{id}", h.handleDeleteSite).Methods("DELETE")
+	// Site management is desktop-only; see registerDesktopSiteRoutes.
+	h.registerDesktopSiteRoutes(r)
 
 	// Catchment selection for site creation
 	r.HandleFunc("/sites/dissolve-catchments", h.handleDissolveCatchments).Methods("POST")
@@ -134,13 +130,62 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/indicators", h.handleGetSiteIndicators).Methods("GET")
 	r.HandleFunc("/sites/{id}/indicators", h.handleExtractIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
-	r.HandleFunc("/sites/{id}/indicators/reset", h.handleResetIdealIndicators).Methods("POST")
 	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET", "POST")
 	r.HandleFunc("/sites/{id}/whiskers", h.handleSiteWhiskers).Methods("GET", "POST")
+}
 
-	// Site boundary editing (union/difference with catchments)
-	r.HandleFunc("/sites/{id}/boundary/union/{catchmentId}", h.handleBoundaryUnion).Methods("POST")
-	r.HandleFunc("/sites/{id}/boundary/difference/{catchmentId}", h.handleBoundaryDifference).Methods("POST")
+// registerDesktopSiteRoutes registers the site routes that exist solely for the
+// desktop build.
+//
+// A user's own sites belong in their browser, not on our disk. The client
+// honours that: getAppRuntime() returns "browser" unless the Go webview injects
+// __DECISION_THEATRE_WEBVIEW__, and in browser runtime every create, read,
+// update and delete goes to the dt-sites localStorage key with no fallthrough to
+// the API. The routes below therefore have no browser-runtime caller at all.
+//
+// Registering them anyway put an unauthenticated write-to-disk API on the hosted
+// deployment — nginx proxies every path — with nothing on the other end that
+// wanted it. Six of the eight reach sites.Store.Update/Create/Delete; the two
+// reads disclose every site on the host.
+//
+// The shared routes are a different case and stay registered for everyone. A
+// browser session really does call /indicators, /catchments, /whiskers,
+// /dissolve-catchments and /boundary — but it passes runtime:"browser" with the
+// site in the request body, and those handlers return before touching the store.
+// Compute in, result out, nothing persisted.
+// In server mode these are absent from the route table entirely rather than
+// answering 403, so no handler code is reachable — the same approach taken for
+// the file dialog route. An unrouted /api path falls through to the SPA handler,
+// so a caller gets HTML rather than a JSON error; that is worth tidying, but it
+// is the pre-existing behaviour for every unrouted path and not this change.
+func (h *Handler) registerDesktopSiteRoutes(r *mux.Router) {
+	if !h.cfg.DesktopMode {
+		return
+	}
+
+	for _, route := range []struct {
+		path    string
+		methods []string
+		handler http.HandlerFunc
+	}{
+		// Persistence: the CRUD the desktop build uses in place of localStorage.
+		{"/sites", []string{"POST"}, h.handleCreateSite},
+		{"/sites/{id}", []string{"PUT", "PATCH"}, h.handleUpdateSite},
+		{"/sites/{id}", []string{"DELETE"}, h.handleDeleteSite},
+
+		// Writes reached through a narrower door. These lack a runtime:"browser"
+		// guard precisely because the client never sends one — it does the same
+		// work locally and only calls the API in webview runtime.
+		{"/sites/{id}/indicators/reset", []string{"POST"}, h.handleResetIdealIndicators},
+		{"/sites/{id}/boundary/union/{catchmentId}", []string{"POST"}, h.handleBoundaryUnion},
+		{"/sites/{id}/boundary/difference/{catchmentId}", []string{"POST"}, h.handleBoundaryDifference},
+
+		// Reads with no browser-runtime caller.
+		{"/sites", []string{"GET"}, h.handleListSites},
+		{"/sites/{id}", []string{"GET"}, h.handleGetSite},
+	} {
+		r.HandleFunc(route.path, route.handler).Methods(route.methods...)
+	}
 }
 
 // handleMetadataColors returns a map of attribute column names to hex colors.
