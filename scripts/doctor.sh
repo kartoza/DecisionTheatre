@@ -147,7 +147,9 @@ ui_blank
 # -----------------------------------------------------------------------------
 ui_group "VERSIONS"
 
-flake_version="$(grep -oE '^ *version = "[^"]+";' flake.nix | head -1 | sed -E 's/.*"(.*)".*/\1/')"
+# scripts/version.sh owns how the declaration is stored; asking it rather than
+# grepping flake.nix again keeps one reader of that file.
+flake_version="$("$SCRIPT_DIR/version.sh" --declared 2>/dev/null || true)"
 pkg_version="$(jq -r '.version // empty' frontend/package.json 2>/dev/null || true)"
 lock_version="$(jq -r '.version // empty' frontend/package-lock.json 2>/dev/null || true)"
 git_version="$("$SCRIPT_DIR/version.sh" 2>/dev/null || echo "unknown")"
@@ -171,7 +173,16 @@ for pair in "frontend/package.json:$pkg_version" "frontend/package-lock.json:$lo
     fi
 done
 
-ui_note "git describe" "$git_version"
+ui_note "build version" "$git_version"
+
+# The declared version having no tag is why a local build and a nix build used
+# to disagree, and it is invisible until someone compares two binaries.
+if [ -n "$flake_version" ] && git rev-parse -q --verify "refs/tags/v$flake_version" > /dev/null 2>&1; then
+    ui_ok "tag v$flake_version" "exists"
+elif [ -n "$flake_version" ]; then
+    ui_warn "tag v$flake_version" "does not exist yet" \
+        "the declared version has not been released; builds report it with a git suffix"
+fi
 
 # The CHANGELOG should have a section for the version being declared.
 if [ -f CHANGELOG.md ]; then

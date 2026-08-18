@@ -33,7 +33,7 @@ GOLINT := golangci-lint
 
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
-.PHONY: test test-frontend test-all
+.PHONY: test test-frontend test-all test-scripts
 .PHONY: fmt lint check deps
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: protect-branch
@@ -131,7 +131,13 @@ test:
 test-frontend:
 	cd $(FRONTEND_DIR) && npx vitest run
 
-test-all: test test-frontend
+## test-scripts: Tests for the shell scripts. Currently version.sh, which had
+## every build path reporting a release number that came from the newest tag
+## rather than the declared one.
+test-scripts:
+	@./scripts/tests/version-test.sh
+
+test-all: test test-frontend test-scripts
 
 # ============================
 # Code quality

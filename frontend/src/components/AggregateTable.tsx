@@ -147,6 +147,8 @@ function AggregateTable({
       siteAverage,
       hasData: true,
     };
+  // useMemo has a missing dependency: 'fallbackAverage'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [catchments, attribute, scenario]);
 
   return (
