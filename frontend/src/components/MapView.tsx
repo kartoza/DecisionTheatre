@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites, clearSiteWhiskerCache } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
@@ -3836,29 +3836,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // Maintain catchmentIds explicitly (add/remove the clicked ID) rather than
         // re-deriving from geometry, which fails for edge-sharing catchments in a union.
         if (siteId) {
-          const sites = loadLocalSites();
-          const siteIndex = sites.findIndex(s => s.id === siteId);
-          if (siteIndex >= 0) {
-            const existing = sites[siteIndex];
+          const existing = loadLocalSite(siteId);
+          if (existing) {
             const existingIds = Array.isArray(existing.catchmentIds)
               ? existing.catchmentIds.map(String)
               : [];
             const newIds = operation === 'union'
               ? (existingIds.includes(catchmentId) ? existingIds : [...existingIds, catchmentId])
               : existingIds.filter(id => id !== catchmentId);
-            // Also clear cached per-catchment data so AggregateTable re-fetches with the new IDs
-            const {
-              catchments: _c,
-              catchmentIndicators: _ci,
-              catchmentData: _cd,
-              ...rest
-            } = existing as typeof existing & {
-              catchments?: unknown;
-              catchmentIndicators?: unknown;
-              catchmentData?: unknown;
-            };
-            sites[siteIndex] = { ...rest, catchmentIds: newIds } as typeof existing;
-            saveLocalSites(sites);
+            // The cached per-catchment data used to be stripped by hand here so
+            // AggregateTable would refetch with the new ids. It is never stored now,
+            // so there is nothing to strip.
+            saveLocalSite({ ...existing, catchmentIds: newIds });
           }
         }
 

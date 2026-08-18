@@ -314,6 +314,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **The browser stored three to eight times more than it needed to, and rewrote all
+  of it on every save.** A user's sites live in their browser — that is the design
+  brief — so this is the system of record, not a cache. Three things made it
+  expensive, and they had one cause: everything lived in a single `dt-sites` blob.
+
+  Sites are now stored one record per site, so a save touches one record:
+
+  | parse + serialise per save | |
+  |---|---:|
+  | the whole store, as it was | 38.8 ms |
+  | the largest single record | 14.8 ms |
+  | a typical record (65,691 B) | **0.51 ms** |
+
+  The full per-catchment breakdown is no longer persisted at all. At 27–56 KB per
+  catchment against a ~5 MB quota, a site of 90–185 catchments filled the browser on
+  its own — and it is not the client's to hold: the server computes it, and
+  `getSiteCatchments` already refetched it behind a 30-second cache whenever it was
+  missing. It now goes to that cache and never to disk.
+
+  `catchmentIds` was also stored twice, once on the site and once inside
+  `indicators`. For the Africa walkthrough those were byte-identical arrays of
+  147,837 IDs — 3.84 MB of a 4.0 MB document.
+
+  | stored bytes, walkthrough documents as representative sites | before | after | |
+  |---|---:|---:|---:|
+  | 7 catchments | 455,923 | 65,691 | −86% |
+  | 2 catchments | 168,539 | 57,879 | −66% |
+  | 11 catchments | 374,388 | 78,448 | −79% |
+  | the 147,837-id site | 4,026,496 | 2,104,598 | −48% |
+  | **total** | **5,025,346** | **2,306,616** | **−54%** |
+
+  `lib/siteStore.ts` owns the format and migrates an existing blob on first read,
+  normalising as it goes so an old record cannot resurrect either the breakdown or
+  the duplicated ID list. If any record fails to write the blob is left alone, so a
+  full quota cannot lose data. Five places that read the whole list to change one
+  site now call `saveLocalSite`.
+
 - **No API response was compressed.** Searching the server for compression found
   exactly one hit — the tile handler, where MBTiles blobs are already gzipped on
   disk and the header merely declares it. GeoJSON is close to a best case for
