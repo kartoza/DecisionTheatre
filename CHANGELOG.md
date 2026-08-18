@@ -98,6 +98,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A local build and a nix build of the same commit reported different release
+  numbers.** `scripts/version.sh` — which the Makefile and every packaging script
+  use, so that they cannot disagree — reported `git describe` alone, and
+  `git describe` names the newest *tag*. `flake.nix` declares **0.4.0** and the
+  newest tag is **v0.2.2**, so `make build` produced a binary calling itself
+  `0.2.2-115-g1311b8a` while `nix build`, which takes its version from
+  `flake.nix`, called the identical source `0.4.0`.
+
+  The declared version now leads and git's position follows it —
+  `0.4.0-115-g1311b8a`, `0.4.0-115-g1311b8a-dirty`, or plain `0.4.0` on a clean
+  checkout of the matching tag or outside a git checkout entirely. `flake.nix`
+  remains the one place a release number is written; `version.sh --declared`
+  reports it without the suffix, and `scripts/doctor.sh` now asks for it rather
+  than growing a second grep of `flake.nix`.
+
+  `dt doctor` also reports when the declared version has no tag — the condition
+  that caused this, and one that is otherwise invisible until two binaries are
+  compared. `scripts/tests/version-test.sh` covers the behaviour in throwaway
+  repositories; 8 of its 11 cases fail against the previous script.
+
 - **Switching sites coloured the map from the previous site.** `applyColors` was
   memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
   prop in ten places — the choropleth fetch for both panes, the browser-runtime
