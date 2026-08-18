@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The container image can be built from the flake.** `nix build .#container`,
+  `./scripts/build-container.sh` or `make container` produce a Docker image whose
+  contents are the runtime closure of the binary the flake already builds.
+
+  `deployments/Dockerfile` names its runtime packages by hand, which means two
+  statements of what the application needs with nothing keeping them in step. They
+  did fall out of step: it installed WebKit 4.0 while the flake, CI and the Debian
+  packaging all targeted 4.1, and it omitted a plugin `mkdocs.yml` requires, so for
+  a while no image could be built at all. An image derived from the flake has no
+  second list to drift.
+
+  Both paths still work and both are built in CI. `docker-compose.yaml` gained a
+  `DT_IMAGE` override, defaulting to what compose builds today, so an existing
+  deployment is unaffected until it opts in.
+
 - **The frontend is linted.** The repository has shipped an eslint dependency, a
   `lint` script and a CI job called `lint-frontend` since it was written, and none
   of them ever linted anything: there was no configuration file, so eslint exited
@@ -321,6 +336,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three tracked Go files were not gofmt-clean** (`internal/api/handler.go` and two test
   files). Now formatted, and the pre-commit hook keeps them that way.
 - **Every shell script under `scripts/` is now shellcheck-clean** at warning severity.
+- **Place-name search called Nominatim directly from the browser, outside the OSM
+  usage policy.** That policy requires a `User-Agent` naming the application with a
+  contact, asks that results be cached, and caps traffic at one request per second.
+  None of it was achievable where the code sat: `User-Agent` is a forbidden header
+  name for `fetch`, so the browser silently cannot send one, and a 400 ms input
+  debounce is not a rate limit — several open tabs are several times the traffic.
+
+  Searches now go through `GET /api/geocode`, which sends
+  `DecisionTheatre/<version> (+https://github.com/kartoza/DecisionTheatre)`, holds
+  upstream calls a second apart for the whole deployment, and caches answers for
+  15 minutes. An upstream failure returns an empty list rather than an error, so
+  the client keeps its bundled gazetteer matches and search still works offline.
+  The response shape is normalised, so the client no longer knows which geocoder
+  answered and swapping it is a change to one file.
+
+- **Page backgrounds were hotlinked from `images.unsplash.com` on every page
+  load**, making three pages depend on a third-party host at runtime that can
+  rate-limit, change what a URL returns, or see the IP of every visitor. Both
+  images are vendored (668 KB total, webp) with their provenance and licence
+  recorded in `frontend/src/assets/backgrounds/README.md`.
+
+- **The satellite tile URL was written out twice** and pointed at Google's
+  undocumented `mt0.google.com` endpoint. It is now defined once, in
+  `frontend/src/lib/satelliteBasemap.ts`, and supplied at runtime via `/api/info`
+  from `--satellite-tile-url` / `--satellite-attribution` — not through
+  `import.meta.env`, which Vite inlines at build time. The default endpoint is
+  unchanged for now, so **this does not resolve the terms-of-use question**; it
+  makes answering it a deployment change rather than a code change. Attribution
+  travels with the URL, since crediting Google for another provider's imagery
+  would be worse than crediting nobody.
+
+- **Three external links opened with `target="_blank"` and no
+  `rel="noopener noreferrer"`**, while partner cards higher in the same file set it
+  correctly. All now carry it.
+
+- **The documentation iframe had no `sandbox` attribute.** It now runs with only
+  what MkDocs Material needs — scripts, same-origin, and popups that escape the
+  sandbox — withholding top-level navigation, forms, modals and downloads.
+
 - **Starting a demo tour tried to write a multi-megabyte site to localStorage and blew
   the quota.** The tour resets the walkthrough's ideal targets to current, then
   persisted the whole site object into the `dt-sites` key "so it is available for the

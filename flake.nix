@@ -7,10 +7,10 @@
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      flake-utils,
+    { self
+    , nixpkgs
+    , flake-utils
+    ,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -157,18 +157,18 @@
               let
                 baseName = baseNameOf (toString path);
               in
-              !(
-                baseName == ".go"
-                || baseName == ".direnv"
-                || baseName == "result"
-                || baseName == "node_modules"
-                || baseName == ".idea"
-                || baseName == ".vscode"
-                || (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName)
-                || (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName)
-                || (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName)
-                || (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
-              );
+                !(
+                  baseName == ".go"
+                  || baseName == ".direnv"
+                  || baseName == "result"
+                  || baseName == "node_modules"
+                  || baseName == ".idea"
+                  || baseName == ".vscode"
+                  || (type == "regular" && pkgs.lib.hasSuffix ".gguf" baseName)
+                  || (type == "regular" && pkgs.lib.hasSuffix ".gob" baseName)
+                  || (type == "regular" && pkgs.lib.hasSuffix ".mbtiles" baseName)
+                  || (type == "regular" && pkgs.lib.hasSuffix ".gpkg" baseName)
+                );
           };
 
           # Pins the vendored Go module set. Derived from go.mod and go.sum.
@@ -254,6 +254,95 @@
           };
         };
 
+        # =====================================================
+        # Container image, built from this flake
+        #
+        # The hand-maintained Dockerfile listed its runtime dependencies by hand
+        # — and got them wrong: it installed WebKit 4.0 while the flake, CI and
+        # the Debian packaging all target 4.1, and it omitted a mkdocs plugin
+        # that mkdocs.yml requires, so no image could be built at all. Both
+        # faults are the same fault: a second dependency list maintained apart
+        # from the one that is actually tested.
+        #
+        # dockerTools takes the runtime closure of the binary this flake already
+        # builds, so the image contains exactly what the application links
+        # against and nothing states a version twice. The image cannot disagree
+        # with `nix build` about its dependencies, because it is derived from it.
+        #
+        #   nix build .#container && docker load < result
+        #
+        # buildLayeredImage rather than buildImage: the store paths become
+        # separate layers, so a rebuild that changes only the application
+        # re-uploads only that layer rather than the whole webkit closure.
+        # =====================================================
+        container = pkgs.dockerTools.buildLayeredImage {
+          name = "decision-theatre";
+          tag = version;
+
+          # cacert is a genuine runtime dependency, not boilerplate: the geocode
+          # endpoint proxies to an upstream over TLS, and without a trust store
+          # every place-name search fails at certificate verification.
+          #
+          # The Debian image also installed jq. Nothing in the running container
+          # uses it — it is used by scripts/sync-flake.sh and scripts/doctor.sh,
+          # which are developer tools — so it is not carried here.
+          contents = [
+            pkgs.cacert
+            pkgs.tzdata
+          ];
+
+          # The application's own closure arrives through Entrypoint below;
+          # listing it here as well would only duplicate it.
+          config = {
+            Entrypoint = [ "${decision-theatre}/bin/decision-theatre" ];
+
+            # Identical to the Dockerfile's CMD, so `docker compose` keeps
+            # working unchanged. --bind 0.0.0.0 is required and deliberate: the
+            # process must accept connections from outside its own network
+            # namespace to be reachable at all. The default is loopback because
+            # the API is unauthenticated, so it is nginx in front of this
+            # container that controls access.
+            Cmd = [
+              "--headless"
+              "--bind"
+              "0.0.0.0"
+              "--port"
+              "8080"
+              "--data-dir"
+              "/app/data"
+              "--resources-dir"
+              "/app/resources"
+            ];
+
+            WorkingDir = "/app";
+
+            ExposedPorts = {
+              "8080/tcp" = { };
+              "8081/tcp" = { };
+              "8082/tcp" = { };
+              "8083/tcp" = { };
+            };
+
+            Env = [
+              # Go's TLS stack finds a trust store at one of a handful of fixed
+              # paths, none of which a nix image has; naming it is what makes
+              # cacert above take effect.
+              "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              # Settings are saved under $HOME, and the compose file mounts a
+              # volume at /root/.config/decision-theatre expecting exactly this.
+              "HOME=/root"
+              "TZ=UTC"
+            ];
+          };
+
+          # The two directories the compose file mounts over, so the image is
+          # usable without them too. Kept to mkdir alone — anything longer
+          # belongs in a script under scripts/ rather than inside a nix string.
+          extraCommands = ''
+            mkdir -p app/data app/resources root/.config
+          '';
+        };
+
         # Launcher for `nix run`. The launch policy (desktop WebView mode,
         # flags, data directory resolution) lives in scripts/run-app.sh so that
         # `nix run`, `make run` and the neovim <leader>pr mapping cannot drift
@@ -327,10 +416,10 @@
         # a machine that has not entered the development shell — which is what
         # CI does. Each wraps the tracked script rather than restating it.
         mkScriptTool =
-          {
-            name,
-            script,
-            runtimeInputs ? [ ],
+          { name
+          , script
+          , runtimeInputs ? [ ]
+          ,
           }:
           pkgs.writeShellApplication {
             inherit name runtimeInputs;
@@ -386,6 +475,7 @@
             pack-data
             doctor
             check-flake
+            container
             ;
           default = decision-theatre;
         };

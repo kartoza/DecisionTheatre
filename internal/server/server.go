@@ -43,6 +43,10 @@ type Server struct {
 	cfg        config.Config
 	httpServer *http.Server
 
+	// geocode rate-limits and caches place-name lookups so the upstream policy
+	// is honoured once for the whole deployment; see geocode.go.
+	geocode *geocodeLimiter
+
 	// stores and routes are swapped, never mutated in place: a datapack install
 	// replaces both from a background goroutine while requests are being served.
 	// See state.go for why this is a pointer swap rather than a set of fields.
@@ -85,6 +89,8 @@ func New(cfg config.Config) (*Server, error) {
 	// on a machine with no datapack yet — the setup guide is what runs then.
 	s.stores.Store(openDataStores(cfg.DataDir, cfg.ResourcesDir))
 
+	s.geocode = newGeocodeLimiter(cfg.Version)
+
 	s.setRouter(s.buildRouter())
 
 	// Pre-warm the tile cache in the background so that low-zoom tiles are
@@ -123,6 +129,10 @@ func (s *Server) buildRouter() *mux.Router {
 	router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
 	router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
 	router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
+
+	// Place-name search, proxied so the upstream usage policy can be met at all;
+	// see geocode.go. Public: both builds offer search.
+	router.HandleFunc("/api/geocode", s.handleGeocode).Methods("GET")
 
 	// Desktop-only. In server mode these paths are simply absent, so they 404
 	// through the SPA fallback rather than existing and refusing — there is
