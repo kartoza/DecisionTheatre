@@ -40,12 +40,20 @@ func hammer(fn func()) (stop func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// fn first, then the check. Testing done first means that on a busy
+			// machine the caller's loop can finish and close the channel before
+			// these goroutines are ever scheduled, so every one of them returns
+			// having done nothing and the test asserts against no activity at
+			// all. That is exactly how TestStyleCacheUnderConcurrentInvalidation
+			// failed with "the cache never built anything" while a container
+			// build was saturating the CPU. This way each goroutine contributes
+			// at least one call.
 			for {
+				fn()
 				select {
 				case <-done:
 					return
 				default:
-					fn()
 				}
 			}
 		}()
