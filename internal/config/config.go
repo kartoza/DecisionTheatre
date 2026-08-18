@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+
+	"github.com/kartoza/decision-theatre/internal/fsutil"
 )
 
 const appName = "decision-theatre"
@@ -230,5 +232,8 @@ func SaveSettings(s *Settings) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	// Atomic, for the same reason as the site files: a truncate-then-write leaves
+	// settings empty if the machine stops in between, and these name the datapack
+	// the application loads at startup.
+	return fsutil.WriteFileAtomic(path, data, 0o644)
 }

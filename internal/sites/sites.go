@@ -11,9 +11,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/kartoza/decision-theatre/internal/fsutil"
 )
 
 // SiteCreationMethod represents how a site boundary was created
@@ -110,6 +113,56 @@ type Store struct {
 	dataDir   string
 	sitesDir  string
 	imagesDir string
+
+	// One mutex per site, created on demand and never removed.
+	//
+	// Every write here is a read-modify-write: load the JSON, change part of it,
+	// write the whole thing back. Two concurrent requests both read the original
+	// and the second write silently discards the first — so a user editing
+	// indicators in two panes loses one panel's recalculation with no error
+	// anywhere. Serialising per site fixes that without making unrelated sites
+	// wait for each other.
+	//
+	// Entries are not reclaimed: a mutex is two words, sites are few and
+	// long-lived, and reclaiming safely would need reference counting for no
+	// practical gain.
+	locks sync.Map // site ID -> *sync.Mutex
+}
+
+// lockSite returns the mutex guarding one site, creating it on first use.
+func (s *Store) lockSite(id string) *sync.Mutex {
+	actual, _ := s.locks.LoadOrStore(id, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
+// LockSite takes a site's lock and returns the function that releases it.
+//
+// This is exported because the read-modify-write that matters is not in this
+// package. The indicator handler loads a site, recalculates cascading targets
+// across a hundred lines, and writes it back; locking only inside Update would
+// leave that whole cycle unprotected, so the caller has to be able to hold the
+// lock across it:
+//
+//	unlock := store.LockSite(id)
+//	defer unlock()
+//	site, err := store.Get(id)
+//	... modify ...
+//	updated, err := store.UpdateLocked(id, site)
+//
+// Use UpdateLocked, not Update, while holding it — Update takes the same
+// non-reentrant lock and would deadlock.
+func (s *Store) LockSite(id string) (unlock func()) {
+	mu := s.lockSite(id)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// WithSite runs fn with the site's lock held, for callers whose whole cycle fits
+// in a closure.
+func (s *Store) WithSite(id string, fn func() error) error {
+	unlock := s.LockSite(id)
+	defer unlock()
+	return fn()
 }
 
 // NewStore creates a new site store
@@ -211,7 +264,20 @@ func (s *Store) Create(site *Site) (*Site, error) {
 }
 
 // Update updates an existing site
+// Update applies a partial update, holding the site's lock for the whole
+// read-modify-write so that two concurrent updates cannot both read the original
+// and have the second silently discard the first.
 func (s *Store) Update(id string, updates *Site) (*Site, error) {
+	unlock := s.LockSite(id)
+	defer unlock()
+
+	return s.UpdateLocked(id, updates)
+}
+
+// UpdateLocked is Update for a caller already holding the site's lock via
+// LockSite. Calling it without the lock is safe only when no concurrent write is
+// possible.
+func (s *Store) UpdateLocked(id string, updates *Site) (*Site, error) {
 	site, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -285,7 +351,12 @@ func (s *Store) Update(id string, updates *Site) (*Site, error) {
 }
 
 // Delete removes a site
+// Delete removes a site, holding its lock so a concurrent update cannot write the
+// file back out after it has gone.
 func (s *Store) Delete(id string) error {
+	unlock := s.LockSite(id)
+	defer unlock()
+
 	site, err := s.Get(id)
 	if err != nil {
 		return err
@@ -334,8 +405,10 @@ func (s *Store) saveSite(site *Site) error {
 		return fmt.Errorf("failed to marshal site: %w", err)
 	}
 
+	// Atomic: os.WriteFile truncates first, so a crash between truncate and write
+	// left an empty file — losing the site rather than losing one edit.
 	filename := filepath.Join(s.sitesDir, fmt.Sprintf("%s.json", site.ID))
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	if err := fsutil.WriteFileAtomic(filename, data, 0o644); err != nil {
 		return fmt.Errorf("failed to write site file: %w", err)
 	}
 
@@ -426,7 +499,7 @@ func (s *Store) saveThumbnail(siteID, dataURL string) (string, error) {
 	// Save to file with site- prefix to distinguish from project thumbnails
 	filename := fmt.Sprintf("site-%s%s", siteID, ext)
 	path := filepath.Join(s.imagesDir, filename)
-	if err := os.WriteFile(path, imageData, 0644); err != nil {
+	if err := fsutil.WriteFileAtomic(path, imageData, 0o644); err != nil {
 		return "", fmt.Errorf("failed to write image file: %w", err)
 	}
 
