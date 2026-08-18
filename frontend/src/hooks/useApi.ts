@@ -683,7 +683,16 @@ export async function listSites(): Promise<Site[]> {
 // share a single in-flight request rather than firing N identical network calls.
 const CACHE_TTL_MS = 30_000;
 const _siteCache = new Map<string, { promise: Promise<Site | null>; ts: number }>();
-const _catchmentsCache = new Map<string, { promise: Promise<CatchmentIndicators[]>; ts: number }>();
+// `sticky` marks a breakdown that came embedded in a walkthrough document. It is
+// not a cached copy of something the server holds — the server has never heard of
+// a walkthrough site, and GET /api/sites/{id}/catchments 404s for one — so it must
+// not expire. Before this it aged out after CACHE_TTL_MS and the refetch returned
+// an empty array, silently emptying the aggregate table, charts and dials thirty
+// seconds after a walkthrough was opened.
+const _catchmentsCache = new Map<
+  string,
+  { promise: Promise<CatchmentIndicators[]>; ts: number; sticky?: boolean }
+>();
 
 // Walkthrough demo sites embed their own per-catchment breakdown directly in
 // the static JSON they're loaded from (they were never created through the
@@ -696,7 +705,7 @@ export function primeSiteCatchmentsFromEmbedded(site: Site): void {
     ?? (site as SiteWithCatchments).catchmentIndicators
     ?? (site as SiteWithCatchments).catchmentData;
   if (Array.isArray(embedded) && embedded.length > 0) {
-    _catchmentsCache.set(site.id, { promise: Promise.resolve(embedded), ts: Date.now() });
+    _catchmentsCache.set(site.id, { promise: Promise.resolve(embedded), ts: Date.now(), sticky: true });
   }
 }
 
@@ -979,7 +988,7 @@ export async function deleteSite(id: string): Promise<void> {
 export async function getSiteCatchments(siteId: string): Promise<CatchmentIndicators[]> {
   const now = Date.now();
   const hit = _catchmentsCache.get(siteId);
-  if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
+  if (hit && (hit.sticky || now - hit.ts < CACHE_TTL_MS)) return hit.promise;
 
   const promise = (async (): Promise<CatchmentIndicators[]> => {
     if (isBrowserRuntime()) {
