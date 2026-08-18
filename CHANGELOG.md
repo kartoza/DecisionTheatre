@@ -50,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Map rendering is capped at 1.5x device pixel ratio.** Both MapLibre instances
+  were created without `pixelRatio`, so each rendered at the display's native
+  ratio. Fragment shading cost scales with the *square* of that: a 2x display does
+  four times the per-pixel work, a 3x display nine times — and quad view keeps up
+  to twelve map instances live. The clamp only ever lowers the ratio, so a 1x
+  display is untouched, and 1.5x is visually near-indistinguishable on a map at
+  these zoom levels. The existing `fadeDuration: 0` is left alone.
+
+- **`prefers-reduced-motion` is honoured.** There are 157 framer-motion call sites
+  across 14 files and not one consulted the setting, which the project's WCAG 2.2
+  AA target requires independently of the performance argument. A single
+  `<MotionConfig reducedMotion="user">` at the root covers all of them, and covers
+  any animation added later without anyone having to remember. It sits outside the
+  error boundary so the guided tours, which animate too, are included.
+
+
 - **Nothing reaches `main` with failing checks any more.** `dt protect-branch`
   requires every pull-request check to pass, requires the branch to be up to date,
   and **applies to administrators** — pull requests had been merged red, which

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ChakraProvider, ColorModeScript } from '@chakra-ui/react';
+import { MotionConfig } from 'framer-motion';
 import App from './App';
 import TourGuide from './components/TourGuide';
 import MunywanaDemoTour from './components/MunywanaDemoTour';
@@ -19,14 +20,28 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ColorModeScript initialColorMode={theme.config.initialColorMode} />
     <ChakraProvider theme={theme}>
-      <ErrorBoundary>
-        <App />
-        <TourGuide />
-        <MunywanaDemoTour />
-        <ShaiHillsDemoTour />
-        <ViphyaDemoTour />
-        <AfricaDemoTour />
-      </ErrorBoundary>
+      {/*
+        Honour prefers-reduced-motion across every animation at once.
+
+        There are 157 framer-motion call sites across 14 files and none consulted
+        the setting. reducedMotion="user" makes framer-motion read the media query
+        and skip transform and layout animations for anyone who has asked for
+        that — an accessibility obligation under the project's WCAG 2.2 AA target,
+        independent of the performance argument.
+
+        One provider rather than 157 edits: it also means a new animation added
+        later is covered without anyone remembering to do anything.
+      */}
+      <MotionConfig reducedMotion="user">
+        <ErrorBoundary>
+          <App />
+          <TourGuide />
+          <MunywanaDemoTour />
+          <ShaiHillsDemoTour />
+          <ViphyaDemoTour />
+          <AfricaDemoTour />
+        </ErrorBoundary>
+      </MotionConfig>
     </ChakraProvider>
   </React.StrictMode>,
 );
