@@ -38,6 +38,7 @@ import {
   markSessionActive,
   shouldPromptResumeSession,
 } from './types';
+import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
 function App() {
   const toast = useToast();
@@ -89,6 +90,58 @@ function App() {
   const [chartGraphModes, setChartGraphModes] = useState<('line' | 'boxplot' | null)[]>(() => loadPaneStates().map(() => null));
   const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
+
+  // Storage failures used to be discarded, so a full quota looked like a working
+  // application that quietly forgot things. Two things happen here, once each:
+  //
+  //   - a check on startup, so a user close to the ceiling is warned before the
+  //     next thing they save is the one that fails, rather than after
+  //   - a subscription to write failures, which fires once per kind of failure
+  //     per session; per-write would be several toasts a minute about a pane
+  //     layout, which is noise rather than information
+  useEffect(() => {
+    const health = checkStorageHealth();
+
+    if (!health.available) {
+      toast({
+        title: 'Browser storage is unavailable',
+        description:
+          'Your sites and layout cannot be saved in this browser — private browsing '
+          + 'or a privacy setting is blocking storage. Work will be lost when you '
+          + 'close the tab.',
+        status: 'warning',
+        duration: null,
+        isClosable: true,
+      });
+    } else if (health.nearLimit) {
+      toast({
+        title: 'Browser storage is nearly full',
+        description:
+          `About ${Math.round(health.usedRatio * 100)}% of the space this browser `
+          + 'allows is in use. Delete a site you no longer need, or the next one you '
+          + 'save may not be stored.',
+        status: 'warning',
+        duration: 12000,
+        isClosable: true,
+      });
+    }
+
+    return onStorageFailure((failure) => {
+      toast({
+        title: failure.kind === 'quota'
+          ? 'Browser storage is full'
+          : 'Browser storage is not working',
+        description: failure.kind === 'quota'
+          ? 'Some changes could not be saved. Delete a site you no longer need to '
+            + 'free up space, then try again.'
+          : 'Some changes could not be saved in this browser, so they will be lost '
+            + 'when you close the tab.',
+        status: 'error',
+        duration: null,
+        isClosable: true,
+      });
+    });
+  }, [toast]);
   const { data: fullDomainData } = useFullDomainPrecalculated();
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
   const extractingIndicatorsRef = useRef(false);

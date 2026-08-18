@@ -1300,9 +1300,23 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Failed to apply choropleth:', err);
     }
-  // useCallback has missing dependencies: 'applyChoroplethLayer' and 'siteId'
+  // siteId belongs here: the body reads it in ten places — the choropleth fetch
+  // for both panes, the browser-runtime ideal overrides, and three per-site
+  // caches. Without it, switching sites invoked a callback still bound to the
+  // previous site's id, so the map fetched and coloured the wrong site until an
+  // unrelated colour-scale change happened to recreate the callback.
+  //
+  // Everything else this reads goes through a ref, which is why siteId was the
+  // only value that could go stale. Recreating the callback is cheap: consumers
+  // either call it through applyColorsRef, or from effects that already list
+  // siteId and so re-run on a site change anyway.
+  //
+  // applyChoroplethLayer is still undeclared and still suppressed. Adding it is a
+  // separate judgement — it is recreated on most renders, so listing it would
+  // rebuild this callback constantly — and it is one of the fifteen in the
+  // tracking issue.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [colorScaleMode, colorScaleType]);
+  }, [colorScaleMode, colorScaleType, siteId]);
 
   const applyColorsRef = useRef(applyColors);
   useEffect(() => {

@@ -14,7 +14,7 @@ import {
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
-import { getSite, loadLocalSites, saveLocalSites, normalizeWalkthroughSite } from '../hooks/useApi';
+import { loadDemoSiteForTour } from '../hooks/useApi';
 import type { Site } from '../types';
 
 export interface DemoStep {
@@ -172,37 +172,12 @@ export default function DemoTour({
     setStep(nextStep);
   };
 
-  const loadDemoSite = async (): Promise<Site> => {
-    let site: Site | null = await getSite(siteId);
-
-    if (!site) {
-      setLoadStatus({ message: 'Fetching site data…', pct: 40 });
-      const response = await fetch(`/data/walkthroughs/${siteId}.json`);
-      if (!response.ok) throw new Error('Walkthrough site data not found');
-      site = normalizeWalkthroughSite({ ...await response.json() as Site, source: 'walkthrough' as const });
-    }
-
-    // Reset ideal (target) values to match current each time the tour starts
-    // so that any changes from a previous run do not carry over.
-    if (site.indicators?.current) {
-      site = {
-        ...site,
-        indicators: { ...site.indicators, ideal: { ...site.indicators.current } },
-      };
-    }
-
-    // Persist the reset state so it is available for the rest of the session.
-    const existingSites = loadLocalSites();
-    const siteIndex = existingSites.findIndex((s) => s.id === site!.id);
-    if (siteIndex >= 0) {
-      existingSites[siteIndex] = site;
-      saveLocalSites(existingSites);
-    } else {
-      saveLocalSites([...existingSites, site]);
-    }
-
-    return site;
-  };
+  // Resolving the site, resetting its targets and remembering it for the session
+  // all live in useApi.loadDemoSiteForTour — this component previously carried its
+  // own copy of the fetch-and-normalise logic that getSite already implements, and
+  // then persisted the whole site to localStorage, which for the 4 MB Africa
+  // walkthrough could not fit in the quota.
+  const loadDemoSite = (): Promise<Site> => loadDemoSiteForTour(siteId);
 
   // Automatically load and zoom to the walkthrough site when loadSiteStep is reached.
   useEffect(() => {

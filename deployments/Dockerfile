@@ -75,4 +75,8 @@ RUN mkdir -p /app/data /app/resources
 EXPOSE 8080 8081 8082 8083
 
 ENTRYPOINT ["decision-theatre"]
-CMD ["--headless", "--port", "8080", "--data-dir", "/app/data", "--resources-dir", "/app/resources"]
+# --bind 0.0.0.0 is required and deliberate: the process must accept connections
+# from outside its own network namespace to be reachable at all. The default is
+# loopback because the API is unauthenticated, so here it is nginx in front of
+# this container that controls access.
+CMD ["--headless", "--bind", "0.0.0.0", "--port", "8080", "--data-dir", "/app/data", "--resources-dir", "/app/resources"]
