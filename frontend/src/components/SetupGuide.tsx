@@ -184,7 +184,7 @@ function SetupGuide({ info, onBack }: SetupGuideProps) {
               Decision Theatre
             </Heading>
             <Text color="gray.400" fontSize="lg">
-              Offline catchment data exploration with embedded AI
+              Offline exploration of African catchment data with scenario comparison
             </Text>
             {info.tiles_loaded ? (
               <Badge colorScheme="blue" mt={3} fontSize="sm" px={3} py={1}>

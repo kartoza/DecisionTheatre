@@ -1,0 +1,38 @@
+[
+  {
+    "source": "walkthrough",
+    "id": "165bcb54-71aa-49de-8e80-bb3142f16eb7",
+    "title": "Viphya Complex Forest Reserve",
+    "description": "",
+    "thumbnail": "/data/images/site-165bcb54-71aa-49de-8e80-bb3142f16eb7.jpg",
+    "createdAt": "2026-07-14T13:21:58Z",
+    "updatedAt": "2026-08-04T12:54:03.192Z"
+  },
+  {
+    "source": "walkthrough",
+    "id": "6dede7c6-8eb3-47a8-a678-16c610b551e6",
+    "title": "Africa",
+    "description": "",
+    "thumbnail": null,
+    "createdAt": "2026-07-27T07:21:12Z",
+    "updatedAt": "2026-08-04T12:54:03.128Z"
+  },
+  {
+    "source": "walkthrough",
+    "id": "d4061726-167d-4074-9f58-4a0de0ed534b",
+    "title": "Shai Hills",
+    "description": "Shai Hills Resource Reserve, coastal savanna on the Accra Plains, Ghana.",
+    "thumbnail": null,
+    "createdAt": "2026-07-16T08:00:35Z",
+    "updatedAt": "2026-08-04T12:54:03.167Z"
+  },
+  {
+    "source": "walkthrough",
+    "id": "fb1066ef-978e-4744-ac62-570a7cb366ed",
+    "title": "Munywana",
+    "description": "",
+    "thumbnail": "/data/images/site-f1ccaa36-ed32-440c-b633-d4b08b3ba24a.jpg",
+    "createdAt": "2026-07-29T11:38:03Z",
+    "updatedAt": "2026-08-04T12:54:03.217Z"
+  }
+]
