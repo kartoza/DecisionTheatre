@@ -43,6 +43,7 @@ RUN rm -rf internal/server/static \
 RUN python3 -m venv /tmp/mkdocs \
     && /tmp/mkdocs/bin/pip install --no-cache-dir \
         mkdocs \
+        mkdocs-macros-plugin \
         mkdocs-material \
         mkdocs-minify-plugin \
         pygments \

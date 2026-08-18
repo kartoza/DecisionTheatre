@@ -251,6 +251,16 @@ func resolveScenarioTable(scenario string) string {
 	return "scenario_current"
 }
 
+// resolveScenarioBoundTable resolves the table holding the lower/upper
+// uncertainty bound columns for a scenario, mirroring resolveScenarioTable.
+// bound must be "lower" or "upper".
+func resolveScenarioBoundTable(scenario, bound string) (string, error) {
+	if bound != "lower" && bound != "upper" {
+		return "", fmt.Errorf("invalid bound: %s", bound)
+	}
+	return resolveScenarioTable(scenario) + "_" + bound, nil
+}
+
 func normalizeCatchmentID(id string) string {
 	return strings.TrimSuffix(id, ".0")
 }
@@ -358,11 +368,25 @@ func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]floa
 // GetScenarioAverages returns area-weighted means for one scenario across multiple attributes.
 // When bbox is provided, the aggregation is restricted to catchments intersecting that bbox.
 func (s *GpkgStore) GetScenarioAverages(scenario string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+	return s.getAveragesForTable(resolveScenarioTable(scenario), attributes, bbox)
+}
+
+// GetScenarioBoundAverages returns area-weighted means of the lower/upper
+// uncertainty bound columns for one scenario across multiple attributes.
+// These power whisker/box-plot ranges outside "site" zone range, where the
+// per-catchment whisker computation (ComputeWhiskerBounds) doesn't apply.
+func (s *GpkgStore) GetScenarioBoundAverages(scenario, bound string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+	tableName, err := resolveScenarioBoundTable(scenario, bound)
+	if err != nil {
+		return nil, err
+	}
+	return s.getAveragesForTable(tableName, attributes, bbox)
+}
+
+func (s *GpkgStore) getAveragesForTable(tableName string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
 	if len(attributes) == 0 {
 		return nil, fmt.Errorf("no attributes provided")
 	}
-
-	tableName := resolveScenarioTable(scenario)
 
 	selectExprs := make([]string, 0, len(attributes))
 	for i, attr := range attributes {
