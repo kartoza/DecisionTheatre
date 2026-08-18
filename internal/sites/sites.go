@@ -4,8 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -231,8 +234,14 @@ func (s *Store) Update(id string, updates *Site) (*Site, error) {
 				return nil, fmt.Errorf("failed to save thumbnail: %w", err)
 			}
 			site.Thumbnail = &imagePath
-		} else {
+		} else if *updates.Thumbnail == "" {
+			// An explicit clear.
 			site.Thumbnail = updates.Thumbnail
+		} else if validThumbnailPath(*updates.Thumbnail) {
+			// A path this store wrote earlier, sent back unchanged.
+			site.Thumbnail = updates.Thumbnail
+		} else {
+			return nil, fmt.Errorf("invalid thumbnail path %q: expected a data URL or a path this store wrote", *updates.Thumbnail)
 		}
 	}
 	if len(updates.Geometry) > 0 {
@@ -277,10 +286,19 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 
-	// Delete thumbnail if exists
-	if site.Thumbnail != nil && strings.HasPrefix(*site.Thumbnail, "/data/images/") {
-		imagePath := filepath.Join(s.dataDir, strings.TrimPrefix(*site.Thumbnail, "/data/"))
-		os.Remove(imagePath) // Ignore errors
+	// Delete the thumbnail, re-validating rather than trusting what was stored:
+	// a value written before this validation existed is still in the file.
+	if site.Thumbnail != nil && *site.Thumbnail != "" {
+		imagePath, err := s.resolveThumbnailFile(*site.Thumbnail)
+		if err != nil {
+			// Refusing to delete is the safe outcome — the alternative is
+			// removing a file this store never wrote. Leave the orphan and say so.
+			log.Printf("Warning: not deleting thumbnail for site %s: %v", id, err)
+		} else if err := os.Remove(imagePath); err != nil && !os.IsNotExist(err) {
+			// A thumbnail that cannot be removed is not a reason to fail the
+			// delete, but it should not be silent either.
+			log.Printf("Warning: could not delete thumbnail %s: %v", imagePath, err)
+		}
 	}
 
 	// Delete site file
@@ -320,6 +338,63 @@ func (s *Store) saveSite(site *Site) error {
 }
 
 // saveThumbnail saves a base64 image to disk and returns the URL path
+// thumbnailPathPattern is the only shape saveThumbnail ever produces:
+// /data/images/<name>.<ext>, with the name limited to characters that cannot
+// form a traversal or an absolute path.
+//
+// The extensions match what saveThumbnail derives from the data URL's MIME type.
+var thumbnailPathPattern = regexp.MustCompile(`^/data/images/[A-Za-z0-9._-]+\.(png|jpe?g|gif|webp)$`)
+
+// validThumbnailPath reports whether a client-supplied thumbnail reference is
+// one this store could have written.
+//
+// A client may send back a path it was given earlier — that is how an unchanged
+// thumbnail survives an update — so the value cannot simply be rejected. But it
+// was previously stored verbatim and later joined onto the data directory and
+// passed to os.Remove, so any string the client chose became a file the process
+// would delete: two requests, one PUT and one DELETE, removed any file the
+// process could reach. A prefix check alone does not help, because
+// "/data/images/../../etc/passwd" satisfies it.
+func validThumbnailPath(p string) bool {
+	if !thumbnailPathPattern.MatchString(p) {
+		return false
+	}
+	// Belt and braces: the pattern already excludes "/" and "\\" inside the
+	// name, so Clean cannot change a valid path. This catches a future widening
+	// of the pattern that reintroduces the problem.
+	return path.Clean(p) == p
+}
+
+// resolveThumbnailFile maps a validated thumbnail reference to a path inside the
+// data directory, and confirms the result really is inside it.
+//
+// The check is on the cleaned, absolute path rather than the input, so a symlink
+// or a traversal that survived validation still cannot escape.
+func (s *Store) resolveThumbnailFile(thumbnail string) (string, error) {
+	if !validThumbnailPath(thumbnail) {
+		return "", fmt.Errorf("thumbnail path is not one this store writes: %q", thumbnail)
+	}
+
+	imagesDir, err := filepath.Abs(s.imagesDir)
+	if err != nil {
+		return "", fmt.Errorf("could not resolve the images directory: %w", err)
+	}
+
+	candidate, err := filepath.Abs(filepath.Join(s.dataDir, strings.TrimPrefix(thumbnail, "/data/")))
+	if err != nil {
+		return "", fmt.Errorf("could not resolve the thumbnail path: %w", err)
+	}
+
+	// filepath.Rel is used rather than a string prefix so that a sibling
+	// directory sharing a prefix — images-backup next to images — cannot pass.
+	rel, err := filepath.Rel(imagesDir, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("thumbnail path escapes the images directory: %q", thumbnail)
+	}
+
+	return candidate, nil
+}
+
 func (s *Store) saveThumbnail(siteID, dataURL string) (string, error) {
 	// Parse data URL: data:image/jpeg;base64,/9j/4AAQ...
 	parts := strings.SplitN(dataURL, ",", 2)
