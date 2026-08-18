@@ -378,3 +378,132 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 	log.Printf("Loaded metadata.csv: %d rows", rowCount)
 	return mc
 }
+
+// AddColumnAliases keys every metadata entry by the real GeoPackage column name
+// as well as the name metadata.csv uses.
+//
+// The two disagree. metadata.csv is exported from R, whose make.names() rewrites
+// spaces and hyphens to dots, so `herbs_diet_kgkm2_Obligate grazer` in the
+// GeoPackage is `herbs_diet_kgkm2_Obligate.grazer` in the CSV. Measured against
+// the supplied datapack: of 505 GeoPackage columns, 159 match a metadata row
+// exactly and **344 match only once dots are treated as the separator** — so two
+// thirds of the dataset had no colour, no detailed name, no units, no axis label
+// and no chart type, and was absent from the selectors that read those maps.
+//
+// Nothing logged it. A row whose name matches nothing was simply dropped.
+//
+// The alias is built from the GeoPackage side rather than by reversing the
+// substitution, because the reverse is ambiguous: make.names() maps both ' ' and
+// '-' to '.', so `Browser.grazer.intermediate` could be `Browser grazer
+// intermediate` or `Browser-grazer intermediate` — and in this dataset it is the
+// latter. Normalising the real column forward, the way normalizeMetadataColumn
+// already does, has exactly one answer.
+//
+// Existing keys are never overwritten: where a name matches both ways, the CSV's
+// own entry wins.
+func (mc *MetadataCache) AddColumnAliases(columns []string) int {
+	aliased := 0
+
+	alias := func(realName, metaName string) bool {
+		added := false
+		if v, ok := mc.Colors[metaName]; ok {
+			if _, exists := mc.Colors[realName]; !exists {
+				mc.Colors[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.Details[metaName]; ok {
+			if _, exists := mc.Details[realName]; !exists {
+				mc.Details[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.VariableTypes[metaName]; ok {
+			if _, exists := mc.VariableTypes[realName]; !exists {
+				mc.VariableTypes[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.TargetRanges[metaName]; ok {
+			if _, exists := mc.TargetRanges[realName]; !exists {
+				mc.TargetRanges[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.AxisLabels[metaName]; ok {
+			if _, exists := mc.AxisLabels[realName]; !exists {
+				mc.AxisLabels[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.XAxisLabels[metaName]; ok {
+			if _, exists := mc.XAxisLabels[realName]; !exists {
+				mc.XAxisLabels[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.Units[metaName]; ok {
+			if _, exists := mc.Units[realName]; !exists {
+				mc.Units[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.ChartTypes[metaName]; ok {
+			if _, exists := mc.ChartTypes[realName]; !exists {
+				mc.ChartTypes[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.GroupingVariables[metaName]; ok {
+			if _, exists := mc.GroupingVariables[realName]; !exists {
+				mc.GroupingVariables[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.GroupingValues[metaName]; ok {
+			if _, exists := mc.GroupingValues[realName]; !exists {
+				mc.GroupingValues[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.MaxValCurrent[metaName]; ok {
+			if _, exists := mc.MaxValCurrent[realName]; !exists {
+				mc.MaxValCurrent[realName] = v
+				added = true
+			}
+		}
+		if v, ok := mc.MaxValReference[metaName]; ok {
+			if _, exists := mc.MaxValReference[realName]; !exists {
+				mc.MaxValReference[realName] = v
+				added = true
+			}
+		}
+
+		// The boolean sets carry meaning by presence, so only a true entry is
+		// worth aliasing.
+		for _, set := range []map[string]bool{mc.Inputs, mc.TargetInputs, mc.CanMap, mc.CanGraph, mc.Dial0Middle} {
+			if v, ok := set[metaName]; ok && v {
+				if _, exists := set[realName]; !exists {
+					set[realName] = v
+					added = true
+				}
+			}
+		}
+		return added
+	}
+
+	for _, realName := range columns {
+		metaName := normalizeMetadataColumn(realName)
+		if metaName == "" || metaName == realName {
+			continue
+		}
+		if alias(realName, metaName) {
+			aliased++
+		}
+	}
+
+	if aliased > 0 {
+		log.Printf("Metadata: aliased %d of %d GeoPackage columns whose metadata.csv name differs (R make.names)", aliased, len(columns))
+	}
+	return aliased
+}
