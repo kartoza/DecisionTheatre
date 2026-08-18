@@ -36,6 +36,24 @@ set -euo pipefail
 #   ./scripts/protect-branch.sh                   apply it
 #   ./scripts/protect-branch.sh --require-review 1
 #   ./scripts/protect-branch.sh --branch develop
+#   ./scripts/protect-branch.sh --no-strict      apply without up-to-dateness
+#   ./scripts/protect-branch.sh --strict         the default, stated explicitly
+#
+# WHY --no-strict EXISTS
+#
+# Strict means a branch must be up to date with main before it can merge. With
+# several green pull requests waiting, merging the first makes every other one
+# out of date, so each merge needs a round of "update branch" and a full CI run
+# before the next can go. Five ready pull requests become five sequential CI
+# cycles.
+#
+# --no-strict turns off only that up-to-dateness requirement, for the length of
+# a batch merge. Every check is still required and still has to have passed; the
+# only thing dropped is the demand that it passed against the newest main. That
+# is a real, small risk — two changes can each be green alone and broken
+# together — so it belongs to a deliberate batch with main checked afterwards,
+# never as a standing setting. Restore it with --strict, or by running this
+# script with no arguments at all.
 #
 # Needs an authenticated `gh` with admin rights on the repository.
 # =============================================================================
@@ -51,11 +69,16 @@ cd "$PROJECT_ROOT"
 BRANCH="main"
 REVIEWS=0
 MODE="apply"
+# The safe value is the default: a run with no arguments restores strictness,
+# which is what the batch-merge caller relies on to put it back.
+STRICT="true"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --show) MODE="show" ;;
         --dry-run) MODE="dry-run" ;;
+        --no-strict) STRICT="false" ;;
+        --strict) STRICT="true" ;;
         --branch)
             BRANCH="${2:?--branch needs a name}"
             shift
@@ -65,7 +88,11 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h | --help)
-            sed -n '4,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            # Derived from the rules rather than a hardcoded range: this was
+            # '4,44p', and the paragraph added above would have silently cut the
+            # end off --help. The same lesson as scripts/run-app.sh.
+            awk '/^# ={10,}$/ { rules++; next } rules == 1' "${BASH_SOURCE[0]}" |
+                sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -157,7 +184,12 @@ ui_group "WILL REQUIRE"
 for c in "${CHECKS[@]}"; do
     ui_ok "$c" "must pass"
 done
-ui_note "strict" "the branch must be up to date with $BRANCH before merging"
+if [ "$STRICT" = "true" ]; then
+    ui_note "strict" "the branch must be up to date with $BRANCH before merging"
+else
+    ui_warn "strict" "OFF — checks are still required, up-to-dateness is not" \
+        "for a batch merge only; re-run without --no-strict to restore it"
+fi
 ui_note "admins" "included — the setting is meaningless otherwise"
 ui_note "approvals" "$REVIEWS"
 
@@ -168,8 +200,9 @@ PAYLOAD="$(python3 -c '
 import json, sys
 contexts = json.loads(sys.argv[1])
 reviews = int(sys.argv[2])
+strict = sys.argv[3] == "true"
 print(json.dumps({
-    "required_status_checks": {"strict": True, "contexts": contexts},
+    "required_status_checks": {"strict": strict, "contexts": contexts},
     "enforce_admins": True,
     "required_pull_request_reviews": {
         "required_approving_review_count": reviews,
@@ -180,7 +213,7 @@ print(json.dumps({
     "restrictions": None,
     "allow_force_pushes": False,
     "allow_deletions": False,
-}))' "$CONTEXTS_JSON" "$REVIEWS")"
+}))' "$CONTEXTS_JSON" "$REVIEWS" "$STRICT")"
 
 if [ "$MODE" = "dry-run" ]; then
     ui_blank
