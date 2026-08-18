@@ -24,7 +24,7 @@ fi
 # Try to create compat shim from webkit2gtk-4.1
 if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
     echo "Error: Neither webkit2gtk-4.0 nor webkit2gtk-4.1 found"
-    echo "Install libwebkit2gtk-4.0-dev (Debian/Ubuntu) or webkit2gtk4.0-devel (Fedora)"
+    echo "Install libwebkit2gtk-4.1-dev (Debian/Ubuntu) or webkit2gtk4.1-devel (Fedora)"
     exit 1
 fi
 
