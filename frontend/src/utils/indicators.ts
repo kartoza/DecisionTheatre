@@ -132,6 +132,5 @@ export function applyAOIWeightedIndicators(
     idealUpper: base.idealUpper,
     catchmentCount: catchments.length,
     totalAreaKm2,
-    catchmentIds: catchments.map((c) => c.id),
   };
 }

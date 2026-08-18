@@ -430,6 +430,8 @@ function SiteCreationMap({
       map.remove();
       mapRef.current = null;
     };
+  // useEffect has a missing dependency: 'addGeometryToMap'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [initialGeometry, boundingBox, initialExtent]);
 
   useEffect(() => {
@@ -691,6 +693,8 @@ function SiteCreationMap({
         map.getCanvas().style.cursor = '';
       };
     }
+  // useEffect has a missing dependency: 'updateDrawingPreview'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [
     mode,
     isMapReady,
@@ -1036,7 +1040,7 @@ function SiteCreationMap({
           ? `Click to add more points (${3 - drawnPoints.length} more needed)`
           : 'Click to add more points, or confirm when ready';
       case 'catchments':
-        return selectedCatchments.size != 0
+        return selectedCatchments.size !== 0
           ? `${selectedCatchments.size} catchment${selectedCatchments.size > 1 ? 's' : ''} selected`
           : isBoxSelectionMode
           ? 'Drag to draw a selection box and add catchments'

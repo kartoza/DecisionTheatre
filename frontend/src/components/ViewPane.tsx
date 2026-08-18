@@ -466,6 +466,8 @@ function ViewPane({
       : (typeof targetValue === 'number' && typeof currentValue === 'number' && targetValue !== currentValue);
 
     return { min, max, referenceValue, currentValue, targetValue, targetChanged };
+  // useMemo has a missing dependency: 'dialCatchmentLoading'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);

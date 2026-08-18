@@ -1369,7 +1369,7 @@ func (h *Handler) doSiteExtraction(id string) error {
 	}
 
 	indicators := computeAreaWeightedIndicators(catchmentData)
-	indicators.CatchmentIDs = catchmentIDs
+	site.CatchmentIDs = catchmentIDs
 	site.Indicators = indicators
 
 	freshCatchments := make([]sites.SiteCatchment, 0, len(catchmentData))
@@ -1483,7 +1483,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		indicators := computeAreaWeightedIndicators(catchmentData)
-		indicators.CatchmentIDs = catchmentIDs
+		site.CatchmentIDs = catchmentIDs
 		site.Indicators = indicators
 		// Strip catchments from browser response — large data, frontend uses separate endpoint
 		site.Catchments = nil

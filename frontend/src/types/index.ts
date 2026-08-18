@@ -323,8 +323,11 @@ export interface SiteIndicators {
   extractedAt: string;      // When indicators were extracted
   catchmentCount: number;   // Number of catchments used
   totalAreaKm2: number;     // Total area in km²
-  catchmentIds: string[];   // IDs of catchments used
   warnings?: string[];
+  // catchmentIds deliberately does not live here. It is on Site, and it was on
+  // both: for the Africa walkthrough that was the same 147,837-element array
+  // written twice — 3.84 MB of a 4.0 MB document. Nothing read this copy; the
+  // three places that mentioned it only carried it along. Read `site.catchmentIds`.
 }
 
 // Site represents a saved site with its boundary and map state

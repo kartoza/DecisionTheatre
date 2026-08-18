@@ -319,7 +319,7 @@ func TestCompressionAppliedInServerModeOnly(t *testing.T) {
 	} {
 		srv := newTestServer(t, mode.desktop)
 		// A route with a body big enough to cross the threshold.
-		srv.router = muxWithBigJSON()
+		srv.setRouter(muxWithBigJSON())
 		handler := srv.rootHandler()
 
 		rec := get(t, handler, "/api/choropleth", "gzip")
