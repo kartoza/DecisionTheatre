@@ -1178,11 +1178,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         );
 
         const applySide = (
-          map: maplibregl.Map,
+          // Nullable since the compare map is created only in compare mode:
+          // this is the tile path's equivalent of the guards the GeoJSON path
+          // carries. Without it the right side is asked to paint a map that
+          // does not exist.
+          map: maplibregl.Map | null,
           side: 'left' | 'right',
           values: ChoroplethValues | null,
           scenario: Scenario,
         ) => {
+          if (!map) return;
           if (!values || values.ids.length === 0) {
             removeChoroplethLayers(map, side);
             return;
