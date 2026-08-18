@@ -170,6 +170,12 @@ jobs:
       - name: TypeScript typecheck
         run: cd frontend && npx tsc --noEmit
 
+      # The job has been called lint-frontend since it was written while running
+      # no linter at all: there was no eslint configuration, so the script exited
+      # with an error rather than a result and nothing invoked it. It lints now.
+      - name: ESLint
+        run: cd frontend && npm run lint
+
   # ==========================================
   # Go tests
   # ==========================================

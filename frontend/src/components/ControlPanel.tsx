@@ -1099,7 +1099,11 @@ function ControlPanel({
               borderRadius="lg"
               border="1px"
               borderColor={borderColor}
-              bg={useColorModeValue('white', 'gray.750')}
+              // cardBg, not a hook call: this sits inside a `viewMode !== 'chart'`
+              // conditional, so calling useColorModeValue here changed the number of
+              // hooks between renders — React's "rendered fewer hooks than expected".
+              // The component already computes this exact value at the top.
+              bg={cardBg}
             >
               <HStack mb={2}>
                 <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">

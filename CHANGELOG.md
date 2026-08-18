@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The frontend is linted.** The repository has shipped an eslint dependency, a
+  `lint` script and a CI job called `lint-frontend` since it was written, and none
+  of them ever linted anything: there was no configuration file, so eslint exited
+  with an error rather than a result, and the CI job ran `npx tsc --noEmit` alone.
+  No TypeScript in this project had ever been linted.
+
+  `frontend/eslint.config.js` is built from the `@typescript-eslint` parser and
+  plugin already in `package.json` rather than the `typescript-eslint`
+  meta-package, so linting the code we have costs no new npm dependency. The rule
+  set is deliberately narrow — faults rather than style — because enabling
+  everything at once produces findings that get silenced rather than fixed. CI
+  runs it, and `--report-unused-disable-directives` means a suppression left
+  behind after a fix fails the build.
+
+  The first run found 25 problems, including a **conditionally called hook**:
+  `useColorModeValue` inside a `viewMode !== 'chart'` branch in `ControlPanel`,
+  which changes the number of hooks between renders — React's "rendered fewer
+  hooks than expected". It now uses the value the component already computes.
+
+  Also fixed: a `!=` that should be `!==`, five deliberately-unused destructuring
+  bindings that now say so with an underscore instead of a `void` statement, and
+  two dependencies a hook never used. The remaining fifteen
+  `react-hooks/exhaustive-deps` findings are recorded in place with a reason and
+  tracked, rather than fixed blind: adding a dependency changes when an effect
+  runs, and in a 4,000-line component with no rendering tests that can produce a
+  render loop nothing here would catch.
+
 - **`scripts/protect-branch.sh --no-strict`**, for batch merges. Strict protection
   requires a branch to be up to date with `main` before it can merge, so with several
   green pull requests waiting, merging the first makes every other one stale: five
