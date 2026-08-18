@@ -22,8 +22,31 @@ services:
       - ${DT_DATA_DIR}:/app/data
       - ${DT_RESOURCES_DIR}:/app/resources:ro
       - ../scripts:/app/scripts:ro
-      - ../dist:/app/dist
+      - decision-theatre-dist:/app/dist:ro
       - decision-theatre-settings:/root/.config/decision-theatre
+
+  # Toolchain container for `make pack-data` and
+  # ./scripts/build-cross-docker.sh. Not started by `docker compose up` — run
+  # on demand:
+  #
+  #   docker compose --profile build run --rm builder make pack-data
+  #   docker compose --profile build run --rm builder ./scripts/build-cross-docker.sh
+  #
+  # Its output goes to decision-theatre-dist, the same volume the app service
+  # reads its downloads from, never to this container's own filesystem.
+  builder:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.builder
+    image: decision-theatre-builder:latest
+    profiles:
+      - build
+    working_dir: /src
+    volumes:
+      - ..:/src
+      - ${DT_DATA_DIR}:/src/data
+      - decision-theatre-dist:/src/dist
+      - /var/run/docker.sock:/var/run/docker.sock
 
   nginx:
     image: nginx:1.27-bookworm
@@ -43,3 +66,4 @@ services:
 
 volumes:
   decision-theatre-settings:
+  decision-theatre-dist:
