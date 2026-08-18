@@ -3,7 +3,13 @@ services:
     build:
       context: ..
       dockerfile: deployments/Dockerfile
-    image: decision-theatre:latest
+    # Overridable so the image built from the flake can be used instead of the
+    # one compose builds from deployments/Dockerfile:
+    #   ./scripts/build-container.sh
+    #   DT_IMAGE=decision-theatre:0.4.0 docker compose -f deployments/docker-compose.yaml up
+    # Compose only builds when the named image is absent, so setting this to an
+    # image that is already loaded uses it as-is.
+    image: ${DT_IMAGE:-decision-theatre:latest}
     restart: unless-stopped
     command:
       - --headless

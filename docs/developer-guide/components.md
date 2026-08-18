@@ -72,10 +72,17 @@ resolved versions, consult `go.sum` and `frontend/package-lock.json`.
 | macOS | WKWebView (system) | Apple EULA |
 | Windows | Edge WebView2 | Microsoft EULA |
 
-!!! warning "Version mismatch in the container build"
-    `deployments/Dockerfile` installs `libwebkit2gtk-4.0-dev`, while the flake, CI and the
-    Debian packaging all target 4.1.
-    Ticket: *Docker image installs webkit 4.0 while flake, CI and packaging all use 4.1*.
+!!! note "One WebKit version, one compatibility shim"
+    Everything that builds the application targets WebKitGTK **4.1**: the flake, CI,
+    the Debian packaging and both container files. WebKit 4.0 is gone from current
+    distributions, so building against it was borrowed time.
+
+    `webview_go` asks pkg-config for `webkit2gtk-4.0` in a `#cgo` line with no build
+    tag for 4.1, so a 4.1-only machine cannot compile it as-is. `scripts/webkit-compat.sh`
+    derives a `webkit2gtk-4.0.pc` from the installed 4.1 one and exports the
+    environment that points at it. The flake, CI and both Dockerfiles all go through
+    that one script, so they resolve the dependency identically — and the binary
+    links `libwebkit2gtk-4.1.so` regardless of the name pkg-config was asked for.
 
 ## Build System
 

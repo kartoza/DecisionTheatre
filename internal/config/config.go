@@ -40,6 +40,21 @@ type Config struct {
 	ResourcesDir string
 	Version      string
 
+	// SatelliteTileURL is the raster basemap the client uses for satellite
+	// imagery, an {x}/{y}/{z} template passed to maplibre.
+	//
+	// Configurable so that changing provider does not require a rebuild. The
+	// default is Google's undocumented mt0.google.com endpoint, which needs no
+	// key — which is exactly why using it falls outside the Google Maps terms of
+	// service. Replacing it is a live decision (issue #65); this field is what
+	// makes that decision a deployment change rather than a code change.
+	SatelliteTileURL string
+
+	// SatelliteAttribution is displayed on the map for the above. For most
+	// providers this is a licence condition rather than a courtesy, so it travels
+	// with the URL instead of being hardcoded in the client.
+	SatelliteAttribution string
+
 	// DesktopMode is true only when the process owns a desktop session and has
 	// opened the embedded WebView window.
 	//
@@ -54,6 +69,30 @@ type Config struct {
 	// The zero value is the safe one. A caller that forgets to set it gets the
 	// server build, without the desktop-only routes.
 	DesktopMode bool
+}
+
+// DefaultSatelliteTileURL is used when nothing is configured. See
+// SatelliteTileURL for why this particular endpoint is a known problem.
+const DefaultSatelliteTileURL = "https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+
+// DefaultSatelliteAttribution matches DefaultSatelliteTileURL.
+const DefaultSatelliteAttribution = "© Google Maps"
+
+// Satellite returns the configured basemap template and its attribution, applying
+// the defaults.
+func (c Config) Satellite() (tileURL, attribution string) {
+	tileURL = c.SatelliteTileURL
+	if tileURL == "" {
+		tileURL = DefaultSatelliteTileURL
+	}
+	attribution = c.SatelliteAttribution
+	if attribution == "" && tileURL == DefaultSatelliteTileURL {
+		// Only default the attribution alongside the default URL: crediting
+		// Google for somebody else's imagery would be worse than crediting
+		// nobody.
+		attribution = DefaultSatelliteAttribution
+	}
+	return tileURL, attribution
 }
 
 // ListenAddress returns the host:port to bind, applying the safe default.
