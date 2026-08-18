@@ -25,14 +25,9 @@ are served from their own prefixes.
     *HTTP server binds 0.0.0.0 while the code claims it binds localhost*,
     *No request body size limits on any JSON handler*.
 
-!!! warning "Expected to change"
-    Responses are not compressed today, and `valuesOnly` responses use a per-feature
-    GeoJSON wrapper with null geometry. Both are being changed — compression will be
-    negotiated via `Accept-Encoding`, and `valuesOnly` is expected to move to a columnar
-    `{ids, values}` shape.
-
-    Tickets: *No HTTP compression on any API response*, *Full-dataset stat fetches ship
-    16.1 MB of feature wrappers, twice, concurrently*.
+!!! note "Compression"
+    JSON responses over 1 KB are gzipped when the client offers `Accept-Encoding: gzip`.
+    See *Response compression* in `internal/server/compress.go` for the level and why.
 
 ## Server Information
 
@@ -147,16 +142,65 @@ if the ID is not found.
 ### `GET /api/choropleth`
 
 The main map data endpoint. Returns a GeoJSON `FeatureCollection` of catchment polygons
-with the requested attribute in each feature's properties.
+with the requested attribute in each feature's properties — unless `valuesOnly=1`, which
+returns the columnar shape described below.
 
 | Query parameter | Description |
 |---|---|
-| `scenario` | `reference`, `current` or `future` |
+| `scenario` | `reference`, `current` or `future`. With `valuesOnly=1`, a comma-separated list of up to three of them |
 | `attribute` | Attribute column name |
 | `minx`, `miny`, `maxx`, `maxy` | Viewport bounding box |
-| `zoom` | Current map zoom; selects the server-side aggregation tier |
-| `siteId` | Optional; applies site-specific ideal overrides |
-| `valuesOnly` | `1` bypasses zoom aggregation and returns every catchment's raw value with null geometry |
+| `zoom` | Current map zoom; selects the server-side aggregation tier. Ignored when `valuesOnly=1` |
+| `siteId` | Optional; applies site-specific ideal overrides to the `future` scenario |
+| `valuesOnly` | `1` bypasses zoom aggregation and returns every catchment's raw value, columnar |
+
+#### `valuesOnly=1`
+
+For statistics, not for rendering: no zoom aggregation, no feature limit, every catchment
+in the bounding box with a value. There is no geometry, so the response is not a
+`FeatureCollection` — it is parallel arrays, discriminated by `"type": "CatchmentValues"`.
+
+```json
+{
+  "type": "CatchmentValues",
+  "attribute": "NPP_gm2",
+  "scenarios": ["current"],
+  "ids": [1121879850, 1121879851],
+  "values": [1234.5678901234, 2.5],
+  "domain_min": 0,
+  "domain_max": 9999
+}
+```
+
+Naming several scenarios returns `series` in place of `values`, one array per scenario,
+all aligned to the single `ids` array:
+
+```json
+{
+  "type": "CatchmentValues",
+  "attribute": "NPP_gm2",
+  "scenarios": ["current", "reference"],
+  "ids": [1121879850, 1121879851],
+  "series": {
+    "current": [1234.5678901234, 2.5],
+    "reference": [987.65432109876, null]
+  },
+  "domain_min": 0,
+  "domain_max": 9999
+}
+```
+
+- A `null` in a series means that scenario has no value for that catchment. The scenarios'
+  NULL sets need not agree, and one shared `ids` array has to be able to say so.
+- `domain_min`/`domain_max` are reported for the first scenario named. They are
+  scenario-dependent, and a multi-scenario response has no single answer; callers of this
+  endpoint compute their own min/max from the values.
+- An unrecognised scenario name is a `400`. The `FeatureCollection` path is lenient here
+  and reads `scenario_current`; this path takes a caller-supplied list, so it says no.
+
+Asking for both scenarios of a comparison in one request is the intended use: they always
+want the same extent and attribute, and the response is dominated by the `ids` column,
+which one request sends once where two sent it twice.
 
 ### `GET /api/aggregate`
 

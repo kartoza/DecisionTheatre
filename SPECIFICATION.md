@@ -273,7 +273,9 @@ Each pane supports three visualization modes, cycled via toolbar button:
   `colors`, `details`, `variabletypes`, `inputs`, `targetinputs`, `targetranges`,
   `canmap`, `cangraph`, `axislabels`, `xaxislabels`, `units`, `charttypes`,
   `groupingvariables`, `groupingvalues`, `dial0middle`
-- `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
+- `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw
+  value as a columnar `{ids, values}` / `{ids, series}` response, for one or more scenarios
+  in a single request)
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
@@ -447,6 +449,8 @@ Violet → Indigo → Blue → Cyan → Green → Yellow → Orange → Red
 - Pre-computed geojson column in GeoPackage
 - R-tree spatial index for fast bbox queries
 - Efficient SQLite queries via GeoPackage
+- Statistics fetches (`valuesOnly=1`) use a columnar `{ids, values}` response and serve
+  both scenarios of a comparison from one request
 
 ---
 

@@ -590,67 +590,6 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 	}, nil
 }
 
-// QueryCatchmentValues returns every catchment's attribute value within a bounding
-// box, with no geometry and no LIMIT. It exists for statistics (min/max/mean/count)
-// where accuracy across the true full dataset matters and per-catchment HYBAS_ID is
-// required (e.g. filtering to a site's catchments), unlike QueryCatchments' render
-// paths, which trade some accuracy/detail for a bounded, renderable feature count.
-// Callers never hand this to a map source, so shipping one feature per catchment
-// (with a null geometry) doesn't carry the rendering cost that motivated those
-// other paths.
-func (s *GpkgStore) QueryCatchmentValues(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
-	start := time.Now()
-	defer func() {
-		log.Printf("[perf] QueryCatchmentValues scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
-	}()
-
-	tableName := resolveScenarioTable(scenario)
-	if !s.isValidColumn(attribute) {
-		return nil, fmt.Errorf("invalid attribute: %s", attribute)
-	}
-
-	query := fmt.Sprintf(`
-		SELECT c.HYBAS_ID, s."%s" as value
-		FROM catchments_lev12 c
-		JOIN %s s ON c.HYBAS_ID_int = s.catchment_id_int
-		WHERE s."%s" IS NOT NULL
-		  AND c.fid IN (
-			SELECT id FROM rtree_catchments_lev12_geom
-			WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
-		  )
-	`, attribute, tableName, attribute)
-
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
-	if err != nil {
-		return nil, fmt.Errorf("query failed: %w", err)
-	}
-	defer rows.Close()
-
-	features := []GeoJSONFeature{}
-	for rows.Next() {
-		var id, value float64
-		if err := rows.Scan(&id, &value); err != nil {
-			log.Printf("Warning: failed to scan row: %v", err)
-			continue
-		}
-
-		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       int64(id),
-			Geometry: json.RawMessage("null"),
-			Properties: map[string]interface{}{
-				"HYBAS_ID": int64(id),
-				attribute:  value,
-			},
-		})
-	}
-
-	return &FeatureCollection{
-		Type:     "FeatureCollection",
-		Features: features,
-	}, nil
-}
-
 // ensureGridGeometryCache kicks off buildGridGeometryCache exactly once. Safe
 // to call from every request; only the first call actually starts the build.
 func (s *GpkgStore) ensureGridGeometryCache() {

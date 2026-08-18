@@ -12,6 +12,15 @@ import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { evictExpired } from '../lib/ttlCache';
+import type { CatchmentSeries, CatchmentValues } from '../lib/catchmentValues';
+import {
+  aoiWeightedZoneStatsFromSeries,
+  applyIdealOverrides,
+  filterSeriesByCatchmentIds,
+  isCatchmentSeries,
+  selectScenario,
+  zoneStatsFromSeries,
+} from '../lib/catchmentValues';
 import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
 
 interface MapViewProps {
@@ -299,7 +308,6 @@ interface ChoroplethData {
   features: Array<{
     type: string;
     id: number;
-    // null for valuesOnly (stats) fetches - see QueryCatchmentValues in gpkg_store.go.
     geometry: object | null;
     properties: {
       // Absent on grid-aggregated features (continent-scale zoom, see
@@ -316,8 +324,15 @@ interface ChoroplethData {
 
 /**
  * Compute statistics (min, max, mean) for the visible zone features.
+ *
+ * Takes either shape the choropleth endpoint returns: rendered viewport
+ * statistics come from GeoJSON features, full-dataset and site statistics from
+ * a columnar values series. The series is read directly rather than rebuilt
+ * into features — reconstructing 147,837 wrappers on the main thread would
+ * spend exactly what the columnar format was introduced to save.
  */
-function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | null {
+function computeZoneStats(data: ChoroplethData | CatchmentSeries, attribute: string): ZoneStats | null {
+  if (isCatchmentSeries(data)) return zoneStatsFromSeries(data);
   if (!data.features || data.features.length === 0) return null;
 
   const values: number[] = [];
@@ -365,10 +380,11 @@ function simplifyBoundaryForComputation(geometry: GeoJSON.Geometry): GeoJSON.Geo
  * fractions: Map<catchmentId → { aoiFraction, areaKm2 }> from getSiteAOIFractions.
  */
 function computeAOIWeightedZoneStatsFromFractions(
-  data: ChoroplethData,
+  data: ChoroplethData | CatchmentSeries,
   attribute: string,
   fractions: Map<string, { aoiFraction: number; areaKm2: number }>,
 ): ZoneStats | null {
+  if (isCatchmentSeries(data)) return aoiWeightedZoneStatsFromSeries(data, fractions);
   if (!data.features || data.features.length === 0 || fractions.size === 0) return null;
 
   let min = Infinity;
@@ -408,10 +424,15 @@ function computeAOIWeightedZoneStatsFromFractions(
  * a synchronous turf.intersect that blocks the JS main thread.
  */
 function computeAOIWeightedZoneStats(
-  data: ChoroplethData,
+  data: ChoroplethData | CatchmentSeries,
   attribute: string,
   boundaryGeometry: GeoJSON.Geometry,
 ): ZoneStats | null {
+  // A values series carries no geometry, so there is nothing to intersect.
+  // This is not a new limitation: the values-only responses this replaced sent
+  // "geometry": null for every feature, so this function already returned null
+  // for them and the caller already fell back to unweighted statistics.
+  if (isCatchmentSeries(data)) return null;
   if (!data.features || data.features.length === 0) return null;
 
   const boundaryFeature = geometryToPolygonFeature(simplifyBoundaryForComputation(boundaryGeometry));
@@ -461,9 +482,23 @@ function computeAOIWeightedZoneStats(
   return { min, max, mean: weightedSum / totalValidArea, count };
 }
 
-function filterDatasetByCatchmentIds(data: ChoroplethData | null, catchmentIds: Set<string>): ChoroplethData | null {
+/**
+ * Restrict a dataset to a set of catchment IDs, preserving its shape: a values
+ * series filters its parallel arrays, a FeatureCollection filters its features.
+ * The generic return type keeps the caller's knowledge of which one it has.
+ */
+function filterDatasetByCatchmentIds<T extends ChoroplethData | CatchmentSeries>(
+  data: T | null,
+  catchmentIds: Set<string>,
+): T | null {
   if (!data) return null;
   if (catchmentIds.size === 0) return data;
+
+  if (isCatchmentSeries(data)) {
+    // Narrowing a union member back to the generic T is not something
+    // TypeScript can verify; the branch is guarded by the type predicate.
+    return filterSeriesByCatchmentIds(data, catchmentIds) as T;
+  }
 
   return {
     ...data,
@@ -499,7 +534,7 @@ function extractBoundaryGeometryFromStyleSource(
 }
 
 function inferCatchmentIdsFromBoundary(
-  datasets: Array<ChoroplethData | null>,
+  datasets: Array<ChoroplethData | CatchmentSeries | null>,
   boundaryGeometry: GeoJSON.Geometry | null,
 ): Set<string> {
   const inferredIds = new Set<string>();
@@ -509,7 +544,11 @@ function inferCatchmentIdsFromBoundary(
   if (!boundaryFeature) return inferredIds;
 
   for (const dataset of datasets) {
-    if (!dataset?.features?.length) continue;
+    // Inference needs geometry to intersect, which a values series has none of
+    // — as the null-geometry features it replaced had none either, so this
+    // contributed nothing for values-only datasets before the change.
+    if (!dataset || isCatchmentSeries(dataset)) continue;
+    if (!dataset.features?.length) continue;
 
     for (const feature of dataset.features) {
       const featureId = feature.properties?.HYBAS_ID;
@@ -652,8 +691,7 @@ async function fetchChoroplethData(
   bounds: maplibregl.LngLatBounds,
   zoom: number,
   siteId?: string | null,
-  idealOverrides?: Map<number, number>,
-  valuesOnly = false
+  idealOverrides?: Map<number, number>
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -667,13 +705,6 @@ async function fetchChoroplethData(
     maxy: ne.lat.toString(),
     zoom: zoom.toString(),
   });
-
-  // valuesOnly bypasses zoom-based aggregation/truncation server-side entirely -
-  // used for stats that need every real catchment value and HYBAS_ID (e.g. site
-  // stats filter by catchment ID), not a render-sized sample.
-  if (valuesOnly) {
-    params.set('valuesOnly', '1');
-  }
 
   const hasSiteOverride = siteId && scenario === 'future';
   if (hasSiteOverride) {
@@ -731,6 +762,96 @@ async function fetchChoroplethData(
     console.error('Failed to fetch choropleth data:', err);
     return null;
   }
+}
+
+// Module-level cache for columnar values requests, on the same terms as
+// _choroplethCache above: keyed by the full query string, swept by TTL.
+const _catchmentValuesCache = new Map<string, { promise: Promise<CatchmentValues | null>; ts: number }>();
+
+/**
+ * Fetch every catchment's raw value for an extent, for one or more scenarios at
+ * once.
+ *
+ * This is the statistics path, not a render path: it bypasses zoom-based
+ * aggregation and truncation server-side, because the numbers shown against
+ * "Full" and against a site must reflect the true dataset and carry a real
+ * HYBAS_ID per catchment, not a render-sized sample.
+ *
+ * Both scenarios of a comparison go in one request. They always want the same
+ * extent, the same attribute and the same site — only the scenario differs —
+ * and the response is dominated by the ID column, which one request sends once
+ * where two sent it twice. Passing the same scenario for both sides is fine:
+ * the server collapses the duplicate.
+ */
+async function fetchCatchmentValues(
+  scenarios: Scenario[],
+  attribute: string,
+  bounds: maplibregl.LngLatBounds,
+  siteId?: string | null,
+  idealOverrides?: Map<number, number>,
+): Promise<CatchmentValues | null> {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+
+  const requested = [...new Set(scenarios)];
+  const params = new URLSearchParams({
+    scenario: requested.join(','),
+    attribute,
+    minx: sw.lng.toString(),
+    miny: sw.lat.toString(),
+    maxx: ne.lng.toString(),
+    maxy: ne.lat.toString(),
+    valuesOnly: '1',
+  });
+  // zoom is deliberately absent: this mode ignores it, and including it would
+  // fragment the cache key on every pan and zoom for no change in the response.
+
+  const wantsFuture = requested.includes('future');
+  const hasSiteOverride = Boolean(siteId) && wantsFuture;
+  if (hasSiteOverride && siteId) {
+    params.set('siteId', siteId);
+  }
+
+  // Same rule as fetchChoroplethData: a response carrying a site's edited
+  // targets is not shared, because the user can change those targets inside the
+  // cache window, and the browser-runtime overlay below mutates the response in
+  // place — a cached object must never be mutated by one of its readers.
+  const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
+  const key = params.toString();
+
+  const request = async (): Promise<CatchmentValues | null> => {
+    try {
+      const resp = await fetch(`/api/choropleth?${params}`);
+      if (!resp.ok) return null;
+      return await resp.json() as CatchmentValues;
+    } catch (err) {
+      console.error('Failed to fetch catchment values:', err);
+      return null;
+    }
+  };
+
+  if (canCache) {
+    const now = Date.now();
+    const hit = _catchmentValuesCache.get(key);
+    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
+
+    evictExpired(_catchmentValuesCache, CHOROPLETH_CACHE_TTL_MS, now);
+
+    const promise = request();
+    promise.catch(() => _catchmentValuesCache.delete(key));
+    _catchmentValuesCache.set(key, { promise, ts: now });
+    return promise;
+  }
+
+  const data = await request();
+
+  // In browser mode the backend store is never updated, so apply per-catchment
+  // ideal overrides client-side for the future scenario.
+  if (data && wantsFuture && idealOverrides && idealOverrides.size > 0) {
+    applyIdealOverrides(data, 'future', idealOverrides);
+  }
+
+  return data;
 }
 
 /**
@@ -1387,14 +1508,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       try {
         // These stats must reflect the true full dataset, not a render-sized
         // sample/aggregate, so fetch every catchment's raw value regardless of
-        // viewport zoom (zoom argument is ignored server-side in this mode).
-        const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
-        ]);
+        // viewport zoom. One request covers both scenarios: same extent, same
+        // attribute, and they share the ID column.
+        const values = await fetchCatchmentValues(
+          [c.leftScenario, c.rightScenario], c.attribute, fullBounds,
+        );
 
         if (cancelled) return;
 
+        const leftData = selectScenario(values, c.leftScenario);
+        const rightData = selectScenario(values, c.rightScenario);
         const leftFullStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
         const rightFullStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
         fullZoneStatsRef.current = { left: leftFullStats, right: rightFullStats };
@@ -1639,17 +1762,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       try {
-        // filterDatasetByCatchmentIds below needs a real HYBAS_ID per feature,
+        // filterDatasetByCatchmentIds below needs a real HYBAS_ID per catchment,
         // and the AOI-weighted stats need every matching catchment's raw value -
         // the grid-aggregated render path can supply neither, so fetch true
-        // per-catchment values regardless of viewport zoom.
-        const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
+        // per-catchment values regardless of viewport zoom. Both scenarios come
+        // from one request over one extent (see fetchCatchmentValues).
+        const [values, siteCatchments] = await Promise.all([
+          fetchCatchmentValues(
+            [c.leftScenario, c.rightScenario], c.attribute, siteBoundsLL, siteId, siteIdealOverrides,
+          ),
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
         if (cancelled) return;
+
+        const leftData = selectScenario(values, c.leftScenario);
+        const rightData = selectScenario(values, c.rightScenario);
 
         // Build the authoritative ID set from siteCatchments, keeping only those with
         // meaningful AOI overlap (aoiFraction > 0). Catchments that intersect the bounding
@@ -1674,10 +1802,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ?? extractBoundaryGeometryFromStyleSource(leftMapRef.current?.getStyle()?.sources?.[SITE_BOUNDARY_SOURCE])
           ?? siteGeometryFromApi;
         // Skip inferCatchmentIdsFromBoundary when API fractions or explicit IDs are available —
-        // the intersection-based fallback is only safe for small datasets (≤50 features).
+        // the intersection-based fallback is only safe for small datasets (≤50 catchments).
         const cachedInferredStat = _inferredIdsSiteCache.get(siteId);
-        const totalFeatures = (leftData?.features?.length ?? 0) + (rightData?.features?.length ?? 0);
-        const canInfer = !apiCatchmentIds && explicitCatchmentIds.size === 0 && totalFeatures <= 50;
+        const totalCatchments = (leftData?.ids.length ?? 0) + (rightData?.ids.length ?? 0);
+        const canInfer = !apiCatchmentIds && explicitCatchmentIds.size === 0 && totalCatchments <= 50;
         const inferredCatchmentIds = cachedInferredStat
           ?? (canInfer && boundaryGeometry ? inferCatchmentIdsFromBoundary([leftData, rightData], boundaryGeometry) : new Set<string>());
         if (!cachedInferredStat && inferredCatchmentIds.size > 0) _inferredIdsSiteCache.set(siteId, inferredCatchmentIds);
@@ -1701,7 +1829,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ? (catchmentFractionMap.size > 0
               ? computeAOIWeightedZoneStatsFromFractions(leftFiltered, c.attribute, catchmentFractionMap)
                 ?? computeZoneStats(leftFiltered, c.attribute)
-              : (boundaryGeometry && (leftFiltered.features?.length ?? 0) <= 50
+              : (boundaryGeometry && leftFiltered.ids.length <= 50
                   ? computeAOIWeightedZoneStats(leftFiltered, c.attribute, boundaryGeometry)
                     ?? computeZoneStats(leftFiltered, c.attribute)
                   : computeZoneStats(leftFiltered, c.attribute)))
@@ -1710,7 +1838,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ? (catchmentFractionMap.size > 0
               ? computeAOIWeightedZoneStatsFromFractions(rightFiltered, c.attribute, catchmentFractionMap)
                 ?? computeZoneStats(rightFiltered, c.attribute)
-              : (boundaryGeometry && (rightFiltered.features?.length ?? 0) <= 50
+              : (boundaryGeometry && rightFiltered.ids.length <= 50
                   ? computeAOIWeightedZoneStats(rightFiltered, c.attribute, boundaryGeometry)
                     ?? computeZoneStats(rightFiltered, c.attribute)
                   : computeZoneStats(rightFiltered, c.attribute)))

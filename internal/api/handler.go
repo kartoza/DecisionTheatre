@@ -690,26 +690,22 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		zoom = geodata.DetailZoomThreshold
 	}
 
+	// valuesOnly requests bypass the zoom-based render paths entirely: they are
+	// used for statistics that need true full-dataset accuracy (and, for site
+	// stats, real per-catchment HYBAS_ID to filter by) rather than a bounded,
+	// renderable feature count. Nothing below this point applies to them -
+	// there is no geometry to aggregate and no FeatureCollection to build - so
+	// they are answered by their own handler in catchment_values.go.
+	if q.Get("valuesOnly") == "1" {
+		h.respondCatchmentValues(w, q, attribute, minx, miny, maxx, maxy)
+		return
+	}
+
 	// For the future/target scenario with a known site, build a lookup of
 	// per-catchment ideal values so the choropleth shows user-edited targets.
-	siteID := q.Get("siteId")
-	var idealOverrides map[int64]float64
-	if scenario == "future" && siteID != "" && h.siteStore != nil {
-		if site, siteErr := h.siteStore.Get(siteID); siteErr == nil {
-			idealOverrides = make(map[int64]float64, len(site.Catchments))
-			for _, c := range site.Catchments {
-				if c.Ideal == nil {
-					continue
-				}
-				val, ok := c.Ideal[attribute]
-				if !ok {
-					continue
-				}
-				if idF, parseErr := strconv.ParseFloat(c.ID, 64); parseErr == nil {
-					idealOverrides[int64(idF)] = val
-				}
-			}
-		}
+	idealOverrides := map[int64]float64{}
+	if scenario == "future" {
+		idealOverrides = h.idealOverridesFor(q.Get("siteId"), attribute)
 	}
 
 	// Use reference geometry when overlaying ideal values; future without a
@@ -719,17 +715,8 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		queryScenario = "reference"
 	}
 
-	// Query catchments. valuesOnly requests bypass the zoom-based render paths
-	// entirely: they're used for statistics that need true full-dataset
-	// accuracy (and, for site stats, real per-catchment HYBAS_ID to filter by)
-	// rather than a bounded, renderable feature count.
 	queryStart := time.Now()
-	var fc *geodata.FeatureCollection
-	if q.Get("valuesOnly") == "1" {
-		fc, err = h.gpkgStore.QueryCatchmentValues(queryScenario, attribute, minx, miny, maxx, maxy)
-	} else {
-		fc, err = h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy, zoom)
-	}
+	fc, err := h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy, zoom)
 	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
 		if fc != nil {
 			return len(fc.Features)
@@ -752,29 +739,7 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get domain range for consistent color scaling across scenarios
-	domainStart := time.Now()
-	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
-	log.Printf("[perf] handleChoropleth step=getDomainRange attribute=%s duration_ms=%d", attribute, time.Since(domainStart).Milliseconds())
-	if err != nil {
-		// If domain tables don't exist, fall back to no domain range
-		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
-		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
-	}
-
-	// Prefer metadata.csv's curated maxval_curr/maxval_ref over the scanned
-	// domain_maxima table for the max bound — these are authoritative
-	// per-scenario ceilings rather than a value derived from scanning every
-	// catchment. "future" (target) values are edited starting from current,
-	// so they share current's ceiling. Falls back to the scanned max when a
-	// column is missing/blank for this attribute.
-	maxvalByScenario := h.metaCache.MaxValReference
-	if scenario != "reference" {
-		maxvalByScenario = h.metaCache.MaxValCurrent
-	}
-	if metaMax, ok := maxvalByScenario[attribute]; ok {
-		domainRange.Max = metaMax
-	}
+	domainRange := h.choroplethDomainRange(attribute, scenario)
 
 	// Build response with domain range
 	response := ChoroplethResponse{
