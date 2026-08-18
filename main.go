@@ -30,6 +30,9 @@ func main() {
 	dataDir := flag.String("data-dir", "", "Directory containing data files (mbtiles, geopackage)")
 	resourcesDir := flag.String("resources-dir", "", "Directory containing resource files (mbtiles, styles)")
 	headless := flag.Bool("headless", false, "Run in headless mode (no GUI window)")
+	bindAddress := flag.String("bind", config.DefaultBindAddress,
+		"Interface to listen on. Loopback by default; the API is unauthenticated, "+
+			"so use 0.0.0.0 only where something in front of it controls access.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -97,7 +100,7 @@ func main() {
 	}
 
 	// Find an available port (try up to 10 ports starting from the requested one)
-	availablePort, err := findAvailablePort(*port, 10)
+	availablePort, err := findAvailablePort(*bindAddress, *port, 10)
 	if err != nil {
 		log.Fatalf("Failed to find available port: %v", err)
 	}
@@ -111,6 +114,9 @@ func main() {
 		DataDir:      resolvedDataDir,
 		ResourcesDir: resolvedResourcesDir,
 		Version:      version,
+		BindAddress:  *bindAddress,
+		// --headless is the server build; anything else opens the window below.
+		DesktopMode: !*headless,
 	}
 
 	log.Printf("Decision Theatre v%s starting on port %d", version, cfg.Port)
@@ -133,7 +139,7 @@ func main() {
 	}()
 
 	// Wait for server to be ready
-	serverURL := fmt.Sprintf("http://localhost:%d", cfg.Port)
+	serverURL := cfg.LocalURL()
 	waitForServer(serverURL, 10*time.Second)
 
 	if *headless {
@@ -251,10 +257,13 @@ func waitForServer(url string, timeout time.Duration) {
 
 // findAvailablePort finds an available port, starting from the given port.
 // If the port is in use, it tries subsequent ports up to maxAttempts times.
-func findAvailablePort(startPort int, maxAttempts int) (int, error) {
+// The probe must bind the same interface the server will, or it answers a
+// different question: a port free on loopback can be taken on another interface,
+// and vice versa.
+func findAvailablePort(bindAddress string, startPort int, maxAttempts int) (int, error) {
 	for i := 0; i < maxAttempts; i++ {
 		port := startPort + i
-		addr := fmt.Sprintf(":%d", port)
+		addr := config.Config{BindAddress: bindAddress}.ListenAddressForPort(port)
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
 			// Opened only to see whether the port is free.

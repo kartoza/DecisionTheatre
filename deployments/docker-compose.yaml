@@ -7,6 +7,12 @@ services:
     restart: unless-stopped
     command:
       - --headless
+      # Required and deliberate — see the note on CMD in Dockerfile. The
+      # application defaults to loopback because its API is unauthenticated;
+      # inside a container nothing would reach it, and nginx in front of this
+      # service is what controls access.
+      - --bind
+      - 0.0.0.0
       - --port
       - "8080"
       - --data-dir

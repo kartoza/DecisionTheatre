@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -343,7 +344,26 @@ func (s *Server) handleDatapackDownload(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	allowLongDownload(w, filename, fi.Size())
 	http.ServeContent(w, r, filename, fi.ModTime(), f)
+}
+
+// allowLongDownload lifts the server's WriteTimeout for a single response.
+//
+// The datapack is hundreds of megabytes; on a slow connection sending it takes
+// far longer than any timeout that is useful against a stalled client. Rather
+// than disable WriteTimeout for every request — which is what the server did
+// before, and which let one stuck client hold a goroutine indefinitely — the two
+// handlers that stream a large file opt out here.
+//
+// A failure is logged and ignored: the download then runs under the default
+// deadline, which is worse for the user but not incorrect, and there is nothing
+// better to do at this point since the response has already begun.
+func allowLongDownload(w http.ResponseWriter, filename string, size int64) {
+	// The zero time means no deadline.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("Could not lift the write deadline for %s (%d bytes): %v", filename, size, err)
+	}
 }
 
 type executableInfo struct {
@@ -423,18 +443,44 @@ func (s *Server) handleExecutableDownload(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
+	allowLongDownload(w, filename, fi.Size())
 	http.ServeContent(w, r, filename, fi.ModTime(), f)
 }
 
 // handleFileDialog opens a native OS file picker and returns the selected path.
 // This is needed because the webview cannot expose native file paths to JavaScript.
+// fileDialogTimeout bounds how long a file picker may stand open.
+//
+// zenity blocks until a human answers. Without a bound, a dialog nobody notices
+// holds its request goroutine — and the HTTP connection — indefinitely. Two
+// minutes is long enough to find a file on a slow filesystem and short enough
+// that a forgotten dialog frees itself.
+const fileDialogTimeout = 2 * time.Minute
+
+// handleFileDialog opens a native file picker. Registered only in desktop mode;
+// see config.Config.DesktopMode for why.
 func (s *Server) handleFileDialog(w http.ResponseWriter, r *http.Request) {
+	// Tied to the request as well as the timeout, so a client that gives up
+	// takes the dialog with it.
+	ctx, cancel := context.WithTimeout(r.Context(), fileDialogTimeout)
+	defer cancel()
+
 	path, err := zenity.SelectFile(
+		zenity.Context(ctx),
 		zenity.Title("Select Data Pack"),
 		zenity.FileFilters{
 			{Name: "Data Packs", Patterns: []string{"*.zip", "*.7z"}},
 		},
 	)
+
+	// A timeout and a cancelled request both arrive as a context error. Neither
+	// is a server fault, and neither should be reported as one.
+	if ctx.Err() != nil {
+		httputil.RespondError(w, http.StatusRequestTimeout,
+			"the file dialog was closed without a selection")
+		return
+	}
+
 	if err == zenity.ErrCanceled {
 		httputil.RespondJSON(w, http.StatusOK, map[string]interface{}{"path": ""})
 		return

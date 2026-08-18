@@ -22,6 +22,12 @@
 # HTTP port. The app walks forward from here if the port is busy.
 #DT_PORT=8080
 
+# Interface to listen on. Defaults to 127.0.0.1, because the API has no
+# authentication of its own — 0.0.0.0 hands it to everyone who can reach this
+# machine. Set it when you want to open the app in a browser or on a phone on
+# your own network, and only on a network you trust.
+#DT_BIND=0.0.0.0
+
 # Skip the staleness checks entirely and launch the existing bin/decision-theatre.
 #DT_SKIP_BUILD=1
 

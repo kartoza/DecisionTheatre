@@ -420,10 +420,26 @@ The `docker-compose.yaml` passes the following flags to the binary. These are fi
 
 | Flag | Value | Description |
 |------|-------|-------------|
-| `--headless` | *(present)* | Disables the GUI window. Required for server operation. |
+| `--headless` | *(present)* | Disables the GUI window. Required for server operation, and it is also what selects the server build — see [Client/Server Boundary](client-server-boundary.md#consequences-for-the-api-surface). |
+| `--bind` | `0.0.0.0` | Interface to listen on. Required here; see the warning below. |
 | `--port` | `8080` | HTTP port the app listens on inside the container. |
 | `--data-dir` | `/app/data` | Path to the data directory (bound from `DT_DATA_DIR`). |
 | `--resources-dir` | `/app/resources` | Path to the resources directory (bound from `DT_RESOURCES_DIR`). |
+
+!!! warning "`--bind 0.0.0.0` is safe here and only here"
+    The application defaults to `127.0.0.1`, because every endpoint is
+    unauthenticated and binding all interfaces would publish the whole API to the
+    network. Inside a container that default would make the app unreachable even
+    to Nginx, so the compose file opts in explicitly.
+
+    What makes it acceptable is that the `app` service only `expose`s 8080–8083 on
+    the Docker network and never publishes them to the host; `nginx` is the only
+    service with a `ports:` mapping, so it is the single way in. Adding
+    `ports: - "8080:8080"` to `app` would bypass Nginx and publish an
+    unauthenticated API to your network.
+
+    If you run the binary directly on a host rather than through the compose
+    stack, leave `--bind` at its default and put a proxy in front of it.
 
 ---
 
