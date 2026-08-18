@@ -62,6 +62,13 @@ func NewHandler(
 		cfg:       cfg,
 		metaCache: loadMetadataCache(cfg.DataDir),
 	}
+
+	// metadata.csv is exported from R, whose make.names() rewrites spaces and
+	// hyphens to dots, so two thirds of the GeoPackage's columns are named
+	// differently in the two files and matched nothing. See AddColumnAliases.
+	if gpkgStore != nil {
+		h.metaCache.AddColumnAliases(gpkgStore.GetColumns())
+	}
 	go func() {
 		lt := LoadLookupTables(cfg.DataDir)
 		h.lookupsMu.Lock()
