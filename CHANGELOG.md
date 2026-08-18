@@ -109,6 +109,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A datapack without a manifest falls back to the old path rather than showing no
   demos.
 
+- **Map rendering is capped at 1.5x device pixel ratio.** Both MapLibre instances
+  were created without `pixelRatio`, so each rendered at the display's native
+  ratio. Fragment shading cost scales with the *square* of that: a 2x display does
+  four times the per-pixel work, a 3x display nine times — and quad view keeps up
+  to twelve map instances live. The clamp only ever lowers the ratio, so a 1x
+  display is untouched, and 1.5x is visually near-indistinguishable on a map at
+  these zoom levels. The existing `fadeDuration: 0` is left alone.
+
+- **`prefers-reduced-motion` is honoured.** There are 157 framer-motion call sites
+  across 14 files and not one consulted the setting, which the project's WCAG 2.2
+  AA target requires independently of the performance argument. A single
+  `<MotionConfig reducedMotion="user">` at the root covers all of them, and covers
+  any animation added later without anyone having to remember. It sits outside the
+  error boundary so the guided tours, which animate too, are included.
+
 - **The application shipped 6.85 MB of JavaScript before first paint, and 18 MB of
   images.** plotly was imported statically at the top of the chart component, so
   every visitor downloaded roughly 4.6 MB of plotting library whether or not they

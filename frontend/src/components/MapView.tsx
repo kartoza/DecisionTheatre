@@ -83,6 +83,20 @@ const GOOGLE_BASEMAP_STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: 'google-tiles', type: 'raster', source: 'google' }],
 };
 
+// Fragment shading cost scales with the square of the device pixel ratio: a 2x
+// display does four times the per-pixel work of a 1x one, and 3x does nine times.
+// With up to twelve map instances live in quad view, that is the difference
+// between a comfortable frame budget and a stalled one on integrated graphics.
+//
+// 1.5 is visually near-indistinguishable on a map at these zoom levels, and this
+// only ever lowers the ratio — a 1x display is untouched.
+const MAX_MAP_PIXEL_RATIO = 1.5;
+
+function mapPixelRatio(): number {
+  const actual = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+  return Math.min(actual, MAX_MAP_PIXEL_RATIO);
+}
+
 // Layer IDs for choropleth
 const CHOROPLETH_LAYER_LEFT = 'choropleth-left';
 const CHOROPLETH_LAYER_RIGHT = 'choropleth-right';
@@ -2805,6 +2819,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
+      pixelRatio: mapPixelRatio(),
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,
@@ -2825,6 +2840,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
+      pixelRatio: mapPixelRatio(),
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,
