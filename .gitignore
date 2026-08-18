@@ -37,8 +37,6 @@ Thumbs.db
 PROMPT.log
 PROMPTS.log
 # Models
-*.gguf
-*.gob
 # MkDocs
 site/
 requirements/site/
