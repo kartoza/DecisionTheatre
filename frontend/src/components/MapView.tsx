@@ -12,6 +12,7 @@ import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { evictExpired } from '../lib/ttlCache';
+import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -68,20 +69,41 @@ function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
   return _cachedStyle ?? url;
 }
 
-// Google Maps hybrid satellite raster style (no API key required for tile access)
-const GOOGLE_BASEMAP_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    google: {
-      type: 'raster',
-      tiles: ['https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'],
-      tileSize: 256,
-      attribution: '\u00a9 Google Maps',
-      maxzoom: 21,
+// Satellite raster basemap.
+//
+// A function rather than a constant: the tile template is supplied at runtime by
+// /api/info, and a module-level constant is evaluated at import time — before that
+// response can possibly have arrived — so it would always have captured the
+// default. See lib/satelliteBasemap.ts.
+function satelliteBasemapStyle(): maplibregl.StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      satellite: {
+        type: 'raster',
+        tiles: [satelliteTileUrl()],
+        tileSize: 256,
+        attribution: satelliteAttribution(),
+        maxzoom: 21,
+      },
     },
-  },
-  layers: [{ id: 'google-tiles', type: 'raster', source: 'google' }],
-};
+    layers: [{ id: 'satellite-tiles', type: 'raster', source: 'satellite' }],
+  };
+}
+
+// Fragment shading cost scales with the square of the device pixel ratio: a 2x
+// display does four times the per-pixel work of a 1x one, and 3x does nine times.
+// With up to twelve map instances live in quad view, that is the difference
+// between a comfortable frame budget and a stalled one on integrated graphics.
+//
+// 1.5 is visually near-indistinguishable on a map at these zoom levels, and this
+// only ever lowers the ratio — a 1x display is untouched.
+const MAX_MAP_PIXEL_RATIO = 1.5;
+
+function mapPixelRatio(): number {
+  const actual = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+  return Math.min(actual, MAX_MAP_PIXEL_RATIO);
+}
 
 // Layer IDs for choropleth
 const CHOROPLETH_LAYER_LEFT = 'choropleth-left';
@@ -1970,7 +1992,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     setIsGoogleBasemap(nextVal);
 
     const newStyle: maplibregl.StyleSpecification | string = nextVal
-      ? GOOGLE_BASEMAP_STYLE
+      ? satelliteBasemapStyle()
       : (window.location.origin + '/data/style.json');
 
     const reapplyAfterStyleLoad = (map: maplibregl.Map) => {
@@ -2791,7 +2813,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Use the cached object if available (staggered panes will find it ready),
     // otherwise fall back to the URL so MapLibre fetches it normally. Browser
     // runtime starts on the Google basemap (see isGoogleBasemapRef default).
-    const mapStyle = isGoogleBasemapRef.current ? GOOGLE_BASEMAP_STYLE : getStyleForMap(styleUrl);
+    const mapStyle = isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl);
 
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
@@ -2805,6 +2827,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
+      pixelRatio: mapPixelRatio(),
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,
@@ -2825,6 +2848,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
+      pixelRatio: mapPixelRatio(),
       scrollZoom: true,
       dragPan: true,
       dragRotate: true,

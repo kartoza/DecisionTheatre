@@ -119,11 +119,32 @@ function DocsPanel({ isOpen, onClose }: DocsPanelProps) {
         />
       </Box>
 
-      {/* iframe stays mounted so it preserves navigation state */}
+      {/* iframe stays mounted so it preserves navigation state.
+
+          sandbox drops the ambient authority this frame had by default. The docs
+          are our own MkDocs build on the same origin, so the concern is not a
+          hostile page — it is that an unrestricted frame may navigate the
+          top-level window, submit forms or open modals, and a documentation panel
+          needs none of that.
+
+          Granted, with the reason each is required:
+            allow-scripts     MkDocs Material's search, navigation and theme
+            allow-same-origin its own assets; without this every same-origin
+                              request inside the frame is blocked and the page
+                              renders unstyled
+            allow-popups      external links in the docs open in a new tab
+            allow-popups-to-escape-sandbox
+                              so those tabs are not sandboxed in turn
+
+          Withheld: allow-top-navigation, allow-forms, allow-modals,
+          allow-downloads. Note that allow-scripts plus allow-same-origin lets a
+          frame remove its own sandbox attribute, so this is defence in depth
+          against first-party content, not a security boundary. */}
       <Box
         as="iframe"
         src="/docs/"
         title="Documentation"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         w="100%"
         h="100%"
         border="none"
