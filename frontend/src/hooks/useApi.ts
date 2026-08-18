@@ -5,7 +5,7 @@ import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
-import { loadSites, saveSites } from '../lib/siteStore';
+import { loadSite, loadSites, saveSite, saveSites } from '../lib/siteStore';
 
 const API_BASE = '/api';
 /**
@@ -53,11 +53,21 @@ export function saveLocalSites(sites: Site[]): boolean {
   return saveSites(sites);
 }
 
-
-function loadLocalSite(siteId: string): Site | null {
-  const sites = loadLocalSites();
-  return sites.find((entry) => entry.id === siteId) ?? null;
+/**
+ * Read or write a single site.
+ *
+ * Five places did read-the-whole-list, replace-one-entry, write-the-whole-list.
+ * That was the only way to change one site when everything lived in one blob;
+ * it is not any more, and the long form hid what each of them was doing.
+ */
+export function loadLocalSite(id: string): Site | null {
+  return loadSite(id);
 }
+
+export function saveLocalSite(site: Site): boolean {
+  return saveSite(site);
+}
+
 
 function sortSitesByCreatedAtDesc(sites: Site[]): Site[] {
   return [...sites].sort((a, b) => b.createdAt.localeCompare(a.createdAt));

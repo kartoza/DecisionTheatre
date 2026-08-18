@@ -15,7 +15,7 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, loadLocalSites, saveLocalSites } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -284,11 +284,8 @@ function App() {
           if (!response.ok) throw new Error('Failed to extract indicators');
           const updatedSiteFromApi: Site = await response.json();
           const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
-          const storedSites = loadLocalSites();
-          const updatedSites = storedSites.some((s) => s.id === updatedSite.id)
-            ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
-            : [...storedSites, updatedSite];
-          if (!saveLocalSites(updatedSites)) {
+          // One site changed, so one record is written.
+          if (!saveLocalSite(updatedSite)) {
             toast({
               title: 'Storage full',
               description: 'Extracted indicators could not be saved — delete some existing sites to free up space.',

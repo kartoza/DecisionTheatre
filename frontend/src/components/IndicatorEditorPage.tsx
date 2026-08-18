@@ -50,7 +50,7 @@ import {
 } from 'react-icons/fi';
 import type { Site, SiteIndicators, AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
-import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes, loadLocalSites, saveLocalSites } from '../hooks/useApi';
+import { useAttributeDetails, useAttributeUserInputs, useAttributeVariableTypes, saveLocalSite } from '../hooks/useApi';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning } from '../utils/warnings';
 import { colors } from '../styles/colors';
 
@@ -323,13 +323,10 @@ export default function IndicatorEditorPage({
           if (!r.ok) throw new Error('Failed');
           const updatedSiteFromApi: Site = await r.json();
           const updatedSite: Site = { ...updatedSiteFromApi, thumbnail };
-          const storedSites = loadLocalSites();
-          const next = storedSites.some((s) => s.id === updatedSite.id)
-            ? storedSites.map((s) => (s.id === updatedSite.id ? updatedSite : s))
-            : [...storedSites, updatedSite];
+          // One site changed, so one record is written.
           setLocalIndicators(updatedSite.indicators ?? null);
           onSiteUpdated(updatedSite);
-          if (saveLocalSites(next)) {
+          if (saveLocalSite(updatedSite)) {
             toast({ title: 'Indicators extracted', description: `Aggregated ${updatedSite.indicators?.catchmentCount || 0} catchments`, status: 'success', duration: 3000 });
           } else {
             toast({
@@ -437,11 +434,8 @@ export default function IndicatorEditorPage({
           indicators: localIndicators,
         };
 
-        const storedSites = loadLocalSites();
-        const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
-          ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
-          : [...storedSites, updatedSite];
-        if (!saveLocalSites(updatedSites)) {
+        // One site changed, so one record is written.
+        if (!saveLocalSite(updatedSite)) {
           throw new Error('Browser storage is full — delete some existing sites and try again.');
         }
 
@@ -594,11 +588,8 @@ export default function IndicatorEditorPage({
           indicators: resetIndicators,
         };
 
-        const storedSites = loadLocalSites();
-        const updatedSites = storedSites.some(stored => stored.id === updatedSite.id)
-          ? storedSites.map(stored => (stored.id === updatedSite.id ? updatedSite : stored))
-          : [...storedSites, updatedSite];
-        if (!saveLocalSites(updatedSites)) {
+        // One site changed, so one record is written.
+        if (!saveLocalSite(updatedSite)) {
           throw new Error('Browser storage is full — delete some existing sites and try again.');
         }
 
