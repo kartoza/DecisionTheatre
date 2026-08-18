@@ -14,8 +14,8 @@
 # What it does:
 #   1. Pulls the latest commit on the current branch.
 #   2. Rebuilds the docker compose images (to pick up any pulled code
-#      changes). Runs every time, regardless of whether the Drive data
-#      has changed.
+#      changes), including the builder image used by steps 7-8. Runs every
+#      time, regardless of whether the Drive data has changed.
 #   3. Checks the configured Google Drive folder for changes.
 #      - If nothing has changed: brings the stack up (picking up any
 #        image rebuilt in step 2, a no-op otherwise) and stops here —
@@ -26,6 +26,12 @@
 #   6. Restarts the deployments docker compose stack.
 #   7. Rebuilds the distributable datapack.
 #   8. Rebuilds the cross-platform desktop installers.
+#
+# Steps 7 and 8 run inside the `builder` service (deployments/Dockerfile.builder)
+# rather than on this host directly — it carries the Go/Node/mkdocs toolchain
+# `make pack-data` and build-cross-docker.sh need, so this host only needs
+# Docker. Their output lands in the decision-theatre-dist volume, which the
+# app service also mounts (read-only) to serve it — never baked into an image.
 
 set -euo pipefail
 
@@ -36,6 +42,14 @@ DEPLOYMENTS_DIR="$PROJECT_ROOT/deployments"
 # Google Drive folder that holds the source CSV files for the datapack.
 DRIVE_FOLDER="https://drive.google.com/drive/folders/1yVrQ_jQUooAD8wi9oCEA-Go52mrsH36f"
 
+# Runs a command inside the builder service (docker-compose.yaml, "build"
+# profile), which carries the toolchain make pack-data and
+# build-cross-docker.sh need. Removed after it exits; nothing built inside it
+# is kept except what it writes to the decision-theatre-dist volume.
+run_builder() {
+    (cd "$DEPLOYMENTS_DIR" && docker compose --profile build run --rm builder "$@")
+}
+
 echo "=== Scheduled redeploy started at $(date -u +"%Y-%m-%dT%H:%M:%SZ") ==="
 
 echo "==> Pulling latest changes..."
@@ -44,7 +58,7 @@ git pull
 
 echo "==> Rebuilding docker compose images..."
 cd "$DEPLOYMENTS_DIR"
-docker compose build
+docker compose --profile build build
 
 echo "==> Checking Google Drive folder for updates..."
 cd "$PROJECT_ROOT"
@@ -60,9 +74,8 @@ if ./scripts/check-drive-updates.sh "$DRIVE_FOLDER"; then
     docker compose ps
     echo "==> Deployments stack started."
 
-    cd "$PROJECT_ROOT"
     echo "==> Building cross-platform installers..."
-    ./scripts/build-cross-docker.sh
+    run_builder ./scripts/build-cross-docker.sh
 
     echo "=== Scheduled redeploy finished at $(date -u +"%Y-%m-%dT%H:%M:%SZ") (no-op) ==="
     exit 0
@@ -83,14 +96,13 @@ docker compose ps
 echo "==> Deployments stack started."
 
 echo "==> Checking the data directory and building the datapack..."
-cd "$PROJECT_ROOT"
 # pack-data checks the data directory first and refuses to build a pack that the
 # application could not load. That is deliberate for an unattended job: a failed
 # redeploy is recoverable, a silently broken pack served to users is not. Add
 # ARGS="--force" here only if you would rather ship a known-broken pack.
-make pack-data
+run_builder make pack-data
 
 echo "==> Building cross-platform installers..."
-./scripts/build-cross-docker.sh
+run_builder ./scripts/build-cross-docker.sh
 
 echo "=== Scheduled redeploy finished at $(date -u +"%Y-%m-%dT%H:%M:%SZ") ==="

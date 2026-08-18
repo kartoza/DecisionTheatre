@@ -40,6 +40,9 @@ deployments/
 ├── .env.example           # Template — copy this to .env
 ├── Dockerfile             # Multi-stage build (Node → Go → Debian slim)
 ├── Dockerfile.dockerignore
+├── Dockerfile.cross       # Cross-compiles bare Linux/Windows executables
+├── Dockerfile.cross.dockerignore
+├── Dockerfile.builder     # Toolchain image for the on-demand `builder` service
 ├── docker-compose.yaml
 ├── nginx.conf             # Nginx virtual-host config
 └── certs/
@@ -520,6 +523,8 @@ The `app` container mounts two host paths as Docker bind mounts (not named volum
 | `/app/resources` | `DT_RESOURCES_DIR` | Read-only |
 
 Because these are bind mounts, data persists on the host even if the container is removed. Back up `DT_DATA_DIR` (especially `sites/` and `projects/` subdirectories) as part of your regular server backup routine.
+
+The data pack zip and cross-platform executables that back the app's Download page are different: they are build output, not source data, so they live in the `decision-theatre-dist` named Docker volume instead of a host bind mount — mounted read-only at `/app/dist` in `app`, and read-write at `/src/dist` in `builder`. Nothing writes there except the `builder` service (see [Building the Image](#building-the-image) and [Building Executables in Docker](releasing.md#building-executables-in-docker) / [Building a Data Pack](releasing.md#building-a-data-pack) in the release guide), and it is never baked into an image layer.
 
 ---
 
