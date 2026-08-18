@@ -656,7 +656,7 @@ function ChartView({
     );
     if (!hasData) return null;
 
-    const xLabel = axisLabels[attribute] ?? attribute.replace(/_/g, ' ');
+    const xLabel = resolveAxisLabelForColumn(attribute, xAxisLabels) ?? attribute.replace(/_/g, ' ');
     const chartType = 'line';
 
     return {
@@ -668,7 +668,7 @@ function ChartView({
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData, targetHasBeenUpdated]);
+  }, [attribute, xAxisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData, targetHasBeenUpdated]);
 
   // Build grouped chart data for all columns where Grouping variable matches the selected group.
   const groupedChartData = useMemo(() => {
@@ -1632,7 +1632,8 @@ function ChartView({
                   xref: 'paper',
                   yref: 'paper',
                   x: 0.5,
-                  y: -0.18,
+                  y: 0,
+                  yshift: -45,
                   showarrow: false,
                   font: { color: '#a0aec0', size: 13 },
                 },
