@@ -197,6 +197,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The container images built against a different WebKit than everything else ships.**
+  `deployments/Dockerfile`, `deployments/Dockerfile.cross` and
+  `deployments/Dockerfile.builder` all installed `libwebkit2gtk-4.0-dev`, while the
+  flake, CI, the Debian
+  packaging and the documented runtime dependency all target 4.1. The container was
+  therefore the one build nobody else's environment matched, and WebKit 4.0 has been
+  dropped from current Debian, so it was borrowed time rather than a stable choice.
+
+  All three now install 4.1 and run `scripts/webkit-compat.sh`, the same shim the
+  flake and CI use, which derives a `webkit2gtk-4.0.pc` from the installed 4.1 one so
+  that `webview_go`'s hardcoded `#cgo pkg-config: webkit2gtk-4.0` resolves. Verified
+  by building both files: the binary links `libwebkit2gtk-4.1.so.0`, the container
+  serves `/`, `/api/health` and `/docs/`, and `--build-arg VERSION` reaches
+  `--version`.
+
+- **`mkdocs build` failed in both container files.** `mkdocs.yml` has declared the
+  `macros` plugin since the documentation rebuild, and neither Dockerfile installed
+  `mkdocs-macros-plugin`, so every image build died at
+  `Config value 'plugins': The "macros" plugin is not installed`. This was already
+  broken on `main`.
+
+  No workflow built either container file, which is how a Dockerfile that could not
+  succeed came to sit on `main` unnoticed. CI now has a `container-build` job that
+  builds `deployments/Dockerfile`, runs it, and checks that it reports the version it
+  was built with, links `libwebkit2gtk-4.1.so`, and serves `/`, `/api/health` and
+  `/docs/`. A one-second grep in front of it fails the job immediately if any
+  container file reintroduces WebKit 4.0.
+
 - **`SPECIFICATION.md` documented fixed vulnerabilities as present.** Its "known gaps"
   section still said the server binds all interfaces, that `POST /api/datapack/install`
   accepts an arbitrary filesystem path, that `POST /api/dialog/open-file` is registered

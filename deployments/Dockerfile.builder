@@ -25,7 +25,7 @@ RUN apt-get update \
         gnupg \
         jq \
         libgtk-3-dev \
-        libwebkit2gtk-4.0-dev \
+        libwebkit2gtk-4.1-dev \
         make \
         pkg-config \
         python3 \
@@ -43,6 +43,11 @@ RUN python3 -m venv /opt/mkdocs \
         pygments \
         pymdown-extensions
 ENV PATH="/opt/mkdocs/bin:${PATH}"
+
+# No webkit compatibility shim is set up here, unlike deployments/Dockerfile and
+# Dockerfile.cross. This image only supplies the toolchain: the builds it runs
+# go through `make`, which calls scripts/build-app.sh, and that script creates
+# the webkit2gtk-4.0 shim from the installed 4.1 itself.
 
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
