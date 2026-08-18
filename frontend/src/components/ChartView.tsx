@@ -147,6 +147,31 @@ function resolveVariableTypeForColumn(column: string, variableTypes: Record<stri
   return '';
 }
 
+// Separates a "Grouping variable" value from an optional axis-label suffix in an
+// encoded chartAxisLabelFilter value (see encodeGroupingOption in ControlPanel.tsx).
+// Must stay in sync with the identical delimiter/encoder there.
+const GROUP_UNIT_DELIM = '\u0001';
+
+function decodeGroupingFilter(value: string | null | undefined): { group: string; axisLabel: string | null } {
+  if (!value) return { group: '', axisLabel: null };
+  const idx = value.indexOf(GROUP_UNIT_DELIM);
+  if (idx === -1) return { group: value, axisLabel: null };
+  return { group: value.slice(0, idx), axisLabel: value.slice(idx + 1) };
+}
+
+function columnMatchesGroupingFilter(
+  column: string,
+  filterValue: string | null | undefined,
+  groupingVariables: Record<string, string>,
+  axisLabels: Record<string, string>,
+): boolean {
+  if (!filterValue) return true;
+  const { group, axisLabel } = decodeGroupingFilter(filterValue);
+  if (resolveGroupingVariableForColumn(column, groupingVariables) !== group) return false;
+  if (axisLabel !== null && (resolveAxisLabelForColumn(column, axisLabels) ?? '') !== axisLabel) return false;
+  return true;
+}
+
 function normalizeColumnKey(value: string): string {
   const normalized = value
     .trim()
@@ -336,17 +361,19 @@ function ChartView({
 
     return candidates.filter((col) => {
       if (chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
-      if (chartAxisLabelFilter && resolveGroupingVariableForColumn(col, groupingVariables) !== chartAxisLabelFilter) return false;
+      if (!columnMatchesGroupingFilter(col, chartAxisLabelFilter, groupingVariables, axisLabels)) return false;
       return true;
     });
-  }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables]);
+  }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables, axisLabels]);
 
   const groupedDisplayColumns = useMemo(() => {
     if (filteredChartColumns.length === 0) return filteredChartColumns;
 
+    const filterGroup = decodeGroupingFilter(chartAxisLabelFilter).group;
+
     // Herbivores/Diet includes multiple metric families sharing the same x-axis labels
     // (kgkm2, counts, dmi, ch4). Mixing them corrupts grouped line/boxplot rendering.
-    if (chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Diet') {
+    if (chartGroup === 'Herbivores' && filterGroup === 'Diet') {
       const familyByColumn = new Map<string, string>();
       const familyOrder: string[] = [];
 
@@ -808,7 +835,7 @@ function ChartView({
       p.curLower = p.curLowerCount > 0 && p.curLower !== null ? p.curLower / p.curLowerCount : null;
     }
 
-    const hideNoRefOrCur = chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Species';
+    const hideNoRefOrCur = chartGroup === 'Herbivores' && decodeGroupingFilter(chartAxisLabelFilter).group === 'Species';
     const valid = points.filter((p) => {
       if (hideNoRefOrCur) {
         const refVal = p.ref ?? 0;
