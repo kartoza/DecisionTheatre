@@ -79,7 +79,7 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
         status: 'success',
         duration: 3000,
       });
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: 'Failed to delete site',
         status: 'error',

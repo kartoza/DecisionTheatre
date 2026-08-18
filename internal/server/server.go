@@ -21,9 +21,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/api"
 	"github.com/kartoza/decision-theatre/internal/config"
-	"github.com/kartoza/decision-theatre/internal/geodata"
-	"github.com/kartoza/decision-theatre/internal/sites"
-	"github.com/kartoza/decision-theatre/internal/tiles"
 )
 
 //go:embed all:static
@@ -45,14 +42,17 @@ var glyphHTTPClient = &http.Client{Timeout: 5 * time.Second}
 type Server struct {
 	cfg        config.Config
 	httpServer *http.Server
-	router     *mux.Router
-	tileStore  *tiles.MBTilesStore
-	gpkgStore  *geodata.GpkgStore
-	siteStore  *sites.Store
 
-	// Cached style JSON bytes (rewritten to use local URLs). Protected by styleOnce.
-	styleOnce  sync.Once
-	styleBytes []byte
+	// stores and routes are swapped, never mutated in place: a datapack install
+	// replaces both from a background goroutine while requests are being served.
+	// See state.go for why this is a pointer swap rather than a set of fields.
+	stores atomic.Pointer[dataStores]
+	routes atomic.Pointer[mux.Router]
+
+	// Cached style JSON, rewritten to use local URLs. A mutex and an explicit
+	// valid flag, because the sync.Once this replaces was being reassigned to
+	// invalidate it — while other goroutines could be inside Do.
+	style styleCache
 
 	// In-process glyph cache: key = "fontstack/range", value = []byte.
 	// Glyphs fetched from the external CDN on first use are served locally
@@ -78,108 +78,97 @@ type Server struct {
 
 // New creates a new Server with all components initialized
 func New(cfg config.Config) (*Server, error) {
-	s := &Server{
-		cfg:    cfg,
-		router: mux.NewRouter(),
-	}
+	s := &Server{cfg: cfg}
 
-	// Initialize MBTiles store (scan data dir and data/mbtiles)
-	dataMBTilesDir := filepath.Join(cfg.DataDir, "mbtiles")
-	tileStore, err := tiles.NewMBTilesStore(cfg.DataDir, dataMBTilesDir)
-	if err != nil {
-		log.Printf("Warning: MBTiles store not available: %v", err)
-	} else {
-		s.tileStore = tileStore
-	}
+	// Publish the stores before anything can serve a request. openDataStores logs
+	// and leaves a store nil when it cannot be opened, which is the ordinary state
+	// on a machine with no datapack yet — the setup guide is what runs then.
+	s.stores.Store(openDataStores(cfg.DataDir, cfg.ResourcesDir))
 
-	// Initialize GeoPackage store for scenario data and choropleth queries
-	gpkgStore, err := geodata.NewGpkgStore(cfg.DataDir)
-	if err != nil {
-		log.Printf("Warning: GeoPackage store not available: %v", err)
-	} else {
-		s.gpkgStore = gpkgStore
-	}
-
-	// Initialize sites store
-	siteStore, err := sites.NewStore(cfg.DataDir)
-	if err != nil {
-		log.Printf("Warning: Sites store not available: %v", err)
-	} else {
-		s.siteStore = siteStore
-	}
-
-	// Set up routes
-	s.setupRoutes()
+	s.setRouter(s.buildRouter())
 
 	// Pre-warm the tile cache in the background so that low-zoom tiles are
 	// already in RAM when the first map renders. The webview takes a second or
 	// two to start, giving the goroutine a head-start on loading Africa z0-5.
-	if s.tileStore != nil {
-		go s.tileStore.WarmCache("africa",
+	if tileStore := s.data().tiles; tileStore != nil {
+		go tileStore.WarmCache("africa",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 	}
 
 	return s, nil
 }
 
-// setupRoutes configures all HTTP routes
-func (s *Server) setupRoutes() {
+// buildRouter constructs a complete router.
+//
+// It returns a new router rather than mutating a field, so that a rebuild after a
+// datapack install can be published with one atomic store instead of being
+// assembled in place while requests are being routed through it.
+func (s *Server) buildRouter() *mux.Router {
+	router := mux.NewRouter()
 	// API routes
-	apiRouter := s.router.PathPrefix("/api").Subrouter()
-	apiHandler := api.NewHandler(s.tileStore, s.gpkgStore, s.siteStore, s.cfg)
+	apiRouter := router.PathPrefix("/api").Subrouter()
+	// One snapshot for the whole router: the api handler holds the stores it was
+	// built with, which is why a rebuild is what publishes new ones.
+	current := s.data()
+	cfg := s.cfg
+	cfg.DataDir = current.dataDir
+	cfg.ResourcesDir = current.resourcesDir
+	apiHandler := api.NewHandler(current.tiles, current.gpkg, current.sites, cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
 	// Data pack management routes. Serving the pack and the installers is the
 	// hosted deployment's job, so those stay public.
-	s.router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
-	s.router.HandleFunc("/api/datapack/download-info", s.handleDatapackDownloadInfo).Methods("GET")
-	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
-	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
-	s.router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
+	router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
+	router.HandleFunc("/api/datapack/download-info", s.handleDatapackDownloadInfo).Methods("GET")
+	router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
+	router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
+	router.HandleFunc("/api/executables/download/{platform}", s.handleExecutableDownload).Methods("GET")
 
 	// Desktop-only. In server mode these paths are simply absent, so they 404
 	// through the SPA fallback rather than existing and refusing — there is
 	// nothing for a remote caller to probe. See config.Config.DesktopMode.
 	if s.cfg.DesktopMode {
-		s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+		router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
 
 		// Install takes a path on this machine's filesystem and replaces the
 		// contents of the data directory with whatever it finds there. The path
 		// can only come from the file dialog above, which is itself desktop-only,
 		// so on a hosted deployment there was no way to use this route
 		// legitimately and no authentication stopping anyone using it otherwise.
-		s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
+		router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
 	}
 
-	// Tile routes - served directly for performance
-	if s.tileStore != nil {
-		s.router.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
+	// Tile routes - served directly for performance. Registered whenever a tile
+	// store exists now; the handler re-reads the current store per request, so an
+	// install swapping it out cannot leave this route pointing at a closed one.
+	if current.tiles != nil {
+		router.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
 			s.handleTileRequest).Methods("GET")
 	}
 
 	// Style and TileJSON endpoints
-	s.router.HandleFunc("/data/style.json", s.handleStyleJSON).Methods("GET")
-	s.router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
+	router.HandleFunc("/data/style.json", s.handleStyleJSON).Methods("GET")
+	router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
 
 	// Glyph proxy: serves MapLibre font glyphs locally after fetching from CDN once.
 	// Eliminates repeated external HTTPS requests from each map instance in grid view.
-	s.router.HandleFunc("/fonts/{fontstack}/{range}.pbf", s.handleGlyphProxy).Methods("GET")
+	router.HandleFunc("/fonts/{fontstack}/{range}.pbf", s.handleGlyphProxy).Methods("GET")
 
 	// Serve site images from data/images directory
-	imagesDir := filepath.Join(s.cfg.DataDir, "images")
-	s.router.PathPrefix("/data/images/").Handler(
-		http.StripPrefix("/data/images/", http.FileServer(http.Dir(imagesDir))))
+	// dataDirFS rather than http.Dir: these were rooted at the data directory as
+	// it stood at startup, so after an install they served the replaced datapack's
+	// files — or nothing, if that directory had been removed. See state.go.
+	router.PathPrefix("/data/images/").Handler(
+		http.StripPrefix("/data/images/", http.FileServer(dataDirFS{srv: s, sub: "images"})))
 
 	// Serve walkthrough demo site JSON files from data/walkthroughs directory
-	walkthroughsDir := filepath.Join(s.cfg.DataDir, "walkthroughs")
-	s.router.PathPrefix("/data/walkthroughs/").Handler(
-		http.StripPrefix("/data/walkthroughs/", http.FileServer(http.Dir(walkthroughsDir))))
+	router.PathPrefix("/data/walkthroughs/").Handler(
+		http.StripPrefix("/data/walkthroughs/", http.FileServer(dataDirFS{srv: s, sub: "walkthroughs"})))
 
 	// Serve demo assets (e.g. the Munywana boundary shapefile used by the
 	// guided tour) from the data/demo directory.
-	demoDir := filepath.Join(s.cfg.DataDir, "demo")
-	s.router.PathPrefix("/data/demo/").Handler(
-		http.StripPrefix("/data/demo/", http.FileServer(http.Dir(demoDir))))
+	router.PathPrefix("/data/demo/").Handler(
+		http.StripPrefix("/data/demo/", http.FileServer(dataDirFS{srv: s, sub: "demo"})))
 
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
@@ -187,19 +176,21 @@ func (s *Server) setupRoutes() {
 		log.Printf("Warning: Could not load embedded docs: %v", err)
 	} else {
 		docsFileServer := http.StripPrefix("/docs/", http.FileServer(http.FS(docsContent)))
-		s.router.PathPrefix("/docs/").Handler(docsFileServer)
+		router.PathPrefix("/docs/").Handler(docsFileServer)
 	}
 
 	// Static frontend files (embedded)
 	staticContent, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		log.Printf("Warning: Could not load embedded static files: %v", err)
-		return
+		return router
 	}
 
 	// SPA fallback: serve index.html for any non-API, non-tile route
 	fileServer := http.FileServer(http.FS(staticContent))
-	s.router.PathPrefix("/").Handler(spaHandler{staticContent: staticContent, fileServer: fileServer})
+	router.PathPrefix("/").Handler(spaHandler{staticContent: staticContent, fileServer: fileServer})
+
+	return router
 }
 
 // handleTileRequest serves vector tiles from MBTiles
@@ -226,7 +217,21 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tileData, err := s.tileStore.GetTile(name, z, x, y)
+	// One snapshot, nil-checked. This called GetTile on whatever it found, and the
+	// install path set the store to nil before deleting its files — so a tile
+	// request arriving during an install dereferenced nil and took the process
+	// down with it.
+	tileStore := s.data().tiles
+	if tileStore == nil {
+		// Distinguishable from "no such tile": the data is being replaced, and the
+		// same request will work shortly.
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "Tile store is unavailable while data is being installed",
+			http.StatusServiceUnavailable)
+		return
+	}
+
+	tileData, err := tileStore.GetTile(name, z, x, y)
 	if err != nil {
 		http.Error(w, "Tile not found", http.StatusNotFound)
 		return
@@ -261,11 +266,15 @@ func newAuxTileServer(handler http.Handler) *http.Server {
 func (s *Server) startAuxTileServers(mainPort int) {
 	for i := 1; i <= 3; i++ {
 		port := mainPort + i
+		// Registered unconditionally. These listeners are started once at boot and
+		// were never revisited when a datapack install rebuilt the main router, so
+		// they kept serving against whatever store existed at startup — the route
+		// was missing entirely if none did, and stale afterwards if one appeared.
+		// handleTileRequest now resolves the current store per request, so there is
+		// nothing left for a rebuild to fix.
 		r := mux.NewRouter()
-		if s.tileStore != nil {
-			r.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
-				s.handleTileRequest).Methods("GET")
-		}
+		r.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
+			s.handleTileRequest).Methods("GET")
 		srv := newAuxTileServer(r)
 		ln, err := net.Listen("tcp", s.cfg.ListenAddressForPort(port))
 		if err != nil {
@@ -301,7 +310,12 @@ func (s *Server) Start() error {
 // already takes milliseconds. Server mode is the one whose clients may be a
 // network away, and the one nginx sits in front of.
 func (s *Server) rootHandler() http.Handler {
-	var handler http.Handler = s.router
+	// The live router is read per request rather than captured: a datapack install
+	// publishes a new one, and reassigning http.Server.Handler to do that was a
+	// race, since net/http reads Handler for every connection it accepts.
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.currentRouter().ServeHTTP(w, r)
+	})
 	if !s.cfg.DesktopMode {
 		handler = compressResponses(handler)
 	}
@@ -340,12 +354,7 @@ func (s *Server) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if s.tileStore != nil {
-		s.tileStore.Close()
-	}
-	if s.gpkgStore != nil {
-		s.gpkgStore.Close()
-	}
+	s.data().close()
 
 	for _, aux := range s.auxServers {
 		aux.Shutdown(ctx) //nolint:errcheck
@@ -371,25 +380,23 @@ func baseURL(r *http.Request) string {
 // subsequent requests (e.g. the 4 panes in grid view) are served from memory.
 func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	base := baseURL(r)
+	current := s.data()
 
-	var buildErr error
-	s.styleOnce.Do(func() {
-		stylePath := filepath.Join(s.cfg.DataDir, "mbtiles", "style.json")
+	styleBytes, err := s.style.get(func() ([]byte, error) {
+		stylePath := filepath.Join(current.dataDir, "mbtiles", "style.json")
 		data, err := os.ReadFile(stylePath)
-		if err != nil && s.cfg.ResourcesDir != "" {
+		if err != nil && current.resourcesDir != "" {
 			// Fall back to the bundled style in the resources directory.
-			stylePath = filepath.Join(s.cfg.ResourcesDir, "mbtiles", "style.json")
+			stylePath = filepath.Join(current.resourcesDir, "mbtiles", "style.json")
 			data, err = os.ReadFile(stylePath)
 		}
 		if err != nil {
-			buildErr = err
-			return
+			return nil, err
 		}
 
 		var style map[string]interface{}
 		if err := json.Unmarshal(data, &style); err != nil {
-			buildErr = err
-			return
+			return nil, err
 		}
 
 		// Rewrite tile sources to point to our local TileJSON endpoint.
@@ -407,25 +414,22 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 		// (only the first request per glyph range ever leaves the machine).
 		style["glyphs"] = base + "/fonts/{fontstack}/{range}.pbf"
 
-		out, err := json.Marshal(style)
-		if err != nil {
-			buildErr = err
-			return
-		}
-		s.styleBytes = out
+		return json.Marshal(style)
 	})
 
-	if buildErr != nil || s.styleBytes == nil {
-		// styleOnce already ran and failed, or file not found — reset so a
-		// retry is possible after a datapack install.
-		s.styleOnce = sync.Once{}
+	// A failed build is not cached, so no invalidation is needed here to make a
+	// retry possible after an install. That is what the old code was doing by
+	// assigning a fresh sync.Once over the existing one — from this request
+	// goroutine, while other goroutines could be inside Do, which is exactly what
+	// a sync.Once must never have done to it.
+	if err != nil || styleBytes == nil {
 		http.Error(w, "Style not found", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write(s.styleBytes)
+	w.Write(styleBytes)
 }
 
 // handleTileJSON serves TileJSON metadata. It returns multiple tile URL variants
@@ -465,8 +469,8 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add vector_layers from mbtiles metadata if available
-	if s.tileStore != nil {
-		meta, err := s.tileStore.GetMetadata("africa")
+	if tileStore := s.data().tiles; tileStore != nil {
+		meta, err := tileStore.GetMetadata("africa")
 		if err == nil && meta.JSON != "" {
 			var metaJSON map[string]interface{}
 			if json.Unmarshal([]byte(meta.JSON), &metaJSON) == nil {
@@ -542,17 +546,13 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 // rebuildRoutes creates a new router and re-registers all routes with the current store references.
 // This is needed after a datapack install, since the old apiHandler holds stale nil store pointers.
 func (s *Server) rebuildRoutes() {
-	// A new datapack may have a different style.json — reset the cached bytes.
-	s.styleOnce = sync.Once{}
-	s.styleBytes = nil
-	s.router = mux.NewRouter()
-	s.setupRoutes()
-	if s.httpServer != nil {
-		// rootHandler, not limitRequestBody alone: this is the second place the
-		// handler chain is assembled, and rebuilding it by hand here silently drops
-		// whatever middleware the first place added.
-		s.httpServer.Handler = s.rootHandler()
-	}
+	// A new datapack may have a different style.json.
+	s.style.invalidate()
+
+	// Publish, do not mutate. The router used to be replaced field-by-field while
+	// requests were being routed through it, and the running server's Handler was
+	// reassigned underneath net/http.
+	s.setRouter(s.buildRouter())
 }
 
 // spaHandler serves the SPA, falling back to index.html for client-side routing
