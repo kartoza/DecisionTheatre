@@ -689,7 +689,7 @@ export async function createSite(
     // views can render immediately from localStorage.
     if (Array.isArray(site.catchmentIds) && site.catchmentIds.length > 0) {
       try {
-        const { thumbnail, ...siteWithoutThumbnail } = site;
+        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
         const response = await fetch(`${API_BASE}/sites/${site.id}/catchments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -795,7 +795,7 @@ export async function patchSiteIndicators(
   // cascades from the site payload in the request body instead of loading
   // it from data/sites/, and the result is never persisted to disk.
   if (site?.source === 'walkthrough') {
-    const { thumbnail, ...siteWithoutThumbnail } = site;
+    const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
     const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -824,7 +824,7 @@ export async function patchSiteIndicators(
     const localSite = loadLocalSite(id);
     if (localSite) {
       try {
-        const { thumbnail, ...siteWithoutThumbnail } = localSite;
+        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
         const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -911,7 +911,7 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
       try {
         const localSite = loadLocalSite(siteId);
         if (localSite) {
-          const { thumbnail, ...siteWithoutThumbnail } = localSite;
+          const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
           const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1203,8 +1203,7 @@ async function fetchSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResp
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(siteId);
     if (localSite) {
-      const { thumbnail, ...siteWithoutThumbnail } = localSite;
-      void thumbnail;
+      const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
       try {
         const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`, {
           method: 'POST',

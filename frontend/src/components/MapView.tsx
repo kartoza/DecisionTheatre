@@ -1300,6 +1300,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Failed to apply choropleth:', err);
     }
+  // useCallback has missing dependencies: 'applyChoroplethLayer' and 'siteId'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [colorScaleMode, colorScaleType]);
 
   const applyColorsRef = useRef(applyColors);
@@ -1502,6 +1504,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     applyToMap(leftMap);
     applyToMap(rightMap);
+  // useCallback has a missing dependency: 'addBoundaryLayersIfMissing'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, []);
 
   // Compute a site-scoped domain range (min/max) so color scale is based on the site,
@@ -3072,6 +3076,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightClipContainer.remove();
       leftClipContainer.remove();
     };
+  // useEffect has missing dependencies: 'onSwiperPositionChange' and 'reapplyBoundaryLayers'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
   // Resize maps when layout changes or container size updates
@@ -3887,6 +3893,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error adding catchment:', err);
     }
+  // useCallback has a missing dependency: 'updateBoundarySource'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle removing a catchment from the site boundary
@@ -3918,6 +3926,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error removing catchment:', err);
     }
+  // useCallback has a missing dependency: 'updateBoundarySource'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle catchment click in add/remove mode
@@ -4382,6 +4392,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         rightMap.getCanvas().style.cursor = 'grab';
       }
     };
+  // useEffect has missing dependencies: 'ADD_VERTEX_CURSOR', 'DELETE_VERTEX_CURSOR', and 'notifyBoundaryUpdate'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [isBoundaryEditMode, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
 
   // Reset catchment edit mode when boundary edit mode is disabled

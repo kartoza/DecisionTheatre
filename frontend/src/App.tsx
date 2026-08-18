@@ -284,6 +284,8 @@ function App() {
   // Auto-extract indicators when a site is opened that has catchments but no indicators yet
   useEffect(() => {
     startBackgroundIndicatorExtraction(currentSite);
+  // useEffect has a missing dependency: 'currentSite'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [currentSite?.id, currentSite?.catchmentIds, currentSite?.indicators, startBackgroundIndicatorExtraction]);
 
   // Auto-save site state when user interacts with the map (debounced)

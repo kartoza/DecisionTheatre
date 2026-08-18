@@ -375,7 +375,11 @@ function ChartView({
     reference: Record<string, number>;
     current: Record<string, number>;
   } | null>(null);
-  const [siteCatchments, setSiteCatchments] = useState<CatchmentIndicators[] | null>(null);
+  // Write-only state: setSiteCatchments is called in three places and the value is
+  // never read. The binding is elided rather than removed, because setting state
+  // still triggers a re-render — deleting the writes would change when this
+  // component re-renders, which is a different change from enabling the linter.
+  const [, setSiteCatchments] = useState<CatchmentIndicators[] | null>(null);
   const [groupedRangeData, setGroupedRangeData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
@@ -827,7 +831,7 @@ function ChartView({
       curLower: p.curLower,
     }));
     return valid.length > 0 ? valid : null;
-  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, siteCatchments, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds, targetHasBeenUpdated]);
+  }, [chartGroup, chartAxisLabelFilter, groupedDisplayColumns, siteIndicators, catchmentData, groupedRangeData, rangeMode, xAxisLabels, whiskerBounds, targetHasBeenUpdated]);
 
   const groupedYAxisLabel = useMemo(() => {
     if (!chartGroup || !chartAxisLabelFilter) return '';
@@ -855,7 +859,7 @@ function ChartView({
     if (chartGraphMode === 'boxplot') return canRenderBoxplot ? 'boxplot' : 'line';
     if (chartGraphMode === 'line') return 'line';
     return canRenderBoxplot ? 'boxplot' : 'line';
-  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, rangeMode, chartGraphMode]);
+  }, [groupedChartData, chartGroup, groupedDisplayColumns, chartTypes, chartGraphMode]);
 
   const canSummaryBoxplot = useMemo(() => {
     if (!attribute) return false;
