@@ -51,6 +51,15 @@ dist/
 docs/CatchmentCalculations.xlsx
 git.sh
 claude.sh
+
+# Machine-local Claude Code permissions. Personal to whoever is running it, and
+# the tracked copy carried absolute paths under one developer's home directory
+# plus references to internal/llm and internal/nn, removed long ago.
+.claude/settings.local.json
+
+# One-off browser scripts written against a particular machine's scratch
+# directory. Useful while debugging, meaningless to anyone else.
+frontend/scratch_test_*.mjs
 issue-metadata-mismatch.md
 node_modules
 docs/assets/diagrams/generated/
