@@ -5,7 +5,7 @@ import {
   Spinner, Table, Tbody, Td, Text, Th, Thead, Tooltip, Tr, VStack,
   useColorModeValue,
 } from '@chakra-ui/react';
-import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2 } from 'react-icons/fi';
+import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
 import { BsGrid3X3, BsGrid } from 'react-icons/bs';
 import MapView from './MapView';
 import ChartView from './ChartView';
@@ -28,6 +28,7 @@ interface ViewPaneProps {
   onViewModeChange: (paneIndex: number, mode: ViewMode) => void;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
+  onOpenControlPanel?: (paneIndex: number) => void;
   canRemove?: boolean;
   onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
@@ -87,6 +88,7 @@ function ViewPane({
   onViewModeChange,
   onFocusPane,
   onGoQuad,
+  onOpenControlPanel,
   canRemove = false,
   onRemovePane,
   onIdentify,
@@ -439,6 +441,20 @@ function ViewPane({
       max = Math.max(max, ...displayedValues);
     }
 
+    // Keep the dial's scale in proportion to what it's actually displaying —
+    // a domain-wide max pulled from an outlier catchment (or a scenario with
+    // no curated metadata.csv max) shouldn't dwarf a reference/current/target
+    // that are an order of magnitude smaller, making the needle unreadable.
+    const DIAL_BALANCE_MULTIPLIER = 4;
+    if (displayedValues.length > 0) {
+      const maxDisplayedMagnitude = Math.max(...displayedValues.map((v) => Math.abs(v)));
+      if (maxDisplayedMagnitude > 0) {
+        const balanceCap = maxDisplayedMagnitude * DIAL_BALANCE_MULTIPLIER;
+        if (max > balanceCap) max = balanceCap;
+        if (min < -balanceCap) min = -balanceCap;
+      }
+    }
+
     // Ensure min < max
     if (min >= max) {
       const mid = (min + max) / 2 || 50;
@@ -733,6 +749,20 @@ function ViewPane({
                 borderRadius="md"
               />
             </Tooltip>
+            {onOpenControlPanel && (
+              <Tooltip label="Configure factor" placement="top">
+                <IconButton
+                  aria-label="Configure factor"
+                  icon={<FiSliders />}
+                  onClick={() => onOpenControlPanel(paneIndex)}
+                  variant="ghost"
+                  color="white"
+                  _hover={{ bg: 'whiteAlpha.300' }}
+                  size={btnSize}
+                  borderRadius="md"
+                />
+              </Tooltip>
+            )}
             {paneIndex === 0 && onQuadColumnsChange && (
               <Tooltip label={quadColumns === 2 ? '3 across' : '2 across'} placement="top">
                 <IconButton
