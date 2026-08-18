@@ -274,6 +274,9 @@ Each pane supports three visualization modes, cycled via toolbar button:
   `canmap`, `cangraph`, `axislabels`, `xaxislabels`, `units`, `charttypes`,
   `groupingvariables`, `groupingvalues`, `dial0middle`
 - `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
+- `GET /api/catchment-values` - catchment ids and values for a viewport, no geometry; the
+  join payload for the vector-tile choropleth, which sources geometry from
+  `catchments_lev12` in the tile pipeline and applies values as MapLibre feature state
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent

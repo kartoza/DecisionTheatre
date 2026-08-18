@@ -485,6 +485,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance opens there rather than at the default world view, so a release and
   recreate does not move the map under the user.
 
+- **The choropleth is served as vector tiles instead of a GeoJSON source.** The tile
+  pipeline already carried the catchment polygons — `gpkg_to_mbtiles.sh` tiles
+  `catchments_lev12` alongside the basemap layers — but the layer users actually look
+  at was not using them. It refetched the same geometry as GeoJSON on every viewport
+  change and handed it to `setData`, so every pan paid for a fresh parse, tessellation
+  and GPU upload, once per map instance, twelve instances live in grid view.
+
+  From the tiled zoom range up, geometry now comes from the tiles: MapLibre fetches and
+  tessellates each tile once and reuses it for every later pan, zoom and indicator
+  change. The values are fetched separately from the new geometry-free
+  `GET /api/catchment-values` and joined onto the tiles as feature state, which is why
+  switching indicator no longer moves geometry at all.
+
+  | one viewport's payload, 5,000 catchments, modelled at the ~1.5 KB/catchment the server records | raw | gzip (level 5) | main-thread `JSON.parse` |
+  |---|---:|---:|---:|
+  | `/api/choropleth` GeoJSON | 7,810,860 B | 2,448,201 B | 79.2 ms |
+  | `/api/catchment-values` | 146,017 B | 55,494 B | 0.53 ms |
+
+  Colouring is unchanged: the same data-driven `fill-color` expression, evaluated on the
+  GPU, with no per-feature JavaScript. Only where the expression reads a catchment's
+  value from differs — feature properties on the GeoJSON path, feature state on the tile
+  path — and the two are asserted to be identical expressions bar that accessor.
+
+  Below the tiled zoom range nothing changes: the server returns grid-aggregated cells
+  there, which have no tiled equivalent, and the GeoJSON path still serves them. The
+  choice is made from the served TileJSON, so a datapack whose tiles predate catchment
+  tiling stays on the GeoJSON path at every zoom rather than rendering nothing.
+
 - **The browser stored three to eight times more than it needed to, and rewrote all
   of it on every save.** A user's sites live in their browser — that is the design
   brief — so this is the system of record, not a cache. Three things made it

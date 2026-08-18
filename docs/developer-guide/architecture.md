@@ -106,20 +106,27 @@ diagnosing context loss.
 
 - **Base layers** (MapLibre GL JS) — ecoregions, countries, rivers, lakes, catchment
   outlines, populated places, served from MBTiles via `/tiles/`.
-- **Choropleth layer** (MapLibre GL JS GeoJSON source) — catchment polygons fetched from
-  `/api/choropleth` for the current viewport and coloured by a data-driven
-  `fill-color` expression built in `buildFillColorExpression`. Colouring happens GPU-side;
-  there is no per-feature JavaScript.
+- **Choropleth layer** — catchment polygons coloured by a data-driven `fill-color`
+  expression built in `buildFillColorExpression` (`frontend/src/lib/choroplethPaint.ts`).
+  Colouring happens GPU-side; there is no per-feature JavaScript. The polygons reach
+  the map by one of two transports, chosen by zoom:
+
+    - **Vector tiles**, from the tiled zoom range up (`catchments_lev12` in
+      `africa.mbtiles`, zoom 8-15 as generated). MapLibre fetches and tessellates each
+      tile once and reuses it for every later pan, zoom and attribute change. The
+      attribute values are fetched separately from `/api/catchment-values` — geometry-free
+      — and joined onto the tiles as **feature state**, so switching indicator moves
+      values only and never geometry.
+    - **GeoJSON**, below the tiled zoom range, from `/api/choropleth`. There the server
+      returns grid-aggregated cells rather than catchments (see
+      `queryCatchmentsGridAggregated`), which have no tiled equivalent.
+
+    The choice is made from the served TileJSON: if the tileset does not declare a
+    `catchments_lev12` layer *with* its zoom range, the GeoJSON path is used at every
+    zoom, exactly as before. A datapack built before catchments were tiled keeps working.
+
 - **3D extrusion** (optional) — catchments extruded by indicator value.
 - **Site boundary and edit handles** — small GeoJSON sources holding the user's own polygon.
-
-!!! warning "Expected to change"
-    The choropleth is currently a GeoJSON source, parsed on the main thread and uploaded
-    per map instance. It is expected to move into the vector tile pipeline. The
-    data-driven `fill-color` expression is correct and will be preserved.
-
-    Tickets: *Serve the choropleth as vector tiles rather than a GeoJSON source*,
-    *Clamp devicePixelRatio on low-end devices*.
 
 ## Auxiliary Tile Servers
 

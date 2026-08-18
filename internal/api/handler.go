@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -123,6 +124,11 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 
 	// Choropleth endpoint - returns GeoJSON filtered by bbox
 	r.HandleFunc("/choropleth", h.handleChoropleth).Methods("GET")
+
+	// Values-only companion to /choropleth, for the vector-tile render path:
+	// geometry comes from the tile pipeline, so only the attribute values for
+	// the viewport need fetching. See handleCatchmentValues.
+	r.HandleFunc("/catchment-values", h.handleCatchmentValues).Methods("GET")
 
 	// Site management is desktop-only; see registerDesktopSiteRoutes.
 	h.registerDesktopSiteRoutes(r)
@@ -662,26 +668,12 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse bbox parameters
-	minx, err := strconv.ParseFloat(q.Get("minx"), 64)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid minx parameter")
+	bbox, badParam := parseBBoxParams(q)
+	if badParam != "" {
+		respondError(w, http.StatusBadRequest, "invalid "+badParam+" parameter")
 		return
 	}
-	miny, err := strconv.ParseFloat(q.Get("miny"), 64)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid miny parameter")
-		return
-	}
-	maxx, err := strconv.ParseFloat(q.Get("maxx"), 64)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid maxx parameter")
-		return
-	}
-	maxy, err := strconv.ParseFloat(q.Get("maxy"), 64)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid maxy parameter")
-		return
-	}
+	minx, miny, maxx, maxy := bbox[0], bbox[1], bbox[2], bbox[3]
 
 	// zoom is optional; callers that omit it (or send a non-numeric value)
 	// get full-detail geometry, matching the pre-existing behaviour.
@@ -692,25 +684,7 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 
 	// For the future/target scenario with a known site, build a lookup of
 	// per-catchment ideal values so the choropleth shows user-edited targets.
-	siteID := q.Get("siteId")
-	var idealOverrides map[int64]float64
-	if scenario == "future" && siteID != "" && h.siteStore != nil {
-		if site, siteErr := h.siteStore.Get(siteID); siteErr == nil {
-			idealOverrides = make(map[int64]float64, len(site.Catchments))
-			for _, c := range site.Catchments {
-				if c.Ideal == nil {
-					continue
-				}
-				val, ok := c.Ideal[attribute]
-				if !ok {
-					continue
-				}
-				if idF, parseErr := strconv.ParseFloat(c.ID, 64); parseErr == nil {
-					idealOverrides[int64(idF)] = val
-				}
-			}
-		}
-	}
+	idealOverrides := h.siteIdealOverrides(scenario, q.Get("siteId"), attribute)
 
 	// Use reference geometry when overlaying ideal values; future without a
 	// site falls back to reference as before.
@@ -753,21 +727,86 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain range for consistent color scaling across scenarios
-	domainStart := time.Now()
-	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
-	log.Printf("[perf] handleChoropleth step=getDomainRange attribute=%s duration_ms=%d", attribute, time.Since(domainStart).Milliseconds())
+	domainMin, domainMax := h.domainRangeFor(scenario, attribute)
+
+	// Build response with domain range
+	response := ChoroplethResponse{
+		Type:      "FeatureCollection",
+		Features:  fc.Features,
+		DomainMin: domainMin,
+		DomainMax: domainMax,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+// parseBBoxParams reads the minx/miny/maxx/maxy query parameters shared by every
+// viewport-scoped endpoint. It returns the name of the first parameter that
+// failed to parse, or "" when all four are valid, so the caller can report which
+// one was wrong rather than a generic "bad bbox".
+func parseBBoxParams(q url.Values) (bbox [4]float64, badParam string) {
+	for i, name := range [4]string{"minx", "miny", "maxx", "maxy"} {
+		v, err := strconv.ParseFloat(q.Get(name), 64)
+		if err != nil {
+			return bbox, name
+		}
+		bbox[i] = v
+	}
+	return bbox, ""
+}
+
+// siteIdealOverrides builds the per-catchment target values a site's editor has
+// saved, keyed by HYBAS_ID. Only the "future" scenario has them: it is the
+// reference geometry recoloured by the user's edits, so everything else returns
+// nil and the callers skip the overlay entirely.
+func (h *Handler) siteIdealOverrides(scenario, siteID, attribute string) map[int64]float64 {
+	if scenario != "future" || siteID == "" || h.siteStore == nil {
+		return nil
+	}
+	site, err := h.siteStore.Get(siteID)
 	if err != nil {
-		// If domain tables don't exist, fall back to no domain range
+		return nil
+	}
+
+	overrides := make(map[int64]float64, len(site.Catchments))
+	for _, c := range site.Catchments {
+		if c.Ideal == nil {
+			continue
+		}
+		val, ok := c.Ideal[attribute]
+		if !ok {
+			continue
+		}
+		if idF, parseErr := strconv.ParseFloat(c.ID, 64); parseErr == nil {
+			overrides[int64(idF)] = val
+		}
+	}
+	return overrides
+}
+
+// domainRangeFor resolves the colour-scale bounds for an attribute.
+//
+// The minimum comes from the datapack's scanned domain_minima table. The maximum
+// prefers metadata.csv's curated maxval_curr/maxval_ref, which are authoritative
+// per-scenario ceilings rather than a value derived from scanning every
+// catchment; "future" (target) values are edited starting from current, so they
+// share current's ceiling. Falls back to the scanned max when the metadata
+// column is missing or blank for this attribute.
+//
+// Both the GeoJSON and the vector-tile choropleth paths call this: the colours
+// must not shift depending on which transport delivered the geometry.
+func (h *Handler) domainRangeFor(scenario, attribute string) (min, max float64) {
+	start := time.Now()
+	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
+	log.Printf("[perf] domainRangeFor attribute=%s duration_ms=%d", attribute, time.Since(start).Milliseconds())
+	if err != nil {
+		// If domain tables don't exist, fall back to no domain range.
 		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
 		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
 	}
 
-	// Prefer metadata.csv's curated maxval_curr/maxval_ref over the scanned
-	// domain_maxima table for the max bound — these are authoritative
-	// per-scenario ceilings rather than a value derived from scanning every
-	// catchment. "future" (target) values are edited starting from current,
-	// so they share current's ceiling. Falls back to the scanned max when a
-	// column is missing/blank for this attribute.
 	maxvalByScenario := h.metaCache.MaxValReference
 	if scenario != "reference" {
 		maxvalByScenario = h.metaCache.MaxValCurrent
@@ -776,17 +815,98 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		domainRange.Max = metaMax
 	}
 
-	// Build response with domain range
-	response := ChoroplethResponse{
-		Type:      "FeatureCollection",
-		Features:  fc.Features,
-		DomainMin: domainRange.Min,
-		DomainMax: domainRange.Max,
+	return domainRange.Min, domainRange.Max
+}
+
+// CatchmentValuesResponse is the join payload for the vector-tile choropleth:
+// the attribute values for a viewport, with no geometry, plus the same domain
+// range /choropleth returns so the colour scale is identical on both paths.
+type CatchmentValuesResponse struct {
+	Scenario  string    `json:"scenario"`
+	Attribute string    `json:"attribute"`
+	IDs       []int64   `json:"ids"`
+	Values    []float64 `json:"values"`
+	DomainMin float64   `json:"domain_min"`
+	DomainMax float64   `json:"domain_max"`
+}
+
+// handleCatchmentValues returns catchment attribute values for a bbox with no
+// geometry at all.
+//
+// It is the other half of the vector-tile choropleth. Geometry arrives from the
+// tile pipeline, is tessellated once per map instance and then reused for every
+// subsequent viewport and every attribute; the values are what actually change,
+// and they are joined onto the tiles client-side by feature state. That is why
+// this endpoint exists rather than the client reusing /choropleth: sending
+// geometry again on an attribute switch is exactly the cost the tile path is
+// there to remove.
+//
+// Query params: scenario, attribute, minx, miny, maxx, maxy, siteId (optional).
+func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	q := r.URL.Query()
+	scenario := q.Get("scenario")
+	if scenario == "" {
+		scenario = "current"
+	}
+	attribute := q.Get("attribute")
+	count := 0
+	defer func() {
+		log.Printf("[perf] handleCatchmentValues scenario=%s attribute=%s values=%d duration_ms=%d", scenario, attribute, count, time.Since(start).Milliseconds())
+	}()
+
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+	if attribute == "" {
+		respondError(w, http.StatusBadRequest, "attribute parameter is required")
+		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	bbox, badParam := parseBBoxParams(q)
+	if badParam != "" {
+		respondError(w, http.StatusBadRequest, "invalid "+badParam+" parameter")
+		return
+	}
+
+	// "future" is the reference scenario recoloured by the site's saved target
+	// values, exactly as in handleChoropleth - the two must agree or the same
+	// viewport would be coloured differently depending on the render path.
+	queryScenario := scenario
+	if scenario == "future" {
+		queryScenario = "reference"
+	}
+
+	values, err := h.gpkgStore.QueryCatchmentValueArrays(queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if overrides := h.siteIdealOverrides(scenario, q.Get("siteId"), attribute); len(overrides) > 0 {
+		for i, id := range values.IDs {
+			if idealVal, ok := overrides[id]; ok {
+				values.Values[i] = idealVal
+			}
+		}
+	}
+	count = len(values.IDs)
+
+	domainMin, domainMax := h.domainRangeFor(scenario, attribute)
+
+	// Same cache policy as /choropleth: the values for a given
+	// scenario+attribute+bbox are static for the life of the datapack, and the
+	// grid view issues the identical request from every pane.
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_ = json.NewEncoder(w).Encode(response)
+	respondJSON(w, http.StatusOK, CatchmentValuesResponse{
+		Scenario:  scenario,
+		Attribute: attribute,
+		IDs:       values.IDs,
+		Values:    values.Values,
+		DomainMin: domainMin,
+		DomainMax: domainMax,
+	})
 }
 
 // ============================================================================

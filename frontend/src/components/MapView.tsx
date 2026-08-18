@@ -13,6 +13,24 @@ import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { evictExpired } from '../lib/ttlCache';
 import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
+import {
+  PRISM_STOPS,
+  attributeValueAccessor,
+  featureStateValueAccessor,
+  buildFillColorExpression,
+  buildOpacityColorExpression,
+  buildExtrusionExpression,
+  zoneStatsFromValues,
+  type ChoroplethValueAccessor,
+} from '../lib/choroplethPaint';
+import {
+  applyCatchmentValues,
+  CATCHMENT_TILE_SOURCE_LAYER,
+  catchmentTileSourceSpec,
+  fetchCatchmentTileset,
+  forgetCatchmentValues,
+  type CatchmentTileset,
+} from '../lib/choroplethTiles';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -115,27 +133,6 @@ const CHOROPLETH_3D_RIGHT = 'choropleth-right-3d';
 const IDENTIFY_HIGHLIGHT_GLOW = 'identify-highlight-glow';
 const IDENTIFY_HIGHLIGHT_LINE = 'identify-highlight-line';
 
-// Prism colour gradient for data visualization
-// Spectrum: violet -> indigo -> blue -> cyan -> green -> yellow -> orange -> red
-const PRISM_STOPS: [number, string][] = [
-  [0, '#6a0dad'],       // violet
-  [0.143, '#4b0082'],   // indigo
-  [0.286, '#0074d9'],   // blue
-  [0.429, '#00bcd4'],   // cyan
-  [0.571, '#2ecc40'],   // green
-  [0.714, '#ffdc00'],   // yellow
-  [0.857, '#ff851b'],   // orange
-  [1, '#e8003f'],       // red
-];
-
-// Steepness (k) of the logistic curve used by the 'logistic' color scale type.
-// Higher values sharpen the transition around the domain midpoint.
-const LOGISTIC_STEEPNESS = 10;
-
-// Strength (C) of the log1p curve used by the 'logarithmic' color scale type.
-// Higher values exaggerate contrast among low values at the expense of high ones.
-const LOGARITHMIC_STRENGTH = 9;
-
 // CSS gradient for legend
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
@@ -150,9 +147,6 @@ const CATCHMENT_ID_PROP = 'HYBAS_ID';
 // blowup - the actual zoom value is always forwarded, so the crossover is
 // controlled entirely on the backend.
 const MIN_CATCHMENT_ZOOM = 3;
-
-// Maximum extrusion height in metres for 3D mode
-const MAX_EXTRUSION_HEIGHT = 50000;
 
 // Choropleth fill-opacity depends on which basemap is showing beneath it:
 // the busier Google satellite imagery needs a touch of transparency to read
@@ -271,23 +265,6 @@ function padBoundsForFit(bounds: BoundingBox): [[number, number], [number, numbe
   ];
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const normalized = hex.trim().replace('#', '');
-  if (normalized.length === 3) {
-    const r = parseInt(normalized[0] + normalized[0], 16);
-    const g = parseInt(normalized[1] + normalized[1], 16);
-    const b = parseInt(normalized[2] + normalized[2], 16);
-    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
-  }
-  if (normalized.length === 6) {
-    const r = parseInt(normalized.slice(0, 2), 16);
-    const g = parseInt(normalized.slice(2, 4), 16);
-    const b = parseInt(normalized.slice(4, 6), 16);
-    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
-  }
-  return null;
-}
-
 // Debounce delay for fetching choropleth data on map move (ms)
 const FETCH_DEBOUNCE_MS = 300;
 
@@ -328,24 +305,10 @@ function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | 
     }
   }
 
-  if (values.length === 0) return null;
-
-  let min = Infinity;
-  let max = -Infinity;
-  let sum = 0;
-
-  for (const v of values) {
-    if (v < min) min = v;
-    if (v > max) max = v;
-    sum += v;
-  }
-
-  return {
-    min,
-    max,
-    mean: sum / values.length,
-    count: values.length,
-  };
+  // The arithmetic itself lives in the paint library so that the vector-tile
+  // path, which has the values as a plain array and never builds a feature per
+  // catchment, summarises them identically rather than in a parallel copy.
+  return zoneStatsFromValues(values);
 }
 
 function simplifyBoundaryForComputation(geometry: GeoJSON.Geometry): GeoJSON.Geometry {
@@ -644,6 +607,123 @@ function clearSiteComputationCaches(siteId: string): void {
 }
 
 /**
+ * The colour-scale domain both render paths share.
+ *
+ * Always the attribute's global domain across every catchment, independent of
+ * the selected zone range (Full/Extent/Site). The backend's max is
+ * scenario-specific (metadata.csv's curated maxval_curr/maxval_ref rather than a
+ * scan of every catchment), so the two sides can disagree when comparing
+ * reference against current — take the larger of the two so neither side's
+ * colors get clipped, and the result doesn't depend on which scenario happens to
+ * be on the left.
+ */
+function resolveDomainRange(
+  payloads: Array<{ domain_min?: number; domain_max?: number } | null>,
+): { min: number; max: number } {
+  const mins: number[] = [];
+  const maxes: number[] = [];
+  for (const payload of payloads) {
+    if (payload && payload.domain_min !== undefined && payload.domain_max !== undefined) {
+      mins.push(payload.domain_min);
+      maxes.push(payload.domain_max);
+    }
+  }
+  return {
+    min: mins.length > 0 ? Math.min(...mins) : 0,
+    max: maxes.length > 0 ? Math.max(...maxes) : 1,
+  };
+}
+
+/**
+ * The vector-tile path's payload: catchment ids and their values for the
+ * viewport, with no geometry. Mirrors CatchmentValuesResponse in
+ * internal/api/handler.go.
+ */
+interface ChoroplethValues {
+  scenario: string;
+  attribute: string;
+  ids: number[];
+  values: number[];
+  domain_min: number;
+  domain_max: number;
+}
+
+// Companion to _choroplethCache for the values endpoint. Six panes x two
+// scenarios ask for the same viewport at the same moment; one fetch serves all
+// of them.
+const _choroplethValuesCache = new Map<string, { promise: Promise<ChoroplethValues | null>; ts: number }>();
+
+/**
+ * Fetch the attribute values for the current viewport, for the vector-tile
+ * path. Geometry comes from the tiles, so this is the only thing a pan or an
+ * attribute change has to move over the wire.
+ *
+ * Site ideal overrides are applied here for the browser runtime exactly as
+ * fetchChoroplethData does for the GeoJSON path: the backend store is never
+ * updated in that runtime, so the edits live in browser storage.
+ */
+async function fetchChoroplethValues(
+  scenario: Scenario,
+  attribute: string,
+  bounds: maplibregl.LngLatBounds,
+  siteId?: string | null,
+  idealOverrides?: Map<number, number>,
+): Promise<ChoroplethValues | null> {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+
+  const params = new URLSearchParams({
+    scenario,
+    attribute,
+    minx: sw.lng.toString(),
+    miny: sw.lat.toString(),
+    maxx: ne.lng.toString(),
+    maxy: ne.lat.toString(),
+  });
+
+  const hasSiteOverride = siteId && scenario === 'future';
+  if (hasSiteOverride) {
+    params.set('siteId', siteId);
+  }
+
+  const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
+  const key = params.toString();
+  const now = Date.now();
+
+  if (canCache) {
+    const hit = _choroplethValuesCache.get(key);
+    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
+    evictExpired(_choroplethValuesCache, CHOROPLETH_CACHE_TTL_MS, now);
+  }
+
+  const promise = (async (): Promise<ChoroplethValues | null> => {
+    try {
+      const resp = await fetch(`/api/catchment-values?${params}`);
+      if (!resp.ok) return null;
+      const data = await resp.json() as ChoroplethValues;
+
+      if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
+        for (let i = 0; i < data.ids.length; i++) {
+          const override = idealOverrides.get(data.ids[i]);
+          if (override !== undefined) data.values[i] = override;
+        }
+      }
+
+      return data;
+    } catch (err) {
+      console.error('Failed to fetch catchment values:', err);
+      return null;
+    }
+  })();
+
+  if (canCache) {
+    promise.catch(() => _choroplethValuesCache.delete(key));
+    _choroplethValuesCache.set(key, { promise, ts: now });
+  }
+  return promise;
+}
+
+/**
  * Fetch choropleth GeoJSON data for the current viewport.
  */
 async function fetchChoroplethData(
@@ -731,161 +811,6 @@ async function fetchChoroplethData(
     console.error('Failed to fetch choropleth data:', err);
     return null;
   }
-}
-
-/**
- * Build a MapLibre expression producing the 0-1 normalized position of an
- * attribute's value within [min, max].
- *
- * - 'logistic' passes the linear ratio through a sigmoid centered on the
- *   domain midpoint, which compresses values near the extremes and expands
- *   contrast around the middle of the range - useful when most values
- *   cluster around the mean with a long tail.
- * - 'logarithmic' passes the linear ratio through a log1p curve, which
- *   expands contrast among low values at the expense of high ones - useful
- *   when most values are small with a few large outliers. log1p (rather than
- *   a plain log of the raw value) is used so the domain minimum, which can
- *   legitimately be 0, never hits an undefined log(0).
- */
-function buildNormalizedValueExpression(
-  attribute: string,
-  min: number,
-  range: number,
-  scaleType: ColorScaleType
-): maplibregl.ExpressionSpecification {
-  const linearRatio = [
-    '/',
-    ['-', ['coalesce', ['get', attribute], min], min],
-    range,
-  ] as maplibregl.ExpressionSpecification;
-
-  if (scaleType === 'linear') {
-    return linearRatio;
-  }
-
-  if (scaleType === 'logarithmic') {
-    return [
-      'let',
-      't',
-      linearRatio,
-      [
-        '/',
-        ['ln', ['+', 1, ['*', LOGARITHMIC_STRENGTH, ['var', 't']]]],
-        Math.log(1 + LOGARITHMIC_STRENGTH),
-      ],
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  return [
-    'let',
-    't',
-    linearRatio,
-    [
-      '/',
-      1,
-      ['+', 1, ['^', Math.E, ['*', -LOGISTIC_STEEPNESS, ['-', ['var', 't'], 0.5]]]],
-    ],
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-color based on attribute value and global min/max.
- */
-function buildFillColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor?: string | null,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // When a metadata base color is provided, blend from white (low values)
-  // to the base color (high values) instead of using opacity.
-  if (baseColor) {
-    const rgb = hexToRgb(baseColor);
-    if (!rgb) return baseColor;
-
-    const range = max - min;
-    if (range === 0) {
-      // Degenerate domain (every visible value equals min) - treat it as the
-      // low end of the white-to-baseColor scale rather than the high end.
-      return '#FFFFFF';
-    }
-
-    return [
-      'interpolate',
-      ['linear'],
-      buildNormalizedValueExpression(attribute, min, range, scaleType),
-      0,
-      '#FFFFFF',
-      1,
-      baseColor,
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  const range = max - min;
-  if (range === 0) {
-    // Single value - use middle color
-    return PRISM_STOPS[Math.floor(PRISM_STOPS.length / 2)][1];
-  }
-
-  // Build interpolate expression: normalize value to 0-1 then map to colors
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
-  ] as maplibregl.ExpressionSpecification;
-}
-
-function buildOpacityColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor: string,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // Blend color from white (low values) to the metadata base color
-  // (high values). Opacity will be handled separately by layer paint.
-  const rgb = hexToRgb(baseColor);
-  if (!rgb) return baseColor;
-
-  const range = max - min;
-  if (range === 0) {
-    // Degenerate domain (every visible value equals min) - treat it as the
-    // low end of the white-to-baseColor scale rather than the high end.
-    return '#FFFFFF';
-  }
-
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    0,
-    '#FFFFFF',
-    1,
-    baseColor,
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-extrusion-height based on attribute value.
- */
-function buildExtrusionExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | number {
-  const range = max - min;
-  if (range === 0) {
-    return MAX_EXTRUSION_HEIGHT / 2;
-  }
-
-  return [
-    '*',
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    MAX_EXTRUSION_HEIGHT,
-  ] as maplibregl.ExpressionSpecification;
 }
 
 function setCatchmentOutlinesSoftness(map: maplibregl.Map, soften: boolean) {
@@ -1092,6 +1017,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
 
+  // Whether the served tileset carries catchment geometry, and from which zoom.
+  // Null until resolved, and null for good on a datapack whose tiles predate
+  // catchment tiling — in which case every zoom uses the GeoJSON path, exactly
+  // as before.
+  const catchmentTilesetRef = useRef<CatchmentTileset | null>(null);
+
   /** Fetch and apply choropleth data to both maps based on current viewport.
    *  Only shown when zoomed in past MIN_CATCHMENT_ZOOM. */
   const applyColors = useCallback(async () => {
@@ -1192,6 +1123,95 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     }
 
+    const attributeColor = colorScaleMode === 'metadata'
+      ? attributeColorsRef.current?.[c.attribute]
+      : undefined;
+
+    /** Publish the domain range and extent statistics. Shared by both paths. */
+    const publishStats = (
+      min: number,
+      max: number,
+      leftStats: ZoneStats | null,
+      rightStats: ZoneStats | null,
+    ) => {
+      lastDomainRangeRef.current = { min, max };
+      // Extent-based stats are always derived from the current viewport.
+      extentZoneStatsRef.current = { left: leftStats, right: rightStats };
+      if (onStatisticsChangeRef.current) {
+        onStatisticsChangeRef.current({
+          domainRange: { min, max },
+          leftStats,
+          rightStats,
+          fullStats: fullZoneStatsRef.current,
+          siteStats: siteZoneStatsRef.current,
+        });
+      }
+    };
+
+    // Vector-tile path. From the tileset's minimum zoom up, the catchment
+    // geometry is already in the tile pipeline, so only the values are fetched
+    // and they are joined onto the tiles as feature state. MapLibre keeps the
+    // tessellated geometry across pans, zooms and attribute switches, which is
+    // the whole point: the GeoJSON path re-parsed and re-tessellated every
+    // catchment in view on every viewport change, once per map instance.
+    //
+    // The site catchment-id inference below is deliberately not run here: it
+    // works by intersecting fetched geometry against the site boundary, and
+    // there is no fetched geometry on this path. It is a fallback in any case —
+    // the authoritative ids come from the server's AOI fractions (see the stats
+    // effect), which is also why it is already skipped for anything but a very
+    // small feature count.
+    const tileset = catchmentTilesetRef.current;
+    if (tileset && currentZoom >= tileset.minzoom) {
+      try {
+        const [leftValues, rightValues] = await Promise.all([
+          fetchChoroplethValues(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides),
+          fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides),
+        ]);
+
+        const { min, max } = resolveDomainRange([leftValues, rightValues]);
+        publishStats(
+          min,
+          max,
+          leftValues ? zoneStatsFromValues(leftValues.values) : null,
+          rightValues ? zoneStatsFromValues(rightValues.values) : null,
+        );
+
+        const applySide = (
+          map: maplibregl.Map,
+          side: 'left' | 'right',
+          values: ChoroplethValues | null,
+          scenario: Scenario,
+        ) => {
+          if (!values || values.ids.length === 0) {
+            removeChoroplethLayers(map, side);
+            return;
+          }
+          const layerSource = {
+            kind: 'tiles' as const,
+            tileset,
+            values,
+            // Feature state persists across viewport changes, so it has to be
+            // cleared when what it means changes — scenario or attribute.
+            stateKey: `${scenario}|${c.attribute}`,
+          };
+          const apply = () => applyChoroplethLayer(
+            map, side, layerSource, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          if (map.loaded()) {
+            apply();
+          } else {
+            map.once('idle', apply);
+          }
+        };
+
+        applySide(leftMap, 'left', leftValues, c.leftScenario);
+        applySide(rightMap, 'right', rightValues, c.rightScenario);
+      } catch (err) {
+        console.error('Failed to apply choropleth:', err);
+      }
+      return;
+    }
+
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
@@ -1264,55 +1284,21 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftDisplay = leftData;
       const rightDisplay = rightData;
 
-      // Color scale always uses the attribute's global domain across every
-      // catchment, independent of the selected zone range (Full/Extent/Site).
-      // The backend's max is now scenario-specific (metadata.csv's curated
-      // maxval_curr/maxval_ref rather than a scan of every catchment), so the
-      // two sides can disagree when comparing reference against current —
-      // take the larger of the two so neither side's colors get clipped, and
-      // the result doesn't depend on which scenario happens to be on the left.
-      let min = 0;
-      let max = 1;
-      const domainMins: number[] = [];
-      const domainMaxes: number[] = [];
-      if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
-        domainMins.push(leftData.domain_min);
-        domainMaxes.push(leftData.domain_max);
-      }
-      if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
-        domainMins.push(rightData.domain_min);
-        domainMaxes.push(rightData.domain_max);
-      }
-      if (domainMins.length > 0) min = Math.min(...domainMins);
-      if (domainMaxes.length > 0) max = Math.max(...domainMaxes);
-      lastDomainRangeRef.current = { min, max };
-
-      // Extent-based stats are always derived from the current viewport.
-      const leftExtentStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
-      const rightExtentStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
-      extentZoneStatsRef.current = { left: leftExtentStats, right: rightExtentStats };
-
-      if (onStatisticsChangeRef.current) {
-        onStatisticsChangeRef.current({
-          domainRange: { min, max },
-          leftStats: leftExtentStats,
-          rightStats: rightExtentStats,
-          fullStats: fullZoneStatsRef.current,
-          siteStats: siteZoneStatsRef.current,
-        });
-      }
-
-      const attributeColor = colorScaleMode === 'metadata'
-        ? attributeColorsRef.current?.[c.attribute]
-        : undefined;
+      const { min, max } = resolveDomainRange([leftData, rightData]);
+      publishStats(
+        min,
+        max,
+        leftData ? computeZoneStats(leftData, c.attribute) : null,
+        rightData ? computeZoneStats(rightData, c.attribute) : null,
+      );
 
       // Apply to left map - verify the map is ready
       if (leftDisplay && leftDisplay.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+            applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
@@ -1322,10 +1308,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Apply to right map - verify it exists (compare mode only) and is ready
       if (rightMap && rightDisplay && rightDisplay.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+            applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
@@ -1356,6 +1342,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   useEffect(() => {
     applyColorsRef.current = applyColors;
   }, [applyColors]);
+
+  // Resolve the catchment tileset once (the lookup itself is module-cached, so
+  // twelve panes make one request) and repaint, because the first applyColors
+  // may well have run against a still-null ref and taken the GeoJSON path.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCatchmentTileset().then((tileset) => {
+      if (cancelled || !tileset) return;
+      catchmentTilesetRef.current = tileset;
+      applyColorsRef.current();
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Reset site stats when boundary geometry changes so stats recompute.
   useEffect(() => {
@@ -1807,17 +1806,98 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (map.getSource(sourceId)) {
       map.removeSource(sourceId);
     }
+    // Feature state lives on the source, so removing it discards the join;
+    // the bookkeeping that tracks which ids carry a value has to go too, or
+    // the next application would think it had already set them.
+    forgetCatchmentValues(map, sourceId);
 
     setCatchmentOutlinesSoftness(map, false);
   }
 
   /**
-   * Apply choropleth layer to a map with GeoJSON data.
+   * Where a choropleth layer's geometry and values come from.
+   *
+   * 'tiles' is the fast path: geometry from the vector tile pipeline, values
+   * joined on as feature state. 'geojson' is the fallback for the low-zoom
+   * range the tiles do not cover, where the backend serves grid-aggregated
+   * cells instead of catchments (see queryCatchmentsGridAggregated).
+   */
+  type ChoroplethLayerSource =
+    | { kind: 'geojson'; data: ChoroplethData }
+    | { kind: 'tiles'; tileset: CatchmentTileset; values: ChoroplethValues; stateKey: string };
+
+  /**
+   * Ensure the per-side choropleth source exists and holds the current data.
+   *
+   * Returns the source layer name for tile sources, or undefined for GeoJSON -
+   * every layer added below needs it, and getting it wrong is silent (the layer
+   * renders nothing rather than erroring).
+   *
+   * A source can never change type in place, so crossing the zoom threshold
+   * between the two paths tears the old source down first. That is also why the
+   * layers are removed with it: MapLibre refuses to leave a layer pointing at a
+   * source that has gone.
+   */
+  function ensureChoroplethSource(
+    map: maplibregl.Map,
+    side: string,
+    sourceId: string,
+    source: ChoroplethLayerSource,
+  ): string | undefined {
+    const wanted = source.kind === 'tiles' ? 'vector' : 'geojson';
+    const existing = map.getSource(sourceId);
+    if (existing && existing.type !== wanted) {
+      removeChoroplethLayers(map, side);
+    }
+
+    if (source.kind === 'geojson') {
+      const geojsonSource = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (geojsonSource) {
+        geojsonSource.setData(source.data as unknown as GeoJSON.FeatureCollection);
+      } else {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: source.data as unknown as GeoJSON.FeatureCollection,
+        });
+      }
+      return undefined;
+    }
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, catchmentTileSourceSpec(source.tileset));
+    }
+
+    // Feature state, not a source update: the geometry in the tiles is already
+    // loaded and tessellated, and re-setting it is exactly the work this path
+    // exists to avoid. MapLibre carries the state onto tiles that load later,
+    // so panning into new ground needs no re-application.
+    const applied = applyCatchmentValues(
+      map,
+      sourceId,
+      source.tileset.sourceLayer,
+      source.stateKey,
+      source.values.ids,
+      source.values.values,
+    );
+    if (applied.cleared > 0) {
+      console.debug(`[perf] choropleth-${side} feature state: set ${applied.set}, cleared ${applied.cleared}`);
+    }
+
+    return source.tileset.sourceLayer;
+  }
+
+  /**
+   * Apply the choropleth layers to a map.
+   *
+   * The paint expressions are identical on both paths; only how they reach a
+   * catchment's value differs (feature properties vs. feature state). Colouring
+   * remains a data-driven expression evaluated on the GPU - nothing here walks
+   * features in JavaScript.
    */
   function applyChoroplethLayer(
     map: maplibregl.Map,
     side: string,
-    data: ChoroplethData,
+    source: ChoroplethLayerSource,
     attribute: string,
     min: number,
     max: number,
@@ -1836,15 +1916,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         ? CHOROPLETH_FILL_OPACITY_SATELLITE
         : CHOROPLETH_FILL_OPACITY_DEFAULT;
 
-      const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
-      if (source) {
-        source.setData(data as unknown as GeoJSON.FeatureCollection);
-      } else {
-        map.addSource(sourceId, {
-          type: 'geojson',
-          data: data as unknown as GeoJSON.FeatureCollection,
-        });
-      }
+      const sourceLayer = ensureChoroplethSource(map, side, sourceId, source);
+      const value: ChoroplethValueAccessor = source.kind === 'tiles'
+        ? featureStateValueAccessor()
+        : attributeValueAccessor(attribute);
+      // Spread into each addLayer call: 'source-layer' must be absent, not
+      // undefined, for a GeoJSON source.
+      const sourceLayerSpec = sourceLayer ? { 'source-layer': sourceLayer } : {};
 
       setCatchmentOutlinesSoftness(map, true);
 
@@ -1861,11 +1939,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             id: layer3dId,
             type: 'fill-extrusion',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
               'fill-extrusion-color': useOpacityScale && attributeColor
-                ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-                : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
-              'fill-extrusion-height': buildExtrusionExpression(attribute, min, max, scaleType),
+                ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+                : buildFillColorExpression(value, min, max, attributeColor, scaleType),
+              'fill-extrusion-height': buildExtrusionExpression(value, min, max, scaleType),
               'fill-extrusion-base': 0,
               'fill-extrusion-opacity': fillOpacity,
             },
@@ -1875,13 +1954,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             layer3dId,
             'fill-extrusion-color',
             useOpacityScale && attributeColor
-              ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-              : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+              ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+              : buildFillColorExpression(value, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(
             layer3dId,
             'fill-extrusion-height',
-            buildExtrusionExpression(attribute, min, max, scaleType),
+            buildExtrusionExpression(value, min, max, scaleType),
           );
           map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', fillOpacity);
         }
@@ -1895,8 +1974,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             id: layerId,
             type: 'fill',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
-              'fill-color': buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+              'fill-color': buildFillColorExpression(value, min, max, attributeColor, scaleType),
               // Keep boundaries soft so adjacent catchments blend visually.
               'fill-outline-color': CHOROPLETH_OUTLINE_COLOR,
               'fill-opacity': fillOpacity,
@@ -1906,21 +1986,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           map.setPaintProperty(
             layerId,
             'fill-color',
-            buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+            buildFillColorExpression(value, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(layerId, 'fill-outline-color', CHOROPLETH_OUTLINE_COLOR);
           map.setPaintProperty(layerId, 'fill-opacity', fillOpacity);
         }
 
         const edgeColorExpression = useOpacityScale && attributeColor
-          ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-          : buildFillColorExpression(attribute, min, max, attributeColor, scaleType);
+          ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+          : buildFillColorExpression(value, min, max, attributeColor, scaleType);
 
         if (!map.getLayer(edgeBlendLayerId)) {
           map.addLayer({
             id: edgeBlendLayerId,
             type: 'line',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
               'line-color': edgeColorExpression,
               'line-width': CHOROPLETH_EDGE_BLEND_WIDTH,
@@ -3493,28 +3574,37 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const addHighlight = (map: maplibregl.Map, side: 'left' | 'right', catchmentId: string) => {
       removeHighlight(map);
 
-      // Use the same per-side choropleth GeoJSON source the color layer already
-      // renders from (always present once a choropleth is showing) rather than
-      // the base style's "UoW Tiles" vector source, which doesn't exist at all
-      // when the Google satellite basemap is active — the default for browser
-      // runtime — leaving the highlight silently missing.
+      // Use the same per-side choropleth source the color layer already renders
+      // from (always present once a choropleth is showing) rather than the base
+      // style's "UoW Tiles" vector source, which doesn't exist at all when the
+      // Google satellite basemap is active — the default for browser runtime —
+      // leaving the highlight silently missing.
       const sourceId = `choropleth-source-${side}`;
 
       // Check if the source exists
-      if (!map.getSource(sourceId)) {
+      const choroplethSource = map.getSource(sourceId);
+      if (!choroplethSource) {
         console.warn('Identify highlight: source not found:', sourceId);
         return;
       }
 
-      // Parse catchmentId as number for filtering (HYBAS_ID is numeric)
+      // On the vector-tile path the source has a layer within it, and the tiles
+      // may encode HYBAS_ID as a string — to-number normalises both encodings
+      // so the same filter works whichever transport is in use.
+      const sourceLayerSpec = choroplethSource.type === 'vector'
+        ? { 'source-layer': CATCHMENT_TILE_SOURCE_LAYER }
+        : {};
       const catchmentIdNum = parseInt(catchmentId, 10);
+      const idFilter: maplibregl.FilterSpecification =
+        ['==', ['to-number', ['get', CATCHMENT_ID_PROP]], catchmentIdNum];
 
       // Add outer glow layer (neon blue)
       map.addLayer({
         id: IDENTIFY_HIGHLIGHT_GLOW,
         type: 'line',
         source: sourceId,
-        filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
+        ...sourceLayerSpec,
+        filter: idFilter,
         paint: {
           'line-color': '#00BFFF',  // Bright blue
           'line-width': 12,
@@ -3528,7 +3618,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         id: IDENTIFY_HIGHLIGHT_LINE,
         type: 'line',
         source: sourceId,
-        filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
+        ...sourceLayerSpec,
+        filter: idFilter,
         paint: {
           'line-color': '#AEEFFF',  // Pale blue
           'line-width': 4,

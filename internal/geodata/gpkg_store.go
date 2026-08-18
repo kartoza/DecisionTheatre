@@ -590,6 +590,24 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 	}, nil
 }
 
+// CatchmentValues is a bbox's attribute values with no geometry at all, held as
+// two parallel arrays rather than one object per catchment.
+//
+// This is the join payload for the vector-tile choropleth: geometry arrives from
+// the tile pipeline and is reused across every attribute, so the only thing a
+// viewport or attribute change has to move over the wire is the values. The
+// parallel-array shape matters at the sizes involved - a bbox at the tile
+// pipeline's minimum zoom can match tens of thousands of catchments, and one
+// GeoJSON Feature per catchment spends roughly ten times as many bytes on
+// repeated JSON scaffolding ("type", "geometry", "properties", the attribute
+// name) as it does on the id and value that are the actual content.
+type CatchmentValues struct {
+	// IDs and Values are index-aligned: Values[i] is the attribute value for
+	// the catchment whose HYBAS_ID is IDs[i].
+	IDs    []int64   `json:"ids"`
+	Values []float64 `json:"values"`
+}
+
 // QueryCatchmentValues returns every catchment's attribute value within a bounding
 // box, with no geometry and no LIMIT. It exists for statistics (min/max/mean/count)
 // where accuracy across the true full dataset matters and per-catchment HYBAS_ID is
@@ -599,9 +617,40 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 // (with a null geometry) doesn't carry the rendering cost that motivated those
 // other paths.
 func (s *GpkgStore) QueryCatchmentValues(scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+	values, err := s.QueryCatchmentValueArrays(scenario, attribute, minx, miny, maxx, maxy)
+	if err != nil {
+		return nil, err
+	}
+
+	features := make([]GeoJSONFeature, 0, len(values.IDs))
+	for i, id := range values.IDs {
+		features = append(features, GeoJSONFeature{
+			Type:     "Feature",
+			ID:       id,
+			Geometry: json.RawMessage("null"),
+			Properties: map[string]interface{}{
+				"HYBAS_ID": id,
+				attribute:  values.Values[i],
+			},
+		})
+	}
+
+	return &FeatureCollection{
+		Type:     "FeatureCollection",
+		Features: features,
+	}, nil
+}
+
+// QueryCatchmentValueArrays is the geometry-free bbox query both value-shaped
+// callers share: QueryCatchmentValues wraps it back into GeoJSON features for
+// the statistics path, and the /catchment-values endpoint serves it directly to
+// the vector-tile choropleth. Keeping one query means the two can never drift
+// on which catchments they consider in view.
+func (s *GpkgStore) QueryCatchmentValueArrays(scenario, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
 	start := time.Now()
+	count := 0
 	defer func() {
-		log.Printf("[perf] QueryCatchmentValues scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
+		log.Printf("[perf] QueryCatchmentValueArrays scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] values=%d duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, count, time.Since(start).Milliseconds())
 	}()
 
 	tableName := resolveScenarioTable(scenario)
@@ -626,29 +675,25 @@ func (s *GpkgStore) QueryCatchmentValues(scenario, attribute string, minx, miny,
 	}
 	defer rows.Close()
 
-	features := []GeoJSONFeature{}
+	// Non-nil slices: these are marshalled straight to JSON, and a nil slice
+	// encodes as null, which the client would have to special-case on every
+	// empty viewport.
+	result := &CatchmentValues{IDs: []int64{}, Values: []float64{}}
 	for rows.Next() {
+		// HYBAS_ID is scanned through float64 because the column is text in
+		// some datapacks and integer in others; the existing detailed path
+		// does the same (see queryCatchmentsDetailed).
 		var id, value float64
 		if err := rows.Scan(&id, &value); err != nil {
 			log.Printf("Warning: failed to scan row: %v", err)
 			continue
 		}
-
-		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       int64(id),
-			Geometry: json.RawMessage("null"),
-			Properties: map[string]interface{}{
-				"HYBAS_ID": int64(id),
-				attribute:  value,
-			},
-		})
+		result.IDs = append(result.IDs, int64(id))
+		result.Values = append(result.Values, value)
 	}
+	count = len(result.IDs)
 
-	return &FeatureCollection{
-		Type:     "FeatureCollection",
-		Features: features,
-	}, nil
+	return result, nil
 }
 
 // ensureGridGeometryCache kicks off buildGridGeometryCache exactly once. Safe
