@@ -67,6 +67,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A datapack without a manifest falls back to the old path rather than showing no
   demos.
 
+- **The application shipped 6.85 MB of JavaScript before first paint, and 18 MB of
+  images.** plotly was imported statically at the top of the chart component, so
+  every visitor downloaded roughly 4.6 MB of plotting library whether or not they
+  ever opened a chart.
+
+  It is now imported with `React.lazy` behind a `Suspense` boundary. The critical
+  path drops from **6.85 MB to 1.96 MB** of JavaScript — the entry chunk alone goes
+  from 5.50 MB to 0.61 MB — and plotly is fetched when a chart is first rendered.
+  Total JavaScript is unchanged at ~6.97 MB; this moves weight off first paint
+  rather than removing it. Both figures come from building this branch and current
+  `main` from the same base, so the comparison is not confounded by other work.
+
+  Naming plotly in `manualChunks` looked like the right accompaniment and is
+  actively wrong: it puts the module back in the static graph, Vite emits a
+  `<link rel="modulepreload">` for it, and the browser fetches all 4.6 MB before
+  first paint regardless of the lazy import. Measured both ways; the entry is
+  deliberately absent, with a comment saying why.
+
+  Eight referenced images were converted from PNG to webp — **7.63 MB to 0.90 MB**,
+  an 88% reduction, at quality 82 for photographs and 90 for screenshots where
+  text legibility matters. `frontend/src/image.png` is deleted: 1.6 MB, imported by
+  nothing, and byte-identical to `assets/Map_screenshot.png`. Two superseded logos
+  went with it.
+
+  Repository image weight falls from 18.65 MB to 5.31 MB — 71% — measured
+  against git's tracked blobs rather than a filesystem walk.
+
 
 - **Nothing reaches `main` with failing checks any more.** `dt protect-branch`
   requires every pull-request check to pass, requires the branch to be up to date,
