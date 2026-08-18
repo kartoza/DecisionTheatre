@@ -106,7 +106,7 @@ The runtime image includes `jq` for exactly this purpose.
 
 ## Building Executables in Docker
 
-If you don't want to install Nix, Go, Node, or mingw-w64 locally, `deployments/Dockerfile.cross` builds the raw Linux and Windows executables inside Docker (frontend + docs included), using BuildKit's `--output` to export the binary straight to a host directory — no container to clean up afterwards.
+If you don't want to install Nix, Go, Node, or mingw-w64 locally, `deployments/Dockerfile.cross` builds the raw Linux and Windows executables inside Docker (frontend + docs included), using BuildKit's `--output` to export the binary straight to a directory — no container to clean up afterwards.
 
 Requires Docker with BuildKit (Docker 23+, or `DOCKER_BUILDKIT=1` set).
 
@@ -130,6 +130,22 @@ If you need the raw `docker build --output` invocation directly (e.g. for a cust
 
 **macOS is not available in Docker.** The app links against Cocoa/WebKit via CGO, which requires Apple's SDK and toolchain. That SDK isn't redistributable and there's no reliable open cross-toolchain for it, so macOS binaries must be built natively on macOS via `dt packages-darwin` (see the table above).
 
+### Running it via the `builder` service instead of a local Docker install
+
+On a production server managed with `deployments/docker-compose.yaml`, you generally don't want to install Nix/Go/Node/mingw-w64 on the host just to build a datapack or refresh the executables — the host is only expected to have Docker. The `builder` service in that compose file carries that whole toolchain (see `deployments/Dockerfile.builder`) and runs `make pack-data` / `build-cross-docker.sh` for you:
+
+```bash
+cd deployments
+docker compose --profile build run --rm builder make pack-data
+docker compose --profile build run --rm builder ./scripts/build-cross-docker.sh
+```
+
+It's gated behind the `build` [Compose profile](https://docs.docker.com/compose/how-tos/profiles/) so `docker compose up` never starts it — it only runs on demand, and `--rm` removes the container again once it exits.
+
+Both scripts write their output to the `decision-theatre-dist` named volume (mounted at `/src/dist` in `builder`, and read-only at `/app/dist` in `app`) rather than to the builder container's own filesystem — nothing built here is retained once the container is removed except what landed on that volume. This is what `scripts/scheduled-redeploy.sh` uses for its unattended nightly rebuild.
+
+The `builder` service also bind-mounts the host's Docker socket, since `build-cross-docker.sh` itself shells out to `docker build`/`docker compose`/`docker exec` (to run `Dockerfile.cross` and to push config into the running `app` container) — those reach the *host* daemon through that socket. This is the standard "Docker-outside-of-Docker" pattern; it gives the `builder` container the same level of control over the host as any other process with access to that socket, which is why the service is opt-in via the `build` profile rather than always running.
+
 ## Building a Data Pack
 
 Data packs are built locally (not in CI) because they contain large binary data files:
@@ -141,6 +157,8 @@ dt datapack
 This creates `dist/decision-theatre-data-v{VERSION}.zip` with a SHA256 checksum. Upload the data pack to the GitHub Release manually or distribute it separately.
 
 `dt datapack` also updates the downloads page config (see above): `scripts/pack-data.sh` updates the host's `settings.json`, and if the `deployments-app` container from `deployments/docker-compose.yaml` is running, the Makefile target additionally `docker exec`s `update-download-config.sh` inside it with the container-internal `/app/dist/...` path — so the containerized downloads page picks up the new data pack too, with no manual step.
+
+On a Docker-only production host, run this through the `builder` service instead (see above): `docker compose --profile build run --rm builder make pack-data`.
 
 ## Packaging Configuration Files
 
