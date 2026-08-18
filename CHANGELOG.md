@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The container image can be built from the flake.** `nix build .#container`,
+  `./scripts/build-container.sh` or `make container` produce a Docker image whose
+  contents are the runtime closure of the binary the flake already builds.
+
+  `deployments/Dockerfile` names its runtime packages by hand, which means two
+  statements of what the application needs with nothing keeping them in step. They
+  did fall out of step: it installed WebKit 4.0 while the flake, CI and the Debian
+  packaging all targeted 4.1, and it omitted a plugin `mkdocs.yml` requires, so for
+  a while no image could be built at all. An image derived from the flake has no
+  second list to drift.
+
+  Both paths still work and both are built in CI. `docker-compose.yaml` gained a
+  `DT_IMAGE` override, defaulting to what compose builds today, so an existing
+  deployment is unaffected until it opts in.
+
 - **The frontend is linted.** The repository has shipped an eslint dependency, a
   `lint` script and a CI job called `lint-frontend` since it was written, and none
   of them ever linted anything: there was no configuration file, so eslint exited

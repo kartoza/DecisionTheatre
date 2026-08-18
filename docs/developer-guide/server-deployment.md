@@ -38,7 +38,9 @@ Browser  ──HTTPS──▶  Nginx :443  ──HTTP──▶  app :8080
 deployments/
 ├── .env                   # Your local configuration (not committed)
 ├── .env.example           # Template — copy this to .env
-├── Dockerfile             # Multi-stage build (Node → Go → Debian slim)
+├── Dockerfile             # Multi-stage build (Node → Go → Debian slim).
+│                          # The flake builds the same image without the
+│                          # hand-maintained package list — see below.
 ├── Dockerfile.dockerignore
 ├── Dockerfile.cross       # Cross-compiles bare Linux/Windows executables
 ├── Dockerfile.cross.dockerignore
@@ -73,6 +75,45 @@ docker compose logs -f
 ```
 
 The application is now accessible at both `http://<your-server>/` and `https://<your-server>/`.
+
+---
+
+## Two ways to build the image
+
+| | Built by | Needs | Dependencies come from |
+|---|---|---|---|
+| `deployments/Dockerfile` | `docker compose up --build` | Docker | An apt list maintained by hand |
+| **The flake** | `./scripts/build-container.sh` (or `make container`) | Nix and Docker | The runtime closure of the binary Nix builds |
+
+Both produce a working image and both are exercised in CI. The difference is
+where the dependency list comes from.
+
+The Dockerfile names its runtime packages by hand, which means there are two
+statements of what the application needs — the flake's and the Dockerfile's — and
+nothing keeps them in step. They did fall out of step: the Dockerfile installed
+WebKit **4.0** while the flake, CI and the Debian packaging all targeted **4.1**,
+and it omitted a plugin `mkdocs.yml` requires, so for a while no image could be
+built at all.
+
+The flake-built image has no second list. Its contents are the closure of the
+binary, so it contains what the application actually links against, and it cannot
+disagree with `nix build` about a version.
+
+```bash
+# Build and load it
+./scripts/build-container.sh
+
+# Then point compose at it instead of building
+DT_IMAGE=decision-theatre:0.4.0 docker compose up -d
+```
+
+`DT_IMAGE` defaults to `decision-theatre:latest`, which is what compose builds
+from the Dockerfile — so an existing deployment that does not set it keeps
+behaving exactly as before. Compose only builds when the named image is absent,
+so naming an image you have already loaded uses it as-is.
+
+The tag is the version in `flake.nix`; `./scripts/build-container.sh` prints it,
+and `nix eval --raw .#container.imageTag` reports it on its own.
 
 ---
 
