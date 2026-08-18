@@ -91,9 +91,17 @@ info "Comparing Google Drive folder ${BOLD}${FOLDER_ID}${RESET} against ${BOLD}$
 # --one-way: only flag files that are new or changed on the Drive side.
 # Local-only files (generated outputs like datapack.gpkg, mbtiles) are not
 # part of the source data set and must not be treated as "drift".
+#
+# --exclude sites/**, images/**: these are huge and their local mtimes get
+# touched by other tooling, which makes rclone see them as "changed" even
+# when the content matches. They are excluded from fetch-data.sh too, so
+# they are never refreshed by this pipeline — checking them here would only
+# ever produce false positives.
 if rclone check "${RCLONE_REMOTE}:" "$DATA_DIR" \
     --drive-root-folder-id "$FOLDER_ID" \
     --one-way \
+    --exclude "sites/**" \
+    --exclude "images/**" \
     --bind 0.0.0.0; then
     info "No changes found."
     exit 0

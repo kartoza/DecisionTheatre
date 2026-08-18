@@ -4,6 +4,8 @@
 .go
 .venv
 .webkit-compat
+.flatpak-builder
+.tools
 bin
 build-dir
 coverage.out
@@ -23,8 +25,10 @@ internal/server/static
 requirements/site
 
 data
+data (Copy)
 docs_site
 resources
+certificate
 
 R scripts
 

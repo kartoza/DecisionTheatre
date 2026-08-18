@@ -1,4 +1,5 @@
 data/
+data (Copy)/
 resources/
 test_data/
 tmp/
@@ -9,6 +10,9 @@ node_modules/
 .venv/
 result/
 packaging/
+.flatpak-builder/
+.tools/
+certificate/
 *.docx
 *.html
 *.png
