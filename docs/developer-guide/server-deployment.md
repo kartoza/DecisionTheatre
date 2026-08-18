@@ -98,6 +98,94 @@ docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest release
 Every release publishes both tags, along with the image tarball, its SBOM and its
 vulnerability scan as release assets.
 
+!!! note "The image path is lowercase"
+    GHCR rejects an uppercase path, and this repository is `kartoza/DecisionTheatre`.
+    So it is `ghcr.io/kartoza/decisiontheatre`, not `…/DecisionTheatre`. Pulling the
+    capitalised form fails with a confusing `denied` rather than `not found`.
+
+#### Running it
+
+The image needs a data directory and a resources directory, exactly as the compose
+service does. Nothing is baked in — the datapack is never part of the image.
+
+```bash
+docker run -d --name decision-theatre \
+  -p 8080:8080 \
+  -v /srv/decision-theatre/data:/app/data \
+  -v /srv/decision-theatre/resources:/app/resources:ro \
+  ghcr.io/kartoza/decisiontheatre:0.4.0
+```
+
+Then `curl http://127.0.0.1:8080/api/health` should answer `{"status":"ok"}`.
+
+The image's default command already carries the flags the deployment needs —
+`--headless --bind 0.0.0.0 --port 8080 --data-dir /app/data --resources-dir
+/app/resources` — so you only override them if you want something different.
+
+!!! warning "Do not expose port 8080 directly"
+    The API is unauthenticated. `--bind 0.0.0.0` is correct *inside* a container,
+    because the process must accept connections from outside its own network
+    namespace to be reachable at all — but something in front of it has to control
+    access. In the compose deployment that is nginx. If you run the image by hand
+    on a public host, bind it to loopback (`-p 127.0.0.1:8080:8080`) and put a
+    proxy in front.
+
+To use it with the compose stack instead, point `DT_IMAGE` at it:
+
+```bash
+DT_IMAGE=ghcr.io/kartoza/decisiontheatre:0.4.0 docker compose up -d
+```
+
+#### Permission to pull
+
+**If the package is public**, no authentication is needed — `docker pull` works for
+anyone, including a machine that has never logged in to GitHub. That is the
+intended state for this project.
+
+**If the package is private**, a pull returns:
+
+```
+Error response from daemon: denied
+```
+
+which is GHCR's answer both to "you may not" and to "there is no such package", so
+it does not tell you which. Authenticate with a token that has the `read:packages`
+scope:
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+Use a **classic** personal access token with `read:packages`, or a fine-grained
+token with the *Packages: read* permission. A password will not work — GHCR accepts
+tokens only.
+
+##### Making it public (maintainers, once)
+
+A package is created **private** on its first push, whatever the repository's
+visibility. Someone with admin on the package has to change it:
+
+1. Go to `https://github.com/orgs/kartoza/packages`
+2. Open `decisiontheatre` → **Package settings**
+3. Under **Danger Zone** → **Change visibility** → **Public**
+
+The release workflow does not attempt this: `GITHUB_TOKEN` does not carry
+org-level package administration, so a script that tried would fail confusingly
+rather than doing it. It is a one-time manual step.
+
+While you are there, check **Manage Actions access** lists this repository with
+*Write* — the workflow needs it to push. That link is created automatically when
+the image is first pushed with `GITHUB_TOKEN` from this repository, so it normally
+requires nothing.
+
+##### If the first release push fails with 403
+
+The repository's own Actions permissions are the usual cause, not the package:
+**Settings → Actions → General → Workflow permissions** must be **Read and write
+permissions**. A workflow can only narrow what the repository allows, so
+`packages: write` in the workflow file is silently not granted when that setting is
+read-only.
+
 ### 2. Take the image from a pull request
 
 Every pull request builds the image and attaches it, its SBOM and its CVE scan as
