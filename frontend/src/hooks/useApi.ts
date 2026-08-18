@@ -5,10 +5,18 @@ import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
-import { isQuotaExceededError } from '../lib/storage';
+import { loadSite, loadSites, saveSite, saveSites } from '../lib/siteStore';
 
 const API_BASE = '/api';
-const SITES_STORAGE_KEY = 'dt-sites';
+/**
+ * Three names for the same per-catchment payload, as it arrives from the wire or
+ * from a walkthrough document. Walkthrough JSON embeds the breakdown on purpose —
+ * a read-only demo has nothing on the server to fetch it from — and the API
+ * returns it on some responses.
+ *
+ * What changed is that none of it is *stored*: lib/siteStore.ts strips all three
+ * on write, and the breakdown lives in the in-memory cache for the session.
+ */
 type SiteWithCatchments = Site & {
   catchments?: CatchmentIndicators[];
   catchmentIndicators?: CatchmentIndicators[];
@@ -19,83 +27,63 @@ function isBrowserRuntime(): boolean {
   return getAppRuntime() === 'browser';
 }
 
+/**
+ * The browser runtime's sites.
+ *
+ * Both of these are kept as the public shape because a dozen call sites across
+ * five files read the whole list, change one site and write the list back. The
+ * storage underneath is now one record per site (lib/siteStore.ts), so that
+ * pattern costs one write rather than a re-serialisation of everything.
+ */
 export function loadLocalSites(): Site[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const raw = window.localStorage.getItem(SITES_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as Site[] : [];
-  } catch {
-    return [];
-  }
+  return loadSites();
 }
 
-
-
-// Returns whether the sites were actually persisted. localStorage has a hard
-// per-origin quota (~5-10MB); every site's per-catchment breakdown (per-species
-// biomass etc. for each catchment) can make this add up, and once the quota is
-// hit every write throws and silently no-ops unless callers check this return
-// value. On quota failure, retry once with that breakdown stripped from every
-// site — it's the largest field and is regenerable on demand from the server —
-// before giving up and reporting failure so the caller can tell the user.
+/**
+ * Returns whether the sites were actually persisted, so a caller can tell the
+ * user when they were not.
+ *
+ * The old implementation stringified the entire store on every call and, on a
+ * full quota, retried with the per-catchment breakdown stripped out. Neither is
+ * needed now: only changed records are written, and the breakdown is never
+ * stored at all — the server computes it and getSiteCatchments refetches it
+ * behind a TTL cache.
+ */
 export function saveLocalSites(sites: Site[]): boolean {
-  if (typeof window === 'undefined') return true;
-
-  try {
-    window.localStorage.setItem(SITES_STORAGE_KEY, JSON.stringify(sites));
-    return true;
-  } catch (err) {
-    if (!isQuotaExceededError(err)) return false;
-
-    try {
-      const slimmed = sites.map((site) => {
-        const { catchments, catchmentIndicators, catchmentData, ...rest } = site as SiteWithCatchments;
-        void catchments; void catchmentIndicators; void catchmentData;
-        return rest;
-      });
-      window.localStorage.setItem(SITES_STORAGE_KEY, JSON.stringify(slimmed));
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  return saveSites(sites);
 }
 
-function loadLocalCatchments(siteId: string): CatchmentIndicators[] {
-  const sites = loadLocalSites();
-  const site = sites.find((entry) => entry.id === siteId) as SiteWithCatchments | undefined;
-  if (!site) return [];
-
-  const stored = site.catchments ?? site.catchmentIndicators ?? site.catchmentData;
-  return Array.isArray(stored) ? stored : [];
+/**
+ * Read or write a single site.
+ *
+ * Five places did read-the-whole-list, replace-one-entry, write-the-whole-list.
+ * That was the only way to change one site when everything lived in one blob;
+ * it is not any more, and the long form hid what each of them was doing.
+ */
+export function loadLocalSite(id: string): Site | null {
+  return loadSite(id);
 }
 
-function loadLocalSite(siteId: string): Site | null {
-  const sites = loadLocalSites();
-  return sites.find((entry) => entry.id === siteId) ?? null;
+export function saveLocalSite(site: Site): boolean {
+  return saveSite(site);
 }
+
 
 function sortSitesByCreatedAtDesc(sites: Site[]): Site[] {
   return [...sites].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function persistLocalCatchments(siteId: string, catchments: CatchmentIndicators[]): void {
-  const sites = loadLocalSites();
-  if (sites.length === 0) return;
-
-  const nextSites = sites.map((site) => {
-    if (site.id !== siteId) return site;
-    return {
-      ...site,
-      catchments,
-      updatedAt: new Date().toISOString(),
-    };
-  });
-
-  saveLocalSites(sortSitesByCreatedAtDesc(nextSites));
+/**
+ * Remember a fetched breakdown for the rest of the session.
+ *
+ * This used to write the breakdown into the site in localStorage, at 27-56 KB
+ * per catchment against a ~5 MB quota — a site of 90-185 catchments filled the
+ * browser on its own, and it is data the server already holds and can
+ * recompute. It goes in the same in-memory cache getSiteCatchments reads, so a
+ * second view in the same session is still instant and a reload refetches.
+ */
+function cacheCatchments(siteId: string, catchments: CatchmentIndicators[]): void {
+  _catchmentsCache.set(siteId, { promise: Promise.resolve(catchments), ts: Date.now() });
 }
 
 function generateSiteId(): string {
@@ -779,7 +767,7 @@ export async function createSite(
     // views can render immediately from localStorage.
     if (Array.isArray(site.catchmentIds) && site.catchmentIds.length > 0) {
       try {
-        const { thumbnail, ...siteWithoutThumbnail } = site;
+        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
         const response = await fetch(`${API_BASE}/sites/${site.id}/catchments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -788,7 +776,7 @@ export async function createSite(
         if (response.ok) {
           const catchments = await response.json();
           if (Array.isArray(catchments) && catchments.length > 0) {
-            persistLocalCatchments(site.id, catchments);
+            cacheCatchments(site.id, catchments);
           }
         }
       } catch {
@@ -885,7 +873,7 @@ export async function patchSiteIndicators(
   // cascades from the site payload in the request body instead of loading
   // it from data/sites/, and the result is never persisted to disk.
   if (site?.source === 'walkthrough') {
-    const { thumbnail, ...siteWithoutThumbnail } = site;
+    const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
     const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -914,7 +902,7 @@ export async function patchSiteIndicators(
     const localSite = loadLocalSite(id);
     if (localSite) {
       try {
-        const { thumbnail, ...siteWithoutThumbnail } = localSite;
+        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
         const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -935,8 +923,10 @@ export async function patchSiteIndicators(
         if (response.ok) {
           const updatedSite = await response.json() as SiteWithCatchments;
           if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
-            persistLocalCatchments(id, updatedSite.catchments);
-            _catchmentsCache.delete(id);
+            // Cache the fresh breakdown. This used to persist it and then
+            // invalidate a separate in-memory cache; both are now the same
+            // cache, so deleting here would discard what was just fetched.
+            cacheCatchments(id, updatedSite.catchments);
           }
           return updateSite(id, { indicators: updatedSite.indicators });
         }
@@ -993,15 +983,10 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
 
   const promise = (async (): Promise<CatchmentIndicators[]> => {
     if (isBrowserRuntime()) {
-      const localCatchments = loadLocalCatchments(siteId);
-      if (localCatchments.length > 0) {
-        return localCatchments;
-      }
-
       try {
         const localSite = loadLocalSite(siteId);
         if (localSite) {
-          const { thumbnail, ...siteWithoutThumbnail } = localSite;
+          const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
           const response = await fetch(`${API_BASE}/sites/${siteId}/catchments`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1010,7 +995,7 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
           if (response.ok) {
             const data = await response.json();
             if (Array.isArray(data) && data.length > 0) {
-              persistLocalCatchments(siteId, data);
+              cacheCatchments(siteId, data);
               return data;
             }
           }
@@ -1025,7 +1010,7 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
         if (!response.ok) return [];
         const data = await response.json();
         if (Array.isArray(data) && data.length > 0) {
-          persistLocalCatchments(siteId, data);
+          cacheCatchments(siteId, data);
         }
         return Array.isArray(data) ? data : [];
       } catch {
@@ -1039,7 +1024,7 @@ export async function getSiteCatchments(siteId: string): Promise<CatchmentIndica
     }
     const data = await response.json();
     if (Array.isArray(data) && data.length > 0) {
-      persistLocalCatchments(siteId, data);
+      cacheCatchments(siteId, data);
     }
     return data;
   })();
@@ -1293,8 +1278,7 @@ async function fetchSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResp
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(siteId);
     if (localSite) {
-      const { thumbnail, ...siteWithoutThumbnail } = localSite;
-      void thumbnail;
+      const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
       try {
         const response = await fetch(`${API_BASE}/sites/${siteId}/whiskers`, {
           method: 'POST',

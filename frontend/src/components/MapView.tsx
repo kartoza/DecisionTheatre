@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSites, saveLocalSites, clearSiteWhiskerCache } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
@@ -1310,6 +1310,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // only value that could go stale. Recreating the callback is cheap: consumers
   // either call it through applyColorsRef, or from effects that already list
   // siteId and so re-run on a site change anyway.
+  //
+  // applyChoroplethLayer is still undeclared and still suppressed. Adding it is a
+  // separate judgement — it is recreated on most renders, so listing it would
+  // rebuild this callback constantly — and it is one of the fifteen in the
+  // tracking issue.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [colorScaleMode, colorScaleType, siteId]);
 
   const applyColorsRef = useRef(applyColors);
@@ -1512,6 +1518,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     applyToMap(leftMap);
     applyToMap(rightMap);
+  // useCallback has a missing dependency: 'addBoundaryLayersIfMissing'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, []);
 
   // Compute a site-scoped domain range (min/max) so color scale is based on the site,
@@ -3082,6 +3090,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightClipContainer.remove();
       leftClipContainer.remove();
     };
+  // useEffect has missing dependencies: 'onSwiperPositionChange' and 'reapplyBoundaryLayers'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
   // Resize maps when layout changes or container size updates
@@ -3836,29 +3846,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // Maintain catchmentIds explicitly (add/remove the clicked ID) rather than
         // re-deriving from geometry, which fails for edge-sharing catchments in a union.
         if (siteId) {
-          const sites = loadLocalSites();
-          const siteIndex = sites.findIndex(s => s.id === siteId);
-          if (siteIndex >= 0) {
-            const existing = sites[siteIndex];
+          const existing = loadLocalSite(siteId);
+          if (existing) {
             const existingIds = Array.isArray(existing.catchmentIds)
               ? existing.catchmentIds.map(String)
               : [];
             const newIds = operation === 'union'
               ? (existingIds.includes(catchmentId) ? existingIds : [...existingIds, catchmentId])
               : existingIds.filter(id => id !== catchmentId);
-            // Also clear cached per-catchment data so AggregateTable re-fetches with the new IDs
-            const {
-              catchments: _c,
-              catchmentIndicators: _ci,
-              catchmentData: _cd,
-              ...rest
-            } = existing as typeof existing & {
-              catchments?: unknown;
-              catchmentIndicators?: unknown;
-              catchmentData?: unknown;
-            };
-            sites[siteIndex] = { ...rest, catchmentIds: newIds } as typeof existing;
-            saveLocalSites(sites);
+            // The cached per-catchment data used to be stripped by hand here so
+            // AggregateTable would refetch with the new ids. It is never stored now,
+            // so there is nothing to strip.
+            saveLocalSite({ ...existing, catchmentIds: newIds });
           }
         }
 
@@ -3897,6 +3896,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error adding catchment:', err);
     }
+  // useCallback has a missing dependency: 'updateBoundarySource'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle removing a catchment from the site boundary
@@ -3928,6 +3929,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     } catch (err) {
       console.error('Error removing catchment:', err);
     }
+  // useCallback has a missing dependency: 'updateBoundarySource'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [applyLocalBoundaryOperation, notifyBoundaryUpdate, siteId]);
 
   // Handle catchment click in add/remove mode
@@ -4392,6 +4395,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         rightMap.getCanvas().style.cursor = 'grab';
       }
     };
+  // useEffect has missing dependencies: 'ADD_VERTEX_CURSOR', 'DELETE_VERTEX_CURSOR', and 'notifyBoundaryUpdate'
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [isBoundaryEditMode, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
 
   // Reset catchment edit mode when boundary edit mode is disabled

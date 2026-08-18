@@ -103,6 +103,14 @@ jobs:
             exit 1
           fi
 
+
+      # version.sh reported `git describe` alone, which names the newest *tag*.
+      # With flake.nix declaring 0.4.0 and the newest tag v0.2.2, every local
+      # build called itself 0.2.2-... while `nix build` called the same source
+      # 0.4.0. A second of shell, and invisible until two binaries are compared.
+      - name: Shell script tests
+        run: ./scripts/tests/version-test.sh
+
   # ==========================================
   # Go lint
   # ==========================================
@@ -161,6 +169,12 @@ jobs:
 
       - name: TypeScript typecheck
         run: cd frontend && npx tsc --noEmit
+
+      # The job has been called lint-frontend since it was written while running
+      # no linter at all: there was no eslint configuration, so the script exited
+      # with an error rather than a result and nothing invoked it. It lints now.
+      - name: ESLint
+        run: cd frontend && npm run lint
 
   # ==========================================
   # Go tests

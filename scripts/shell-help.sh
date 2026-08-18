@@ -55,7 +55,8 @@ COMMANDS=(
 
     "TEST|dt test|Go tests with race detector and coverage"
     "TEST|dt test-frontend|Frontend tests (vitest)"
-    "TEST|dt test-all|Both suites"
+    "TEST|dt test-scripts|Tests for the shell scripts"
+    "TEST|dt test-all|All three suites"
     "TEST|nix flake check|Every check, in a sandbox"
 
     "DIAGNOSE|dt run --diag|Report what the desktop window resolved its layout to"
