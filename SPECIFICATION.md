@@ -285,24 +285,39 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - `GET /api/tilesets/{name}/metadata` - MBTiles metadata for one tileset
 
 ### Sites
-- `GET /api/sites` - List all sites
-- `POST /api/sites` - Create site
-- `GET /api/sites/{id}` - Get site
-- `PUT|PATCH /api/sites/{id}` - Update site
-- `DELETE /api/sites/{id}` - Delete site
+
+A user's own sites live in their browser, not on the server — that is the design
+brief, and the client honours it: in browser runtime it reads and writes the
+`dt-sites` localStorage key with no fallthrough to the API. The CRUD below therefore
+exists **only in the desktop build**, where the browser is a WebView with no
+persistent storage of its own. In server mode these routes are absent from the route
+table entirely rather than answering 403, so no handler code is reachable.
+
+- `GET /api/sites` - List all sites *(desktop only)*
+- `POST /api/sites` - Create site *(desktop only)*
+- `GET /api/sites/{id}` - Get site *(desktop only)*
+- `PUT|PATCH /api/sites/{id}` - Update site *(desktop only)*
+- `DELETE /api/sites/{id}` - Delete site *(desktop only)*
 - `POST /api/sites/dissolve-catchments` - Merge catchments into boundary
+
+`dissolve-catchments` is not gated: it computes in, returns a result, and persists
+nothing.
 
 ### Site Indicators
 - `GET /api/sites/{id}/indicators` - Aggregated indicator values
 - `POST /api/sites/{id}/indicators` - Extract indicators from constituent catchments
 - `PATCH /api/sites/{id}/indicators` - Update user-set values, triggering recalculation
-- `POST /api/sites/{id}/indicators/reset` - Reset ideal values to current
+- `POST /api/sites/{id}/indicators/reset` - Reset ideal values to current *(desktop only)*
 - `GET|POST /api/sites/{id}/catchments` - Per-catchment breakdown with AOI fractions
 - `GET|POST /api/sites/{id}/whiskers` - Whisker (upper/lower bound) values
 
 ### Boundary Editing
-- `POST /api/sites/{id}/boundary/union/{catchmentId}` - Add a catchment to the boundary
-- `POST /api/sites/{id}/boundary/difference/{catchmentId}` - Remove a catchment
+
+Both write to a stored site, so both are desktop only. The browser build does the
+same work locally against its own copy in localStorage.
+
+- `POST /api/sites/{id}/boundary/union/{catchmentId}` - Add a catchment to the boundary *(desktop only)*
+- `POST /api/sites/{id}/boundary/difference/{catchmentId}` - Remove a catchment *(desktop only)*
 
 ### Catchments
 - `GET /api/catchments/bounds` - Bounding box of the catchment dataset
@@ -311,12 +326,12 @@ Each pane supports three visualization modes, cycled via toolbar button:
 
 ### Data Pack and Downloads
 - `GET /api/datapack/status` - Install state and progress
-- `POST /api/datapack/install` - Install from a local archive path (**destructive**)
+- `POST /api/datapack/install` - Install from a local archive path (**destructive**, desktop runtime only)
 - `GET /api/datapack/download-info` - Metadata for the configured downloadable archive
 - `GET /api/datapack/download` - Stream the archive
 - `GET /api/executables/info` - Per-platform executable availability
 - `GET /api/executables/download/{platform}` - Stream a platform executable
-- `POST /api/dialog/open-file` - Open a native file dialog (desktop runtime only)
+- `POST /api/dialog/open-file` - Open a native file dialog *(desktop only)*
 
 ### Static Content
 - `/data/images/` - Site thumbnails
@@ -447,28 +462,54 @@ Violet → Indigo → Blue → Cyan → Green → Yellow → Orange → Red
 - Zip files are checked for zip slip vulnerabilities during extraction (both the `.zip`
   and `.7z` extractors)
 
+### Network exposure
+
+- **The server binds loopback by default.** `config.DefaultBindAddress` is
+  `127.0.0.1`, and the zero value of `Config.BindAddress` resolves to it, so a caller
+  that forgets the field does not publish to the network. `--bind 0.0.0.0` is explicit
+  and is what the container deployment passes, where nginx in front of it controls
+  access.
+
+### Desktop-only routes
+
+Two routes are registered only when `Config.DesktopMode` is true — that is, only when
+the process owns a desktop session and has opened the WebView window. In server mode
+they are absent rather than present-and-refusing, so there is nothing for a remote
+caller to probe:
+
+- `POST /api/dialog/open-file` — calls a native file picker on the machine's desktop
+  and blocks until a human answers it.
+- `POST /api/datapack/install` — replaces the contents of the data directory with
+  whatever it finds at a filesystem path. That path can only come from the file dialog
+  above, so on a hosted deployment there was no legitimate way to use it.
+
+### Path confinement
+
+Thumbnail paths are validated on write and on read. `saveThumbnail` writes only into
+the images directory; `validThumbnailPath` rejects anything that escapes it, and
+`resolveThumbnailFile` confines the resolved path, so a site cannot be made to delete a
+file elsewhere on disk when it is removed.
+
+### Request limits
+
+Every JSON handler reads through a body size limit rather than decoding directly from
+`r.Body`.
+
 ### Known gaps (tracked, not yet implemented)
 
-The following are stated here so the specification describes the system as it is, not as
-intended. Each has a corresponding issue.
+Stated here so the specification describes the system as it is, not as intended. Each
+has a corresponding issue.
 
 - **No authentication on any endpoint.** The API is unauthenticated, and
-  `deployments/nginx.conf` proxies every path without a denylist.
-- **The server binds all interfaces**, not loopback, despite a source comment asserting
-  otherwise.
-- **`POST /api/datapack/install` accepts an arbitrary filesystem path** and recursively
-  deletes the data directory before extracting.
-- **`POST /api/dialog/open-file` opens a native desktop window** and is registered in
-  server mode as well as desktop mode.
-- **Thumbnail paths are not validated on write.** A non-`data:image` value is stored
-  verbatim and later joined onto the data directory and deleted with the site.
-- **No request body size limits.** Every JSON handler decodes directly from `r.Body`.
-- **No response compression**, and no `context.Context` on database calls, so a client
-  disconnect does not cancel work.
+  `deployments/nginx.conf` proxies every path without a denylist. The desktop-only
+  gating above removes the two routes that made this acute, but it is not
+  authentication.
+- **No `context.Context` on database calls**, so a client disconnect does not cancel
+  the work it started.
 
 Attribute names are validated by `isValidColumn()` before interpolation, but SQL is
-assembled with `fmt.Sprintf` throughout `gpkg_store.go`; the pattern is safe by convention
-rather than by construction.
+assembled with `fmt.Sprintf` throughout `gpkg_store.go`; the pattern is safe by
+convention rather than by construction.
 
 ---
 
