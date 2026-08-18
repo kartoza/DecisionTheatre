@@ -6,7 +6,7 @@ import { bbox as turfBbox, featureCollection, union, difference, intersect, area
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { registerMap, unregisterMap } from '../hooks/useMapSync';
+import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
@@ -850,7 +850,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
+  // Null whenever compare mode is off — see createRightMap in the map-init
+  // effect. Everything that mirrors work onto the right side has to tolerate
+  // its absence.
   const rightMapRef = useRef<maplibregl.Map | null>(null);
+  // Set by the map-init effect; the compare-mode effect below drives them.
+  const ensureRightMapRef = useRef<(() => maplibregl.Map) | null>(null);
+  const destroyRightMapRef = useRef<(() => void) | null>(null);
   const viewportBoundsRef = useRef<maplibregl.LngLatBoundsLike | null>(null);
   const leftClipContainerRef = useRef<HTMLDivElement | null>(null);
   const compareContainerRef = useRef<HTMLDivElement | null>(null);
@@ -858,7 +864,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const sliderHandleRef = useRef<HTMLDivElement | null>(null);
   const sliderDockedRef = useRef<'left' | 'right' | null>(null);
   const isDragging = useRef(false);
-  const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+  // `right` reads as "the right map, if any, has loaded". The right map only
+  // exists in compare mode (see createRightMap below), so when it is absent the
+  // right side is trivially ready and every mapsReady.current.right check in
+  // this file stays correct without a null dance at each one.
+  const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: true });
   const resizeFrameRef = useRef<number | null>(null);
 
   // Compare swiper state (split-screen on/off)
@@ -1020,7 +1030,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap) return;
+    // rightMap may legitimately be null: it only exists in compare mode. Every
+    // right-side call below either takes a nullable map or is guarded.
+    if (!leftMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
 
     if (!isChoroplethEnabledRef.current) {
@@ -1166,11 +1178,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         );
 
         const applySide = (
-          map: maplibregl.Map,
+          // Nullable since the compare map is created only in compare mode:
+          // this is the tile path's equivalent of the guards the GeoJSON path
+          // carries. Without it the right side is asked to paint a map that
+          // does not exist.
+          map: maplibregl.Map | null,
           side: 'left' | 'right',
           values: ChoroplethValues | null,
           scenario: Scenario,
         ) => {
+          if (!map) return;
           if (!values || values.ids.length === 0) {
             removeChoroplethLayers(map, side);
             return;
@@ -1293,8 +1310,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         removeChoroplethLayers(leftMap, 'left');
       }
 
-      // Apply to right map - verify the map is ready
-      if (rightDisplay && rightDisplay.features.length > 0) {
+      // Apply to right map - verify it exists (compare mode only) and is ready
+      if (rightMap && rightDisplay && rightDisplay.features.length > 0) {
         if (rightMap.loaded()) {
           applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
@@ -1426,7 +1443,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) return;
 
     removeChoroplethLayers(leftMap, 'left');
     removeChoroplethLayers(rightMap, 'right');
@@ -1515,7 +1532,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const geometry = boundaryGeometryRef.current;
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!geometry || !leftMap || !rightMap) return;
+    if (!geometry || !leftMap) return;
 
     const applyToMap = (map: maplibregl.Map) => {
       if (map.isStyleLoaded()) {
@@ -1538,7 +1555,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     applyToMap(leftMap);
-    applyToMap(rightMap);
+    if (rightMap) applyToMap(rightMap);
   // useCallback has a missing dependency: 'addBoundaryLayersIfMissing'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, []);
@@ -1773,9 +1790,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   /**
    * Remove choropleth layers from a map.
    */
-  function removeChoroplethLayers(map: maplibregl.Map, side: string) {
-    // Safety check: map.style is undefined after map.remove() is called
-    if (!map.style) return;
+  function removeChoroplethLayers(map: maplibregl.Map | null, side: string) {
+    // The right map is absent outside compare mode, and map.style is undefined
+    // after map.remove() — either way there is nothing to strip.
+    if (!map?.style) return;
 
     const layerId = `choropleth-${side}`;
     const edgeBlendLayerId = `${layerId}-edge-blend`;
@@ -2066,7 +2084,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const toggleGoogleBasemap = useCallback(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
 
     const nextVal = !isGoogleBasemapRef.current;
     isGoogleBasemapRef.current = nextVal;
@@ -2088,10 +2106,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     reapplyAfterStyleLoad(leftMap);
-    reapplyAfterStyleLoad(rightMap);
-
     leftMap.setStyle(newStyle);
-    rightMap.setStyle(newStyle);
+    if (rightMap) {
+      reapplyAfterStyleLoad(rightMap);
+      rightMap.setStyle(newStyle);
+    }
 
     // Re-apply boundary and choropleth layers after styles settle
     window.setTimeout(() => {
@@ -2899,12 +2918,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
 
+    // A map instance is transient now: this effect re-runs, compare mode adds
+    // and removes the right map, and a pane releases its maps when it stops
+    // showing one. Opening at the last view the sync registry saw keeps that
+    // invisible — a recreated map would otherwise snap back to the world view.
+    // Pitch stays under the 3D toggle's control rather than being restored.
+    const restoredView = getLastMapView();
+
     // Create left map with all interactions enabled
     const leftMap = new maplibregl.Map({
       container: leftContainer,
       style: mapStyle,
-      center: [20, 0],
-      zoom: 3,
+      center: restoredView?.center ?? [20, 0],
+      zoom: restoredView?.zoom ?? 3,
+      bearing: restoredView?.bearing ?? 0,
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
@@ -2920,32 +2947,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     });
     leftMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
 
-    // Create right map with all interactions enabled
-    const rightMap = new maplibregl.Map({
-      container: rightContainer,
-      style: mapStyle,
-      center: [20, 0],
-      zoom: 3,
-      pitch: is3DModeRef.current ? 60 : 0,
-      attributionControl: false,
-      fadeDuration: 0,
-      pixelRatio: mapPixelRatio(),
-      scrollZoom: true,
-      dragPan: true,
-      dragRotate: true,
-      doubleClickZoom: true,
-      boxZoom: true,
-      keyboard: true,
-      touchZoomRotate: true,
-      touchPitch: true,
-    });
-    rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
-
     const applyViewportLimits = () => {
       const bounds = viewportBoundsRef.current;
       if (!bounds) return;
       applyZoomOutClipToBounds(leftMap, bounds);
-      applyZoomOutClipToBounds(rightMap, bounds);
+      const rightMap = rightMapRef.current;
+      if (rightMap) applyZoomOutClipToBounds(rightMap, bounds);
     };
 
     void (async () => {
@@ -2973,14 +2980,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }
 
     leftMap.on('move', () => {
-      syncMaps(leftMap, rightMap);
+      const rightMap = rightMapRef.current;
+      if (rightMap) syncMaps(leftMap, rightMap);
       updateIdentifyOverlayPosition();
     });
-    rightMap.on('move', () => syncMaps(rightMap, leftMap));
 
     // Identify click handlers - pass side info for correct layer querying
     leftMap.on('click', (e) => handleIdentifyClick(leftMap, e, 'left'));
-    rightMap.on('click', (e) => handleIdentifyClick(rightMap, e, 'right'));
 
     // Fetch new choropleth data when map moves (debounced)
     leftMap.on('moveend', () => {
@@ -3033,21 +3039,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       signalReady();
       resizeAndRefresh(leftMap);
       if (mapsReady.current.right) {
-        resizeAndRefresh(rightMap);
-        applyColorsRef.current();
-        setAreMapsReady(true);
-        reapplyBoundaryLayers();
-        // Deferred retry: ensures boundary is on top after applyColors async
-        // continuation and React boundary effect have both completed.
-        requestAnimationFrame(() => reapplyBoundaryLayers());
-      }
-    });
-    rightMap.on('load', () => {
-      mapsReady.current.right = true;
-      signalReady();
-      resizeAndRefresh(rightMap);
-      if (mapsReady.current.left) {
-        resizeAndRefresh(leftMap);
+        const rightMap = rightMapRef.current;
+        if (rightMap) resizeAndRefresh(rightMap);
         applyColorsRef.current();
         setAreMapsReady(true);
         reapplyBoundaryLayers();
@@ -3063,10 +3056,96 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const readyTimeoutId = setTimeout(signalReady, 15_000);
 
     leftMapRef.current = leftMap;
-    rightMapRef.current = rightMap;
 
     // Register the left map for cross-pane sync
     const syncId = registerMap(leftMap);
+
+    // The compare (right) map is created on demand rather than up front.
+    // Two MapLibre instances per pane meant twelve WebGL contexts in quad
+    // view, against a browser ceiling of about sixteen past which the oldest
+    // context is silently dropped — and integrated GPUs run out of memory
+    // well before that count. Half of them were drawing nothing whenever the
+    // compare swiper was off. See issue #76.
+    function createRightMap(): maplibregl.Map {
+      const existing = rightMapRef.current;
+      if (existing) return existing;
+
+      // Open on the left map's current view so revealing the split shows the
+      // same place the user is already looking at; the move handlers below
+      // only keep the two in step from the next movement onwards.
+      const leftCenter = leftMap.getCenter();
+      const rightMap = new maplibregl.Map({
+        container: rightContainer,
+        // Re-read the basemap choice rather than reusing the style captured at
+        // init: the user may have toggled the satellite basemap since.
+        style: isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl),
+        center: [leftCenter.lng, leftCenter.lat],
+        zoom: leftMap.getZoom(),
+        bearing: leftMap.getBearing(),
+        pitch: leftMap.getPitch(),
+        attributionControl: false,
+        fadeDuration: 0,
+        pixelRatio: mapPixelRatio(),
+        scrollZoom: true,
+        dragPan: true,
+        dragRotate: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
+        touchZoomRotate: true,
+        touchPitch: true,
+      });
+      rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
+
+      mapsReady.current.right = false;
+      rightMapRef.current = rightMap;
+
+      rightMap.on('move', () => syncMaps(rightMap, leftMap));
+      rightMap.on('click', (e) => handleIdentifyClick(rightMap, e, 'right'));
+
+      // The site-boundary effect wires a styledata listener per map, but it
+      // only runs on site changes and readiness — a map created after that
+      // would never re-add its boundary after a style swap.
+      rightMap.on('styledata', () => reapplyBoundaryLayers());
+
+      rightMap.on('load', () => {
+        mapsReady.current.right = true;
+        signalReady();
+        resizeAndRefresh(rightMap);
+        if (mapsReady.current.left) {
+          resizeAndRefresh(leftMap);
+          applyColorsRef.current();
+          setAreMapsReady(true);
+          reapplyBoundaryLayers();
+          // Deferred retry: ensures boundary is on top after applyColors async
+          // continuation and React boundary effect have both completed.
+          requestAnimationFrame(() => reapplyBoundaryLayers());
+        }
+      });
+
+      applyViewportLimits();
+      updateMapSizes();
+      return rightMap;
+    }
+
+    function destroyRightMap(): void {
+      const rightMap = rightMapRef.current;
+      if (!rightMap) return;
+      // Clear the ref before removing, so anything reading it mid-teardown
+      // sees "no right map" rather than a destroyed instance — the same
+      // ordering the effect cleanup below uses.
+      rightMapRef.current = null;
+      mapsReady.current.right = true;
+      rightMap.remove();
+    }
+
+    ensureRightMapRef.current = createRightMap;
+    destroyRightMapRef.current = destroyRightMap;
+
+    // This effect re-runs on its dependencies, and the lifecycle effect below
+    // only reacts to changes in compare mode, so restore the right map here if
+    // compare mode is already on.
+    if (isSwiperEnabledRef.current) createRightMap();
 
     // Slider drag handling with proper isolation from map events
     let sliderPointerId: number | null = null;
@@ -3080,7 +3159,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       slider.setPointerCapture(e.pointerId);
       // Disable map interactions while dragging slider
       leftMap.dragPan.disable();
-      rightMap.dragPan.disable();
+      rightMapRef.current?.dragPan.disable();
     }
 
     function onSliderPointerMove(e: PointerEvent) {
@@ -3142,7 +3221,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       sliderPointerId = null;
       // Re-enable map interactions
       leftMap.dragPan.enable();
-      rightMap.dragPan.enable();
+      rightMapRef.current?.dragPan.enable();
 
       // Ensure a final resize after drag ends; add a tiny delay for layout settle
       window.setTimeout(() => {
@@ -3151,7 +3230,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             resizeFrameRef.current = null;
             updateMapSizes();
             leftMap.resize();
-            rightMap.resize();
+            rightMapRef.current?.resize();
             updateIdentifyOverlayPosition();
           });
         }
@@ -3165,7 +3244,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       clearTimeout(readyTimeoutId);
-      mapsReady.current = { left: false, right: false };
+      mapsReady.current = { left: false, right: true };
       onReadyFiredRef.current = false;
       setAreMapsReady(false);
       if (fetchTimerRef.current) {
@@ -3179,10 +3258,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Clear refs BEFORE removing maps to prevent other cleanup effects from
       // trying to access destroyed map instances
       leftMapRef.current = null;
-      rightMapRef.current = null;
+      ensureRightMapRef.current = null;
+      destroyRightMapRef.current = null;
+      destroyRightMap();
       removeIdentifyOverlay(false);
       leftMap.remove();
-      rightMap.remove();
       leftClipContainerRef.current = null;
       compareContainerRef.current = null;
       sliderRef.current = null;
@@ -3199,15 +3279,32 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
+  // Compare mode owns the right map's lifetime: created on entering, released
+  // on leaving, so a pane that is not comparing holds one WebGL context rather
+  // than two (issue #76).
+  //
+  // Declared directly after the map-init effect and before every effect that
+  // touches the right map, which matters twice over. React runs all changed
+  // effects' cleanups before any effect body, so the effects listing
+  // isSwiperEnabled detach from a live instance before this one removes it;
+  // and effect bodies run in declaration order, so those same effects see the
+  // new instance on the way back in.
+  useEffect(() => {
+    if (isSwiperEnabled) {
+      ensureRightMapRef.current?.();
+    } else {
+      destroyRightMapRef.current?.();
+    }
+  }, [isSwiperEnabled]);
+
   // Resize maps when layout changes or container size updates
   useEffect(() => {
     const container = mapContainerRef.current;
     const leftClipContainer = leftClipContainerRef.current;
     const rightClipContainer = compareContainerRef.current;
     const leftMap = leftMapRef.current;
-    const rightMap = rightMapRef.current;
 
-    if (!container || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) {
+    if (!container || !leftClipContainer || !rightClipContainer || !leftMap) {
       return;
     }
 
@@ -3216,18 +3313,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!leftContainer || !rightContainer) return;
 
     const updateSizes = () => {
+      // The compare map is read from the ref on each call rather than captured:
+      // this effect outlives several compare-mode toggles, and a container
+      // resize has to reach whichever instance exists at that moment.
+      const rightMap = rightMapRef.current;
       const parentWidth = container.offsetWidth;
       const rightClipWidth = rightClipContainer.offsetWidth;
       leftContainer.style.width = `${parentWidth}px`;
       rightContainer.style.width = `${parentWidth}px`;
       rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
       leftMap.resize();
-      rightMap.resize();
+      rightMap?.resize();
 
       const bounds = viewportBoundsRef.current;
       if (bounds) {
         applyZoomOutClipToBounds(leftMap, bounds);
-        applyZoomOutClipToBounds(rightMap, bounds);
+        if (rightMap) applyZoomOutClipToBounds(rightMap, bounds);
       }
 
       if (siteId) {
@@ -3271,7 +3372,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!container || !leftClipContainer || !rightClipContainer || !slider || !leftMap || !rightMap) {
+    if (!container || !leftClipContainer || !rightClipContainer || !slider || !leftMap) {
       return;
     }
 
@@ -3303,7 +3404,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
 
     leftMap.resize();
-    rightMap.resize();
+    rightMap?.resize();
   }, [isSwiperEnabled]);
 
   // Synchronize slider position when prop changes (from another pane)
@@ -3318,7 +3419,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!container || !slider || !handle || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) return;
+    if (!container || !slider || !handle || !leftClipContainer || !rightClipContainer || !leftMap) return;
 
     // Don't update if we're currently dragging (to avoid feedback loop)
     if (isDragging.current) return;
@@ -3390,13 +3491,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
 
     leftMap.resize();
-    rightMap.resize();
+    rightMap?.resize();
   }, [swiperPosition, isSwiperEnabled]);
 
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) return;
 
     if (isChoroplethEnabled) {
       applyColorsRef.current();
@@ -3463,7 +3564,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
 
     // Helper to remove highlight layers from a map
@@ -3534,14 +3635,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Remove existing highlights
     removeHighlight(leftMap);
-    removeHighlight(rightMap);
+    if (rightMap) removeHighlight(rightMap);
 
     // Add highlight if there's an identify result
     if (identifyResult?.catchmentID) {
       addHighlight(leftMap, 'left', identifyResult.catchmentID);
-      addHighlight(rightMap, 'right', identifyResult.catchmentID);
+      if (rightMap) addHighlight(rightMap, 'right', identifyResult.catchmentID);
     }
-  }, [identifyResult]);
+  // isSwiperEnabled: the right map is created and destroyed with compare mode,
+  // so a highlight raised while it was absent has to be mirrored onto it.
+  }, [identifyResult, isSwiperEnabled]);
 
   // Fetch and display site boundary when siteId changes or maps become ready
   useEffect(() => {
@@ -3549,12 +3652,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const rightMap = rightMapRef.current;
 
     // Wait until maps are ready (state-based trigger ensures re-run)
-    if (!leftMap || !rightMap || !areMapsReady) return;
+    if (!leftMap || !areMapsReady) return;
+
+    // rightMap is null outside compare mode, so the per-map helpers below take
+    // a nullable map and no-op on absence — that keeps every left/right pair of
+    // calls in this effect as it was.
 
     // Helper to remove site boundary layers from a map
-    const removeSiteBoundary = (map: maplibregl.Map) => {
+    const removeSiteBoundary = (map: maplibregl.Map | null) => {
       // Safety check: map.style is undefined after map.remove() is called
-      if (!map.style) return;
+      if (!map?.style) return;
       if (map.getLayer(SITE_BOUNDARY_LINE)) map.removeLayer(SITE_BOUNDARY_LINE);
       if (map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)) map.removeLayer(SITE_BOUNDARY_GLOW_MIDDLE);
       if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) map.removeLayer(SITE_BOUNDARY_OFFWHITE);
@@ -3569,7 +3676,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       addBoundaryLayersIfMissing(map, normalized);
     };
 
-    const addSiteBoundaryWhenReady = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
+    const addSiteBoundaryWhenReady = (map: maplibregl.Map | null, geometry: GeoJSON.Geometry) => {
+      if (!map) return;
       if (map.style) {
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
@@ -3594,8 +3702,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       addSiteBoundaryWhenReady(map, geometry);
     };
 
-    const updateSiteBoundarySource = (map: maplibregl.Map, geometry: GeoJSON.Geometry): boolean => {
-      if (!map.style) return false;
+    const updateSiteBoundarySource = (map: maplibregl.Map | null, geometry: GeoJSON.Geometry): boolean => {
+      if (!map?.style) return false;
       const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource;
       if (!source) return false;
 
@@ -3673,17 +3781,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             zoomToLoadedSiteBounds();
           };
 
-          if (leftMap.loaded() && rightMap.loaded()) {
+          const allLoaded = () => leftMap.loaded() && (rightMap?.loaded() ?? true);
+
+          if (allLoaded()) {
             addToMaps();
           } else {
             // Wait for both maps to be ready
             const checkAndAdd = () => {
-              if (leftMap.loaded() && rightMap.loaded()) {
+              if (allLoaded()) {
                 addToMaps();
               }
             };
             leftMap.once('idle', checkAndAdd);
-            rightMap.once('idle', checkAndAdd);
+            rightMap?.once('idle', checkAndAdd);
           }
         } else {
           zoomToLoadedSiteBounds();
@@ -3692,16 +3802,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       .catch((err) => console.error('Failed to fetch site boundary:', err));
 
     const handleLeftStyleData = () => ensureBoundaryLayers(leftMap);
-    const handleRightStyleData = () => ensureBoundaryLayers(rightMap);
 
     leftMap.on('styledata', handleLeftStyleData);
-    rightMap.on('styledata', handleRightStyleData);
+    // The compare map's equivalent listener is wired in createRightMap, since
+    // that map can outlive or postdate any single run of this effect.
 
     // Cleanup on unmount or siteId change
     return () => {
       siteCatchmentIdsRef.current = null;
       leftMap.off('styledata', handleLeftStyleData);
-      rightMap.off('styledata', handleRightStyleData);
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
@@ -4122,7 +4231,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const updateEditVerticesLayer = useCallback((vertices: [number, number][]) => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
 
     const updateMapVertices = (map: maplibregl.Map) => {
       // Safety check: map.style is undefined after map.remove() is called
@@ -4189,7 +4298,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     if (leftMap.style) updateMapVertices(leftMap);
-    if (rightMap.style) updateMapVertices(rightMap);
+    if (rightMap?.style) updateMapVertices(rightMap);
   }, []);
 
   // Remove edit vertices layers
@@ -4214,7 +4323,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const updateBoundaryDisplay = useCallback((vertices: [number, number][]) => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap || !siteGeometryRef.current) return;
+    if (!leftMap || !siteGeometryRef.current) return;
 
     const newGeometry = buildGeometryFromVertices(vertices, siteGeometryRef.current);
 
@@ -4234,7 +4343,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     updateSource(leftMap);
-    updateSource(rightMap);
+    if (rightMap) updateSource(rightMap);
 
     // Keep the ref in sync so any style/resize-triggered re-apply of the
     // boundary layers (e.g. reapplyBoundaryLayers) uses the live-edited
@@ -4247,9 +4356,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) {
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) {
       return;
     }
+
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
 
     if (isBoundaryEditMode && siteGeometryRef.current) {
       // Enter edit mode
@@ -4261,8 +4376,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       zoomToSiteRef.current({ pitch: 0 });
 
       // Change cursor to indicate draggable points
-      leftMap.getCanvas().style.cursor = 'grab';
-      rightMap.getCanvas().style.cursor = 'grab';
+      for (const map of maps) map.getCanvas().style.cursor = 'grab';
 
       // Set up drag handlers
       const handleMouseDown = (e: maplibregl.MapMouseEvent, map: maplibregl.Map) => {
@@ -4308,10 +4422,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const handleMouseUp = () => {
         if (draggingVertexIndexRef.current !== null) {
           draggingVertexIndexRef.current = null;
-          leftMap.getCanvas().style.cursor = 'grab';
-          rightMap.getCanvas().style.cursor = 'grab';
-          leftMap.dragPan.enable();
-          rightMap.dragPan.enable();
+          for (const map of maps) {
+            map.getCanvas().style.cursor = 'grab';
+            map.dragPan.enable();
+          }
 
           // Notify parent of the updated geometry
           if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
@@ -4321,33 +4435,27 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
       };
 
-      const onLeftMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, leftMap);
-      const onRightMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, rightMap);
+      const cleanups: Array<() => void> = [];
+      for (const map of maps) {
+        const onMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, map);
+        map.on('mousedown', onMouseDown);
+        map.on('mousemove', handleMouseMove);
+        map.on('mouseup', handleMouseUp);
+        cleanups.push(() => {
+          map.off('mousedown', onMouseDown);
+          map.off('mousemove', handleMouseMove);
+          map.off('mouseup', handleMouseUp);
+          map.getCanvas().style.cursor = '';
+        });
+      }
 
-      leftMap.on('mousedown', onLeftMouseDown);
-      rightMap.on('mousedown', onRightMouseDown);
-      leftMap.on('mousemove', handleMouseMove);
-      rightMap.on('mousemove', handleMouseMove);
-      leftMap.on('mouseup', handleMouseUp);
-      rightMap.on('mouseup', handleMouseUp);
-
-      return () => {
-        leftMap.off('mousedown', onLeftMouseDown);
-        rightMap.off('mousedown', onRightMouseDown);
-        leftMap.off('mousemove', handleMouseMove);
-        rightMap.off('mousemove', handleMouseMove);
-        leftMap.off('mouseup', handleMouseUp);
-        rightMap.off('mouseup', handleMouseUp);
-        leftMap.getCanvas().style.cursor = '';
-        rightMap.getCanvas().style.cursor = '';
-      };
+      return () => cleanups.forEach((cleanup) => cleanup());
     } else {
       // Exit edit mode
       removeEditVerticesLayers();
       editVerticesRef.current = [];
       draggingVertexIndexRef.current = null;
-      leftMap.getCanvas().style.cursor = '';
-      rightMap.getCanvas().style.cursor = '';
+      for (const map of maps) map.getCanvas().style.cursor = '';
     }
     // siteGeometry intentionally excluded: this effect sets up/tears down
     // the vertex-drag handlers for entering/exiting edit mode. It read
@@ -4359,14 +4467,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // exiting edit mode. siteGeometryRef.current is used instead so this
     // only reacts to isBoundaryEditMode transitions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBoundaryEditMode, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
+  }, [isBoundaryEditMode, isSwiperEnabled, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
 
   // Handle catchment add/remove click events
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !isBoundaryEditMode || !catchmentEditMode) {
+    if (!leftMap || !isBoundaryEditMode || !catchmentEditMode) {
       return;
     }
 
@@ -4374,50 +4482,48 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       setVertexEditMode(null);
     }
 
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
+
     // Change cursor based on mode
     const cursor = catchmentEditMode === 'add' ? ADD_CATCHMENT_CURSOR : REMOVE_CATCHMENT_CURSOR;
-    leftMap.getCanvas().style.cursor = cursor;
-    rightMap.getCanvas().style.cursor = cursor;
 
-    // Prevent drag-pan from stealing the click for catchment edits
-    leftMap.dragPan.disable();
-    rightMap.dragPan.disable();
+    const cleanups: Array<() => void> = [];
+    for (const map of maps) {
+      map.getCanvas().style.cursor = cursor;
+      // Prevent drag-pan from stealing the click for catchment edits
+      map.dragPan.disable();
 
-    const onLeftClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(leftMap, e);
-    const onRightClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(rightMap, e);
-    const onLeftMove = () => {
-      leftMap.getCanvas().style.cursor = cursor;
-    };
-    const onRightMove = () => {
-      rightMap.getCanvas().style.cursor = cursor;
-    };
+      const onClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(map, e);
+      const onMove = () => {
+        map.getCanvas().style.cursor = cursor;
+      };
+      map.on('click', onClick);
+      map.on('mousemove', onMove);
 
-    leftMap.on('click', onLeftClick);
-    rightMap.on('click', onRightClick);
-    leftMap.on('mousemove', onLeftMove);
-    rightMap.on('mousemove', onRightMove);
+      cleanups.push(() => {
+        map.off('click', onClick);
+        map.off('mousemove', onMove);
+        map.dragPan.enable();
+        // Restore cursor based on whether we're still in edit mode
+        if (isBoundaryEditModeRef.current) {
+          map.getCanvas().style.cursor = 'grab';
+        }
+      });
+    }
 
-    return () => {
-      leftMap.off('click', onLeftClick);
-      rightMap.off('click', onRightClick);
-      leftMap.off('mousemove', onLeftMove);
-      rightMap.off('mousemove', onRightMove);
-      leftMap.dragPan.enable();
-      rightMap.dragPan.enable();
-      // Restore cursor based on whether we're still in edit mode
-      if (isBoundaryEditModeRef.current) {
-        leftMap.getCanvas().style.cursor = 'grab';
-        rightMap.getCanvas().style.cursor = 'grab';
-      }
-    };
-  }, [isBoundaryEditMode, catchmentEditMode, handleCatchmentEditClick]);
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [isBoundaryEditMode, isSwiperEnabled, catchmentEditMode, handleCatchmentEditClick]);
 
   // Handle vertex delete/add mode
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !isBoundaryEditMode || !vertexEditMode) {
+    if (!leftMap || !isBoundaryEditMode || !vertexEditMode) {
       return;
     }
 
@@ -4425,9 +4531,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       setCatchmentEditMode(null);
     }
 
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
+
     const cursor = vertexEditMode === 'delete' ? DELETE_VERTEX_CURSOR : ADD_VERTEX_CURSOR;
-    leftMap.getCanvas().style.cursor = cursor;
-    rightMap.getCanvas().style.cursor = cursor;
+    for (const map of maps) map.getCanvas().style.cursor = cursor;
 
     const handleVertexDelete = (map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
       const features = map.queryRenderedFeatures(e.point, {
@@ -4474,45 +4585,35 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     };
 
-    const onLeftClick = (e: maplibregl.MapMouseEvent) => {
-      if (vertexEditMode === 'delete') {
-        handleVertexDelete(leftMap, e);
-      } else {
-        handleVertexAdd(e);
-      }
-    };
-    const onRightClick = (e: maplibregl.MapMouseEvent) => {
-      if (vertexEditMode === 'delete') {
-        handleVertexDelete(rightMap, e);
-      } else {
-        handleVertexAdd(e);
-      }
-    };
-    const onLeftMove = () => {
-      leftMap.getCanvas().style.cursor = cursor;
-    };
-    const onRightMove = () => {
-      rightMap.getCanvas().style.cursor = cursor;
-    };
+    const cleanups: Array<() => void> = [];
+    for (const map of maps) {
+      const onClick = (e: maplibregl.MapMouseEvent) => {
+        if (vertexEditMode === 'delete') {
+          handleVertexDelete(map, e);
+        } else {
+          handleVertexAdd(e);
+        }
+      };
+      const onMove = () => {
+        map.getCanvas().style.cursor = cursor;
+      };
 
-    leftMap.on('click', onLeftClick);
-    rightMap.on('click', onRightClick);
-    leftMap.on('mousemove', onLeftMove);
-    rightMap.on('mousemove', onRightMove);
+      map.on('click', onClick);
+      map.on('mousemove', onMove);
 
-    return () => {
-      leftMap.off('click', onLeftClick);
-      rightMap.off('click', onRightClick);
-      leftMap.off('mousemove', onLeftMove);
-      rightMap.off('mousemove', onRightMove);
-      if (isBoundaryEditModeRef.current) {
-        leftMap.getCanvas().style.cursor = 'grab';
-        rightMap.getCanvas().style.cursor = 'grab';
-      }
-    };
+      cleanups.push(() => {
+        map.off('click', onClick);
+        map.off('mousemove', onMove);
+        if (isBoundaryEditModeRef.current) {
+          map.getCanvas().style.cursor = 'grab';
+        }
+      });
+    }
+
+    return () => cleanups.forEach((cleanup) => cleanup());
   // useEffect has missing dependencies: 'ADD_VERTEX_CURSOR', 'DELETE_VERTEX_CURSOR', and 'notifyBoundaryUpdate'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [isBoundaryEditMode, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
+  }, [isBoundaryEditMode, isSwiperEnabled, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
 
   // Reset catchment edit mode when boundary edit mode is disabled
   useEffect(() => {
