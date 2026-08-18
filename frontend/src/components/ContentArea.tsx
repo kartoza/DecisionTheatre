@@ -16,6 +16,7 @@ interface ContentAreaProps {
   focusedPane: number;
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
+  onOpenControlPanel?: (paneIndex: number) => void;
   onAddPane: () => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
@@ -111,6 +112,7 @@ function ContentArea({
   focusedPane,
   onFocusPane,
   onGoQuad,
+  onOpenControlPanel,
   onAddPane,
   onRemovePane,
   onIdentify,
@@ -470,6 +472,7 @@ function ContentArea({
                   onViewModeChange={onViewModeChange}
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
+                  onOpenControlPanel={onOpenControlPanel}
                   canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
