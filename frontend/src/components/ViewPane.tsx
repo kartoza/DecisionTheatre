@@ -439,6 +439,20 @@ function ViewPane({
       max = Math.max(max, ...displayedValues);
     }
 
+    // Keep the dial's scale in proportion to what it's actually displaying —
+    // a domain-wide max pulled from an outlier catchment (or a scenario with
+    // no curated metadata.csv max) shouldn't dwarf a reference/current/target
+    // that are an order of magnitude smaller, making the needle unreadable.
+    const DIAL_BALANCE_MULTIPLIER = 4;
+    if (displayedValues.length > 0) {
+      const maxDisplayedMagnitude = Math.max(...displayedValues.map((v) => Math.abs(v)));
+      if (maxDisplayedMagnitude > 0) {
+        const balanceCap = maxDisplayedMagnitude * DIAL_BALANCE_MULTIPLIER;
+        if (max > balanceCap) max = balanceCap;
+        if (min < -balanceCap) min = -balanceCap;
+      }
+    }
+
     // Ensure min < max
     if (min >= max) {
       const mid = (min + max) / 2 || 50;
