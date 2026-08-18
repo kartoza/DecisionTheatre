@@ -135,9 +135,9 @@ func (s *Server) setupRoutes() {
 	apiHandler := api.NewHandler(s.tileStore, s.gpkgStore, s.siteStore, s.cfg)
 	apiHandler.RegisterRoutes(apiRouter)
 
-	// Data pack management routes
+	// Data pack management routes. Serving the pack and the installers is the
+	// hosted deployment's job, so those stay public.
 	s.router.HandleFunc("/api/datapack/status", s.handleDatapackStatus).Methods("GET")
-	s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
 	s.router.HandleFunc("/api/datapack/download-info", s.handleDatapackDownloadInfo).Methods("GET")
 	s.router.HandleFunc("/api/datapack/download", s.handleDatapackDownload).Methods("GET")
 	s.router.HandleFunc("/api/executables/info", s.handleExecutablesInfo).Methods("GET")
@@ -146,7 +146,20 @@ func (s *Server) setupRoutes() {
 	// Place-name search, proxied so the upstream usage policy can be met at all;
 	// see geocode.go. Public: both builds offer search.
 	s.router.HandleFunc("/api/geocode", s.handleGeocode).Methods("GET")
-	s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+
+	// Desktop-only. In server mode these paths are simply absent, so they 404
+	// through the SPA fallback rather than existing and refusing — there is
+	// nothing for a remote caller to probe. See config.Config.DesktopMode.
+	if s.cfg.DesktopMode {
+		s.router.HandleFunc("/api/dialog/open-file", s.handleFileDialog).Methods("POST")
+
+		// Install takes a path on this machine's filesystem and replaces the
+		// contents of the data directory with whatever it finds there. The path
+		// can only come from the file dialog above, which is itself desktop-only,
+		// so on a hosted deployment there was no way to use this route
+		// legitimately and no authentication stopping anyone using it otherwise.
+		s.router.HandleFunc("/api/datapack/install", s.handleDatapackInstall).Methods("POST")
+	}
 
 	// Tile routes - served directly for performance
 	if s.tileStore != nil {
@@ -236,6 +249,21 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(tileData)
 }
 
+// newAuxTileServer configures one auxiliary tile listener.
+//
+// These previously set IdleTimeout only, so a client that opened a connection and
+// then stalled mid-request held it indefinitely. Tiles are small and read from a
+// local mbtiles file, so nothing here streams for long and WriteTimeout needs no
+// exemption, unlike the main server's downloads.
+func newAuxTileServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:      handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+}
+
 // startAuxTileServers opens up to 3 extra listeners on the ports immediately
 // following the main port. Each listener runs a minimal router that only
 // handles tile requests, giving the browser additional HTTP/1.1 connection
@@ -248,11 +276,8 @@ func (s *Server) startAuxTileServers(mainPort int) {
 			r.HandleFunc("/tiles/{name}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}.pbf",
 				s.handleTileRequest).Methods("GET")
 		}
-		srv := &http.Server{
-			Handler:     r,
-			IdleTimeout: 120 * time.Second,
-		}
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		srv := newAuxTileServer(r)
+		ln, err := net.Listen("tcp", s.cfg.ListenAddressForPort(port))
 		if err != nil {
 			log.Printf("Aux tile server: port %d unavailable, skipping: %v", port, err)
 			continue
@@ -269,20 +294,55 @@ func (s *Server) startAuxTileServers(mainPort int) {
 }
 
 func (s *Server) Start() error {
-	s.httpServer = &http.Server{
-		Addr:        fmt.Sprintf(":%d", s.cfg.Port),
-		Handler:     s.router,
-		ReadTimeout: 15 * time.Second,
-		// WriteTimeout is intentionally unset (0 = disabled) — long-running operations
-		// such as datapack extraction can take several minutes on large archives.
-		// This is safe because the server only listens on localhost.
-		IdleTimeout: 120 * time.Second,
-	}
+	s.httpServer = s.newHTTPServer()
 
 	s.startAuxTileServers(s.cfg.Port)
 
-	log.Printf("Server listening on http://localhost:%d", s.cfg.Port)
+	log.Printf("Server listening on http://%s", s.cfg.ListenAddress())
 	return s.httpServer.ListenAndServe()
+}
+
+// rootHandler wraps the router in the middleware every request passes through.
+//
+// Compression is applied in server mode only. Desktop mode reaches the server
+// exclusively over loopback — it binds 127.0.0.1 and opens its own WebView onto
+// it — where there is no bandwidth to save, so compressing the full-Africa
+// choropleth would spend 230ms of CPU per request to speed up a transfer that
+// already takes milliseconds. Server mode is the one whose clients may be a
+// network away, and the one nginx sits in front of.
+func (s *Server) rootHandler() http.Handler {
+	var handler http.Handler = s.router
+	if !s.cfg.DesktopMode {
+		handler = compressResponses(handler)
+	}
+	return limitRequestBody(handler)
+}
+
+// newHTTPServer builds the main listener's configuration.
+//
+// Separate from Start so a test can inspect the address and the timeouts without
+// binding a port or blocking in ListenAndServe.
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
+		Addr: s.cfg.ListenAddress(),
+		// Every request goes through the body limit; see bodylimit.go.
+		Handler:     s.rootHandler(),
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout used to be disabled entirely, justified by a claim that
+		// the server "only listens on localhost" — which was not true: it bound
+		// 0.0.0.0. The binding is fixed now, but a disabled write timeout still
+		// means a stalled client holds a connection and its goroutine forever, so
+		// it is bounded here on its own merits.
+		//
+		// Nothing needs minutes. Datapack extraction, the original reason given,
+		// answers 202 immediately and reports progress through
+		// /api/datapack/status, so no handler blocks on it. The two handlers that
+		// genuinely stream a large file — the datapack and executable downloads —
+		// extend their own deadline with http.NewResponseController rather than
+		// forcing every request to be unbounded. See datapack.go.
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 }
 
 // Stop gracefully shuts down the server.
@@ -498,7 +558,10 @@ func (s *Server) rebuildRoutes() {
 	s.router = mux.NewRouter()
 	s.setupRoutes()
 	if s.httpServer != nil {
-		s.httpServer.Handler = s.router
+		// rootHandler, not limitRequestBody alone: this is the second place the
+		// handler chain is assembled, and rebuilding it by hand here silently drops
+		// whatever middleware the first place added.
+		s.httpServer.Handler = s.rootHandler()
 	}
 }
 

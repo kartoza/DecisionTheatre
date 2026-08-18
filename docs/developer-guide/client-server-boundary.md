@@ -115,6 +115,59 @@ Client storage therefore buys no offline capability. Using it as the primary sto
 derived data is the category error underneath the reported symptoms. Persist user
 intent; refetch everything else.
 
+## Where a site is stored
+
+The rule above is about *computation*. Persistence has its own rule, and it is not the
+same one: **a user's own sites live in their browser, and are never uploaded.**
+
+The runtime decides, via `getAppRuntime()` in `frontend/src/types/runtime.ts`. It
+returns `browser` unless the Go webview has injected
+`window.__DECISION_THEATRE_WEBVIEW__`.
+
+| Operation | Browser runtime | Webview runtime |
+|---|---|---|
+| Create | `saveLocalSites` → `dt-sites` | `POST /api/sites` |
+| Read | `loadLocalSites()` | `GET /api/sites[/{id}]` |
+| Update | rewrite `dt-sites` | `PUT`/`PATCH /api/sites/{id}` |
+| Delete | filter `dt-sites` | `DELETE /api/sites/{id}` |
+
+Both halves matter. The desktop build has a filesystem and no quota, so it uses the
+store in `data/sites/`. The hosted deployment has neither the right nor the need to
+hold anyone's work.
+
+### Consequences for the API surface
+
+Because no browser session ever calls them, the site CRUD routes are registered **only
+in the desktop build** — see `registerDesktopSiteRoutes` in `internal/api/handler.go`,
+gated on `config.Config.DesktopMode`. `POST /api/datapack/install` and
+`POST /api/dialog/open-file` are gated the same way, for the same reason: both act on
+the host's own filesystem.
+
+Registering them unconditionally, as we did until this was noticed, put an
+unauthenticated write-to-disk API on a deployment that nginx proxies wholesale. It was
+the reachable path behind an arbitrary-file-deletion bug (#29) and a
+replace-the-data-directory bug (#27).
+
+The routes a browser session *does* call are a different case and stay public:
+`/indicators`, `/catchments`, `/whiskers`, `/dissolve-catchments` and `/boundary/*`.
+These accept `runtime: "browser"` with the site in the request body and return before
+touching the store — compute in, result out, nothing persisted. Three of them
+(`/indicators/reset`, `/boundary/union`, `/boundary/difference`) have no such guard,
+which is exactly why they are gated instead: the client does that work locally in
+browser runtime and only calls the API from the webview.
+
+!!! warning "The gate depends on a launch flag"
+    `DesktopMode` is `!*headless` in `main.go`. A hosted deployment that stops passing
+    `--headless` re-opens every route above without a line of Go changing, which is why
+    `deployments/Dockerfile` and `deployments/docker-compose.yaml` are asserted to
+    contain it by a test in `internal/api`.
+
+### When adding a route that writes
+
+Ask who calls it. If the answer is "the desktop build", gate it. If the answer is "a
+browser session", it must not write to disk at all — take the site in the request body
+and return the result.
+
 ## Worked example: the two creation paths
 
 ### Selection → outline (correct today)
@@ -191,3 +244,5 @@ Before adding a fetch, a store write or a geometry call, ask:
 - [ ] Am I persisting something the server can regenerate? → don't
 - [ ] Is this geometry the user is editing right now? → client is correct
 - [ ] Does it scale with the size of the study area? → it does not belong in the browser
+- [ ] Does it write to disk? → then no browser session may call it; gate it on
+      `DesktopMode` ([above](#consequences-for-the-api-surface))
