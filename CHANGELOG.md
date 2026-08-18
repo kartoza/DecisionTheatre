@@ -118,6 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Config value 'plugins': The "macros" plugin is not installed`. This was already
   broken on `main`.
 
+  No workflow built either container file, which is how a Dockerfile that could not
+  succeed came to sit on `main` unnoticed. CI now has a `container-build` job that
+  builds `deployments/Dockerfile`, runs it, and checks that it reports the version it
+  was built with, links `libwebkit2gtk-4.1.so`, and serves `/`, `/api/health` and
+  `/docs/`. A one-second grep in front of it fails the job immediately if any
+  container file reintroduces WebKit 4.0.
+
 - **Switching sites coloured the map from the previous site.** `applyColors` was
   memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
   prop in ten places — the choropleth fetch for both panes, the browser-runtime
