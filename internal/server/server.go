@@ -292,6 +292,22 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
+// rootHandler wraps the router in the middleware every request passes through.
+//
+// Compression is applied in server mode only. Desktop mode reaches the server
+// exclusively over loopback — it binds 127.0.0.1 and opens its own WebView onto
+// it — where there is no bandwidth to save, so compressing the full-Africa
+// choropleth would spend 230ms of CPU per request to speed up a transfer that
+// already takes milliseconds. Server mode is the one whose clients may be a
+// network away, and the one nginx sits in front of.
+func (s *Server) rootHandler() http.Handler {
+	var handler http.Handler = s.router
+	if !s.cfg.DesktopMode {
+		handler = compressResponses(handler)
+	}
+	return limitRequestBody(handler)
+}
+
 // newHTTPServer builds the main listener's configuration.
 //
 // Separate from Start so a test can inspect the address and the timeouts without
@@ -300,7 +316,7 @@ func (s *Server) newHTTPServer() *http.Server {
 	return &http.Server{
 		Addr: s.cfg.ListenAddress(),
 		// Every request goes through the body limit; see bodylimit.go.
-		Handler:     limitRequestBody(s.router),
+		Handler:     s.rootHandler(),
 		ReadTimeout: 15 * time.Second,
 		// WriteTimeout used to be disabled entirely, justified by a claim that
 		// the server "only listens on localhost" — which was not true: it bound
@@ -532,7 +548,10 @@ func (s *Server) rebuildRoutes() {
 	s.router = mux.NewRouter()
 	s.setupRoutes()
 	if s.httpServer != nil {
-		s.httpServer.Handler = limitRequestBody(s.router)
+		// rootHandler, not limitRequestBody alone: this is the second place the
+		// handler chain is assembled, and rebuilding it by hand here silently drops
+		// whatever middleware the first place added.
+		s.httpServer.Handler = s.rootHandler()
 	}
 }
 
