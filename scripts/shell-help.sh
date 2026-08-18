@@ -51,6 +51,7 @@ COMMANDS=(
     "BUILD|dt build-docs|Documentation site only, into the embed directory"
     "BUILD|dt clean|Remove build artifacts"
     "BUILD|nix build|Full reproducible build to ./result"
+    "BUILD|dt container|Deployment container image, built from the flake"
 
     "TEST|dt test|Go tests with race detector and coverage"
     "TEST|dt test-frontend|Frontend tests (vitest)"
