@@ -147,6 +147,31 @@ function resolveVariableTypeForColumn(column: string, variableTypes: Record<stri
   return '';
 }
 
+// Separates a "Grouping variable" value from an optional axis-label suffix in an
+// encoded chartAxisLabelFilter value (see encodeGroupingOption in ControlPanel.tsx).
+// Must stay in sync with the identical delimiter/encoder there.
+const GROUP_UNIT_DELIM = '\u0001';
+
+function decodeGroupingFilter(value: string | null | undefined): { group: string; axisLabel: string | null } {
+  if (!value) return { group: '', axisLabel: null };
+  const idx = value.indexOf(GROUP_UNIT_DELIM);
+  if (idx === -1) return { group: value, axisLabel: null };
+  return { group: value.slice(0, idx), axisLabel: value.slice(idx + 1) };
+}
+
+function columnMatchesGroupingFilter(
+  column: string,
+  filterValue: string | null | undefined,
+  groupingVariables: Record<string, string>,
+  axisLabels: Record<string, string>,
+): boolean {
+  if (!filterValue) return true;
+  const { group, axisLabel } = decodeGroupingFilter(filterValue);
+  if (resolveGroupingVariableForColumn(column, groupingVariables) !== group) return false;
+  if (axisLabel !== null && (resolveAxisLabelForColumn(column, axisLabels) ?? '') !== axisLabel) return false;
+  return true;
+}
+
 function normalizeColumnKey(value: string): string {
   const normalized = value
     .trim()
@@ -336,17 +361,19 @@ function ChartView({
 
     return candidates.filter((col) => {
       if (chartGroup && resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
-      if (chartAxisLabelFilter && resolveGroupingVariableForColumn(col, groupingVariables) !== chartAxisLabelFilter) return false;
+      if (!columnMatchesGroupingFilter(col, chartAxisLabelFilter, groupingVariables, axisLabels)) return false;
       return true;
     });
-  }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables]);
+  }, [rangeMode, columns, chartGroup, chartAxisLabelFilter, variableTypes, groupingVariables, axisLabels]);
 
   const groupedDisplayColumns = useMemo(() => {
     if (filteredChartColumns.length === 0) return filteredChartColumns;
 
+    const filterGroup = decodeGroupingFilter(chartAxisLabelFilter).group;
+
     // Herbivores/Diet includes multiple metric families sharing the same x-axis labels
     // (kgkm2, counts, dmi, ch4). Mixing them corrupts grouped line/boxplot rendering.
-    if (chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Diet') {
+    if (chartGroup === 'Herbivores' && filterGroup === 'Diet') {
       const familyByColumn = new Map<string, string>();
       const familyOrder: string[] = [];
 
@@ -379,11 +406,19 @@ function ChartView({
   const [groupedRangeData, setGroupedRangeData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
+    referenceLower: Record<string, number>;
+    referenceUpper: Record<string, number>;
+    currentLower: Record<string, number>;
+    currentUpper: Record<string, number>;
   } | null>(null);
   const [groupedRangeLoading, setGroupedRangeLoading] = useState(false);
   const [summaryRangeData, setSummaryRangeData] = useState<{
     reference: Record<string, number>;
     current: Record<string, number>;
+    referenceLower: Record<string, number>;
+    referenceUpper: Record<string, number>;
+    currentLower: Record<string, number>;
+    currentUpper: Record<string, number>;
   } | null>(null);
   const [summaryRangeLoading, setSummaryRangeLoading] = useState(false);
   const [whiskerBounds, setWhiskerBounds] = useState<WhiskerBoundsResponse | null>(null);
@@ -527,7 +562,7 @@ function ChartView({
       throw lastErr ?? new Error('request failed');
     };
 
-    const fetchAggregates = async (scenario: Scenario): Promise<Record<string, number>> => {
+    const fetchAggregates = async (scenario: Scenario, bound?: 'lower' | 'upper'): Promise<Record<string, number>> => {
       // Large groups like "functional group" can exceed practical URL/query limits
       // when sent as one comma-separated list; request in chunks and merge.
       const batchSize = 12;
@@ -542,6 +577,7 @@ function ChartView({
           scenario,
           attributes: batch.join(','),
         });
+        if (bound) params.set('bound', bound);
 
         if (rangeMode === 'extent' && mapExtent?.bounds) {
           const [minx, miny, maxx, maxy] = mapExtent.bounds;
@@ -563,13 +599,17 @@ function ChartView({
     Promise.all([
       fetchAggregates('reference'),
       fetchAggregates('current'),
-    ]).then(([reference, current]) => {
+      fetchAggregates('reference', 'lower'),
+      fetchAggregates('reference', 'upper'),
+      fetchAggregates('current', 'lower'),
+      fetchAggregates('current', 'upper'),
+    ]).then(([reference, current, referenceLower, referenceUpper, currentLower, currentUpper]) => {
       if (cancelled) return;
 
       if (Object.keys(reference).length === 0 && Object.keys(current).length === 0) {
         setGroupedRangeData(null);
       } else {
-        setGroupedRangeData({ reference, current });
+        setGroupedRangeData({ reference, current, referenceLower, referenceUpper, currentLower, currentUpper });
       }
       setGroupedRangeLoading(false);
     }).catch(() => {
@@ -600,8 +640,9 @@ function ChartView({
     let cancelled = false;
     setSummaryRangeLoading(true);
 
-    const fetchAggregate = async (scenario: Scenario): Promise<Record<string, number>> => {
+    const fetchAggregate = async (scenario: Scenario, bound?: 'lower' | 'upper'): Promise<Record<string, number>> => {
       const params = new URLSearchParams({ scenario, attributes: attribute });
+      if (bound) params.set('bound', bound);
       if (rangeMode === 'extent' && mapExtent?.bounds) {
         const [minx, miny, maxx, maxy] = mapExtent.bounds;
         params.set('minx', String(minx));
@@ -614,10 +655,17 @@ function ChartView({
       return resp.json() as Promise<Record<string, number>>;
     };
 
-    Promise.all([fetchAggregate('reference'), fetchAggregate('current')])
-      .then(([reference, current]) => {
+    Promise.all([
+      fetchAggregate('reference'),
+      fetchAggregate('current'),
+      fetchAggregate('reference', 'lower'),
+      fetchAggregate('reference', 'upper'),
+      fetchAggregate('current', 'lower'),
+      fetchAggregate('current', 'upper'),
+    ])
+      .then(([reference, current, referenceLower, referenceUpper, currentLower, currentUpper]) => {
         if (cancelled) return;
-        setSummaryRangeData({ reference, current });
+        setSummaryRangeData({ reference, current, referenceLower, referenceUpper, currentLower, currentUpper });
         setSummaryRangeLoading(false);
       })
       .catch(() => {
@@ -652,7 +700,7 @@ function ChartView({
     );
     if (!hasData) return null;
 
-    const xLabel = axisLabels[attribute] ?? attribute.replace(/_/g, ' ');
+    const xLabel = resolveAxisLabelForColumn(attribute, xAxisLabels) ?? attribute.replace(/_/g, ' ');
     const chartType = 'line';
 
     return {
@@ -664,7 +712,7 @@ function ChartView({
         typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null,
       ] as (number | null)[],
     };
-  }, [attribute, axisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData, targetHasBeenUpdated]);
+  }, [attribute, xAxisLabels, rangeMode, mapStatistics, leftScenario, rightScenario, siteIndicators, catchmentData, summaryRangeData, targetHasBeenUpdated]);
 
   // Build grouped chart data for all columns where Grouping variable matches the selected group.
   const groupedChartData = useMemo(() => {
@@ -727,18 +775,30 @@ function ChartView({
         ? resolveMapValueForColumn(siteIndicators?.currentLower, col)
         : undefined;
 
+      // For "site" zone range, prefer siteIndicators then fall back to the
+      // site's own catchment-derived whisker bounds. For "domain"/"extent",
+      // there's no site to scope to, so use the area-weighted bound
+      // aggregates fetched for the current zone range instead.
       const refUpperRaw = typeof siteRefUpperRaw === 'number'
         ? siteRefUpperRaw
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, col) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, col) : undefined)
+          : resolveMapValueForColumn(groupedRangeData?.referenceUpper ?? null, col);
       const refLowerRaw = typeof siteRefLowerRaw === 'number'
         ? siteRefLowerRaw
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, col) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, col) : undefined)
+          : resolveMapValueForColumn(groupedRangeData?.referenceLower ?? null, col);
       const curUpperRaw = typeof siteCurUpperRaw === 'number'
         ? siteCurUpperRaw
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, col) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, col) : undefined)
+          : resolveMapValueForColumn(groupedRangeData?.currentUpper ?? null, col);
       const curLowerRaw = typeof siteCurLowerRaw === 'number'
         ? siteCurLowerRaw
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, col) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, col) : undefined)
+          : resolveMapValueForColumn(groupedRangeData?.currentLower ?? null, col);
       const normalizedRefUpper = normalizedRef !== null && typeof refUpperRaw === 'number' && Number.isFinite(refUpperRaw) ? refUpperRaw : null;
       const normalizedRefLower = normalizedRef !== null && typeof refLowerRaw === 'number' && Number.isFinite(refLowerRaw) ? refLowerRaw : null;
       const normalizedCurUpper = normalizedCur !== null && typeof curUpperRaw === 'number' && Number.isFinite(curUpperRaw) ? curUpperRaw : null;
@@ -808,7 +868,7 @@ function ChartView({
       p.curLower = p.curLowerCount > 0 && p.curLower !== null ? p.curLower / p.curLowerCount : null;
     }
 
-    const hideNoRefOrCur = chartGroup === 'Herbivores' && chartAxisLabelFilter === 'Species';
+    const hideNoRefOrCur = chartGroup === 'Herbivores' && decodeGroupingFilter(chartAxisLabelFilter).group === 'Species';
     const valid = points.filter((p) => {
       if (hideNoRefOrCur) {
         const refVal = p.ref ?? 0;
@@ -954,6 +1014,9 @@ function ChartView({
 
   const { width, height } = size;
 
+  const isLoading = groupedRangeLoading || summaryRangeLoading
+    || (groupedChartType === 'boxplot' && whiskerLoading);
+
   if (!hasData) {
     return (
       <Box
@@ -970,11 +1033,13 @@ function ChartView({
       >
         {visible
           ? (
-            chartGroup
-              ? (chartAxisLabelFilter
-                ? (groupedRangeLoading ? 'Loading\u2026' : 'No grouped chart data for this selection')
-                : 'Select a grouping variable to show chart data')
-              : (attribute ? 'Loading…' : 'Select a factor to view its chart')
+            isLoading
+              ? <Spinner size="xl" color="orange.400" thickness="3px" speed="0.7s" />
+              : (chartGroup
+                ? (chartAxisLabelFilter
+                  ? 'No grouped chart data for this selection'
+                  : 'Select a grouping variable to show chart data')
+                : (attribute ? 'No chart data for this selection' : 'Select a factor to view its chart'))
           )
           : null}
       </Box>
@@ -1537,23 +1602,35 @@ function ChartView({
       const curVal = values[1];
       const targetVal = values[2];
 
-      const siteRefUpper = resolveMapValueForColumn(siteIndicators?.referenceUpper, attribute!);
-      const siteRefLower = resolveMapValueForColumn(siteIndicators?.referenceLower, attribute!);
-      const siteCurUpper = resolveMapValueForColumn(siteIndicators?.currentUpper, attribute!);
-      const siteCurLower = resolveMapValueForColumn(siteIndicators?.currentLower, attribute!);
+      const siteRefUpper = rangeMode === 'site' ? resolveMapValueForColumn(siteIndicators?.referenceUpper, attribute!) : undefined;
+      const siteRefLower = rangeMode === 'site' ? resolveMapValueForColumn(siteIndicators?.referenceLower, attribute!) : undefined;
+      const siteCurUpper = rangeMode === 'site' ? resolveMapValueForColumn(siteIndicators?.currentUpper, attribute!) : undefined;
+      const siteCurLower = rangeMode === 'site' ? resolveMapValueForColumn(siteIndicators?.currentLower, attribute!) : undefined;
 
+      // For "site" zone range, prefer siteIndicators then fall back to the
+      // site's own catchment-derived whisker bounds. For "domain"/"extent",
+      // there's no site to scope to, so use the area-weighted bound
+      // aggregates fetched for the current zone range instead.
       const refUpperRaw = typeof siteRefUpper === 'number'
         ? siteRefUpper
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, attribute!) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceUpper, attribute!) : undefined)
+          : resolveMapValueForColumn(summaryRangeData?.referenceUpper ?? null, attribute!);
       const refLowerRaw = typeof siteRefLower === 'number'
         ? siteRefLower
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, attribute!) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.referenceLower, attribute!) : undefined)
+          : resolveMapValueForColumn(summaryRangeData?.referenceLower ?? null, attribute!);
       const curUpperRaw = typeof siteCurUpper === 'number'
         ? siteCurUpper
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, attribute!) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentUpper, attribute!) : undefined)
+          : resolveMapValueForColumn(summaryRangeData?.currentUpper ?? null, attribute!);
       const curLowerRaw = typeof siteCurLower === 'number'
         ? siteCurLower
-        : (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, attribute!) : undefined);
+        : rangeMode === 'site'
+          ? (whiskerBounds ? resolveMapValueForColumn(whiskerBounds.currentLower, attribute!) : undefined)
+          : resolveMapValueForColumn(summaryRangeData?.currentLower ?? null, attribute!);
 
       const seriesDefs = [
         { name: SERIES_LABELS[0], color: SERIES_COLORS[0], val: refVal,
@@ -1628,7 +1705,8 @@ function ChartView({
                   xref: 'paper',
                   yref: 'paper',
                   x: 0.5,
-                  y: -0.18,
+                  y: 0,
+                  yshift: -45,
                   showarrow: false,
                   font: { color: '#a0aec0', size: 13 },
                 },
@@ -1916,9 +1994,6 @@ function ChartView({
       </svg>
     );
   };
-
-  const isLoading = groupedRangeLoading || summaryRangeLoading
-    || (groupedChartType === 'boxplot' && whiskerLoading);
 
   return (
     <Box
