@@ -62,6 +62,13 @@ func NewHandler(
 		cfg:       cfg,
 		metaCache: loadMetadataCache(cfg.DataDir),
 	}
+
+	// metadata.csv is exported from R, whose make.names() rewrites spaces and
+	// hyphens to dots, so two thirds of the GeoPackage's columns are named
+	// differently in the two files and matched nothing. See AddColumnAliases.
+	if gpkgStore != nil {
+		h.metaCache.AddColumnAliases(gpkgStore.GetColumns())
+	}
 	go func() {
 		lt := LoadLookupTables(cfg.DataDir)
 		h.lookupsMu.Lock()
@@ -426,6 +433,8 @@ func (h *Handler) handleScenarioData(w http.ResponseWriter, r *http.Request) {
 //	scenario: scenario name (required)
 //	attributes: comma-separated list of attribute column names (required)
 //	minx,miny,maxx,maxy: optional bbox for extent aggregation
+//	bound: optional "lower" or "upper" to return the corresponding uncertainty
+//	  bound instead of the mean, for whisker/box-plot ranges outside site scope
 func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
 	if h.gpkgStore == nil {
 		respondError(w, http.StatusNotFound, "no geo data loaded")
@@ -492,9 +501,21 @@ func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
 		bbox = &[4]float64{minx, miny, maxx, maxy}
 	}
 
+	bound := strings.TrimSpace(q.Get("bound"))
+	if bound != "" && bound != "lower" && bound != "upper" {
+		respondError(w, http.StatusBadRequest, "bound must be 'lower' or 'upper'")
+		return
+	}
+
 	aggStart := time.Now()
-	agg, err := h.gpkgStore.GetScenarioAverages(scenario, attributes, bbox)
-	log.Printf("[perf] handleAggregateData scenario=%s attributes=%d hasBbox=%v duration_ms=%d", scenario, len(attributes), bbox != nil, time.Since(aggStart).Milliseconds())
+	var agg map[string]float64
+	var err error
+	if bound == "" {
+		agg, err = h.gpkgStore.GetScenarioAverages(scenario, attributes, bbox)
+	} else {
+		agg, err = h.gpkgStore.GetScenarioBoundAverages(scenario, bound, attributes, bbox)
+	}
+	log.Printf("[perf] handleAggregateData scenario=%s bound=%q attributes=%d hasBbox=%v duration_ms=%d", scenario, bound, len(attributes), bbox != nil, time.Since(aggStart).Milliseconds())
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return

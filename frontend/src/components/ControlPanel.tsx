@@ -18,7 +18,7 @@ import {
 import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
@@ -101,6 +101,59 @@ function resolveVariableTypeForColumn(column: string, variableTypes: Record<stri
   }
 
   return '';
+}
+
+function resolveAxisLabelForColumn(column: string, axisLabels: Record<string, string>): string {
+  const candidates = [
+    column,
+    column.replace(/_/g, ' '),
+    column.replace(/_/g, '.'),
+    column.replace(/\./g, '_'),
+    column.replace(/\./g, ' '),
+    column.replace(/ /g, '_'),
+    column.replace(/ /g, '.'),
+  ];
+
+  for (const key of candidates) {
+    const label = axisLabels[key];
+    if (label && label.trim().length > 0) return label;
+  }
+
+  const normalizedColumn = normalizeColumnKey(column);
+  for (const [key, label] of Object.entries(axisLabels)) {
+    if (normalizeColumnKey(key) === normalizedColumn && label.trim().length > 0) return label;
+  }
+
+  return '';
+}
+
+// Separates a "Grouping variable" value from an optional axis-label suffix in an
+// encoded chartAxisLabelFilter value (see encodeGroupingOption below). Must stay in
+// sync with the identical delimiter/decoder in ChartView.tsx.
+const GROUP_UNIT_DELIM = '\u0001';
+
+function encodeGroupingOption(group: string, axisLabel: string): string {
+  return `${group}${GROUP_UNIT_DELIM}${axisLabel}`;
+}
+
+function decodeGroupingFilter(value: string | null | undefined): { group: string; axisLabel: string | null } {
+  if (!value) return { group: '', axisLabel: null };
+  const idx = value.indexOf(GROUP_UNIT_DELIM);
+  if (idx === -1) return { group: value, axisLabel: null };
+  return { group: value.slice(0, idx), axisLabel: value.slice(idx + 1) };
+}
+
+function columnMatchesGroupingFilter(
+  column: string,
+  filterValue: string | null | undefined,
+  groupingVariables: Record<string, string>,
+  axisLabels: Record<string, string>,
+): boolean {
+  if (!filterValue) return true;
+  const { group, axisLabel } = decodeGroupingFilter(filterValue);
+  if (resolveGroupingVariableForColumn(column, groupingVariables) !== group) return false;
+  if (axisLabel !== null && resolveAxisLabelForColumn(column, axisLabels) !== axisLabel) return false;
+  return true;
 }
 
 function normalizeColumnKey(value: string): string {
@@ -412,6 +465,7 @@ function ControlPanel({
   const { chartTypes } = useAttributeChartTypes();
   const { groupingVariables } = useAttributeGroupingVariables();
   const { variableTypes } = useAttributeVariableTypes();
+  const { axisLabels } = useAttributeAxisLabels();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
@@ -441,21 +495,42 @@ function ControlPanel({
     if (!chartGroup) return [];
 
     const fromChartableColumns = columns
-      .filter((col) => canGraph[col] && resolveVariableTypeForColumn(col, variableTypes) === chartGroup)
-      .map((col) => resolveGroupingVariableForColumn(col, groupingVariables))
-      .filter((group): group is string => Boolean(group && group.trim().length > 0 && group !== 'catchID'));
+      .filter((col) => canGraph[col] && resolveVariableTypeForColumn(col, variableTypes) === chartGroup);
 
-    const groups = fromChartableColumns.length > 0
+    const sourceColumns = fromChartableColumns.length > 0
       ? fromChartableColumns
-      : Object.entries(groupingVariables)
-          .filter(([col, group]) => {
-            if (!group || group === 'catchID') return false;
-            return resolveVariableTypeForColumn(col, variableTypes) === chartGroup;
-          })
-          .map(([, group]) => group);
+      : Object.keys(groupingVariables)
+          .filter((col) => resolveVariableTypeForColumn(col, variableTypes) === chartGroup);
 
-    return [...new Set(groups)].sort().map((group) => ({ value: group, label: group.replace(/_/g, ' ') }));
-  }, [chartGroup, columns, canGraph, variableTypes, groupingVariables]);
+    // Mixing indicators that plot on different axes into one chart produces a
+    // meaningless combined y-axis (e.g. burned area and fuel load on the same
+    // scale), so split any grouping-variable bucket whose columns span multiple
+    // "axis label" values into one option per axis label.
+    const axisLabelsByGroup = new Map<string, Set<string>>();
+    for (const col of sourceColumns) {
+      const group = resolveGroupingVariableForColumn(col, groupingVariables);
+      if (!group || group === 'catchID') continue;
+      const axisLabel = resolveAxisLabelForColumn(col, axisLabels) || 'unspecified axis label';
+      if (!axisLabelsByGroup.has(group)) axisLabelsByGroup.set(group, new Set());
+      axisLabelsByGroup.get(group)!.add(axisLabel);
+    }
+
+    const options: { value: string; label: string }[] = [];
+    for (const [group, labelSet] of axisLabelsByGroup) {
+      if (labelSet.size <= 1) {
+        options.push({ value: group, label: group.replace(/_/g, ' ') });
+        continue;
+      }
+      for (const axisLabel of labelSet) {
+        options.push({
+          value: encodeGroupingOption(group, axisLabel),
+          label: `${group.replace(/_/g, ' ')} (${axisLabel})`,
+        });
+      }
+    }
+
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [chartGroup, columns, canGraph, variableTypes, groupingVariables, axisLabels]);
 
   const lineBoxplotToggleAvailable = useMemo(() => {
     if (viewMode !== 'chart' || !chartGroup || !chartAxisLabelFilter) return false;
@@ -487,14 +562,14 @@ function ControlPanel({
     const groupColumns = columns.filter((col) => {
       if (!canGraph[col]) return false;
       if (resolveVariableTypeForColumn(col, variableTypes) !== chartGroup) return false;
-      return resolveGroupingVariableForColumn(col, groupingVariables) === chartAxisLabelFilter;
+      return columnMatchesGroupingFilter(col, chartAxisLabelFilter, groupingVariables, axisLabels);
     });
 
     return groupColumns.some((col) => {
       const chartType = (resolveChartTypeForColumn(col) ?? '').toLowerCase().replace(/\s+/g, '');
       return chartType.includes('line/boxplot');
     });
-  }, [viewMode, chartGroup, chartAxisLabelFilter, columns, canGraph, variableTypes, groupingVariables, chartTypes]);
+  }, [viewMode, chartGroup, chartAxisLabelFilter, columns, canGraph, variableTypes, groupingVariables, chartTypes, axisLabels]);
 
   useEffect(() => {
     if (chartAxisLabelFilter && !groupingVariableOptions.some((option) => option.value === chartAxisLabelFilter)) {
@@ -524,7 +599,7 @@ function ControlPanel({
             return false;
           }
           if (viewMode === 'chart' && chartAxisLabelFilter) {
-            if (resolveGroupingVariableForColumn(col, groupingVariables) !== chartAxisLabelFilter) return false;
+            if (!columnMatchesGroupingFilter(col, chartAxisLabelFilter, groupingVariables, axisLabels)) return false;
           }
           return true;
         })
@@ -534,7 +609,7 @@ function ControlPanel({
       label: attributeDetails[col] || col,
       sublabel: attributeDetails[col] ? col : undefined,
     }));
-  }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails]);
+  }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails, axisLabels]);
 
   const allGraphableFactorOptions = useMemo(
     () => columns
