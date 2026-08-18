@@ -18,13 +18,19 @@ set -euo pipefail
 #
 #   desktop  the standalone GTK/WebKit application — the server runs in-process
 #            and an embedded WebView window opens onto it. The default.
-#   server   the same server with no window, for a browser on this or another
-#            machine to connect to at http://<host>:<port>.
+#   server   the same server with no window, for a browser to connect to at
+#            http://127.0.0.1:<port>. Reaching it from another machine needs
+#            DT_BIND — the default is loopback because the API is
+#            unauthenticated.
 #
 # Environment knobs (all optional):
 #   DT_MODE          desktop (default) or server.
 #   DT_BIN           Launch this binary; skips every build step entirely.
 #   DT_PORT          HTTP port (default: the app's own default, 8080).
+#   DT_BIND          Interface to listen on (default: 127.0.0.1). The API is
+#                    unauthenticated, so 0.0.0.0 exposes it to your whole
+#                    network — set it only when something in front controls
+#                    access. Server mode on another machine needs it.
 #   DT_DATA_DIR      Passed as --data-dir. Unset lets the app resolve it from
 #                    saved settings, then ./data, then the per-user directory.
 #   DT_RESOURCES_DIR Passed as --resources-dir.
@@ -51,7 +57,11 @@ set -euo pipefail
 # =============================================================================
 
 usage() {
-    sed -n '4,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Print the comment block between the two ==== rules above. The range is
+    # derived rather than hardcoded: it was '4,45p', and adding four lines to the
+    # header silently truncated --help so the Options section stopped appearing.
+    awk '/^# ={10,}$/ { rules++; next } rules == 1' "${BASH_SOURCE[0]}" |
+        sed 's/^# \{0,1\}//'
 }
 
 # The knobs that .dt-env is allowed to set.
@@ -59,6 +69,7 @@ DT_VARS=(
     DT_MODE
     DT_BIN
     DT_PORT
+    DT_BIND
     DT_DATA_DIR
     DT_RESOURCES_DIR
     DT_HEADLESS
@@ -173,6 +184,7 @@ BIN="$DT_RESOLVED_BIN"
 ARGS=()
 
 [ -n "${DT_PORT:-}" ] && ARGS+=(--port "$DT_PORT")
+[ -n "${DT_BIND:-}" ] && ARGS+=(--bind "$DT_BIND")
 [ -n "${DT_DATA_DIR:-}" ] && ARGS+=(--data-dir "$DT_DATA_DIR")
 [ -n "${DT_RESOURCES_DIR:-}" ] && ARGS+=(--resources-dir "$DT_RESOURCES_DIR")
 [ "$DT_MODE" = "server" ] && ARGS+=(--headless)
