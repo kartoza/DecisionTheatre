@@ -30,6 +30,7 @@ WORKDIR /src
 
 RUN pip install --no-cache-dir \
     mkdocs \
+    mkdocs-macros-plugin \
     mkdocs-material \
     mkdocs-minify-plugin \
     mkdocs-macros-plugin \

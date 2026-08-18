@@ -146,6 +146,12 @@ download_csvs() {
     # with only a Tailscale IPv6 address and no real IPv6 default route)
     # resolve googleapis.com to an AAAA record and fail with "network is
     # unreachable" instead of falling back to IPv4.
+    #
+    # --exclude sites/**, images/**: these directories are owned by root
+    # (created by a container running as root against the bind-mounted data
+    # dir), so rclone's chtimes on them fails with "operation not permitted"
+    # when run as a regular user. They are large and not needed by this
+    # pipeline, so skip them entirely rather than fetch and then fail.
     rclone copy "$src" "$DATA_DIR" \
         --drive-root-folder-id "$FOLDER_ID" \
         --progress \
@@ -156,6 +162,8 @@ download_csvs() {
         --retries 3 \
         --low-level-retries 10 \
         --timeout 5m \
+        --exclude "sites/**" \
+        --exclude "images/**" \
         --bind 0.0.0.0
 
     echo
