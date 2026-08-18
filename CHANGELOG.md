@@ -98,6 +98,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SPECIFICATION.md` documented fixed vulnerabilities as present.** Its "known gaps"
+  section still said the server binds all interfaces, that `POST /api/datapack/install`
+  accepts an arbitrary filesystem path, that `POST /api/dialog/open-file` is registered
+  in server mode, that thumbnail paths are unvalidated, that there are no request body
+  size limits and no response compression. Five of those seven were closed on `main`
+  weeks ago. A specification that describes fixed defects as current is worse than one
+  that omits them: it is read as a threat assessment.
+
+  Each claim was rechecked against the code and the section rewritten to what is
+  actually true. Two gaps remain and are stated as such: there is still no
+  authentication on any endpoint and `deployments/nginx.conf` still proxies every path
+  without a denylist, and there is still no `context.Context` on database calls.
+
+- **The endpoint list did not say which routes are desktop-only.** A user's sites live
+  in their browser — the design brief, and what the client does — so the server's site
+  CRUD exists only in the desktop build, where the WebView has no persistent storage of
+  its own. The specification listed those routes as ordinary API, which reads as though
+  a hosted deployment stores users' sites. All seven gated routes are now marked, and
+  the reason is stated where the list begins.
+
 - **Switching sites coloured the map from the previous site.** `applyColors` was
   memoised on `[colorScaleMode, colorScaleType]` while its body read the `siteId`
   prop in ten places — the choropleth fetch for both panes, the browser-runtime
