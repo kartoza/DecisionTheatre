@@ -12,6 +12,7 @@ import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { evictExpired } from '../lib/ttlCache';
+import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -68,20 +69,27 @@ function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
   return _cachedStyle ?? url;
 }
 
-// Google Maps hybrid satellite raster style (no API key required for tile access)
-const GOOGLE_BASEMAP_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    google: {
-      type: 'raster',
-      tiles: ['https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'],
-      tileSize: 256,
-      attribution: '\u00a9 Google Maps',
-      maxzoom: 21,
+// Satellite raster basemap.
+//
+// A function rather than a constant: the tile template is supplied at runtime by
+// /api/info, and a module-level constant is evaluated at import time — before that
+// response can possibly have arrived — so it would always have captured the
+// default. See lib/satelliteBasemap.ts.
+function satelliteBasemapStyle(): maplibregl.StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      satellite: {
+        type: 'raster',
+        tiles: [satelliteTileUrl()],
+        tileSize: 256,
+        attribution: satelliteAttribution(),
+        maxzoom: 21,
+      },
     },
-  },
-  layers: [{ id: 'google-tiles', type: 'raster', source: 'google' }],
-};
+    layers: [{ id: 'satellite-tiles', type: 'raster', source: 'satellite' }],
+  };
+}
 
 // Fragment shading cost scales with the square of the device pixel ratio: a 2x
 // display does four times the per-pixel work of a 1x one, and 3x does nine times.
@@ -1984,7 +1992,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     setIsGoogleBasemap(nextVal);
 
     const newStyle: maplibregl.StyleSpecification | string = nextVal
-      ? GOOGLE_BASEMAP_STYLE
+      ? satelliteBasemapStyle()
       : (window.location.origin + '/data/style.json');
 
     const reapplyAfterStyleLoad = (map: maplibregl.Map) => {
@@ -2805,7 +2813,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Use the cached object if available (staggered panes will find it ready),
     // otherwise fall back to the URL so MapLibre fetches it normally. Browser
     // runtime starts on the Google basemap (see isGoogleBasemapRef default).
-    const mapStyle = isGoogleBasemapRef.current ? GOOGLE_BASEMAP_STYLE : getStyleForMap(styleUrl);
+    const mapStyle = isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl);
 
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
