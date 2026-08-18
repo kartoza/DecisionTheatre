@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`scripts/protect-branch.sh --no-strict`**, for batch merges. Strict protection
+  requires a branch to be up to date with `main` before it can merge, so with several
+  green pull requests waiting, merging the first makes every other one stale: five
+  ready pull requests become five sequential update-and-wait-for-CI cycles.
+
+  `--no-strict` drops only the up-to-dateness requirement. Every check is still
+  required and must still have passed — the only thing given up is the demand that it
+  passed against the newest `main`. That is a real if small risk, since two changes can
+  each be green alone and broken together, so it is meant for a deliberate batch with
+  `main` checked afterwards, never as a standing setting. Running the script with no
+  arguments restores strictness, which is what the batch caller relies on.
+
+  `--help` no longer reads a hardcoded line range, which the new paragraph would have
+  silently truncated.
+
 - **The flake can no longer fall out of step with the Go and npm manifests.** `flake.nix`
   pins two fixed-output hashes — `vendorHash` from `go.mod`/`go.sum`, `npmDepsHash` from
   `frontend/package-lock.json`. A fixed-output derivation is only revalidated when its
@@ -117,6 +132,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An audit with it found exactly one genuine case: an earlier throwaway version
   reported two, the second a false positive from matching a later hook's
   dependency array.
+
+- **The production page injected stack traces into itself.** `index.html`
+  installed `window.onerror` and `unhandledrejection` handlers that appended a
+  fixed, full-width red block containing the message, file, line, column and full
+  stack to the live document — internal paths and frame details shown to whoever
+  happened to be using the application, in every build.
+
+  The handlers now live in `src/main.tsx` behind `import.meta.env.DEV`, which is a
+  compile-time constant, so the block is **removed from a production bundle**
+  rather than merely skipped — verified by grepping the built assets. In
+  production the React error boundary is the recovery path, and anything outside
+  React reaches the console.
+
+- **Analytics loaded unconditionally in the desktop application.** The Google tag
+  sat three lines below a comment in the same file saying nothing there may fetch
+  from a third party, because in the offline desktop build an external request
+  either fails or blocks first paint. It also reported desktop usage to Google as
+  though it were a web visit.
+
+  It now loads only when `__DECISION_THEATRE_WEBVIEW__` is absent — a marker the
+  webview injects before any page script runs, so the check is reliable rather
+  than a guess — and is appended by script rather than being a bare tag that
+  executes before any guard can run. This is **not** consent: opt-in telemetry
+  with a visible toggle, and supplying the measurement ID at runtime, both remain
+  open.
+
+- **Two thirds of the indicators were invisible.** `metadata.csv` is exported from
+  R, whose `make.names()` rewrites spaces and hyphens to dots, so
+  `herbs_diet_kgkm2_Obligate grazer` in the GeoPackage is
+  `herbs_diet_kgkm2_Obligate.grazer` in the metadata. The lookup is an exact string
+  comparison, and a row matching nothing was silently discarded — nothing logged
+  it, and the indicator simply never appeared.
+
+  Measured against the supplied datapack: of **502** GeoPackage columns, **158**
+  carried metadata and **344** did not, so two thirds of the dataset had no colour,
+  no detailed name, no units, no axis label and no chart type, and was missing from
+  every selector that reads those maps. After the fix, **502 of 502**.
+
+  Each metadata entry is now also keyed by the real column name. The alias is built
+  from the GeoPackage side rather than by reversing the substitution, because the
+  reverse is ambiguous — `make.names()` maps both `' '` and `'-'` to `'.'`, so
+  `Browser.grazer.intermediate` could be either, and in this dataset it is
+  `Browser-grazer intermediate`. Normalising the real column forward has exactly
+  one answer. An entry the CSV already provides is never overwritten, and a `false`
+  flag is not aliased, because those maps carry meaning by presence.
 
 
 - **The desktop window laid the whole application out at a million times scale, and hung
