@@ -25,12 +25,18 @@ import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { getAppRuntime } from '../types/runtime';
 import places from '../data/places.json';
+import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
 
 const MAX_SEARCH_RESULTS = 8;
 const SEARCH_FLY_ZOOM = 10;
 const SEARCH_MIN_CHARS = 3;
 const SEARCH_DEBOUNCE_MS = 400;
-const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
+// Place search goes through our own backend rather than straight to Nominatim.
+// The OSM usage policy requires an identifying User-Agent and a real rate limit,
+// and neither is possible here: User-Agent is a forbidden header name for fetch,
+// and a per-tab debounce is not a rate limit when a user has several tabs open.
+// See internal/server/geocode.go.
+const PLACE_SEARCH_URL = '/api/geocode';
 
 interface PlaceResult {
   name: string;
@@ -38,22 +44,19 @@ interface PlaceResult {
   lat: number;
 }
 
-// Nominatim covers small towns that the bundled gazetteer (major cities only)
-// misses. It's an online-only enhancement — a failed/offline request just
-// leaves the instant local matches in place, so search still works offline.
-async function fetchNominatimPlaces(query: string, signal: AbortSignal): Promise<PlaceResult[]> {
-  const url = `${NOMINATIM_SEARCH_URL}?format=jsonv2&q=${encodeURIComponent(query)}&limit=${MAX_SEARCH_RESULTS}`;
+// Online search covers small towns that the bundled gazetteer (major cities
+// only) misses. It's an enhancement — a failed, rate-limited or offline request
+// just leaves the instant local matches in place, so search still works offline.
+//
+// The backend already returns the normalised shape and has done the parsing, so
+// the client no longer knows or cares which geocoder answered.
+async function fetchOnlinePlaces(query: string, signal: AbortSignal): Promise<PlaceResult[]> {
+  const url = `${PLACE_SEARCH_URL}?q=${encodeURIComponent(query)}`;
   const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
   if (!response.ok) return [];
 
-  const results = await response.json() as Array<{ lat: string; lon: string; display_name: string }>;
-  return results
-    .map((result) => ({
-      name: result.display_name,
-      lng: parseFloat(result.lon),
-      lat: parseFloat(result.lat),
-    }))
-    .filter((place) => Number.isFinite(place.lng) && Number.isFinite(place.lat));
+  const results = await response.json() as PlaceResult[];
+  return results.filter((place) => Number.isFinite(place.lng) && Number.isFinite(place.lat));
 }
 
 const MotionBox = motion(Box);
@@ -69,7 +72,7 @@ interface SiteCreationMapProps {
 
 const GOOGLE_SATELLITE_SOURCE_ID = 'google-satellite';
 const GOOGLE_SATELLITE_LAYER_ID = 'google-satellite-tiles';
-const GOOGLE_TILE_URL = 'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
+
 
 // Bright, chunky line styles for site boundaries
 const SITE_LINE_PAINT = {
@@ -147,7 +150,9 @@ function SiteCreationMap({
       .slice(0, MAX_SEARCH_RESULTS);
   }, [locationQuery]);
 
-  // Debounced online search — Nominatim's usage policy caps requests to
+  // Debounced online search — the backend enforces the upstream rate limit and
+  // caches, but debouncing still avoids a request per keystroke. Nominatim's
+  // usage policy caps requests to
   // roughly 1/sec, so only fire once typing pauses, and cancel any request
   // that's superseded by further typing.
   useEffect(() => {
@@ -165,7 +170,7 @@ function SiteCreationMap({
       searchAbortRef.current = controller;
       setIsSearchingOnline(true);
 
-      fetchNominatimPlaces(query, controller.signal)
+      fetchOnlinePlaces(query, controller.signal)
         .then((results) => {
           if (!controller.signal.aborted) setOnlineLocationResults(results);
         })
@@ -376,9 +381,9 @@ function SiteCreationMap({
         if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
           map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
             type: 'raster',
-            tiles: [GOOGLE_TILE_URL],
+            tiles: [satelliteTileUrl()],
             tileSize: 256,
-            attribution: '© Google Maps',
+            attribution: satelliteAttribution(),
             maxzoom: 21,
           });
         }
@@ -988,9 +993,9 @@ function SiteCreationMap({
       if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
         map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
           type: 'raster',
-          tiles: [GOOGLE_TILE_URL],
+          tiles: [satelliteTileUrl()],
           tileSize: 256,
-          attribution: '© Google Maps',
+          attribution: satelliteAttribution(),
           maxzoom: 21,
         });
       }

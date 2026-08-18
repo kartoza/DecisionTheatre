@@ -34,6 +34,7 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
+.PHONY: container
 .PHONY: fmt lint check deps
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: protect-branch
@@ -198,6 +199,14 @@ verify-flake:
 ## and nix/manifest-lock.json together.
 sync-flake:
 	@./scripts/sync-flake.sh
+
+## container: Build the deployment container image from the flake and load it
+## into docker. The image contents are the runtime closure of the binary nix
+## already builds, so it cannot disagree with `nix build` about its
+## dependencies — which is how deployments/Dockerfile came to install WebKit
+## 4.0 while everything else targeted 4.1.
+container:
+	@./scripts/build-container.sh
 
 ## hooks: Install the git hooks so the checks run before each commit.
 hooks:

@@ -30,6 +30,11 @@ func main() {
 	dataDir := flag.String("data-dir", "", "Directory containing data files (mbtiles, geopackage)")
 	resourcesDir := flag.String("resources-dir", "", "Directory containing resource files (mbtiles, styles)")
 	headless := flag.Bool("headless", false, "Run in headless mode (no GUI window)")
+	satelliteTileURL := flag.String("satellite-tile-url", "",
+		"Raster tile template for satellite imagery. Defaults to the endpoint the "+
+			"application has always used; see issue #65.")
+	satelliteAttribution := flag.String("satellite-attribution", "",
+		"Attribution shown for --satellite-tile-url. Required by most providers' licences.")
 	bindAddress := flag.String("bind", config.DefaultBindAddress,
 		"Interface to listen on. Loopback by default; the API is unauthenticated, "+
 			"so use 0.0.0.0 only where something in front of it controls access.")
@@ -110,11 +115,13 @@ func main() {
 
 	// Build configuration
 	cfg := config.Config{
-		Port:         availablePort,
-		DataDir:      resolvedDataDir,
-		ResourcesDir: resolvedResourcesDir,
-		Version:      version,
-		BindAddress:  *bindAddress,
+		Port:                 availablePort,
+		DataDir:              resolvedDataDir,
+		ResourcesDir:         resolvedResourcesDir,
+		Version:              version,
+		BindAddress:          *bindAddress,
+		SatelliteTileURL:     *satelliteTileURL,
+		SatelliteAttribution: *satelliteAttribution,
 		// --headless is the server build; anything else opens the window below.
 		DesktopMode: !*headless,
 	}

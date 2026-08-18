@@ -24,6 +24,7 @@ import {
 import { DiWindows, DiLinux, DiApple } from 'react-icons/di';
 import type { AppPage } from '../types';
 import { useServerInfo, useDatapackDownloadInfo, useExecutablesInfo, type ExecutablePlatformInfo } from '../hooks/useApi';
+import mountainLake from '../assets/backgrounds/mountain-lake.webp';
 
 const MotionBox = motion(Box);
 
@@ -172,7 +173,7 @@ function DownloadPage({ onNavigate }: DownloadPageProps) {
       <Box
         position="fixed"
         top={0} left={0} right={0} bottom={0}
-        backgroundImage="url('https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=80')"
+        backgroundImage={`url(${mountainLake})`}
         backgroundSize="cover"
         backgroundPosition="center"
         backgroundAttachment="fixed"

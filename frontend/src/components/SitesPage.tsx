@@ -29,6 +29,7 @@ import {
 import type { AppPage, Site } from '../types';
 import { listSites, deleteSite } from '../hooks/useApi';
 import { colors } from '../styles/colors';
+import savannaSunset from '../assets/backgrounds/savanna-sunset.webp';
 
 const MotionBox = motion(Box);
 
@@ -107,7 +108,7 @@ function SitesPage({ onNavigate, onOpenSite, onCloneSite, onEditSite }: SitesPag
         left={0}
         right={0}
         bottom={0}
-        backgroundImage="url('https://images.unsplash.com/photo-1501854140801-50d01698950b?auto=format&fit=crop&w=2000&q=80')"
+        backgroundImage={`url(${savannaSunset})`}
         backgroundSize="cover"
         backgroundPosition="center"
         backgroundAttachment="fixed"

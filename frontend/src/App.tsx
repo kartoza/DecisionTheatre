@@ -38,6 +38,7 @@ import {
   markSessionActive,
   shouldPromptResumeSession,
 } from './types';
+import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
 function App() {
@@ -99,6 +100,13 @@ function App() {
   const [isExtractingIndicators, setIsExtractingIndicators] = useState(false);
   const { info } = useServerInfo();
 
+  // Adopt the server's satellite basemap configuration as soon as it arrives. A
+  // map created before this runs keeps the built-in default, which is the imagery
+  // the application has always shown — so the worst case is unchanged behaviour
+  // rather than a missing basemap. See lib/satelliteBasemap.ts.
+  useEffect(() => {
+    applyServerSatelliteConfig(info);
+  }, [info]);
   // Storage failures used to be discarded, so a full quota looked like a working
   // application that quietly forgot things. Two things happen here, once each:
   //
