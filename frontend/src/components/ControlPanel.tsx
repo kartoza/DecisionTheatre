@@ -14,6 +14,11 @@ import {
   Tooltip,
   Button,
   ButtonGroup,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalCloseButton,
+  ModalBody,
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -26,6 +31,10 @@ import { colors } from '../styles/colors';
 
 interface ControlPanelProps {
   isOpen: boolean;
+  /** Render as a centered Modal dialog instead of the slide-out side panel — used to
+   * let grid/quad view edit a single pane's factor without leaving the grid layout. */
+  asModal?: boolean;
+  onClose?: () => void;
   comparison: ComparisonState;
   onLeftChange: (scenario: Scenario) => void;
   onRightChange: (scenario: Scenario) => void;
@@ -431,6 +440,8 @@ function ScenarioSelector({
 
 function ControlPanel({
   isOpen,
+  asModal = false,
+  onClose,
   comparison,
   onLeftChange,
   onRightChange,
@@ -749,54 +760,8 @@ function ControlPanel({
     setIsResizing(true);
   };
 
-  return (
-    <Slide
-      direction="right"
-      in={isOpen}
-      style={{
-        zIndex: 15,
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        height: '100%',
-        width: 'auto',
-      }}
-    >
-      <Box
-        id="tour-control-panel"
-        w={{ base: '100vw', md: `${panelWidth}px` }}
-        h="100%"
-        bg={bgColor}
-        borderLeft="1px"
-        borderColor={borderColor}
-        overflowY="auto"
-        boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
-        pt="70px" // Header height offset
-        position="relative"
-      >
-        <Box
-          display={{ base: 'none', md: 'block' }}
-          position="absolute"
-          left={0}
-          top={0}
-          bottom={0}
-          width="6px"
-          cursor="col-resize"
-          zIndex={2}
-          onMouseDown={handleResizeStart}
-          _hover={{ bg: 'blackAlpha.200' }}
-        />
-        {/* Close hint for mobile */}
-        <Box display={{ base: 'block', md: 'none' }} p={2} textAlign="right">
-          <IconButton
-            aria-label="Close panel"
-            icon={<FiChevronRight />}
-            size="sm"
-            variant="ghost"
-          />
-        </Box>
-
-        <VStack spacing={6} p={6} align="stretch">
+  const panelContent = (
+    <VStack spacing={6} p={6} align="stretch">
           {/* Create Site button - shown prominently at top in explore mode */}
           {isExploreMode && onNavigateToCreateSite && (
             <Box>
@@ -1242,7 +1207,71 @@ function ControlPanel({
           )}
 
           {/* Info footer intentionally hidden */}
-        </VStack>
+    </VStack>
+  );
+
+  if (asModal) {
+    return (
+      <Modal isOpen={isOpen} onClose={() => onClose?.()} size="xl" scrollBehavior="inside" isCentered>
+        <ModalOverlay />
+        <ModalContent bg={bgColor} maxH="85vh">
+          <ModalCloseButton zIndex={1} />
+          <ModalBody p={0} pt={10} pb={2}>
+            {panelContent}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+    );
+  }
+
+  return (
+    <Slide
+      direction="right"
+      in={isOpen}
+      style={{
+        zIndex: 15,
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        height: '100%',
+        width: 'auto',
+      }}
+    >
+      <Box
+        id="tour-control-panel"
+        w={{ base: '100vw', md: `${panelWidth}px` }}
+        h="100%"
+        bg={bgColor}
+        borderLeft="1px"
+        borderColor={borderColor}
+        overflowY="auto"
+        boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
+        pt="70px" // Header height offset
+        position="relative"
+      >
+        <Box
+          display={{ base: 'none', md: 'block' }}
+          position="absolute"
+          left={0}
+          top={0}
+          bottom={0}
+          width="6px"
+          cursor="col-resize"
+          zIndex={2}
+          onMouseDown={handleResizeStart}
+          _hover={{ bg: 'blackAlpha.200' }}
+        />
+        {/* Close hint for mobile */}
+        <Box display={{ base: 'block', md: 'none' }} p={2} textAlign="right">
+          <IconButton
+            aria-label="Close panel"
+            icon={<FiChevronRight />}
+            size="sm"
+            variant="ghost"
+          />
+        </Box>
+
+        {panelContent}
       </Box>
     </Slide>
   );

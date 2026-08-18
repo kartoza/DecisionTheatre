@@ -61,6 +61,11 @@ function App() {
     const mode = loadLayoutMode();
     return mode === 'single' ? loadFocusedPane() : null;
   });
+  // True when the control panel was opened from grid view via the per-pane
+  // "Configure factor" button — renders it as a centered Modal instead of the
+  // slide-out side panel, and is scoped to indicatorPaneIndex without switching
+  // layoutMode away from 'quad'.
+  const [isGridControlModal, setIsGridControlModal] = useState(false);
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
   // If this is a brand-new tab (not a same-tab refresh) and there's saved
@@ -529,14 +534,27 @@ function App() {
     setFocusedPane(paneIndex);
     setLayoutMode('single');
     setIndicatorPaneIndex(paneIndex);
+    setIsGridControlModal(false);
   }, []);
 
   // Switch to quad mode and hide filter panel
   const handleGoQuad = useCallback(() => {
     setLayoutMode('quad');
     setIndicatorPaneIndex(null);
+    setIsGridControlModal(false);
     setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
   }, [focusedPane]);
+
+  // Open the control panel as a modal, scoped to one pane, while staying in grid view.
+  const handleOpenGridControlPanel = useCallback((paneIndex: number) => {
+    setIndicatorPaneIndex(paneIndex);
+    setIsGridControlModal(true);
+  }, []);
+
+  const handleCloseGridControlPanel = useCallback(() => {
+    setIndicatorPaneIndex(null);
+    setIsGridControlModal(false);
+  }, []);
 
   // Listen for demo event to reset to single pane map view.
   useEffect(() => {
@@ -931,7 +949,14 @@ function App() {
     }
   }, [currentSiteId, currentSite, toast]);
 
-  const isIndicatorOpen = indicatorPaneIndex !== null;
+  // Only treat the panel as the grid-view modal while actually in quad layout —
+  // guards against isGridControlModal staying stale true if some other flow
+  // (e.g. a demo tour reset) forces layoutMode back to 'single' without going
+  // through handleFocusPane/handleGoQuad/handleCloseGridControlPanel.
+  const isGridControlPanelActive = isGridControlModal && layoutMode === 'quad';
+  // Excludes the grid-view control panel modal — that one overlays the grid without
+  // shrinking it, unlike the slide-out panel used in single pane mode.
+  const isIndicatorOpen = indicatorPaneIndex !== null && !isGridControlPanelActive;
 
   // Show setup guide when tiles aren't loaded
   if (info && !info.tiles_loaded) {
@@ -1129,6 +1154,7 @@ function App() {
             focusedPane={focusedPane}
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
+            onOpenControlPanel={handleOpenGridControlPanel}
             onAddPane={handleAddPane}
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
@@ -1171,7 +1197,9 @@ function App() {
 
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
-          isOpen={isIndicatorOpen}
+          isOpen={indicatorPaneIndex !== null}
+          asModal={isGridControlPanelActive}
+          onClose={handleCloseGridControlPanel}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
