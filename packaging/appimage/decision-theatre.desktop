@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Decision Theatre
-Comment=Offline catchment data exploration with embedded AI
+Comment=Offline exploration of African catchment data with scenario comparison
 Exec=decision-theatre
 Icon=decision-theatre
 Terminal=false
