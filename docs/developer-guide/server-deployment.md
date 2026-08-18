@@ -122,13 +122,29 @@ The image's default command already carries the flags the deployment needs —
 `--headless --bind 0.0.0.0 --port 8080 --data-dir /app/data --resources-dir
 /app/resources` — so you only override them if you want something different.
 
-!!! warning "Do not expose port 8080 directly"
-    The API is unauthenticated. `--bind 0.0.0.0` is correct *inside* a container,
-    because the process must accept connections from outside its own network
-    namespace to be reachable at all — but something in front of it has to control
-    access. In the compose deployment that is nginx. If you run the image by hand
-    on a public host, bind it to loopback (`-p 127.0.0.1:8080:8080`) and put a
-    proxy in front.
+!!! note "The API is unauthenticated, and read-only"
+    In server mode nothing the API exposes writes anything. The two routes that
+    could — `POST /api/datapack/install`, which replaces the data directory, and
+    `POST /api/dialog/open-file`, which opens a native file picker — are
+    registered only when `DesktopMode` is set, so in a container they are absent
+    from the route table entirely. The remaining `POST`/`PATCH` routes compute a
+    result and return it; none of them persists.
+
+    So exposing this is not a data-integrity risk. Two things are still worth
+    weighing before putting it on a public address:
+
+    - **A single request can be expensive.** A full-domain statistics query
+      returns roughly 14.7 MB and takes about 4 seconds, and nothing rate-limits
+      it. That is an availability and bandwidth consideration rather than a
+      security one, but it is cheap to abuse.
+    - **`/api/geocode` proxies to OpenStreetMap's Nominatim**, whose usage policy
+      the server exists to honour on behalf of every browser tab — see
+      `internal/server/geocode.go`. A publicly reachable instance is an open relay
+      to a third party under *your* identifying User-Agent, and the policy is
+      yours to keep.
+
+    `--bind 0.0.0.0` is correct inside a container: the process must accept
+    connections from outside its own network namespace to be reachable at all.
 
 To use it with the compose stack instead, point `DT_IMAGE` at it:
 
