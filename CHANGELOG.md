@@ -458,6 +458,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **Saving one site cost as much as saving all of them.** The three bulk callers
+  loaded every stored site, changed one, and wrote them all back, so `JSON.parse`
+  and `JSON.stringify` ran across the whole store on the main thread for every
+  edit — and the cost grew with everything a user had ever saved rather than with
+  what changed.
+
+  A record cache now keeps, per site, the object last handed out and the exact
+  string it serialises to. Reads re-parse only when the stored string differs, an
+  untouched site is recognised by reference and never re-serialised, and the index
+  is rewritten only when membership or order actually changed.
+
+  Measured in jsdom, editing one site out of 200 with the store at 4,091,627
+  characters — 78% of this machine's measured 5,241,856-character localStorage
+  ceiling — **saving fell from 24.94 ms to 0.28 ms and reloading from 17.90 ms to
+  0.60 ms**. The figure that matters is that the new cost barely moves between a
+  807,000-character store (0.21 ms) and a 4.1-million one (0.28 ms): it is now
+  proportional to the edit, not to the store.
+
+  Nothing is deferred, debounced or batched, so no durability window is
+  introduced — these records are the user's only copy of their work. A cache entry
+  is written only when the underlying write succeeded and is dropped when it
+  failed, so a quota exception can never leave the application believing a site is
+  stored.
+
 - **The application held twelve WebGL contexts in grid view and never gave one
   back.** Each `MapView` built two MapLibre instances — left and right — whether or
   not the user was comparing anything, and a pane latched "has shown a map" on first
