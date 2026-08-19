@@ -87,7 +87,7 @@ func main() {
 	case "list":
 		err = cmdList(os.Args[2:])
 	case "-h", "--help", "help":
-		fmt.Fprint(os.Stdout, usageText())
+		_, _ = fmt.Fprint(os.Stdout, usageText())
 		os.Exit(exitOK)
 	default:
 		fmt.Fprintf(os.Stderr, "error: %q is not a dtbench command.\n", os.Args[1])

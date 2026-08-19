@@ -26,14 +26,6 @@ func measured(name string, p50 float64) ScenarioResult {
 	}
 }
 
-// spread widens a result's observed range, for the tests that care about the
-// summary statistics rather than the samples behind them.
-func spread(s ScenarioResult, min, max float64) ScenarioResult {
-	s.TotalMs.Min = min
-	s.TotalMs.Max = max
-	return s
-}
-
 // samplesAround builds a deterministic, evenly spaced sample set centred on
 // centre and reaching half either side.
 //

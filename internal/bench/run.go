@@ -170,10 +170,11 @@ func Execute(ctx context.Context, opts Options) (Run, error) {
 	}
 
 	run.ServerVersion = serverVersion(ctx, client, run.Target)
-	if run.ServerVersion == "" {
+	switch run.ServerVersion {
+	case "":
 		run.Notes = append(run.Notes,
 			"The target did not report a version, so these results cannot be attributed to a build.")
-	} else if run.ServerVersion == "dev" {
+	case "dev":
 		run.Notes = append(run.Notes,
 			`The target reports its version as "dev", which means it was built without a version stamped in. `+
 				"Results can be compared with each other but not attributed to a release.")
