@@ -13,7 +13,7 @@ import DialChart from './DialChart';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeUnits } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
@@ -226,6 +226,29 @@ function ViewPane({
     return () => { cancelled = true; };
   }, [comparison.attribute, siteId, viewMode]);
 
+  /**
+   * The bbox this pane's aggregates are scoped to, as a string, or '' when the
+   * range mode does not use one.
+   *
+   * mapExtent is a fresh object on every map move, and it was a dependency of
+   * the effect below regardless of range mode — so panning the map re-ran the
+   * aggregate fetch even in Full-domain mode, where the extent is not read at
+   * all and the answer cannot change. Six panes, two scenarios, a 4.8-second
+   * full-domain query each. Depending on a string that is only non-empty when
+   * the extent actually matters removes both the identity churn and the
+   * irrelevant re-runs.
+   */
+  const aggregateExtentQuery = useMemo(() => {
+    if (rangeMode !== 'extent' || !mapExtent?.bounds) return '';
+    const [minx, miny, maxx, maxy] = mapExtent.bounds;
+    return new URLSearchParams({
+      minx: String(minx),
+      miny: String(miny),
+      maxx: String(maxx),
+      maxy: String(maxy),
+    }).toString();
+  }, [rangeMode, mapExtent]);
+
   useEffect(() => {
     if (viewMode !== 'dial' || !comparison.attribute) {
       setDialRangeValues(null);
@@ -239,7 +262,7 @@ function ViewPane({
       return;
     }
 
-    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+    if (rangeMode === 'extent' && !aggregateExtentQuery) {
       setDialRangeValues(null);
       setDialRangeLoading(false);
       return;
@@ -259,32 +282,29 @@ function ViewPane({
     }
 
     let cancelled = false;
+    // Cancels the requests, not just their effect: a pan supersedes the
+    // previous extent's aggregates immediately, and every pane is asking.
+    const abort = new AbortController();
     setDialRangeLoading(true);
 
-    const fetchAggregate = async (scenario: string): Promise<number | undefined> => {
-      const params = new URLSearchParams({
-        scenario,
-        attributes: comparison.attribute || '',
-      });
+    const attribute = comparison.attribute || '';
 
-      if (rangeMode === 'extent' && mapExtent?.bounds) {
-        const [minx, miny, maxx, maxy] = mapExtent.bounds;
-        params.set('minx', String(minx));
-        params.set('miny', String(miny));
-        params.set('maxx', String(maxx));
-        params.set('maxy', String(maxy));
-      }
+    const aggregateFor = async (scenario: string): Promise<number | undefined> => {
+      const params = new URLSearchParams(aggregateExtentQuery);
+      params.set('scenario', scenario);
+      params.set('attributes', attribute);
 
-      const resp = await fetch(`/api/aggregate?${params.toString()}`);
-      if (!resp.ok) return undefined;
-      const payload = await resp.json() as Record<string, number>;
-      const value = payload[comparison.attribute || ''];
+      // Shared with every other pane asking the same question, and with the
+      // chart view's summary series. A failure or a cancellation reads as "no
+      // value", exactly as the non-2xx case did before.
+      const payload = await fetchAggregate(params, abort.signal).catch(() => ({} as Record<string, number>));
+      const value = payload[attribute];
       return typeof value === 'number' && !isNaN(value) ? value : undefined;
     };
 
     Promise.all([
-      fetchAggregate(comparison.leftScenario),
-      fetchAggregate(comparison.rightScenario),
+      aggregateFor(comparison.leftScenario),
+      aggregateFor(comparison.rightScenario),
     ]).then(([referenceValue, currentValue]) => {
       if (cancelled) return;
       setDialRangeValues({ referenceValue, currentValue });
@@ -293,14 +313,14 @@ function ViewPane({
       if (!cancelled) { setDialRangeValues(null); setDialRangeLoading(false); }
     });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; abort.abort(); };
   }, [
     viewMode,
     rangeMode,
     comparison.attribute,
     comparison.leftScenario,
     comparison.rightScenario,
-    mapExtent,
+    aggregateExtentQuery,
     fullDomainData,
   ]);
 

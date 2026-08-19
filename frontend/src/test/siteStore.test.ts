@@ -3,10 +3,13 @@ import {
   LEGACY_KEY,
   clearSiteStore,
   deleteSite,
+  getSiteStoreStats,
+  invalidateSiteCache,
   loadSite,
   loadSites,
   migrateLegacyStore,
   normaliseForStorage,
+  resetSiteStoreStats,
   saveSite,
   saveSites,
 } from '../lib/siteStore';
@@ -45,6 +48,7 @@ function countWrites() {
 beforeEach(() => {
   window.localStorage.clear();
   clearSiteStore();
+  resetSiteStoreStats();
 });
 
 afterEach(() => {
@@ -274,5 +278,262 @@ describe('reading and writing', () => {
 
   it('refuses a site with no id rather than writing a broken key', () => {
     expect(saveSite({ title: 'no id' } as unknown as Site)).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The cost of a save
+//
+// Splitting the blob into one key per site fixed the write but not the work
+// around it: the bulk callers still load every site, change one and hand the
+// whole list back, so the store parsed N records on the way in and re-serialised
+// N on the way out to find the one that differed. These tests count that work,
+// because "proportional to what changed" is a claim until it is a number.
+// ---------------------------------------------------------------------------
+
+function manySites(n: number): Site[] {
+  return Array.from({ length: n }, (_, i) => site(`s${i}`, { title: `site ${i}` }));
+}
+
+describe('what a save actually costs', () => {
+  it('serialises one site when one site of fifty changed', () => {
+    saveSites(manySites(50));
+    const loaded = loadSites();
+
+    const changed = [...loaded];
+    changed[17] = { ...loaded[17], title: 'edited' } as Site;
+
+    resetSiteStoreStats();
+    expect(saveSites(changed)).toBe(true);
+    const cost = getSiteStoreStats();
+
+    expect(cost.serialised).toBe(1);
+    expect(cost.recordWrites).toBe(1);
+    // Membership and order did not change, so the index does not need rewriting.
+    expect(cost.indexWrites).toBe(0);
+    // And nothing had to be read back to work out which record differed.
+    expect(cost.recordReads).toBe(0);
+    expect(cost.parsed).toBe(0);
+  });
+
+  it('costs the same with fifty sites stored as with five — that is the whole issue', () => {
+    function costOfOneEdit(n: number) {
+      window.localStorage.clear();
+      clearSiteStore();
+      saveSites(manySites(n));
+      const loaded = loadSites();
+      const changed = [...loaded];
+      changed[1] = { ...loaded[1], title: 'edited' } as Site;
+      resetSiteStoreStats();
+      saveSites(changed);
+      return getSiteStoreStats();
+    }
+
+    expect(costOfOneEdit(50)).toEqual(costOfOneEdit(5));
+  });
+
+  it('does no work at all when nothing changed', () => {
+    saveSites(manySites(20));
+    const loaded = loadSites();
+
+    resetSiteStoreStats();
+    expect(saveSites(loaded)).toBe(true);
+
+    expect(getSiteStoreStats()).toMatchObject({
+      serialised: 0,
+      recordWrites: 0,
+      indexWrites: 0,
+      parsed: 0,
+    });
+  });
+
+  it('still recognises an equal site it has never seen the object of', () => {
+    // A caller that rebuilt the list from somewhere else gets no identity hit,
+    // so the record is serialised — but an identical string must not be written.
+    saveSites(manySites(3));
+    invalidateSiteCache();
+
+    resetSiteStoreStats();
+    saveSites(manySites(3));
+
+    expect(getSiteStoreStats().serialised).toBe(3);
+    expect(getSiteStoreStats().recordWrites).toBe(0);
+  });
+
+  it('parses each record once however often it is read', () => {
+    saveSites(manySites(10));
+    invalidateSiteCache();
+
+    resetSiteStoreStats();
+    loadSites();
+    const first = getSiteStoreStats().parsed;
+    loadSites();
+    loadSites();
+    const total = getSiteStoreStats().parsed;
+
+    expect(first).toBe(10);
+    expect(total).toBe(10);
+  });
+
+  it('hands out a stable reference, which is what makes the shortcut sound', () => {
+    saveSites(manySites(3));
+    invalidateSiteCache();
+
+    const a = loadSites();
+    const b = loadSites();
+
+    expect(a[0]).toBe(b[0]);
+    expect(a[2]).toBe(b[2]);
+  });
+
+  it('writes the index only when membership or order changed', () => {
+    saveSites(manySites(3));
+
+    resetSiteStoreStats();
+    saveSites([...loadSites()].reverse());
+    expect(getSiteStoreStats().indexWrites).toBe(1);
+
+    resetSiteStoreStats();
+    saveSites(loadSites());
+    expect(getSiteStoreStats().indexWrites).toBe(0);
+
+    expect(loadSites().map((s) => s.id)).toEqual(['s2', 's1', 's0']);
+  });
+
+  it('an explicit single-site save is never skipped, however unchanged it looks', () => {
+    // Durability beats cleverness: a caller reaching for saveSite is asserting
+    // the site changed, and a store that argued would lose someone's work.
+    const s = site('a');
+    saveSite(s);
+
+    resetSiteStoreStats();
+    expect(saveSite(s)).toBe(true);
+
+    expect(getSiteStoreStats().recordWrites).toBe(1);
+  });
+});
+
+// Deliberately spy-based rather than counter-based, so it says something about
+// the store's observable behaviour rather than about its own bookkeeping — and
+// so it can be pointed at any implementation. Against the version that compared
+// each site to storage, this read fifty records to save one.
+describe('what a save touches, observed from outside', () => {
+  it('reads no records to save one site out of fifty', () => {
+    saveSites(manySites(50));
+    const loaded = loadSites();
+    const changed = [...loaded];
+    changed[7] = { ...loaded[7], title: 'edited' } as Site;
+
+    const reads: string[] = [];
+    const writes: string[] = [];
+    const realGet = Storage.prototype.getItem;
+    const realSet = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, k: string) {
+      reads.push(k);
+      return realGet.call(this, k);
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      k: string,
+      v: string,
+    ) {
+      writes.push(k);
+      realSet.call(this, k, v);
+    });
+
+    saveSites(changed);
+    vi.restoreAllMocks();
+
+    // The version that compared each site against storage read all fifty here.
+    expect(reads.filter((k) => k.startsWith('dt-site:'))).toEqual([]);
+    expect(writes).toEqual(['dt-site:s7']);
+  });
+});
+
+describe('the cache never outlives what it describes', () => {
+  it('does not believe a record is stored when the write failed', () => {
+    const s = site('a', { title: 'precious' });
+
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    });
+    expect(saveSites([s])).toBe(false);
+    vi.restoreAllMocks();
+
+    // Same object, so the identity shortcut would skip it if the failed write
+    // had been cached. It must not have been.
+    expect(saveSites([s])).toBe(true);
+    expect(loadSite('a')?.title).toBe('precious');
+  });
+
+  it('surfaces a quota failure from the list path, not just the single path', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    });
+    expect(saveSites([site('a')])).toBe(false);
+  });
+
+  it('surfaces a failure to write the index', () => {
+    saveSites([site('a')]);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      k: string,
+    ) {
+      if (k === 'dt-site-index') throw new DOMException('quota', 'QuotaExceededError');
+    });
+
+    // A new site changes membership, so the index must be rewritten.
+    expect(saveSite(site('b'))).toBe(false);
+  });
+
+  it('re-reads a record another tab replaced', () => {
+    saveSites([site('a', { title: 'ours' })]);
+    const ours = loadSites();
+
+    // What another tab writing dt-site:a looks like from in here.
+    window.localStorage.setItem('dt-site:a', JSON.stringify(site('a', { title: 'theirs' })));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'dt-site:a' }));
+
+    expect(loadSite('a')?.title).toBe('theirs');
+
+    // And the stale object we still hold is written back rather than skipped.
+    resetSiteStoreStats();
+    saveSites(ours);
+    expect(getSiteStoreStats().recordWrites).toBe(1);
+    expect(loadSite('a')?.title).toBe('ours');
+  });
+
+  it('forgets everything when another tab clears storage', () => {
+    saveSites([site('a')]);
+    window.localStorage.clear();
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+
+    expect(loadSites()).toEqual([]);
+  });
+
+  it('forgets a deleted site rather than serving it from cache', () => {
+    saveSites([site('a'), site('b')]);
+    loadSites();
+    deleteSite('a');
+
+    expect(loadSite('a')).toBeNull();
+    expect(loadSites().map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('migrates the legacy blob even with a warm cache, and indexes it', () => {
+    saveSites([site('kept')]);
+    loadSites();
+
+    window.localStorage.setItem(LEGACY_KEY, JSON.stringify([site('old-a'), site('old-b')]));
+
+    expect(loadSites().map((s) => s.id)).toEqual(['old-a', 'old-b']);
+    expect(window.localStorage.getItem(LEGACY_KEY)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem('dt-site-index') as string)).toEqual([
+      'old-a',
+      'old-b',
+    ]);
+    // The migrated records are readable through the cache that was already warm.
+    expect(loadSite('old-a')?.title).toBe('site old-a');
   });
 });

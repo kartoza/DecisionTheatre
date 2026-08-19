@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -447,9 +448,9 @@ func (h *Handler) handleScenarioData(w http.ResponseWriter, r *http.Request) {
 	scenario := vars["scenario"]
 	attribute := vars["attribute"]
 
-	data, err := h.gpkgStore.GetScenarioData(scenario, attribute)
+	data, err := h.gpkgStore.GetScenarioData(r.Context(), scenario, attribute)
 	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
+		respondStoreError(w, r, http.StatusNotFound, err)
 		return
 	}
 
@@ -540,13 +541,13 @@ func (h *Handler) handleAggregateData(w http.ResponseWriter, r *http.Request) {
 	var agg map[string]float64
 	var err error
 	if bound == "" {
-		agg, err = h.gpkgStore.GetScenarioAverages(scenario, attributes, bbox)
+		agg, err = h.gpkgStore.GetScenarioAverages(r.Context(), scenario, attributes, bbox)
 	} else {
-		agg, err = h.gpkgStore.GetScenarioBoundAverages(scenario, bound, attributes, bbox)
+		agg, err = h.gpkgStore.GetScenarioBoundAverages(r.Context(), scenario, bound, attributes, bbox)
 	}
 	log.Printf("[perf] handleAggregateData scenario=%s bound=%q attributes=%d hasBbox=%v duration_ms=%d", scenario, bound, len(attributes), bbox != nil, time.Since(aggStart).Milliseconds())
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondStoreError(w, r, http.StatusBadRequest, err)
 		return
 	}
 
@@ -581,13 +582,31 @@ func (h *Handler) handlePrecalculateFull(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Deliberately detached from the request's cancellation. This computes the
+	// full-domain averages for every column across the whole dataset - seconds
+	// of work - and the result is cached for the life of the process and
+	// served to every pane of every subsequent quad-view load. It is shared
+	// work that one request merely happens to trigger, so one impatient user
+	// reloading must not discard it and leave the next arrival to start over.
+	//
+	// The request itself is still cancellable in the sense that matters: if
+	// the client has gone by the time this finishes, the response write is
+	// discarded by net/http. Only the computation is protected.
+	//
+	// context.WithoutCancel keeps the request context's values but drops both
+	// its cancellation and its deadline, so this computation has no time limit
+	// of its own. That is acceptable here only because it is bounded work over
+	// a fixed dataset that the process is going to have to do exactly once;
+	// anything unbounded would need its own deadline instead.
+	computeCtx := context.WithoutCancel(r.Context())
+
 	start := time.Now()
-	refAgg, err := h.gpkgStore.GetScenarioAverages("reference", columns, nil)
+	refAgg, err := h.gpkgStore.GetScenarioAverages(computeCtx, "reference", columns, nil)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute reference averages: %v", err))
 		return
 	}
-	curAgg, err := h.gpkgStore.GetScenarioAverages("current", columns, nil)
+	curAgg, err := h.gpkgStore.GetScenarioAverages(computeCtx, "current", columns, nil)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute current averages: %v", err))
 		return
@@ -624,9 +643,9 @@ func (h *Handler) handleComparisonData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := h.gpkgStore.GetComparisonData(left, right, attribute)
+	data, err := h.gpkgStore.GetComparisonData(r.Context(), left, right, attribute)
 	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
+		respondStoreError(w, r, http.StatusNotFound, err)
 		return
 	}
 
@@ -642,8 +661,15 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	data := h.gpkgStore.GetCatchmentAttributes(catchmentID)
+	data := h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
 	if len(data) == 0 {
+		// An abandoned request also comes back empty here, and telling the
+		// client its catchment does not exist would be a lie - and would show
+		// up as a 404 rate spike whenever users click around quickly.
+		if clientGone(r) {
+			respondCancelled(w, r)
+			return
+		}
 		respondError(w, http.StatusNotFound, "catchment not found")
 		return
 	}
@@ -716,9 +742,9 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	queryStart := time.Now()
 	var fc *geodata.FeatureCollection
 	if q.Get("valuesOnly") == "1" {
-		fc, err = h.gpkgStore.QueryCatchmentValues(queryScenario, attribute, minx, miny, maxx, maxy)
+		fc, err = h.gpkgStore.QueryCatchmentValues(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy)
 	} else {
-		fc, err = h.gpkgStore.QueryCatchments(queryScenario, attribute, minx, miny, maxx, maxy, zoom)
+		fc, err = h.gpkgStore.QueryCatchments(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy, zoom)
 	}
 	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
 		if fc != nil {
@@ -727,7 +753,7 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		return 0
 	}(), time.Since(queryStart).Milliseconds())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -743,7 +769,7 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain range for consistent color scaling across scenarios
-	domainMin, domainMax := h.domainRangeFor(scenario, attribute)
+	domainMin, domainMax := h.domainRangeFor(r.Context(), scenario, attribute)
 
 	// Build response with domain range
 	response := ChoroplethResponse{
@@ -813,13 +839,17 @@ func (h *Handler) siteIdealOverrides(scenario, siteID, attribute string) map[int
 //
 // Both the GeoJSON and the vector-tile choropleth paths call this: the colours
 // must not shift depending on which transport delivered the geometry.
-func (h *Handler) domainRangeFor(scenario, attribute string) (min, max float64) {
+func (h *Handler) domainRangeFor(ctx context.Context, scenario, attribute string) (min, max float64) {
 	start := time.Now()
-	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
+	domainRange, err := h.gpkgStore.GetDomainRange(ctx, attribute)
 	log.Printf("[perf] domainRangeFor attribute=%s duration_ms=%d", attribute, time.Since(start).Milliseconds())
 	if err != nil {
-		// If domain tables don't exist, fall back to no domain range.
-		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
+		// If domain tables don't exist, fall back to no domain range. A
+		// cancelled request lands here too, and must not be logged as a
+		// datapack problem; its caller abandons the response anyway.
+		if !geodata.IsCancellation(ctx, err) {
+			log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
+		}
 		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
 	}
 
@@ -894,9 +924,9 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 		queryScenario = "reference"
 	}
 
-	values, err := h.gpkgStore.QueryCatchmentValueArrays(queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	values, err := h.gpkgStore.QueryCatchmentValueArrays(r.Context(), queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -909,7 +939,7 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 	}
 	count = len(values.IDs)
 
-	domainMin, domainMax := h.domainRangeFor(scenario, attribute)
+	domainMin, domainMax := h.domainRangeFor(r.Context(), scenario, attribute)
 
 	// Same cache policy as /choropleth: the values for a given
 	// scenario+attribute+bbox are static for the life of the datapack, and the
@@ -990,7 +1020,7 @@ func (h *Handler) waitForPendingCatchments(site *sites.Site, timeout time.Durati
 	return site
 }
 
-func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
+func (h *Handler) populateSiteCatchmentDetails(ctx context.Context, site *sites.Site) error {
 	start := time.Now()
 	defer func() {
 		catchmentCount := 0
@@ -1014,7 +1044,7 @@ func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
 	}
 
 	indicatorsStart := time.Now()
-	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(ctx, site.CatchmentIDs)
 	if err != nil {
 		return err
 	}
@@ -1024,7 +1054,7 @@ func (h *Handler) populateSiteCatchmentDetails(site *sites.Site) error {
 	// Skip the expensive geometry fetch + polyclip intersection in that case.
 	if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
 		aoiStart := time.Now()
-		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+		if err := h.gpkgStore.ApplyAOIFractions(ctx, catchmentData, site.Geometry); err != nil {
 			return err
 		}
 		log.Printf("[perf] populateSiteCatchmentDetails step=applyAOIFractions site_id=%s catchments=%d duration_ms=%d", site.ID, len(site.CatchmentIDs), time.Since(aoiStart).Milliseconds())
@@ -1068,7 +1098,14 @@ func (h *Handler) populateSiteCatchmentDetailsDeferred(siteID string, catchmentI
 		CatchmentIDs: append([]string(nil), catchmentIDs...),
 		Geometry:     append(json.RawMessage(nil), geometry...),
 	}
-	if err := h.populateSiteCatchmentDetails(transientSite); err != nil {
+	// Deliberately context.Background(). The handler that started this
+	// goroutine has already responded and returned, so its request context is
+	// cancelled the moment it does - threading it here would abort the
+	// enrichment every time rather than only when a client disconnects. The
+	// work belongs to the site, not to the request that happened to create
+	// it, and other requests (GET /sites/{id}/catchments, indicator
+	// extraction) wait on its completion channel.
+	if err := h.populateSiteCatchmentDetails(context.Background(), transientSite); err != nil {
 		log.Printf("Warning: deferred site catchment enrichment failed site_id=%s err=%v", siteID, err)
 		return
 	}
@@ -1159,8 +1196,8 @@ func (h *Handler) handleUpdateSite(w http.ResponseWriter, r *http.Request) {
 			updates.Geometry = existing.Geometry
 		}
 	}
-	if err := h.populateSiteCatchmentDetails(&updates); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
+	if err := h.populateSiteCatchmentDetails(r.Context(), &updates); err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1236,9 +1273,9 @@ func (h *Handler) handleDissolveCatchments(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get dissolved geometry from gpkg store
-	geometry, area, err := h.gpkgStore.DissolveCatchments(req.CatchmentIDs)
+	geometry, area, err := h.gpkgStore.DissolveCatchments(r.Context(), req.CatchmentIDs)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1343,9 +1380,9 @@ func (h *Handler) handleCatchmentGeometry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	features, err := h.gpkgStore.GetCatchmentsByIDs([]string{catchmentID})
+	features, err := h.gpkgStore.GetCatchmentsByIDs(r.Context(), []string{catchmentID})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1364,9 +1401,9 @@ func (h *Handler) handleCatchmentsBounds(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bounds, err := h.gpkgStore.GetCatchmentsBounds()
+	bounds, err := h.gpkgStore.GetCatchmentsBounds(r.Context())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1412,9 +1449,9 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 	}
 
 	if !includeGeometry {
-		ids, err := h.gpkgStore.GetCatchmentIDsByBBox(req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
+		ids, err := h.gpkgStore.GetCatchmentIDsByBBox(r.Context(), req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
+			respondStoreError(w, r, http.StatusInternalServerError, err)
 			return
 		}
 
@@ -1429,9 +1466,9 @@ func (h *Handler) handleCatchmentsInBBox(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	features, err := h.gpkgStore.GetCatchmentsByBBox(req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
+	features, err := h.gpkgStore.GetCatchmentsByBBox(r.Context(), req.MinX, req.MinY, req.MaxX, req.MaxY, limit)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -1462,7 +1499,7 @@ type ExtractIndicatorsRequest struct {
 
 // doSiteExtraction performs the full indicator extraction for a site and saves to disk.
 // Called from a background goroutine for webview runtime.
-func (h *Handler) doSiteExtraction(id string) error {
+func (h *Handler) doSiteExtraction(ctx context.Context, id string) error {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] doSiteExtraction site_id=%s duration_ms=%d", id, time.Since(start).Milliseconds())
@@ -1489,12 +1526,12 @@ func (h *Handler) doSiteExtraction(id string) error {
 		catchmentData = siteCatchmentsToIndicators(site.Catchments)
 		log.Printf("[perf] doSiteExtraction step=useCachedCatchments site_id=%s catchments=%d", id, len(catchmentData))
 	} else {
-		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(catchmentIDs)
+		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(ctx, catchmentIDs)
 		if err != nil {
 			return fmt.Errorf("get catchment data: %w", err)
 		}
 		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
-			if aoiErr := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); aoiErr != nil {
+			if aoiErr := h.gpkgStore.ApplyAOIFractions(ctx, catchmentData, site.Geometry); aoiErr != nil {
 				log.Printf("Warning: ApplyAOIFractions for %s: %v", id, aoiErr)
 			}
 		}
@@ -1604,13 +1641,17 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 			respondError(w, http.StatusBadRequest, "site has no associated catchments")
 			return
 		}
-		catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(catchmentIDs)
+		catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(r.Context(), catchmentIDs)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+			respondStoreError(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
-			if aoiErr := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); aoiErr != nil {
+			if aoiErr := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); aoiErr != nil {
+				if geodata.IsCancellation(r.Context(), aoiErr) {
+					respondCancelled(w, r)
+					return
+				}
 				log.Printf("Warning: ApplyAOIFractions for browser site: %v", aoiErr)
 			}
 		}
@@ -1649,7 +1690,12 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	h.pendingExtractions.Store(id, struct{}{})
 	go func() {
 		defer h.pendingExtractions.Delete(id)
-		if err := h.doSiteExtraction(id); err != nil {
+		// Deliberately context.Background(): this handler responds 202 and
+		// returns immediately, so the request context is already cancelled by
+		// the time the extraction gets going. The client polls
+		// GET /sites/{id}/indicators for the result, which means the work has
+		// to outlive the request that asked for it.
+		if err := h.doSiteExtraction(context.Background(), id); err != nil {
 			log.Printf("Async extraction failed for site %s: %v", id, err)
 		}
 	}()
@@ -1925,7 +1971,7 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 		// Populate catchments before building lookup data so AOIFraction and
 		// catchment IDs are available for site-level NPP/SOC aggregation.
 		if len(site.Catchments) == 0 && h.gpkgStore != nil && len(site.CatchmentIDs) > 0 {
-			if popErr := h.populateSiteCatchmentDetails(site); popErr != nil {
+			if popErr := h.populateSiteCatchmentDetails(r.Context(), site); popErr != nil {
 				log.Printf("Warning: could not populate catchments for ideal propagation site_id=%s: %v", id, popErr)
 			}
 		}
@@ -2115,13 +2161,17 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get indicator data for all catchments
-	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(r.Context(), site.CatchmentIDs)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
-		if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+		if err := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); err != nil {
+			if geodata.IsCancellation(r.Context(), err) {
+				respondCancelled(w, r)
+				return
+			}
 			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
 		}
 	}
@@ -2229,19 +2279,31 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
 		catchmentData = siteCatchmentsToIndicators(site.Catchments)
 	} else {
-		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(site.CatchmentIDs)
+		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(r.Context(), site.CatchmentIDs)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to get catchment data: "+err.Error())
+			respondStoreError(w, r, http.StatusInternalServerError, err)
 			return
 		}
 		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
-			if err := h.gpkgStore.ApplyAOIFractions(catchmentData, site.Geometry); err != nil {
+			if err := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); err != nil {
+				if geodata.IsCancellation(r.Context(), err) {
+					respondCancelled(w, r)
+					return
+				}
 				log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
 			}
 		}
 	}
 
-	bounds := h.gpkgStore.ComputeWhiskerBounds(catchmentData)
+	bounds := h.gpkgStore.ComputeWhiskerBounds(r.Context(), catchmentData)
+	// ComputeWhiskerBounds has no error return, so a cancelled request comes
+	// back as empty bounds. Persisting those would poison the site's cached
+	// whiskers for every later reader, and returning them would show a chart
+	// with no uncertainty range at all rather than no chart.
+	if clientGone(r) {
+		respondCancelled(w, r)
+		return
+	}
 
 	// Persist computed bounds into site indicators so subsequent requests are instant.
 	if h.siteStore != nil && r.Method != http.MethodPost {
@@ -2359,9 +2421,9 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get catchment geometry
-	features, err := h.gpkgStore.GetCatchmentsByIDs([]string{catchmentID})
+	features, err := h.gpkgStore.GetCatchmentsByIDs(r.Context(), []string{catchmentID})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if len(features) == 0 {
@@ -2405,8 +2467,8 @@ func (h *Handler) handleBoundaryUnion(w http.ResponseWriter, r *http.Request) {
 	site.Geometry = newGeometry
 	site.BoundingBox = bbox
 	site.Area = newArea
-	if err := h.populateSiteCatchmentDetails(site); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
+	if err := h.populateSiteCatchmentDetails(r.Context(), site); err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
@@ -2451,9 +2513,9 @@ func (h *Handler) handleBoundaryDifference(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get catchment geometry
-	features, err := h.gpkgStore.GetCatchmentsByIDs([]string{catchmentID})
+	features, err := h.gpkgStore.GetCatchmentsByIDs(r.Context(), []string{catchmentID})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if len(features) == 0 {
@@ -2492,8 +2554,8 @@ func (h *Handler) handleBoundaryDifference(w http.ResponseWriter, r *http.Reques
 	site.Geometry = newGeometry
 	site.BoundingBox = bbox
 	site.Area = newArea
-	if err := h.populateSiteCatchmentDetails(site); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to build catchment details: "+err.Error())
+	if err := h.populateSiteCatchmentDetails(r.Context(), site); err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 
