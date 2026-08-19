@@ -19,11 +19,27 @@ import { safeSetItem, safeRemoveItem } from './storage';
  *     TTL cache, which is why the old quota-failure path could strip it and
  *     carry on.
  *   - **`catchmentIds` twice**, once on the site and once inside `indicators`.
+ *   - **`ideal` twice.** The target values are seeded as a copy of `current`
+ *     and the user edits a handful of them, so most of the 502 attributes were
+ *     stored a second time under a different name.
  *
  * Records are now stored one key per site, so a save touches one record and
  * costs the size of that record rather than the size of the store. Sites are
- * normalised on the way in: the breakdown is dropped, and so is the duplicated
- * id list if an old document still carries it.
+ * normalised on the way in: the breakdown is dropped, the duplicated id list is
+ * dropped if an old document still carries it, and `ideal` is reduced to the
+ * entries that differ from `current` (`normaliseForStorage`), then rebuilt on
+ * the way out (`denormaliseFromStorage`).
+ *
+ * Measured on a synthetic 200-catchment site built from the real attribute maps
+ * in `data/walkthroughs/`, against a localStorage ceiling measured at 5,241,856
+ * characters:
+ *
+ *   in memory, as the API returns it   11,215,026 chars — 214% of the ceiling
+ *   stored, breakdown and ids dropped      67,656 chars —   1.3%
+ *   stored, `ideal` reduced too            46,589 chars —   0.9%
+ *
+ * The first line is the point: the document could not be stored at all. The
+ * third is what one site costs now.
  *
  * ## Why one key per site was not enough on its own
  *
@@ -61,6 +77,15 @@ import { safeSetItem, safeRemoveItem } from './storage';
  *     whose whole job is to work out which of a list changed.
  *   - `invalidateSiteCache` is exported for anything that needs to opt out.
  *
+ * ## What is still stored that could in principle be recomputed
+ *
+ * `indicators.reference` and `indicators.current` are aggregations the server
+ * computes from the catchments, and at ~21,000 characters each they are most of
+ * what is left. They stay, because this store is the user's only copy: dropping
+ * them would mean a site opened without a reachable server, or against a
+ * datapack that no longer holds those catchments, shows a site with no numbers
+ * in it. Recomputable is not the same as recoverable.
+ *
  * ## What is not deferred
  *
  * Writes are still synchronous and still happen on the call. Nothing is
@@ -96,6 +121,16 @@ export const LEGACY_KEY = 'dt-sites';
  * again — but old records still carry them, hence the list.
  */
 const BREAKDOWN_FIELDS = ['catchments', 'catchmentIndicators', 'catchmentData'] as const;
+
+/**
+ * Where the part of `ideal` that differs from `current` is stored.
+ *
+ * A distinct name rather than a thinner `ideal`, so the two encodings can be
+ * told apart with certainty: a record with `ideal` is whole and is read as it
+ * stands, a record with `idealDelta` is rebuilt. Nothing has to guess, and a
+ * store part-written by an older build reads correctly either way.
+ */
+const IDEAL_DELTA_FIELD = 'idealDelta';
 
 function recordKey(id: string): string {
   return `${RECORD_PREFIX}${id}`;
@@ -153,7 +188,18 @@ export function resetSiteStoreStats(): void {
  * so it is what is on disk, never what we hoped was.
  */
 interface CachedRecord {
+  /**
+   * What reads hand out. Always the value `raw` parses to, never the object a
+   * caller passed in — a caller's site still carries the per-catchment
+   * breakdown, and handing that back would mean the store's own guarantee
+   * ("the breakdown is not kept") held only until the next reload.
+   */
   site: Site;
+  /**
+   * The exact object last handed to a write, kept only so `saveSites` can
+   * recognise it again by identity. Never handed out.
+   */
+  written?: Site;
   raw: string;
 }
 
@@ -220,22 +266,107 @@ export function normaliseForStorage(site: Site): Site {
     delete copy[field];
   }
 
-  // Older records carry indicators.catchmentIds, byte-identical to the array on
-  // the site itself. Nothing reads it.
   const indicators = copy.indicators as Record<string, unknown> | undefined | null;
-  if (indicators && typeof indicators === 'object' && 'catchmentIds' in indicators) {
-    const { catchmentIds: _dropped, ...rest } = indicators;
-    void _dropped;
-    copy.indicators = rest;
+  if (indicators && typeof indicators === 'object') {
+    copy.indicators = normaliseIndicators(indicators);
   }
 
   return copy as unknown as Site;
 }
 
+/**
+ * Undo `normaliseForStorage`, so a caller sees the shape it wrote.
+ *
+ * Only `ideal` needs rebuilding; everything else normalisation removes is
+ * removed because nothing reads it. Applied on the parse path and on the object
+ * the cache hands out, which are the only two ways a stored record becomes a
+ * `Site` again.
+ */
+export function denormaliseFromStorage(site: Site): Site {
+  const record = site as unknown as Record<string, unknown>;
+  const indicators = record.indicators as Record<string, unknown> | undefined | null;
+  if (!indicators || typeof indicators !== 'object' || !(IDEAL_DELTA_FIELD in indicators)) {
+    return site;
+  }
+
+  const { [IDEAL_DELTA_FIELD]: delta, ...rest } = indicators;
+  const current = rest.current;
+  return {
+    ...record,
+    indicators: {
+      ...rest,
+      ideal: {
+        ...(isNumberMap(current) ? current : {}),
+        ...(delta && typeof delta === 'object' ? delta : {}),
+      },
+    },
+  } as unknown as Site;
+}
+
+function isNumberMap(value: unknown): value is Record<string, number> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * The indicator block as it is stored.
+ *
+ * Two things come off it, both of them copies of something already in the same
+ * record:
+ *
+ *   - `catchmentIds`, byte-identical to the array on the site itself. Nothing
+ *     reads this copy; `SiteIndicators` no longer admits the property at all, so
+ *     this only has to cope with records written before it did.
+ *   - the part of `ideal` that equals `current`. `ideal` is seeded as a copy of
+ *     `current` and the user edits some of it, so on a site with the full 502
+ *     attributes the untouched majority is stored twice. Only the entries that
+ *     actually differ are kept, under `idealDelta`, and `ideal` is rebuilt from
+ *     `current` on the way out.
+ */
+function normaliseIndicators(indicators: Record<string, unknown>): Record<string, unknown> {
+  const { catchmentIds: _duplicate, ...rest } = indicators;
+  void _duplicate;
+
+  const current = rest.current;
+  const ideal = rest.ideal;
+  if (!isNumberMap(current) || !isNumberMap(ideal)) return rest;
+
+  // `ideal` is rebuilt as `{ ...current, ...delta }`, which reproduces it
+  // exactly only when `ideal` has an entry for every key `current` has. It does
+  // in every document this application produces. One that does not — hand-edited,
+  // or written by a version that computed the two from different attribute sets —
+  // would silently gain entries, so it is stored whole instead. Bytes are not
+  // worth a changed target value.
+  for (const key of Object.keys(current)) {
+    if (!(key in ideal)) return rest;
+  }
+
+  const delta: Record<string, number> = {};
+  for (const key of Object.keys(ideal)) {
+    if (ideal[key] !== current[key]) delta[key] = ideal[key];
+  }
+
+  const { ideal: _whole, ...withoutIdeal } = rest;
+  void _whole;
+  return { ...withoutIdeal, [IDEAL_DELTA_FIELD]: delta };
+}
+
+/** A record as it is written, kept together so neither half can go stale. */
+interface Encoded {
+  /** The normalised site — what `raw` parses to. */
+  stored: Site;
+  raw: string;
+}
+
 /** The one place a site becomes a string, so the cost has somewhere to be counted. */
-function serialise(site: Site): string {
+function serialise(site: Site): Encoded {
   stats.serialised++;
-  return JSON.stringify(normaliseForStorage(site));
+  const stored = normaliseForStorage(site);
+  return { stored, raw: JSON.stringify(stored) };
+}
+
+/** What the cache should hold for a record that was just written. */
+function cacheEntry(written: Site, encoded: Encoded): CachedRecord {
+  return { site: denormaliseFromStorage(encoded.stored), written, raw: encoded.raw };
 }
 
 function getRecordRaw(id: string): string | null {
@@ -256,13 +387,13 @@ function getRecordRaw(id: string): string | null {
  * stored when it is not. That is the whole point of `safeSetItem` returning a
  * boolean, and losing it here would recreate the silent-loss bug one level up.
  */
-function writeRecord(site: Site, raw: string): boolean {
+function writeRecord(site: Site, encoded: Encoded): boolean {
   stats.recordWrites++;
-  if (!safeSetItem(recordKey(site.id), raw)) {
+  if (!safeSetItem(recordKey(site.id), encoded.raw)) {
     recordCache.delete(site.id);
     return false;
   }
-  recordCache.set(site.id, { site, raw });
+  recordCache.set(site.id, cacheEntry(site, encoded));
   return true;
 }
 
@@ -332,7 +463,7 @@ function readRecord(id: string): Site | null {
     stats.parsed++;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
-    const site = parsed as Site;
+    const site = denormaliseFromStorage(parsed as Site);
     recordCache.set(id, { site, raw });
     return site;
   } catch {
@@ -455,14 +586,14 @@ export function saveSites(sites: Site[]): boolean {
     // The object we handed out, unchanged. Nothing to serialise, nothing to
     // write. This is the case that makes a save proportional to the edit.
     const cached = recordCache.get(site.id);
-    if (cached && cached.site === site) continue;
+    if (cached && (cached.site === site || cached.written === site)) continue;
 
     const next = serialise(site);
     // Prefer what the cache knows is on disk over re-reading it; getItem copies
     // the whole record string, which for a continent-scale site is ~2 M chars.
     const current = cached ? cached.raw : getRecordRaw(site.id);
-    if (current === next) {
-      recordCache.set(site.id, { site, raw: next });
+    if (current === next.raw) {
+      recordCache.set(site.id, cacheEntry(site, next));
       continue;
     }
 
