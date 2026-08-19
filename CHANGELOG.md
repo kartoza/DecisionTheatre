@@ -458,6 +458,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **The application held twelve WebGL contexts in grid view and never gave one
+  back.** Each `MapView` built two MapLibre instances — left and right — whether or
+  not the user was comparing anything, and a pane latched "has shown a map" on first
+  display and kept the map mounted behind `opacity: 0` for the rest of the session.
+  Six panes, two contexts each, permanently. Browsers cap simultaneous contexts at
+  around sixteen and silently drop the oldest past that ("Too many active WebGL
+  contexts"), and integrated GPUs run out of memory well before that count.
+
+  The right map is now created on entering compare mode and removed on leaving it,
+  and a pane releases its maps once it has stopped displaying one. MapLibre
+  instances constructed by a six-pane grid, counted under the test harness:
+
+  | grid view, six panes | before | after |
+  |---|---:|---:|
+  | all on a map, compare off | 12 | **6** |
+  | all on a map, compare on | 12 | 12 |
+  | two on a map, four on chart/dial/table | 12 | **4** |
+
+  The compare swiper defaults to on, so the worst case is unchanged; what has gone
+  is paying for maps nothing is displaying.
+
+  Releasing a map is not free, so a pane keeps its map for fifteen seconds after
+  switching away — flipping to a chart and straight back does not reload anything.
+  The sync registry now remembers the last view any map reported, and a new
+  instance opens there rather than at the default world view, so a release and
+  recreate does not move the map under the user.
+
 - **The choropleth is served as vector tiles instead of a GeoJSON source.** The tile
   pipeline already carried the catchment polygons — `gpkg_to_mbtiles.sh` tiles
   `catchments_lev12` alongside the basemap layers — but the layer users actually look

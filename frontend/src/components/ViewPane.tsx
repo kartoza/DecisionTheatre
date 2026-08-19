@@ -70,6 +70,17 @@ interface ViewPaneProps {
 // View mode cycle order
 const VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial', 'table'];
 
+// How long a pane keeps its map mounted after switching to another view.
+//
+// A mounted MapView holds a WebGL context (two in compare mode), and browsers
+// cap the simultaneous total at around sixteen, silently dropping the oldest
+// past that. Quad view renders six panes, so a pane showing a chart must not
+// keep a map alive for the rest of the session — which is what the previous
+// one-way "has shown a map" latch did. The delay is here because a teardown is
+// not free: map -> chart -> map is a normal way to read a pane, and that round
+// trip should not pay for a fresh MapLibre init and tile fetch. See issue #76.
+const MAP_RELEASE_DELAY_MS = 15_000;
+
 // Icons and labels for each view mode
 const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string; nextLabel: string }> = {
   map: { icon: <FiMap />, label: 'Map', nextLabel: 'Show line chart' },
@@ -130,26 +141,32 @@ function ViewPane({
   const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
   const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
 
-  // Lazy-mount MapView: only render once the pane has been in map mode at least once.
-  // This prevents full map initialization (tile loading, WebGL context) for panes that
-  // start in chart/dial/table mode, which was the main cause of slow quad-view transitions.
-  const [hasShownMap, setHasShownMap] = useState(viewMode === 'map');
+  // Mount MapView only while the pane is showing a map, plus a grace period.
+  // A pane that has never been in map mode never pays for map initialization
+  // (tile loading, WebGL context) — the main cause of slow quad-view
+  // transitions — and one that has left map mode gives its contexts back.
+  const [mapMounted, setMapMounted] = useState(viewMode === 'map');
   // mapReady starts false; it becomes true once MapView fires onReady.
-  // If the pane starts in map mode, hasShownMap is true but mapReady stays
+  // If the pane starts in map mode, mapMounted is true but mapReady stays
   // false until onReady fires — the spinner shows only during that initial load.
   const [mapReady, setMapReady] = useState(false);
   useEffect(() => {
     if (viewMode === 'map') {
-      setHasShownMap(prev => {
-        // Only show the spinner on the very first transition into map mode.
-        // On subsequent returns (chart → map, dial → map) MapView is still
-        // mounted and areMapsReady is already true, so onReady will never
-        // re-fire — the spinner would get stuck indefinitely.
-        if (!prev) setMapReady(false);
-        return true;
-      });
+      setMapMounted(true);
+      return;
     }
+    const releaseTimer = setTimeout(() => setMapMounted(false), MAP_RELEASE_DELAY_MS);
+    // Returning to map mode inside the grace period cancels the release, so the
+    // still-mounted MapView is simply revealed again — no reload, no spinner.
+    return () => clearTimeout(releaseTimer);
   }, [viewMode]);
+
+  // onReady fires once per MapView instance, so the spinner has to be re-armed
+  // whenever the instance goes away. Doing it here rather than on the way into
+  // map mode also guarantees it can never be left showing over a live map.
+  useEffect(() => {
+    if (!mapMounted) setMapReady(false);
+  }, [mapMounted]);
 
   // Stagger WebGL context creation across panes so the browser/GPU isn't hit with
   // 8 simultaneous map initializations. Pane 0 starts immediately; each subsequent
@@ -534,7 +551,7 @@ function ViewPane({
       border={compact ? '1px' : 'none'}
       borderColor={borderColor}
     >
-      {/* Map layer — only mounted after the pane has first entered map mode */}
+      {/* Map layer — mounted only while this pane is showing a map (issue #76) */}
       <Box
         position="absolute"
         top={0}
@@ -545,7 +562,7 @@ function ViewPane({
         transition="opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
         pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
       >
-        {hasShownMap && mapMountReady && <MapView
+        {mapMounted && mapMountReady && <MapView
           comparison={comparison}
           onOpenSettings={() => onFocusPane(paneIndex)}
           onIdentify={onIdentify}
