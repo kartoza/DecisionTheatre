@@ -248,12 +248,15 @@ func parseNumericIDs(ids []string) ([]interface{}, bool) {
 	return args, true
 }
 
-func (s *GpkgStore) resolveScenarioIDColumn(ctx context.Context, tableName string) (string, error) {
+// The querier is a parameter because the caller may already be holding a
+// pooled connection (see weightSet): reaching for a second one from inside
+// work that holds the first is how a bounded pool deadlocks under load.
+func (s *GpkgStore) resolveScenarioIDColumn(ctx context.Context, q querier, tableName string) (string, error) {
 	if cached, ok := s.idColCache.Load(tableName); ok {
 		return cached.(string), nil
 	}
 
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	rows, err := q.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return "", err
 	}
@@ -1820,7 +1823,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ctx context.Context, ids []strin
 	queryScenario := func(scenario string) {
 		scenarioStart := time.Now()
 		tableName := "scenario_" + scenario
-		idColumn, err := s.resolveScenarioIDColumn(ctx, tableName)
+		idColumn, err := s.resolveScenarioIDColumn(ctx, s.db, tableName)
 		if err != nil {
 			scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to resolve ID column for %s: %w", tableName, err)}
 			return
@@ -2664,6 +2667,11 @@ func calculatePolygonArea(poly polyclip.Polygon) float64 {
 // off as that. Handlers cache these bounds onto the site, so a swallowed
 // failure did not just blank one chart: it persisted the blank.
 func (s *GpkgStore) ComputeWhiskerBounds(ctx context.Context, catchments []CatchmentIndicators) (WhiskerBounds, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] ComputeWhiskerBounds catchments=%d duration_ms=%d", len(catchments), time.Since(start).Milliseconds())
+	}()
+
 	if len(catchments) == 0 {
 		return WhiskerBounds{}, nil
 	}
@@ -2680,66 +2688,32 @@ func (s *GpkgStore) ComputeWhiskerBounds(ctx context.Context, catchments []Catch
 		return WhiskerBounds{}, nil
 	}
 
-	tables := []string{
+	results, err := s.aggregateTables(ctx, []string{
 		"scenario_reference_lower",
 		"scenario_reference_upper",
 		"scenario_current_lower",
 		"scenario_current_upper",
+	}, w)
+	if err != nil {
+		return WhiskerBounds{}, err
 	}
 
-	type namedResult struct {
-		name   string
-		values map[string]float64
-		err    error
-	}
-	ch := make(chan namedResult, len(tables))
-	for _, tbl := range tables {
-		tbl := tbl
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					ch <- namedResult{name: tbl, err: fmt.Errorf("panic querying %s: %v", tbl, r)}
-				}
-			}()
-			totals, err := s.aggregateWeightedTable(ctx, tbl, w)
-			if err != nil {
-				// A datapack without this table has no whiskers of this kind.
-				// That is a property of the data, not a fault, and is reported
-				// by leaving the bound absent.
-				if errors.Is(err, errTableAbsent) {
-					ch <- namedResult{name: tbl}
-					return
-				}
-				ch <- namedResult{name: tbl, err: err}
-				return
-			}
-			ch <- namedResult{name: tbl, values: totals.mean()}
-		}()
-	}
-
+	// A table the datapack does not have is left out of results, and the bound
+	// it would have filled stays absent - a datapack built without whisker
+	// tables has no whiskers to report, which is a fact about the data rather
+	// than a fault.
 	var bounds WhiskerBounds
-	var firstErr error
-	for range tables {
-		r := <-ch
-		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
-			continue
-		}
-		switch r.name {
-		case "scenario_reference_lower":
-			bounds.ReferenceLower = r.values
-		case "scenario_reference_upper":
-			bounds.ReferenceUpper = r.values
-		case "scenario_current_lower":
-			bounds.CurrentLower = r.values
-		case "scenario_current_upper":
-			bounds.CurrentUpper = r.values
-		}
+	if t, ok := results["scenario_reference_lower"]; ok {
+		bounds.ReferenceLower = t.mean()
 	}
-	if firstErr != nil {
-		return WhiskerBounds{}, firstErr
+	if t, ok := results["scenario_reference_upper"]; ok {
+		bounds.ReferenceUpper = t.mean()
+	}
+	if t, ok := results["scenario_current_lower"]; ok {
+		bounds.CurrentLower = t.mean()
+	}
+	if t, ok := results["scenario_current_upper"]; ok {
+		bounds.CurrentUpper = t.mean()
 	}
 	return bounds, nil
 }

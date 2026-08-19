@@ -427,3 +427,145 @@ func TestApplyAOIFractionsReportsUnreadableSiteGeometry(t *testing.T) {
 			"are the weights every aggregate for this site is computed from")
 	}
 }
+
+// TestBothAggregatePlansAgree is the guard on there being two of them.
+//
+// A small catchment set is inlined into the statement; a large one is
+// materialised into a TEMP table so SQLite scans the scenario table once
+// instead of chasing a random row fetch per catchment. That second plan is
+// 36x faster on the real datapack at continent scale, which is exactly the
+// kind of win that tempts one into not checking it computes the same number.
+func TestBothAggregatePlansAgree(t *testing.T) {
+	store := openStore(t, newAggregateTestDir(t))
+	ctx := context.Background()
+
+	w := newCatchmentWeights([]CatchmentIndicators{
+		{ID: "1000000001", AreaKm2: 4, AOIFraction: 1},
+		{ID: "1000000002", AreaKm2: 1, AOIFraction: 0.5},
+		{ID: "1000000003", AreaKm2: 1, AOIFraction: 1},
+	})
+
+	store.mu.RLock()
+	columns := store.columns
+	store.mu.RUnlock()
+
+	for _, tableName := range []string{"scenario_current", "scenario_reference"} {
+		idColumn, err := store.resolveScenarioIDColumn(ctx, store.db, tableName)
+		if err != nil {
+			t.Fatalf("resolve id column: %v", err)
+		}
+
+		inline := newWeightedTotals(len(columns))
+		if err := store.aggregateViaValuesClause(ctx, tableName, idColumn, w, columns, inline); err != nil {
+			t.Fatalf("inline plan: %v", err)
+		}
+
+		ws, err := store.newWeightSet(ctx, w)
+		if err != nil {
+			t.Fatalf("weight set: %v", err)
+		}
+		// The synthetic set is far below weightTableThreshold, so force the
+		// materialised plan rather than waiting for a continent to test it.
+		conn, err := store.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.populateWeightTable(ctx, conn, w); err != nil {
+			t.Fatalf("populate weight table: %v", err)
+		}
+		ws.conn = conn
+
+		materialisedTotals := newWeightedTotals(len(columns))
+		err = store.aggregateViaWeightTable(ctx, tableName, idColumn, ws, columns, materialisedTotals)
+		ws.close()
+		if err != nil {
+			t.Fatalf("materialised plan: %v", err)
+		}
+
+		if inline.matched != materialisedTotals.matched {
+			t.Errorf("%s: inline matched %d rows, materialised matched %d",
+				tableName, inline.matched, materialisedTotals.matched)
+		}
+		inlineMean, materialisedMean := inline.mean(), materialisedTotals.mean()
+		if len(inlineMean) != len(materialisedMean) {
+			t.Fatalf("%s: inline produced %d attributes, materialised %d",
+				tableName, len(inlineMean), len(materialisedMean))
+		}
+		for col, want := range inlineMean {
+			got, ok := materialisedMean[col]
+			if !ok {
+				t.Errorf("%s: materialised plan lost attribute %s", tableName, col)
+				continue
+			}
+			if math.Abs(got-want) > 1e-12 {
+				t.Errorf("%s attribute %s: inline %v, materialised %v - the two plans must agree",
+					tableName, col, want, got)
+			}
+		}
+	}
+}
+
+// TestMaterialisedAggregateScansTheScenarioTable pins the query plan, because
+// the plan is the entire performance story of this file and nothing else in
+// the test suite would notice it changing.
+//
+// Measured against the real datapack at 147,837 catchments, one whisker table
+// takes about 7 seconds when SQLite scans the scenario table and probes the
+// weights per row, and over 200 seconds when it runs the join the other way
+// round and fetches one random row per catchment instead. Both plans return
+// the same numbers, so only this assertion stands between the fast one and a
+// silent return to a six-minute request.
+func TestMaterialisedAggregateScansTheScenarioTable(t *testing.T) {
+	store := openStore(t, newAggregateTestDir(t))
+	ctx := context.Background()
+
+	w := newCatchmentWeights([]CatchmentIndicators{
+		{ID: "1000000001", AreaKm2: 4, AOIFraction: 1},
+		{ID: "1000000002", AreaKm2: 1, AOIFraction: 1},
+	})
+
+	conn, err := store.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := store.populateWeightTable(ctx, conn, w); err != nil {
+		t.Fatalf("populate weight table: %v", err)
+	}
+
+	query := fmt.Sprintf(
+		`EXPLAIN QUERY PLAN SELECT %s FROM scenario_current s CROSS JOIN %s w ON s.catchment_id_int = w.cid`,
+		aggregateExpressions([]string{gpkgtest.Attribute}), weightTableName)
+	rows, err := conn.QueryContext(ctx, query)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read plan: %v", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("no query plan returned")
+	}
+
+	// The scenario table must be the outer loop, scanned once...
+	if !strings.HasPrefix(plan[0], "SCAN s") {
+		t.Errorf("outer loop is %q, want a scan of the scenario table; "+
+			"driving the join from the weights means one random row fetch per catchment: %v", plan[0], plan)
+	}
+	// ...and the weights must be probed by rowid, not scanned per row, which
+	// would make the whole thing quadratic.
+	if len(plan) < 2 || !strings.Contains(plan[1], "SEARCH w") {
+		t.Errorf("inner loop is %q, want a keyed search of the weight table: %v", plan[len(plan)-1], plan)
+	}
+}

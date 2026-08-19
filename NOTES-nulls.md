@@ -74,13 +74,12 @@ New `AggregateCatchmentIndicators` computes, **in SQL**,
 
     sum(area × aoiFraction × value) / sum(area × aoiFraction)
 
-per indicator per scenario. The weights go in as a `VALUES` CTE joined to the
-scenario table, so each statement returns exactly **one row of sums** no matter
-how many catchments it covers — nothing per-catchment crosses the SQL boundary.
-The denominator is per attribute, counting only catchments that actually have a
-value for it, matching both `computeAOIWeightedAttributeValue` (frontend) and
-`computeAreaWeightedIndicators` (server); a catchment missing one indicator must
-not drag that indicator's mean toward zero.
+per indicator per scenario. Each statement returns exactly **one row of sums**
+no matter how many catchments it covers — nothing per-catchment crosses the SQL
+boundary. The denominator is per attribute, counting only catchments that
+actually have a value for it, matching both `computeAOIWeightedAttributeValue`
+(frontend) and `computeAreaWeightedIndicators` (server); a catchment missing one
+indicator must not drag that indicator's mean toward zero.
 
 `ComputeWhiskerBounds` was rewritten onto the same helper, so a whisker bound
 and the value it brackets are now computed by the same code.
@@ -91,9 +90,89 @@ Registered for both runtimes, and added to `sharedRoutes` in the route-gating
 test.
 
 New `GetCatchmentAreasByIDs` returns id + area + AOI fraction and nothing else —
-tens of bytes per catchment instead of ~35 KB. `/whiskers` and `?slim=true` now
-use it, which is what makes them work for a continent-sized site **without any
+tens of bytes per catchment instead of ~25 KB. `/whiskers` and `?slim=true` use
+it, which is what makes them work for a continent-sized site **without any
 frontend change**.
+
+### The query plan is the whole performance story
+
+Getting the aggregate into SQL was not sufficient, and I initially reported
+`/whiskers` as working at continent scale when it did not. It took **391 s** and
+then failed to write the response. Measured against the real datapack
+(147,837 catchments, 502 indicator columns, six tables of 147,837 rows each):
+
+| plan | one whisker table |
+| --- | --- |
+| weights inline in a `VALUES` clause | **5m 56s** |
+| same, all columns in one batch | 5m 59s |
+| weights in a TEMP table keyed by `INTEGER PRIMARY KEY` | **9.9s** |
+
+Same arithmetic, same answers, 36× apart. The difference is which way round
+SQLite runs the join:
+
+- With the weights inline, SQLite scans the `VALUES` list and looks each
+  catchment up through the scenario table's id index — **one random row fetch
+  per catchment**, into a table of 505-column rows, repeated for every batch.
+- With the weights in a TEMP table whose key is the rowid, it scans the scenario
+  table **once, sequentially**, and probes the (small, in-memory) weight table
+  per row.
+
+Two things about this were not obvious and are worth recording:
+
+- **Column batching was never the cost.** Raising `aggregateColumnChunkSize`
+  from 500 to 900 so 502 columns fit in one statement changed nothing under the
+  inline plan (5m56s → 5m59s): the second pass hit a warm page cache. It does
+  matter under the materialised plan, where each batch is a full CPU-bound scan.
+- **I got this wrong once in this branch.** My first materialised implementation
+  stored both id spellings in ordinary indexed columns. That is enough to lift
+  the bind-variable ceiling but *not* enough to get the plan: with a plain index
+  rather than an `INTEGER PRIMARY KEY`, SQLite went back to `SCAN w, SEARCH s`
+  and a dense whisker table took over 200 s again. The schema is load-bearing.
+
+So the plan is now pinned rather than hoped for: the weight table is keyed by
+`cid INTEGER PRIMARY KEY`, the join is written `CROSS JOIN` (SQLite's documented
+way to fix loop order, with no effect on results), and a table whose id column
+is not an integer falls back to the inline plan rather than risking a worse one.
+`TestMaterialisedAggregateScansTheScenarioTable` asserts the plan directly with
+`EXPLAIN QUERY PLAN`, because nothing else in the suite would notice it
+changing — both plans return identical numbers.
+
+The four whisker tables are aggregated concurrently, each with its own weight
+set and connection. Sharing one materialised set would mean sharing the one
+connection its TEMP table lives on, and so running the tables in sequence. The
+work is CPU-bound, not I/O-bound (measured: `read_bytes` flat, one core
+saturated), so on a 16-core host four tables at once cost about what one does:
+33.1s serial → 10.9s concurrent.
+
+### Measured, whole-of-Africa site (147,837 catchments)
+
+Reproduce with:
+
+    DT_DATAPACK_DIR=/path/to/data go test ./internal/geodata/ -run TestRealDatapack -v -timeout 30m
+
+| | before | after |
+| --- | --- | --- |
+| `/whiskers` end to end | **391 s**, then a write timeout | **18.2 s** |
+| — `GetCatchmentAreasByIDs` | 3.6 s | 7.2 s |
+| — `ComputeWhiskerBounds` | ~387 s | **10.9 s** |
+| `/summary` (`AggregateCatchmentIndicators`) | ~7 s | **5.8 s** |
+| small site (11 catchments), whiskers | 82 ms | **41 ms** |
+| small site, summary | — | 21 ms |
+
+The small-site case got faster too, because 502 columns now fit in one statement
+instead of two.
+
+Correctness is checked, not assumed: `TestRealDatapackWholeContinent` compares
+one attribute's aggregate against an independent SQL query written the obvious
+way, with no chunking, weight table or column batching in it. It matches to
+better than 1 part in 10⁹ (`lowTC_prop` = 0.6191613751348248).
+
+`GetCatchmentAreasByIDs` is now 40% of the whiskers request, and it has the same
+random-fetch shape (chunked `IN` lookups into `catchments_lev12`). It was left
+alone: the obvious fix is to scan `catchments_lev12` instead, but that table
+carries the `geojson` blob column, so a scan risks pulling gigabytes of overflow
+pages to read two small columns. It is the next thing to look at, with
+measurement, not the next thing to assume.
 
 ### Chunking
 
@@ -108,17 +187,24 @@ limit (also confirmed empirically: 1,999 ok, 2,001 fails).
 
 | Request | Answer |
 | --- | --- |
-| `POST /sites/{id}/summary` | The intended answer. Fixed size (a few KB) at any catchment count. |
-| `POST /sites/{id}/whiskers` | Works at any size now — weights-only fetch. |
+| `POST /sites/{id}/summary` | The intended answer. ~52 KB, 5.8 s, at any catchment count. |
+| `POST /sites/{id}/whiskers` | Works at this size: 18.2 s. |
 | `POST /sites/{id}/catchments?slim=true` | id + area + fraction, ~50 bytes each (~7 MB for Africa). Not capped: it is bounded by the id list the client itself sent. |
 | `POST /sites/{id}/catchments` (full) | **413** above `MaxDetailCatchments`, with the limit in the message and a pointer to the summary. |
 
-`MaxDetailCatchments = 5000`. The real datapack yields ~35 KB of JSON per
-catchment (1.16 GB / 32,766 — every record carries every indicator for both
-scenarios), so 5,000 is ~175 MB. That is still far more than any client should
-be asked to parse, but it is comfortably above any site drawn around a real
-place (Munywana is 11 catchments) while making a gigabyte-scale body
-unreachable. **This number is a judgement call** — see "not vouched for".
+`MaxDetailCatchments = 5000`, now set from measurement rather than estimate.
+Every record carries all 502 indicators for both scenarios:
+
+| catchments | body | query | encode |
+| --- | --- | --- | --- |
+| 100 | 2.6 MB | 0.2 s | 0.1 s |
+| 1,000 | 17.9 MB | 0.4 s | 0.5 s |
+| 5,000 | **151.6 MB** | 1.9 s | 4.8 s |
+
+which puts Africa at something over 4 GB. 5,000 is where that curve is left:
+152 MB and about seven seconds is already far more than a client should be
+asked to hold, and it is three orders of magnitude above any site drawn around
+a real place. It is a ceiling, not a target.
 
 The old endpoint keeps working, bounded and erroring honestly, for callers that
 have not moved to `/summary`.
@@ -182,6 +268,23 @@ standard-library only (no `go.mod`/`go.sum`/`vendorHash` movement):
 - `TestGetCatchmentIndicatorsByIDsRefusesUnboundedRequest`
 - `TestGridGeometryCacheFailureIsReportedNotDrawnAsEmpty`
 - `TestApplyAOIFractionsReportsUnreadableSiteGeometry`
+- `TestBothAggregatePlansAgree` — there are now two query plans for the same
+  arithmetic, and the fast one is 36× faster, which is exactly the kind of win
+  that tempts one into not checking it computes the same number. It does.
+- `TestMaterialisedAggregateScansTheScenarioTable` — asserts the plan itself
+  with `EXPLAIN QUERY PLAN`. Both plans return identical results, so this is
+  the only thing standing between the fast one and a silent return to a
+  six-minute request.
+
+`internal/geodata/real_datapack_test.go` — the measurements, skipped unless
+`DT_DATAPACK_DIR` points at a real datapack (no hard-coded paths). These are
+where every number quoted in the constants' comments comes from, and they can
+be re-derived by running them:
+- `TestRealDatapackWholeContinent` — 147,837 catchments, timings plus a
+  cross-check of the arithmetic against an independent SQL aggregate.
+- `TestRealDatapackSmallSite` — guards the plan nearly every real site takes;
+  fails if 11 catchments ever take more than 5 s.
+- `TestRealDatapackDetailResponseSize` — the basis for `MaxDetailCatchments`.
 
 `internal/api/site_summary_test.go` — the same from the client's end, over the
 real router, browser runtime, site in the body:
@@ -215,12 +318,20 @@ packages, and `golangci-lint run` on both packages (0 issues).
   catchments exists and is in use, this turns a slow-but-working request into a
   413. The right answer is for every caller to move to `/summary`; until then
   this number is the one thing here most likely to need adjusting.
-- **The aggregate's SQL has not been run against the real datapack** — there is
-  no `datapack.gpkg` in this checkout. The arithmetic is covered by tests on the
-  synthetic pack, but the *plan* is not: whether SQLite uses an index for the
-  `VALUES` CTE join, and how the 147,837-catchment case performs in wall-clock
-  terms, is unmeasured. If it is slow, the shape to try is a covering index on
-  the scenario tables' id column, not a change to the query.
+- **Concurrency and the connection pool.** Each table's aggregation now holds
+  one pooled connection for its TEMP table, so a `/whiskers` request at
+  continent scale holds four of the sixteen. Four such requests at once will
+  saturate the pool and a fifth will queue. That is backpressure rather than
+  deadlock — nothing holding a connection reaches for a second one, which is
+  why `resolveScenarioIDColumn` and `tableExists` now take the querier as a
+  parameter — but it is untested under real concurrent load. Small sites do not
+  materialise and so do not hold connections, which is the common case.
+- **18 s is better, not good.** `/whiskers` at 147,837 catchments completes
+  reliably now instead of timing out, but it is still a slow request, and the
+  browser runtime does not cache the result (only the desktop build persists it
+  onto the site). If that is not acceptable, the honest options are to bound the
+  endpoint the way `/catchments` is bounded, or to compute it once and cache it
+  server-side; both are decisions above my level.
 - **AOI fraction convention.** `newCatchmentWeights` treats a fraction outside
   `(0, 1]` as 1, which is what `ComputeWhiskerBounds` has always done and keeps
   whisker numbers identical. The frontend's `normalizeAOIFraction` clamps to
@@ -242,6 +353,9 @@ packages, and `golangci-lint run` on both packages (0 issues).
   `creationMethod: "catchments"`, which skips this path entirely, so it is not
   on the #140 route — but it is a real ceiling that has simply moved rather than
   gone.
+- **The datapack was read, never written.** All measurement opened it
+  `mode=ro`; the TEMP tables live in the connection's temp store, not in the
+  datapack file.
 - `internal/server/static/index.html` and `internal/server/docs_site/index.html`
   are gitignored build scaffolding created to make `go build` work here; they
   are not in the commit.
