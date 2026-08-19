@@ -101,12 +101,33 @@ function readRecord(id: string): Site | null {
   }
 }
 
+/** Whether the per-site index has ever been written, even as an empty list. */
+function indexKeyExists(): boolean {
+  if (!isBrowser()) return false;
+  try {
+    return window.localStorage.getItem(INDEX_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Move a legacy `dt-sites` blob to per-site records.
  *
- * Runs at most once: the blob is removed on success. If writing any record
- * fails — a full quota, most likely — the blob is left alone so nothing is
- * lost, and the next read tries again.
+ * Intended to run at most once: the blob is removed on success. If writing any
+ * record fails — a full quota, most likely — the blob used to be left alone so
+ * the next read would try again. Under a quota that never recovers (the blob
+ * itself, a full duplicate of everything, was often *why* it was full) that
+ * meant it never went away, and every read kept re-migrating it — including
+ * sites the per-site store had since had deleted, resurrecting them on every
+ * load with no error to explain why the delete "didn't work".
+ *
+ * So a second condition ends the retries even without a successful migration:
+ * once the per-site index has ever been written — by this function or by an
+ * ordinary create/update/delete — the per-site store is the live system of
+ * record, and the legacy blob is stale by definition. It is discarded rather
+ * than merged, on the same best-effort basis as everything else here: freeing
+ * the space it held matters more than a blob nothing will read again.
  *
  * Returns the migrated sites, or null when there was nothing to migrate.
  */
@@ -120,6 +141,11 @@ export function migrateLegacyStore(): Site[] | null {
     return null;
   }
   if (!raw) return null;
+
+  if (indexKeyExists()) {
+    safeRemoveItem(LEGACY_KEY);
+    return null;
+  }
 
   let parsed: unknown;
   try {
@@ -219,9 +245,11 @@ export function saveSites(sites: Site[]): boolean {
   }
 
   // Records dropped from the list are deleted, so the store cannot accumulate
-  // sites the caller believes it removed.
+  // sites the caller believes it removed. A failed removal must fail the whole
+  // save — otherwise the caller (and the index write below) reports success
+  // while an orphaned record silently survives on disk.
   for (const id of readIndex()) {
-    if (!ids.includes(id)) safeRemoveItem(recordKey(id));
+    if (!ids.includes(id) && !safeRemoveItem(recordKey(id))) ok = false;
   }
 
   if (!writeIndex(ids)) ok = false;

@@ -5,7 +5,7 @@ import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
-import { loadSite, loadSites, saveSite, saveSites } from '../lib/siteStore';
+import { loadSite, loadSites, saveSite, saveSites, deleteSite as deleteSiteRecord } from '../lib/siteStore';
 
 const API_BASE = '/api';
 /**
@@ -101,14 +101,25 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return response.json();
 }
 
+// How often to re-fetch /api/info after the first load. Version/data-loaded
+// status never changes at runtime, but satellite_quota_exceeded can flip mid
+// session — this is what lets a map that is actively showing satellite
+// imagery notice the quota was spent and fall back, without a page reload.
+const SERVER_INFO_POLL_MS = 60_000;
+
 export function useServerInfo() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchJSON<ServerInfo>(`${API_BASE}/info`)
-      .then(setInfo)
-      .catch((e) => setError(e.message));
+    const load = () => {
+      fetchJSON<ServerInfo>(`${API_BASE}/info`)
+        .then(setInfo)
+        .catch((e) => setError(e.message));
+    };
+    load();
+    const interval = setInterval(load, SERVER_INFO_POLL_MS);
+    return () => clearInterval(interval);
   }, []);
 
   return { info, error };
@@ -961,9 +972,16 @@ export async function patchSiteIndicators(
 
 export async function deleteSite(id: string): Promise<void> {
   if (isBrowserRuntime()) {
-    const sites = loadLocalSites();
-    const nextSites = sites.filter((site) => site.id !== id);
-    saveLocalSites(sortSitesByCreatedAtDesc(nextSites));
+    // The dedicated single-record primitive, not load-all/filter/save-all: a
+    // delete should only ever need to free space, never touch another site's
+    // record. Going through saveLocalSites used to read and potentially
+    // rewrite every *other* site too (normalising legacy formatting drift),
+    // and that rewrite could itself throw under a genuinely full quota —
+    // meaning a delete, the one operation that should get you out of "full",
+    // could fail before it ever reached the removal.
+    if (!deleteSiteRecord(id)) {
+      throw new Error('Failed to delete site: browser storage write failed.');
+    }
     return;
   }
 

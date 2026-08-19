@@ -146,6 +146,41 @@ describe('migration from the single blob', () => {
     window.localStorage.setItem(LEGACY_KEY, JSON.stringify([site('a'), site('b')]));
     expect(loadSites().map((s) => s.id)).toEqual(['a', 'b']);
   });
+
+  // The actual bug: a legacy blob that never fully migrated (a full-quota
+  // profile, most likely — the blob itself is a duplicate of everything, so it
+  // could easily be *why* the quota was full) survived indefinitely and kept
+  // being re-read as authoritative. A site deleted through the per-site store
+  // reappeared on every subsequent load because the stale blob still listed
+  // it, with no error anywhere to explain why the delete "didn't work".
+  it('does not resurrect a site deleted from an already-active per-site store', () => {
+    // The per-site store is already live: two sites exist as real records.
+    saveSites([site('a'), site('b')]);
+
+    // A legacy blob still lingers from before the per-site store existed,
+    // listing a stale version of 'a' plus a site never migrated at all.
+    window.localStorage.setItem(LEGACY_KEY, JSON.stringify([
+      site('a', { title: 'stale pre-migration copy' }),
+      site('zzz'),
+    ]));
+
+    expect(deleteSite('a')).toBe(true);
+
+    // Reads after the delete — including a fresh one simulating a page
+    // reload — must not see 'a' again, and must not gain 'zzz' either: the
+    // blob is stale, not a second source of truth to merge in.
+    expect(loadSites().map((s) => s.id)).toEqual(['b']);
+    expect(loadSites().map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('discards a stale blob outright once the per-site index already exists, even if empty', () => {
+    saveSites([site('a')]);
+    deleteSite('a'); // index now exists and is empty
+    window.localStorage.setItem(LEGACY_KEY, JSON.stringify([site('resurrected')]));
+
+    expect(loadSites()).toEqual([]);
+    expect(window.localStorage.getItem(LEGACY_KEY)).toBeNull();
+  });
 });
 
 describe('reading and writing', () => {
@@ -189,6 +224,20 @@ describe('reading and writing', () => {
 
     expect(loadSites().map((s) => s.id)).toEqual(['a']);
     expect(window.localStorage.getItem('dt-site:b')).toBeNull();
+  });
+
+  // A failed removal used to be silently ignored: the index write could still
+  // succeed on its own, so saveSites reported success while an orphaned record
+  // for the "deleted" site stayed on disk — a delete the caller believed had
+  // happened, with no error to tell it otherwise.
+  it('reports failure when a dropped record cannot be removed', () => {
+    saveSites([site('a'), site('b')]);
+
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+
+    expect(saveSites([site('a')])).toBe(false);
   });
 
   it('never stores the breakdown, however it arrives', () => {

@@ -14,11 +14,15 @@ export interface ServerInfo {
   version: string;
   tiles_loaded: boolean;
   geo_loaded: boolean;
-  /** Satellite raster tile template, supplied at runtime so changing provider
-   *  needs no rebuild. See lib/satelliteBasemap.ts. */
-  satellite_tile_url?: string;
+  /** Satellite basemap style document. Always this server's own proxy — see
+   *  lib/satelliteBasemap.ts for why the browser does not fetch tiles (or the
+   *  style itself) from the provider directly. */
+  satellite_style_url?: string;
   /** Attribution for the above — a licence condition for most providers. */
   satellite_attribution?: string;
+  /** True once this deployment's monthly satellite tile quota is spent. The
+   *  client should not offer the satellite basemap while this is true. */
+  satellite_quota_exceeded?: boolean;
 }
 
 export interface TilesetMetadata {
