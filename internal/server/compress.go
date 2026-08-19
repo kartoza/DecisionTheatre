@@ -142,6 +142,17 @@ func hasBody(status int) bool {
 	return true
 }
 
+// isPartialContent reports whether the status is 206. http.ServeContent (the
+// static file server, and thus every embedded frontend asset) answers Range
+// requests this way, with Content-Length and Content-Range describing a slice
+// of the uncompressed file. Gzipping that slice on its own produces a body
+// that isn't valid gzip, while the stale Content-Range still names offsets
+// into the uncompressed file — a framing mismatch Chrome rejects outright
+// under HTTP/2 as ERR_HTTP2_PROTOCOL_ERROR.
+func isPartialContent(status int) bool {
+	return status == http.StatusPartialContent
+}
+
 // decide settles whether this response is compressed and sends the header.
 func (w *gzipResponseWriter) decide() {
 	if w.decided {
@@ -159,7 +170,7 @@ func (w *gzipResponseWriter) decide() {
 	alreadyEncoded := header.Get("Content-Encoding") != ""
 	tooSmall := len(w.buf) < compressMinBytes && w.gz == nil
 
-	if alreadyEncoded || !hasBody(w.status) || !isCompressibleType(header.Get("Content-Type")) || tooSmall {
+	if alreadyEncoded || !hasBody(w.status) || isPartialContent(w.status) || !isCompressibleType(header.Get("Content-Type")) || tooSmall {
 		w.raw = true
 		w.ResponseWriter.WriteHeader(w.status)
 		return

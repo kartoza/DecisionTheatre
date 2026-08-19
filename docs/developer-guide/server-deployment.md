@@ -78,42 +78,72 @@ The application is now accessible at both `http://<your-server>/` and `https://<
 
 ---
 
-## Two ways to build the image
+## Getting the image
 
-| | Built by | Needs | Dependencies come from |
-|---|---|---|---|
-| `deployments/Dockerfile` | `docker compose up --build` | Docker | An apt list maintained by hand |
-| **The flake** | `./scripts/build-container.sh` (or `make container`) | Nix and Docker | The runtime closure of the binary Nix builds |
+The image is built from the flake. Its contents are the **runtime closure** of the
+binary Nix builds, so nothing states a dependency version twice — which is what
+went wrong before: a hand-written apt list installed WebKit **4.0** while the
+flake, CI and the Debian packaging all targeted **4.1**, and omitted a plugin
+`mkdocs.yml` requires, so for a while no image could be built at all.
 
-Both produce a working image and both are exercised in CI. The difference is
-where the dependency list comes from.
+There are three ways to get it, in order of how most people should.
 
-The Dockerfile names its runtime packages by hand, which means there are two
-statements of what the application needs — the flake's and the Dockerfile's — and
-nothing keeps them in step. They did fall out of step: the Dockerfile installed
-WebKit **4.0** while the flake, CI and the Debian packaging all targeted **4.1**,
-and it omitted a plugin `mkdocs.yml` requires, so for a while no image could be
-built at all.
-
-The flake-built image has no second list. Its contents are the closure of the
-binary, so it contains what the application actually links against, and it cannot
-disagree with `nix build` about a version.
+### 1. Pull a released image from GHCR
 
 ```bash
-# Build and load it
-./scripts/build-container.sh
-
-# Then point compose at it instead of building
-DT_IMAGE=decision-theatre:0.4.0 docker compose up -d
+docker pull ghcr.io/kartoza/decisiontheatre:0.4.0   # an immovable version pin
+docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest release
 ```
 
-`DT_IMAGE` defaults to `decision-theatre:latest`, which is what compose builds
-from the Dockerfile — so an existing deployment that does not set it keeps
-behaving exactly as before. Compose only builds when the named image is absent,
-so naming an image you have already loaded uses it as-is.
+Every release publishes both tags, along with the image tarball, its SBOM and its
+vulnerability scan as release assets.
 
-The tag is the version in `flake.nix`; `./scripts/build-container.sh` prints it,
-and `nix eval --raw .#container.imageTag` reports it on its own.
+### 2. Take the image from a pull request
+
+Every pull request builds the image and attaches it, its SBOM and its CVE scan as
+a **`container-image` artefact kept for 7 days**. The pull request is annotated
+with the package inventory and the scan results, and the comment carries the
+commands. This is how you try a change before it merges:
+
+```bash
+# Download `container-image` from the Actions run linked in the PR comment
+unzip container-image.zip
+docker load < decision-theatre-image.tar.gz
+docker run --rm -p 8080:8080 decision-theatre:0.4.0
+```
+
+### 3. Build it yourself
+
+Needs Nix and Docker:
+
+```bash
+./scripts/build-container.sh     # builds and loads it, then prints the tag
+make container                   # the same
+nix build .#container            # just the tarball, at ./result
+```
+
+The tag is the version declared in `flake.nix`; `nix eval --raw .#container.imageTag`
+reports it on its own.
+
+### Running a specific image with compose
+
+```bash
+DT_IMAGE=ghcr.io/kartoza/decisiontheatre:0.4.0 docker compose up -d
+```
+
+`DT_IMAGE` defaults to `decision-theatre:latest`. Compose only builds when the
+named image is absent, so naming one you have already pulled or loaded uses it
+as-is.
+
+### What is still built the old way, and why
+
+`deployments/Dockerfile` is still present and compose still builds from it by
+default. It is **no longer built or tested in CI** — the flake image is the one
+that is. It stays only until a release has published an image to GHCR that
+compose can pull instead, because switching before then would leave a deployment
+with nothing to pull. Removing it is tracked, along with `Dockerfile.builder`,
+which the nightly `scripts/scheduled-redeploy.sh` uses to rebuild the datapack
+and installers on a host that has only Docker.
 
 ---
 

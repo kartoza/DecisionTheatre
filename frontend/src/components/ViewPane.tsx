@@ -600,6 +600,7 @@ function ViewPane({
           onSwiperEnabledChange={onSwiperEnabledChange}
           colorScaleMode={colorScaleMode}
           colorScaleType={colorScaleType}
+          rangeMode={rangeMode}
           is3DMode={is3DMode}
           on3DModeChange={on3DModeChange}
           swiperPosition={swiperPosition}

@@ -25,6 +25,10 @@ aa38bd4aa669babea620de9d9b65f1737741eea0:data/mbtiles/style.json:generic-api-key
 cd698f36e0c876fd1af77ab4efe835e490fdf0aa:resources/mbtiles/uow_tiles.json:generic-api-key:14
 062ff0a5d8650051c8e706c39374d31e3fe54b61:internal/server/server.go:generic-api-key:402
 
+# Same key, given a named constant (MapTilerAPIKey) in config.go so the
+# satellite style URL and the glyph proxy can't drift onto different keys.
+d7cd03dc8354e299cb946fd63ae85b3686cc2080:internal/config/config.go:generic-api-key:98
+
 # ---------------------------------------------------------------------------
 # TLS private key committed in 3ac8333 (2026-05-28) — ROTATED
 # ---------------------------------------------------------------------------
