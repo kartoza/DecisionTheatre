@@ -239,13 +239,47 @@ func dbValueToString(v interface{}) string {
 func parseNumericIDs(ids []string) ([]interface{}, bool) {
 	args := make([]interface{}, 0, len(ids))
 	for _, id := range ids {
-		parsed, err := strconv.ParseInt(normalizeCatchmentID(strings.TrimSpace(id)), 10, 64)
-		if err != nil {
+		parsed, ok := parseCatchmentID(id)
+		if !ok {
 			return nil, false
 		}
 		args = append(args, parsed)
 	}
 	return args, true
+}
+
+// parseCatchmentID reads a catchment id as the integer it is, whatever spelling
+// it arrived in.
+//
+// HYBAS_ID is a REAL column in the datapack, so the same id legitimately turns
+// up as "1121879850", "1121879850.0" and - once a float64 has been through a
+// generic string conversion - "1.12187985e+09". Only the first two used to
+// parse, and an id list containing any of the third form fell back to matching
+// on the text column for every id in it.
+//
+// That fallback is no longer merely slower in the ordinary way: the fast
+// query plans key on an integer column (see weightTableThreshold), so an id
+// spelled as a float would quietly cost a continent-sized request thirty
+// seconds instead of three. A value with a real fractional part is still not a
+// catchment id and is still rejected.
+func parseCatchmentID(id string) (int64, bool) {
+	trimmed := normalizeCatchmentID(strings.TrimSpace(id))
+	if trimmed == "" {
+		return 0, false
+	}
+	if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return parsed, true
+	}
+	asFloat, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil || math.Trunc(asFloat) != asFloat || math.IsInf(asFloat, 0) {
+		return 0, false
+	}
+	// Outside this range a float64 cannot represent every integer, so the
+	// value can no longer be trusted to be the id that was meant.
+	if asFloat > math.MaxInt64 || asFloat < math.MinInt64 || math.Abs(asFloat) > 1<<53 {
+		return 0, false
+	}
+	return int64(asFloat), true
 }
 
 // The querier is a parameter because the caller may already be holding a
@@ -1690,8 +1724,13 @@ type CatchmentIndicators struct {
 // an indicator-bearing one costs, which is the difference between a
 // continent-sized site being answerable and not.
 //
-// The id list is queried in catchmentIDChunkSize batches: a single IN clause
-// over 147,837 ids cannot be prepared at all (see sqliteMaxVariables).
+// Small id lists are queried in catchmentIDChunkSize batches, since a single
+// IN clause over 147,837 ids cannot be prepared at all (see
+// sqliteMaxVariables). Large ones take the same materialised route as the
+// aggregates, for the same reason: measured against the real datapack, the
+// batched lookups take about 30s for a continent's worth of ids because each
+// one is a random row fetch into catchments_lev12, while scanning that table
+// once against a temp id set takes about 3s. See catchmentAreasByScan.
 func (s *GpkgStore) GetCatchmentAreasByIDs(ctx context.Context, ids []string) ([]CatchmentIndicators, error) {
 	start := time.Now()
 	defer func() {
@@ -1700,6 +1739,18 @@ func (s *GpkgStore) GetCatchmentAreasByIDs(ctx context.Context, ids []string) ([
 
 	if len(ids) == 0 {
 		return nil, nil
+	}
+
+	if len(ids) > weightTableThreshold {
+		areas, err := s.catchmentAreasByScan(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		if areas != nil {
+			return areas, nil
+		}
+		// A nil result with no error means the scan route did not apply to
+		// this id set; fall through to the batched lookups, which always work.
 	}
 
 	textArgs := make([]interface{}, len(ids))
@@ -1750,6 +1801,73 @@ func (s *GpkgStore) GetCatchmentAreasByIDs(ctx context.Context, ids []string) ([
 		rows.Close()
 	}
 
+	return results, nil
+}
+
+// catchmentAreasByScan reads areas by scanning catchments_lev12 once against a
+// materialised set of the requested ids, rather than looking each id up
+// through the index.
+//
+// It is the same trade the aggregates make (see weightTableThreshold): an
+// index lookup per id is right while the id set is small and selective, and
+// badly wrong once it is a large fraction of the table, because each lookup is
+// a random fetch of a row that also carries a geometry blob.
+//
+// It returns (nil, nil) when the route does not apply - ids that are not all
+// integers cannot key the temp table - leaving the caller to use the batched
+// lookups instead.
+func (s *GpkgStore) catchmentAreasByScan(ctx context.Context, ids []string) ([]CatchmentIndicators, error) {
+	// The temp table is being used purely as a set here: newCatchmentWeights
+	// gives every id a weight of 1 when no areas are supplied, and the weight
+	// column is simply not read by the query below.
+	idOnly := make([]CatchmentIndicators, len(ids))
+	for i, id := range ids {
+		idOnly[i] = CatchmentIndicators{ID: id}
+	}
+	w := newCatchmentWeights(idOnly)
+
+	ws, err := s.newWeightSet(ctx, w, true)
+	if err != nil {
+		return nil, err
+	}
+	defer ws.close()
+	if !ws.materialised() {
+		return nil, nil
+	}
+
+	// CROSS JOIN fixes the loop order so catchments_lev12 is scanned once and
+	// the id set probed by rowid, rather than the other way round. See
+	// aggregateViaWeightTable.
+	query := fmt.Sprintf(`
+		SELECT c.HYBAS_ID_int, c.SUB_AREA
+		FROM catchments_lev12 c
+		CROSS JOIN %s w ON c.HYBAS_ID_int = w.cid
+	`, weightTableName)
+
+	rows, err := ws.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query catchment areas: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]CatchmentIndicators, 0, w.len())
+	for rows.Next() {
+		var catchmentIDRaw interface{}
+		var area sql.NullFloat64
+		if err := rows.Scan(&catchmentIDRaw, &area); err != nil {
+			return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+		}
+		results = append(results, CatchmentIndicators{
+			ID:          normalizeCatchmentID(dbValueToString(catchmentIDRaw)),
+			AreaKm2:     area.Float64,
+			Reference:   map[string]float64{},
+			Current:     map[string]float64{},
+			AOIFraction: 1.0,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+	}
 	return results, nil
 }
 

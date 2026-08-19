@@ -146,49 +146,58 @@ saturated), so on a 16-core host four tables at once cost about what one does:
 
 ### Measured, whole-of-Africa site (147,837 catchments)
 
-Reproduce with:
+Reproduce with a real datapack (no hard-coded paths; skipped without one):
 
-    DT_DATAPACK_DIR=/path/to/data go test ./internal/geodata/ -run TestRealDatapack -v -timeout 30m
+    DT_DATAPACK_DIR=/path/to/data go test ./internal/geodata/ ./internal/api/ -run TestRealDatapack -v -timeout 30m
+
+Over HTTP, browser runtime, 147,837 ids posted in the body:
 
 | | before | after |
 | --- | --- | --- |
-| `/whiskers` end to end | **391 s**, then a write timeout | **18.2 s** |
-| — `GetCatchmentAreasByIDs` | 3.6 s | 7.2 s |
-| — `ComputeWhiskerBounds` | ~387 s | **10.9 s** |
-| `/summary` (`AggregateCatchmentIndicators`) | ~7 s | **5.8 s** |
-| small site (11 catchments), whiskers | 82 ms | **41 ms** |
-| small site, summary | — | 21 ms |
+| `POST /sites/{id}/whiskers` | **391 s**, then `i/o timeout` writing the response | **13.2 s**, 104,358 bytes of real bounds |
+| `POST /sites/{id}/summary` | (did not exist; `/catchments` returned `[]`) | **13.6 s**, 52,406 bytes |
+| `POST /sites/{id}/catchments` | 200 with `[]` (3 bytes) | **413** in 60 ms |
+| small site (11 catchments), whiskers | 82 ms | **42 ms** |
 
-The small-site case got faster too, because 502 columns now fit in one statement
-instead of two.
+Where the time goes now, per request: about 3-7 s reading catchment areas and
+about 10 s aggregating four whisker tables concurrently. The library-level
+figures are `ComputeWhiskerBounds` 10.9 s and `AggregateCatchmentIndicators`
+5.8 s.
+
+The small-site case got faster too, because 502 columns now fit in one
+statement instead of two.
 
 Correctness is checked, not assumed: `TestRealDatapackWholeContinent` compares
 one attribute's aggregate against an independent SQL query written the obvious
 way, with no chunking, weight table or column batching in it. It matches to
 better than 1 part in 10⁹ (`lowTC_prop` = 0.6191613751348248).
 
-`GetCatchmentAreasByIDs` is now 40% of the whiskers request, and it has the same
-random-fetch shape (chunked `IN` lookups into `catchments_lev12`). It was left
-alone: the obvious fix is to scan `catchments_lev12` instead, but that table
-carries the `geojson` blob column, so a scan risks pulling gigabytes of overflow
-pages to read two small columns. It is the next thing to look at, with
-measurement, not the next thing to assume.
+### Two more things measurement found
 
-### Chunking
+**The area lookup became the bottleneck, and had the same shape.** With the
+aggregates fixed, `GetCatchmentAreasByIDs` was 30 s of a 38 s request — 80% of
+it, not the 40% I first wrote. It was doing the same thing the aggregates had
+been doing: batched `IN` lookups, one random row fetch per catchment, into
+`catchments_lev12`, whose rows also carry a geometry blob. Scanning that table
+once against a materialised id set takes 3 s instead. Same technique, same
+`CROSS JOIN`, same threshold.
 
-`catchmentIDChunkSize = 16000` (two bind variables per id in the widest form,
-half of 32,766, rounded down) applied to every id-list query:
-`GetCatchmentIndicatorsByIDs`, `GetCatchmentAreasByIDs`, `GetCatchmentsByIDs`,
-`DissolveCatchments`, and the aggregate. `aggregateColumnChunkSize = 500` keeps
-the aggregate's two-result-columns-per-attribute under SQLite's 2,000 column
-limit (also confirmed empirically: 1,999 ok, 2,001 fails).
+**A REAL column nearly made the whole thing unreachable.** `HYBAS_ID` is a REAL
+column, so the same catchment id legitimately appears as `1121879850`,
+`1121879850.0` and — once a float64 has been through a generic string
+conversion — `1.12187985e+09`. `parseNumericIDs` accepted only the first two,
+and the fast plans key on an integer column, so a single exponent-spelled id in
+the list silently sent the entire request back to the slow plan. It cost 30 s
+instead of 3 s and logged nothing beyond a warning I had only just added. Ids
+are now parsed in any integral spelling (`parseCatchmentID`), with a test for
+each; genuinely fractional values are still rejected.
 
 ## Bounding — what a 147,837-catchment site returns
 
 | Request | Answer |
 | --- | --- |
-| `POST /sites/{id}/summary` | The intended answer. ~52 KB, 5.8 s, at any catchment count. |
-| `POST /sites/{id}/whiskers` | Works at this size: 18.2 s. |
+| `POST /sites/{id}/summary` | The intended answer. ~52 KB, 13.6 s over HTTP, at any catchment count. |
+| `POST /sites/{id}/whiskers` | Works at this size: 13.2 s, 104 KB of real bounds. |
 | `POST /sites/{id}/catchments?slim=true` | id + area + fraction, ~50 bytes each (~7 MB for Africa). Not capped: it is bounded by the id list the client itself sent. |
 | `POST /sites/{id}/catchments` (full) | **413** above `MaxDetailCatchments`, with the limit in the message and a pointer to the summary. |
 
@@ -326,12 +335,19 @@ packages, and `golangci-lint run` on both packages (0 issues).
   why `resolveScenarioIDColumn` and `tableExists` now take the querier as a
   parameter — but it is untested under real concurrent load. Small sites do not
   materialise and so do not hold connections, which is the common case.
-- **18 s is better, not good.** `/whiskers` at 147,837 catchments completes
-  reliably now instead of timing out, but it is still a slow request, and the
-  browser runtime does not cache the result (only the desktop build persists it
-  onto the site). If that is not acceptable, the honest options are to bound the
-  endpoint the way `/catchments` is bounded, or to compute it once and cache it
-  server-side; both are decisions above my level.
+- **13 s is better, not good.** `/whiskers` and `/summary` at 147,837
+  catchments complete reliably now instead of timing out, but thirteen seconds
+  is still a long request, and the browser runtime does not cache the result
+  (only the desktop build persists it onto the site). If that is not
+  acceptable, the honest options are to bound the endpoints the way
+  `/catchments` is bounded, or to compute once and cache server-side; both are
+  decisions above my level.
+- **The remaining time is roughly half area lookup, half aggregation.** The
+  aggregation is a full scan of four 147,837-row, 505-column tables and is
+  close to the floor for that shape. The area lookup could in principle be
+  avoided entirely for sites whose AOI fractions are all 1, by weighting
+  directly from `catchments_lev12.SUB_AREA` inside the aggregate, but that
+  turns a two-table join into a three-table one and I have not measured it.
 - **AOI fraction convention.** `newCatchmentWeights` treats a fraction outside
   `(0, 1]` as 1, which is what `ComputeWhiskerBounds` has always done and keeps
   whisker numbers identical. The frontend's `normalizeAOIFraction` clamps to

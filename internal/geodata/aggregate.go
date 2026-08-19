@@ -285,13 +285,15 @@ type weightSet struct {
 // per-connection, so the name cannot collide between concurrent requests.
 const weightTableName = "aoi_weights"
 
-// newWeightSet prepares the catchments for aggregation, materialising them
-// into a TEMP table if there are enough of them to be worth it.
+// newWeightSet prepares the catchments for querying, materialising them into a
+// TEMP table when asked to. The decision is the caller's, since what counts as
+// worth it depends on the query (see weightTableThreshold); tests pass true
+// directly so the materialised path is exercised without needing a continent.
 //
 // The caller must close the result.
-func (s *GpkgStore) newWeightSet(ctx context.Context, w *catchmentWeights) (*weightSet, error) {
+func (s *GpkgStore) newWeightSet(ctx context.Context, w *catchmentWeights, materialise bool) (*weightSet, error) {
 	ws := &weightSet{weights: w}
-	if w.len() <= weightTableThreshold {
+	if !materialise {
 		return ws, nil
 	}
 
@@ -303,8 +305,8 @@ func (s *GpkgStore) newWeightSet(ctx context.Context, w *catchmentWeights) (*wei
 	// datapack's catchment ids are HYBAS integers and no known datapack takes
 	// that path.
 	if !w.numeric {
-		log.Printf("Warning: %d catchments have non-numeric ids, so the aggregate falls back to the "+
-			"inline plan, which is much slower at this size", w.len())
+		log.Printf("Warning: %d catchments have ids that are not integers, so the query falls back to "+
+			"the plan that looks each one up individually, which is much slower at this size", w.len())
 		return ws, nil
 	}
 
@@ -624,7 +626,7 @@ func (s *GpkgStore) aggregateTables(ctx context.Context, tableNames []string, w 
 				}
 			}()
 
-			ws, err := s.newWeightSet(ctx, w)
+			ws, err := s.newWeightSet(ctx, w, w.len() > weightTableThreshold)
 			if err != nil {
 				ch <- tableResult{name: tableName, err: err}
 				return

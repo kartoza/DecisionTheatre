@@ -460,20 +460,16 @@ func TestBothAggregatePlansAgree(t *testing.T) {
 			t.Fatalf("inline plan: %v", err)
 		}
 
-		ws, err := store.newWeightSet(ctx, w)
+		// The synthetic set is far below weightTableThreshold, so the
+		// materialised plan is asked for directly rather than waiting for a
+		// continent to test it.
+		ws, err := store.newWeightSet(ctx, w, true)
 		if err != nil {
 			t.Fatalf("weight set: %v", err)
 		}
-		// The synthetic set is far below weightTableThreshold, so force the
-		// materialised plan rather than waiting for a continent to test it.
-		conn, err := store.db.Conn(ctx)
-		if err != nil {
-			t.Fatal(err)
+		if !ws.materialised() {
+			t.Fatal("weight set was not materialised")
 		}
-		if err := store.populateWeightTable(ctx, conn, w); err != nil {
-			t.Fatalf("populate weight table: %v", err)
-		}
-		ws.conn = conn
 
 		materialisedTotals := newWeightedTotals(len(columns))
 		err = store.aggregateViaWeightTable(ctx, tableName, idColumn, ws, columns, materialisedTotals)
@@ -567,5 +563,88 @@ func TestMaterialisedAggregateScansTheScenarioTable(t *testing.T) {
 	// would make the whole thing quadratic.
 	if len(plan) < 2 || !strings.Contains(plan[1], "SEARCH w") {
 		t.Errorf("inner loop is %q, want a keyed search of the weight table: %v", plan[len(plan)-1], plan)
+	}
+}
+
+// TestBothAreaLookupsAgree covers the other place where one query grew two
+// plans. Above weightTableThreshold the areas are read by scanning
+// catchments_lev12 against a materialised id set rather than looking each id
+// up through the index - about 3s instead of 30s for a continent, because each
+// index lookup is a random fetch of a row carrying a geometry blob. The two
+// routes must return the same catchments with the same areas.
+func TestBothAreaLookupsAgree(t *testing.T) {
+	store := openStore(t, newAggregateTestDir(t))
+	ctx := context.Background()
+	ids := []string{"1000000001", "1000000002", "1000000003"}
+
+	batched, err := store.GetCatchmentAreasByIDs(ctx, ids)
+	if err != nil {
+		t.Fatalf("batched lookup: %v", err)
+	}
+	scanned, err := store.catchmentAreasByScan(ctx, ids)
+	if err != nil {
+		t.Fatalf("scan lookup: %v", err)
+	}
+	if scanned == nil {
+		t.Fatal("the scan route declined a set of integer ids")
+	}
+
+	if len(batched) != len(scanned) {
+		t.Fatalf("batched returned %d catchments, scan returned %d", len(batched), len(scanned))
+	}
+
+	// Order is not part of either route's contract - the scan returns table
+	// order - so they are compared as sets.
+	want := make(map[string]float64, len(batched))
+	for _, c := range batched {
+		want[c.ID] = c.AreaKm2
+	}
+	for _, c := range scanned {
+		area, ok := want[c.ID]
+		if !ok {
+			t.Errorf("scan returned catchment %s that the batched lookup did not", c.ID)
+			continue
+		}
+		if area != c.AreaKm2 {
+			t.Errorf("catchment %s: batched area %v, scanned area %v", c.ID, area, c.AreaKm2)
+		}
+		if c.AOIFraction != 1 {
+			t.Errorf("catchment %s: scan route left AOIFraction at %v, want the 1.0 default", c.ID, c.AOIFraction)
+		}
+	}
+}
+
+// TestCatchmentIDsParseInEverySpellingTheDatapackUses guards the gate on the
+// fast query plans. HYBAS_ID is a REAL column, so the same catchment id
+// legitimately arrives spelled three different ways, and only an integer
+// spelling reaches the plan that scans once instead of fetching per catchment.
+// An id list containing one exponent-formatted value used to take the whole
+// request down to the slow plan silently.
+func TestCatchmentIDsParseInEverySpellingTheDatapackUses(t *testing.T) {
+	for _, spelling := range []string{"1121879850", "1121879850.0", "1.12187985e+09"} {
+		got, ok := parseCatchmentID(spelling)
+		if !ok {
+			t.Errorf("%q was rejected; it is a catchment id", spelling)
+			continue
+		}
+		if got != 1121879850 {
+			t.Errorf("%q parsed as %d, want 1121879850", spelling, got)
+		}
+	}
+
+	// Things that are not catchment ids stay rejected, so the integer-keyed
+	// plans are never handed something that is not one.
+	for _, notAnID := range []string{"", "   ", "abc", "1121879850.5", "1e400", "0x10"} {
+		if got, ok := parseCatchmentID(notAnID); ok {
+			t.Errorf("%q was accepted as catchment id %d", notAnID, got)
+		}
+	}
+
+	// And the whole-list gate agrees.
+	if _, ok := parseNumericIDs([]string{"1121879850", "1.12187985e+09"}); !ok {
+		t.Error("a list of integer ids in mixed spellings was rejected, which would cost the fast plan")
+	}
+	if _, ok := parseNumericIDs([]string{"1121879850", "not-an-id"}); ok {
+		t.Error("a list containing a non-id was accepted")
 	}
 }
