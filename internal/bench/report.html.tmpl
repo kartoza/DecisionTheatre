@@ -66,8 +66,8 @@
        woff2 only the payload at the foot of this <head> changes and nothing
        here moves. The palette families still follow them, as insurance for the
        case where the data URI itself fails to decode. */
-    --sans: "Report Sans", "Nunito", "Helvetica Neue", Helvetica, Arial, sans-serif;
-    --mono: "Report Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Report Sans", {{ .Brand.FontSans }};
+    --mono: "Report Mono", {{ .Brand.FontMono }};
 
     /* Figures line up because they are asked to, not because the face happens
        to be monospaced. Applied wherever a number can change width. */

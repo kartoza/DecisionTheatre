@@ -793,8 +793,15 @@ func shortCaveat(d Delta) string {
 	if effectiveVerdict(d) == Unchanged && math.Abs(d.BytesChange) >= NoiseFloor {
 		return "size moved, time did not"
 	}
-	if effectiveVerdict(d) != Unchanged && overlapping(base, cur) {
-		return "spreads overlap"
+	// The overlap check this used to call was replaced by the rank-sum test, so
+	// the hedge now comes from what the test could establish rather than from
+	// comparing two medians against two ranges. A verdict the test could not
+	// reach is still worth flagging; one it confirmed no longer needs hedging.
+	if effectiveVerdict(d) != Unchanged && !d.Test.Possible {
+		return "no rank-sum test"
+	}
+	if effectiveVerdict(d) != Unchanged && d.Test.Possible && !d.Test.Significant {
+		return "not separated"
 	}
 	return ""
 }
