@@ -521,19 +521,19 @@ describe('the cache never outlives what it describes', () => {
     expect(loadSites().map((s) => s.id)).toEqual(['b']);
   });
 
-  it('migrates the legacy blob even with a warm cache, and indexes it', () => {
+  // Mirrors 'discards a stale blob outright once the per-site index already
+  // exists' above, specifically for a cache that is already warm: the blob is
+  // stale by definition once real per-site data exists (see
+  // migrateLegacyStore's indexKeyExists check), so it must not resurrect
+  // anything even when a prior read has already cached what is really there.
+  it('discards a legacy blob that appears after the cache is warm, keeping what is already there', () => {
     saveSites([site('kept')]);
     loadSites();
 
     window.localStorage.setItem(LEGACY_KEY, JSON.stringify([site('old-a'), site('old-b')]));
 
-    expect(loadSites().map((s) => s.id)).toEqual(['old-a', 'old-b']);
+    expect(loadSites().map((s) => s.id)).toEqual(['kept']);
     expect(window.localStorage.getItem(LEGACY_KEY)).toBeNull();
-    expect(JSON.parse(window.localStorage.getItem('dt-site-index') as string)).toEqual([
-      'old-a',
-      'old-b',
-    ]);
-    // The migrated records are readable through the cache that was already warm.
-    expect(loadSite('old-a')?.title).toBe('site old-a');
+    expect(loadSite('old-a')).toBeNull();
   });
 });
