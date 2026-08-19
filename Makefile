@@ -137,6 +137,7 @@ test-frontend:
 ## rather than the declared one.
 test-scripts:
 	@./scripts/tests/version-test.sh
+	@./scripts/tests/report-tables-test.sh
 
 test-all: test test-frontend test-scripts
 
