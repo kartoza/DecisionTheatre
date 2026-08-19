@@ -485,6 +485,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance opens there rather than at the default world view, so a release and
   recreate does not move the map under the user.
 
+- **Panning the map re-asked questions whose answers could not have changed.**
+  `ViewPane` and `ChartView` both listed the map extent as an effect dependency
+  regardless of range mode, and the extent is a fresh object on every move — so a
+  pan re-issued full-domain queries that do not depend on the extent at all. At
+  4.77 seconds per full-domain `/api/aggregate` request, a scripted six-pane
+  session of one mount and five pans issued **216 chart-pane requests where 6 were
+  needed, and 72 dial-pane requests where 2 were** — roughly 1,030 seconds of
+  server work reduced to about 29.
+
+  Overlapping work is now ordered as well as reduced. `applyColors` is called from
+  sixteen places and is asynchronous throughout, so runs routinely overlapped and
+  nothing sequenced them: whichever response arrived last painted the map,
+  regardless of which viewport, scenario or attribute the user had asked for. Each
+  run now carries a monotonic ticket that is checked after every await, and
+  superseding a run aborts the requests it no longer needs.
+
+  A shared-request primitive replaces two hand-rolled promise caches. It shares one
+  in-flight request per key, cancels it when nothing wants it, and counts
+  subscribers — so one pane navigating away cannot cancel a request the other
+  eleven are waiting on.
+
+  The choropleth request count is deliberately unchanged: the existing cache
+  already deduplicated those across panes. What changed there is that superseded
+  requests are now cancelled rather than merely ignored, which frees the
+  connection instead of leaving both ends busy.
+
+- **A transient server error was cached as "no data" for a full minute.** The
+  choropleth cache stored a promise that swallowed its own errors and resolved to
+  `null`, so a single 500 response left the map blank for the whole 60-second TTL
+  even after the server recovered. Rejections are no longer cached.
+
 - **The choropleth is served as vector tiles instead of a GeoJSON source.** The tile
   pipeline already carried the catchment polygons — `gpkg_to_mbtiles.sh` tiles
   `catchments_lev12` alongside the basemap layers — but the layer users actually look
