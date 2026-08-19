@@ -87,7 +87,7 @@ func TestNearestFlagPointsAtTheRealOption(t *testing.T) {
 		"some other error":                           "",
 	}
 	for message, want := range cases {
-		if got := nearestFlag(errString(message)); got != want {
+		if got := nearestFlag(stringError(message)); got != want {
 			t.Errorf("nearestFlag(%q) = %q, want %q", message, got, want)
 		}
 	}
@@ -117,6 +117,6 @@ func TestPluralDoesNotSayOneRevisionS(t *testing.T) {
 	}
 }
 
-type errString string
+type stringError string
 
-func (e errString) Error() string { return string(e) }
+func (e stringError) Error() string { return string(e) }

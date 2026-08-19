@@ -478,8 +478,10 @@ func confirmOwnPort(logPath string, port int) error {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		// Cannot read the log, so cannot check. Not fatal — say nothing rather
-		// than fail a sweep over a missing temporary file.
-		return nil
+		// than fail a sweep over a missing temporary file. The check is a
+		// safeguard against measuring a server that moved port; being unable to
+		// perform it is not itself a reason to abandon the revision.
+		return nil //nolint:nilerr // absence of the log is not a port conflict
 	}
 	text := string(data)
 	if !strings.Contains(text, "in use, using port") {

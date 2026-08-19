@@ -126,7 +126,7 @@ func (o *Options) applyDefaults() {
 // call sites dereferenced the callback unconditionally. Absence detection made
 // one of those reachable: a scenario the target answers with the SPA fallback
 // took the absent branch and segfaulted before it could record why.
-func (o Options) logf(format string, args ...any) {
+func (o *Options) logf(format string, args ...any) {
 	if o.Log != nil {
 		o.Log(format, args...)
 	}

@@ -551,6 +551,13 @@ type Headline struct {
 	// regression until you say over what connection.
 	Traded int
 
+	// Absent counts scenarios neither build could answer, because the endpoint
+	// does not exist on either. Counted separately and never folded into
+	// Unchanged: this tool exists partly to stop an endpoint that is missing
+	// from being read as one that is fast, and silently omitting it from the
+	// tally would undo that at the last step.
+	Absent int
+
 	// BiggestWin and BiggestRegression are the deltas worth naming.
 	BiggestWin        *Delta
 	BiggestRegression *Delta
@@ -568,6 +575,9 @@ func (h Headline) describe() string {
 	fmt.Fprintf(&b, "%d faster, %d slower, %d unchanged", h.Faster, h.Slower, h.Unchanged)
 	if h.Traded > 0 {
 		fmt.Fprintf(&b, ", %d traded (smaller but slower to produce, or the reverse)", h.Traded)
+	}
+	if h.Absent > 0 {
+		fmt.Fprintf(&b, ", %d absent from both builds", h.Absent)
 	}
 	if h.Broken > 0 {
 		fmt.Fprintf(&b, ", %d BROKEN", h.Broken)
@@ -615,6 +625,8 @@ func (c Comparison) Summarise() Headline {
 			h.Added++
 		case Removed:
 			h.Removed++
+		case Absent:
+			h.Absent++
 		}
 		h.TotalBytesBaseline += d.Baseline.BytesMax
 		h.TotalBytesCurrent += d.Current.BytesMax

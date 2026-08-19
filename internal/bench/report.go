@@ -265,6 +265,10 @@ func renderDelta(d Delta, widest float64) reportDelta {
 		r.BarClass = "faster"
 	case Slower, Broken:
 		r.BarClass = "slower"
+	default:
+		// Every other verdict draws an uncoloured bar on purpose. A trade or an
+		// absent endpoint is not a win or a regression, and tinting it as one
+		// would be the report answering a question it was careful not to answer.
 	}
 
 	if widest > 0 && d.Current.TotalMs.P50 > 0 {
@@ -319,6 +323,8 @@ func changeLabel(d Delta) string {
 		return "—"
 	case Broken:
 		return "—"
+	default:
+		// Everything else has a number worth quoting; fall through to it.
 	}
 	if d.Baseline.Samples == 0 || d.Current.Samples == 0 {
 		return "—"
@@ -413,8 +419,9 @@ func verdictLabel(d Delta) string {
 		return "not in baseline"
 	case Removed:
 		return "not in this build"
+	default:
+		return string(d.Verdict)
 	}
-	return string(d.Verdict)
 }
 
 // lede is the one sentence a client reads before deciding whether to read
@@ -727,6 +734,10 @@ func headline(c Comparison) (Headline, int) {
 			h.Added++
 		case Removed:
 			h.Removed++
+		case Traded:
+			h.Traded++
+		case Absent:
+			h.Absent++
 		}
 		h.TotalBytesBaseline += d.Baseline.BytesMax
 		h.TotalBytesCurrent += d.Current.BytesMax
