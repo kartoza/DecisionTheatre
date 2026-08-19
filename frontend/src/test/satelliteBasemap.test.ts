@@ -6,8 +6,8 @@ import {
   resetSatelliteConfig,
   satelliteAttribution,
   satelliteStyleUrl,
-  satelliteQuotaExceeded,
-  subscribeSatelliteQuota,
+  satelliteUnavailable,
+  subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
 import type { ServerInfo } from '../types';
 
@@ -84,36 +84,63 @@ describe('satellite basemap configuration', () => {
   });
 });
 
-// The client cannot see the server's tile count directly; it only learns
-// whether the monthly quota is spent through /api/info. These tests pin how
-// that flag propagates, since a map component reacting to the wrong signal
-// would either strand the user on a failing satellite view or never let them
-// use it at all.
-describe('satellite quota tracking', () => {
+// The client cannot see the server's tile count or its configured key
+// directly; it only learns whether satellite can be shown through /api/info.
+// satelliteUnavailable() combines both reasons it might not be — quota spent,
+// or no provider configured at all — into one signal, since a map component
+// reacting to either the wrong signal or only one of the two reasons would
+// either strand the user on a failing satellite view or never let them use it.
+describe('satellite availability and quota tracking', () => {
   beforeEach(() => resetSatelliteConfig());
 
-  it('is not exceeded by default', () => {
-    expect(satelliteQuotaExceeded()).toBe(false);
+  it('is available by default', () => {
+    expect(satelliteUnavailable()).toBe(false);
   });
 
   it('adopts the server-reported quota state', () => {
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: true }));
-    expect(satelliteQuotaExceeded()).toBe(true);
+    expect(satelliteUnavailable()).toBe(true);
 
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: false }));
-    expect(satelliteQuotaExceeded()).toBe(false);
+    expect(satelliteUnavailable()).toBe(false);
   });
 
-  it('treats a missing flag as not exceeded', () => {
+  it('treats a missing quota flag as not exceeded', () => {
     applyServerSatelliteConfig(info({}));
-    expect(satelliteQuotaExceeded()).toBe(false);
+    expect(satelliteUnavailable()).toBe(false);
   });
 
-  it('notifies subscribers only when the state actually changes', () => {
-    const listener = vi.fn();
-    const unsubscribe = subscribeSatelliteQuota(listener);
+  // No provider configured (no key, no operator style URL) — see
+  // config.Config.SatelliteAvailable on the server.
+  it('adopts the server-reported availability state', () => {
+    applyServerSatelliteConfig(info({ satellite_available: false }));
+    expect(satelliteUnavailable()).toBe(true);
 
-    // Already false: no change, no call.
+    applyServerSatelliteConfig(info({ satellite_available: true }));
+    expect(satelliteUnavailable()).toBe(false);
+  });
+
+  it('treats a missing availability flag as available', () => {
+    applyServerSatelliteConfig(info({}));
+    expect(satelliteUnavailable()).toBe(false);
+  });
+
+  it('is unavailable if either reason applies', () => {
+    applyServerSatelliteConfig(info({ satellite_available: false, satellite_quota_exceeded: false }));
+    expect(satelliteUnavailable()).toBe(true);
+
+    applyServerSatelliteConfig(info({ satellite_available: true, satellite_quota_exceeded: true }));
+    expect(satelliteUnavailable()).toBe(true);
+
+    applyServerSatelliteConfig(info({ satellite_available: true, satellite_quota_exceeded: false }));
+    expect(satelliteUnavailable()).toBe(false);
+  });
+
+  it('notifies subscribers only when the combined state actually changes', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeSatelliteUnavailable(listener);
+
+    // Already available: no change, no call.
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: false }));
     expect(listener).not.toHaveBeenCalled();
 
@@ -125,7 +152,12 @@ describe('satellite quota tracking', () => {
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: true }));
     expect(listener).toHaveBeenCalledTimes(1);
 
-    applyServerSatelliteConfig(info({ satellite_quota_exceeded: false }));
+    // Still unavailable — quota clears but the key is now missing — so no
+    // notification: the combined signal has not actually changed.
+    applyServerSatelliteConfig(info({ satellite_quota_exceeded: false, satellite_available: false }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    applyServerSatelliteConfig(info({ satellite_quota_exceeded: false, satellite_available: true }));
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener).toHaveBeenLastCalledWith(false);
 

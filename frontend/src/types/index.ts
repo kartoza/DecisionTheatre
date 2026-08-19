@@ -20,6 +20,10 @@ export interface ServerInfo {
   satellite_style_url?: string;
   /** Attribution for the above — a licence condition for most providers. */
   satellite_attribution?: string;
+  /** False when no satellite provider is configured at all (no key, no
+   *  operator-set style URL) — see config.Config.SatelliteAvailable. The
+   *  client should not offer the satellite basemap while this is false. */
+  satellite_available?: boolean;
   /** True once this deployment's monthly satellite tile quota is spent. The
    *  client should not offer the satellite basemap while this is true. */
   satellite_quota_exceeded?: boolean;

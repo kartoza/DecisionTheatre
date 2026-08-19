@@ -17,9 +17,9 @@ import type { ServerInfo } from '../types';
  * concern (`--satellite-style-url`), configurable without a rebuild. See
  * issue #65.
  *
- * `/api/info` carries the value (and the quota status) to the client, so
- * nothing needs rebuilding to change it — unlike `import.meta.env`, which Vite
- * inlines at build time.
+ * `/api/info` carries the value (and availability/quota status) to the
+ * client, so nothing needs rebuilding to change it — unlike `import.meta.env`,
+ * which Vite inlines at build time.
  */
 export const DEFAULT_SATELLITE_STYLE_URL = '/api/satellite-style.json';
 
@@ -34,14 +34,25 @@ export const DEFAULT_SATELLITE_ATTRIBUTION =
 let styleUrl = DEFAULT_SATELLITE_STYLE_URL;
 let attribution = DEFAULT_SATELLITE_ATTRIBUTION;
 let quotaExceeded = false;
+// Optimistic default: unknown until /api/info resolves, and "assume it works"
+// is the same failure mode applyServerSatelliteConfig's own doc comment
+// already accepts for the rest of this module — a map that initialises before
+// the first response keeps trying, rather than never offering satellite at
+// all while a perfectly good key is loading.
+let available = true;
 
-type QuotaListener = (exceeded: boolean) => void;
-const quotaListeners = new Set<QuotaListener>();
+type UnavailableListener = (unavailable: boolean) => void;
+const unavailableListeners = new Set<UnavailableListener>();
+
+/** Combines the two reasons satellite might not be usable right now. */
+function unavailable(): boolean {
+  return quotaExceeded || !available;
+}
 
 /**
  * Adopt the server's configuration. Called each time `/api/info` resolves —
- * see useApi.ts's useServerInfo, which polls it so a quota that becomes
- * exceeded mid-session is noticed without a page reload.
+ * see useApi.ts's useServerInfo, which polls it so quota being spent, or a
+ * deployment with no provider key, is noticed without a page reload.
  *
  * A map that initialises before the first response lands keeps the default,
  * which is the same imagery the application showed before this existed — so
@@ -57,10 +68,16 @@ export function applyServerSatelliteConfig(info: ServerInfo | null | undefined):
     attribution = info.satellite_attribution ?? '';
   }
 
-  const exceeded = info?.satellite_quota_exceeded ?? false;
-  if (exceeded !== quotaExceeded) {
-    quotaExceeded = exceeded;
-    for (const listener of quotaListeners) listener(quotaExceeded);
+  const wasUnavailable = unavailable();
+
+  quotaExceeded = info?.satellite_quota_exceeded ?? false;
+  // Missing field (an older server, or a response that raced applyServer-
+  // SatelliteConfig before /api/info finished) defaults to available: the
+  // same "assume it works" the module-level default above already commits to.
+  available = info?.satellite_available ?? true;
+
+  if (unavailable() !== wasUnavailable) {
+    for (const listener of unavailableListeners) listener(unavailable());
   }
 }
 
@@ -84,20 +101,27 @@ export function satelliteAttribution(): string {
   return attribution;
 }
 
-/** Whether this deployment's monthly satellite tile quota is currently spent. */
-export function satelliteQuotaExceeded(): boolean {
-  return quotaExceeded;
+/**
+ * Whether the satellite basemap can be shown right now — either this month's
+ * quota is spent, or no provider is configured (no key, and no operator-set
+ * style URL; see config.Config.SatelliteAvailable on the server). Either way
+ * the answer for the client is the same: don't offer it, and if it's already
+ * showing, fall back.
+ */
+export function satelliteUnavailable(): boolean {
+  return unavailable();
 }
 
 /**
- * Notify a listener whenever the quota-exceeded state changes (in either
- * direction — a new calendar month un-exceeds it). Used by the map components
- * to revert to the built-in basemap and warn the user without polling
- * themselves. Returns an unsubscribe function.
+ * Notify a listener whenever satelliteUnavailable's value changes (in either
+ * direction — a new calendar month un-exceeds the quota, or a key gets
+ * configured and the server restarts). Used by the map components to revert
+ * to the built-in basemap and warn the user without polling themselves.
+ * Returns an unsubscribe function.
  */
-export function subscribeSatelliteQuota(listener: QuotaListener): () => void {
-  quotaListeners.add(listener);
-  return () => quotaListeners.delete(listener);
+export function subscribeSatelliteUnavailable(listener: UnavailableListener): () => void {
+  unavailableListeners.add(listener);
+  return () => unavailableListeners.delete(listener);
 }
 
 /** Exported for tests. */
@@ -105,4 +129,5 @@ export function resetSatelliteConfig(): void {
   styleUrl = DEFAULT_SATELLITE_STYLE_URL;
   attribution = DEFAULT_SATELLITE_ATTRIBUTION;
   quotaExceeded = false;
+  available = true;
 }

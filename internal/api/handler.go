@@ -387,6 +387,7 @@ func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"geo_loaded":               h.gpkgStore != nil,
 		"satellite_style_url":      "/api/satellite-style.json",
 		"satellite_attribution":    satelliteAttribution,
+		"satellite_available":      h.cfg.SatelliteAvailable(),
 		"satellite_quota_exceeded": quotaExceeded,
 	}
 	respondJSON(w, http.StatusOK, info)

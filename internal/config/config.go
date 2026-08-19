@@ -157,6 +157,20 @@ func (c Config) Satellite() (styleURL, attribution string) {
 	return styleURL, attribution
 }
 
+// SatelliteAvailable reports whether a satellite basemap can actually be
+// served: either an operator configured their own style URL (assumed usable
+// on its own terms), or the default MapTiler style has a key to authenticate
+// with. False means the client should not offer satellite mode at all rather
+// than trying it and failing — see satelliteTileProxy in internal/server,
+// which refuses the style request outright when this is false, and
+// handleInfo, which reports it so the frontend never asks in the first place.
+func (c Config) SatelliteAvailable() bool {
+	if c.SatelliteStyleURL != "" {
+		return true
+	}
+	return MapTilerAPIKey() != ""
+}
+
 // SatelliteQuota returns the configured monthly tile cap, applying the
 // default. Named apart from the SatelliteQuotaLimit field it reads because Go
 // does not allow a method and a field to share a name.

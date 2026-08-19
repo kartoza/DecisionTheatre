@@ -109,13 +109,13 @@ func newSatelliteServer(t *testing.T, styleURL string, limit int) *Server {
 		Port:                0,
 		DataDir:             t.TempDir(),
 		Version:             "test",
+		SatelliteStyleURL:   styleURL,
 		SatelliteQuotaLimit: limit,
 		SatelliteUsageDir:   t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv.satellite.styleURL = styleURL
 	return srv
 }
 
@@ -319,6 +319,27 @@ func TestSatelliteSpriteIsProxiedAndCached(t *testing.T) {
 	count, _ := srv.satellite.usage.Snapshot(1_000_000)
 	if count != 0 {
 		t.Errorf("usage count = %d, want 0 (sprite fetches must not count)", count)
+	}
+}
+
+// Using the default MapTiler style with no key configured (SatelliteStyleURL
+// empty, DT_MAPTILER_API_KEY unset) must refuse cleanly rather than attempt —
+// and keep retrying — a fetch MapTiler would reject anyway.
+func TestSatelliteStyleUnavailableWithNoStyleURLOrKey(t *testing.T) {
+	srv, err := New(config.Config{
+		Port:                0,
+		DataDir:             t.TempDir(),
+		Version:             "test",
+		SatelliteQuotaLimit: 1_000_000,
+		SatelliteUsageDir:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := getSatellite(t, srv, "/api/satellite-style.json")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when no style URL or key is configured", rec.Code)
 	}
 }
 

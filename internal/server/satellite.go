@@ -72,6 +72,14 @@ type satelliteTileProxy struct {
 	usage      *config.SatelliteUsage
 	quotaLimit int
 
+	// available mirrors config.Config.SatelliteAvailable(): false when the
+	// default MapTiler style would be used but no key is configured. Checked
+	// before ever attempting the upstream fetch, so a deployment with no key
+	// gets one clean 404 instead of repeatedly failing against MapTiler — a
+	// failed style build is not cached (see styleCache), so every request
+	// would otherwise retry the doomed fetch.
+	available bool
+
 	// The rewritten /api/satellite-style.json, built once and cached for the
 	// process lifetime — MapTiler serves the same content to everyone, so
 	// there is nothing here that ever needs invalidating.
@@ -111,6 +119,7 @@ func newSatelliteTileProxy(cfg config.Config, usage *config.SatelliteUsage) *sat
 		styleURL:   styleURL,
 		usage:      usage,
 		quotaLimit: cfg.SatelliteQuota(),
+		available:  cfg.SatelliteAvailable(),
 	}
 }
 
@@ -205,6 +214,15 @@ func (p *satelliteTileProxy) buildStyle(base string) ([]byte, error) {
 
 // handleSatelliteStyle serves the rewritten Hybrid style document.
 func (s *Server) handleSatelliteStyle(w http.ResponseWriter, r *http.Request) {
+	if !s.satellite.available {
+		// No point attempting the upstream fetch: without a key the default
+		// MapTiler style would just fail there. /api/info already reports this
+		// (satellite_available), so a well-behaved client never asks — this is
+		// the backstop for one that does anyway.
+		http.Error(w, "Satellite imagery is not configured", http.StatusNotFound)
+		return
+	}
+
 	base := baseURL(r)
 	styleBytes, err := s.satellite.style.get(func() ([]byte, error) {
 		return s.satellite.buildStyle(base)

@@ -14,8 +14,8 @@ import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from 
 import { evictExpired } from '../lib/ttlCache';
 import {
   satelliteStyleUrl,
-  satelliteQuotaExceeded,
-  subscribeSatelliteQuota,
+  satelliteUnavailable,
+  subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
 import {
   PRISM_STOPS,
@@ -2106,11 +2106,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const toggleGoogleBasemap = useCallback(() => {
     const nextVal = !isGoogleBasemapRef.current;
 
-    if (nextVal && satelliteQuotaExceeded()) {
+    if (nextVal && satelliteUnavailable()) {
       toast({
-        title: 'Satellite imagery limit reached',
-        description: "This month's satellite imagery quota has been used up. "
-          + 'Showing the default map instead.',
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Showing the default map instead.',
         status: 'warning',
         duration: 8000,
         isClosable: true,
@@ -2121,16 +2121,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     applyBasemapStyle(nextVal);
   }, [applyBasemapStyle, toast]);
 
-  // If the quota is spent while satellite imagery is actively showing, revert
-  // to the built-in basemap rather than leaving the map to fail tile-by-tile.
+  // If satellite becomes unavailable (quota spent, or — at startup, before
+  // /api/info has resolved — no provider turns out to be configured) while it
+  // is actively showing, revert to the built-in basemap rather than leaving
+  // the map to fail tile-by-tile.
   useEffect(() => {
-    return subscribeSatelliteQuota((exceeded) => {
-      if (!exceeded || !isGoogleBasemapRef.current) return;
+    return subscribeSatelliteUnavailable((unavailable) => {
+      if (!unavailable || !isGoogleBasemapRef.current) return;
       applyBasemapStyle(false);
       toast({
-        title: 'Satellite imagery limit reached',
-        description: "This month's satellite imagery quota has been used up. "
-          + 'Switched to the default map.',
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Switched to the default map.',
         status: 'warning',
         duration: 8000,
         isClosable: true,

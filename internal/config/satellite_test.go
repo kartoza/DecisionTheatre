@@ -76,8 +76,8 @@ func TestMapTilerAPIKeyIsEmbeddedInTheDefaultStyleURL(t *testing.T) {
 }
 
 // A deployment that forgets to set the key must not crash or leak a
-// placeholder — it degrades to a style URL with an empty key, which the
-// satellite proxy already handles as an ordinary upstream failure.
+// placeholder — it degrades to a style URL with an empty key. SatelliteAvailable
+// is what stops that URL ever actually being fetched — see its own tests below.
 func TestMapTilerAPIKeyEmptyWhenUnset(t *testing.T) {
 	t.Setenv(MapTilerAPIKeyEnvVar, "")
 	if got := MapTilerAPIKey(); got != "" {
@@ -85,5 +85,37 @@ func TestMapTilerAPIKeyEmptyWhenUnset(t *testing.T) {
 	}
 	if !strings.HasSuffix(DefaultSatelliteStyleURL(), "key=") {
 		t.Errorf("DefaultSatelliteStyleURL() = %q, want it to end with an empty key= param", DefaultSatelliteStyleURL())
+	}
+}
+
+// The default MapTiler style needs a key; a deployment with neither an
+// operator-configured style URL nor a key has no usable satellite basemap at
+// all, and should say so rather than let the client find out by a failed fetch.
+func TestSatelliteUnavailableWithNoStyleURLOrKey(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "")
+	var cfg Config
+
+	if cfg.SatelliteAvailable() {
+		t.Error("SatelliteAvailable() = true with no style URL and no key configured")
+	}
+}
+
+func TestSatelliteAvailableWithKeyConfigured(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "test-key")
+	var cfg Config
+
+	if !cfg.SatelliteAvailable() {
+		t.Error("SatelliteAvailable() = false with a key configured")
+	}
+}
+
+// An operator-configured style URL is assumed usable on its own terms — it
+// may not even be MapTiler, so the MapTiler key is irrelevant to it.
+func TestSatelliteAvailableWithOperatorStyleURLEvenWithoutKey(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "")
+	cfg := Config{SatelliteStyleURL: "https://example.test/style.json"}
+
+	if !cfg.SatelliteAvailable() {
+		t.Error("SatelliteAvailable() = false for an operator-configured style URL")
 	}
 }
