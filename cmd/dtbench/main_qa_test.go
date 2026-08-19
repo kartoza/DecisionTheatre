@@ -131,7 +131,7 @@ func TestReportRefusesToRunWithoutBothSidesAndSaysHowToFindThem(t *testing.T) {
 
 	// Half an instruction is still an error: silently pairing one named run with
 	// a guess would produce a comparison the user did not ask for.
-	err := cmdReport([]string{"--results", dir, "--current", "somewhere.json"})
+	err := cmdReport(t.Context(), []string{"--results", dir, "--current", "somewhere.json"})
 	if err == nil {
 		t.Fatal("report ran with a current but no baseline")
 	}
@@ -140,7 +140,7 @@ func TestReportRefusesToRunWithoutBothSidesAndSaysHowToFindThem(t *testing.T) {
 	}
 
 	// Nothing given and nothing stored: an error that says how to get started.
-	err = cmdReport([]string{"--results", dir})
+	err = cmdReport(t.Context(), []string{"--results", dir})
 	if err == nil {
 		t.Fatal("report ran with neither side given and no runs stored")
 	}
@@ -153,7 +153,7 @@ func TestReportRefusesToRunWithoutBothSidesAndSaysHowToFindThem(t *testing.T) {
 	writeRun(t, dir, healthyRun("after", 40))
 
 	out := captureOutput(t, func() {
-		if err := cmdReport([]string{"--results", dir, "--out", filepath.Join(dir, "r.html")}); err != nil {
+		if err := cmdReport(t.Context(), []string{"--results", dir, "--out", filepath.Join(dir, "r.html")}); err != nil {
 			t.Errorf("report with no arguments and two runs stored: %v", err)
 		}
 	})
@@ -169,7 +169,7 @@ func TestReportNamesAResultsFileItCannotRead(t *testing.T) {
 	good := writeRun(t, dir, healthyRun("before", 2))
 	missing := filepath.Join(dir, "not-there.json")
 
-	err := cmdReport([]string{"--baseline", missing, "--current", good})
+	err := cmdReport(t.Context(), []string{"--baseline", missing, "--current", good})
 	if err == nil {
 		t.Fatal("report succeeded with a missing baseline")
 	}
@@ -188,7 +188,7 @@ func TestReportWritesTheHTMLItWasAskedFor(t *testing.T) {
 	out := filepath.Join(dir, "report.html")
 
 	stdout := captureOutput(t, func() {
-		if err := cmdReport([]string{"--baseline", base, "--current", cur, "--out", out}); err != nil {
+		if err := cmdReport(t.Context(), []string{"--baseline", base, "--current", cur, "--out", out}); err != nil {
 			t.Errorf("cmdReport: %v", err)
 		}
 	})
@@ -222,7 +222,7 @@ func TestReportIntoAMissingDirectoryExplainsItself(t *testing.T) {
 
 	var err error
 	captureOutput(t, func() {
-		err = cmdReport([]string{"--baseline", base, "--current", cur, "--out", out})
+		err = cmdReport(t.Context(), []string{"--baseline", base, "--current", cur, "--out", out})
 	})
 
 	// Ux made the command create the directory rather than refuse, which is the
@@ -255,7 +255,7 @@ func TestReportRefusesAResultsFileFromANewerSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := cmdReport([]string{"--baseline", good, "--current", future,
+	err := cmdReport(t.Context(), []string{"--baseline", good, "--current", future,
 		"--out", filepath.Join(dir, "r.html")})
 
 	if err == nil {
@@ -281,7 +281,7 @@ func TestReportOnTwoRunsWithNothingInCommonStillSaysSomethingTrue(t *testing.T) 
 
 	out := filepath.Join(dir, "report.html")
 	stdout := captureOutput(t, func() {
-		if err := cmdReport([]string{
+		if err := cmdReport(t.Context(), []string{
 			"--baseline", writeRun(t, dir, before),
 			"--current", writeRun(t, dir, after),
 			"--out", out,
@@ -324,7 +324,7 @@ func TestReportOnARunWithZeroScenariosDoesNotCrash(t *testing.T) {
 
 	out := filepath.Join(dir, "report.html")
 	captureOutput(t, func() {
-		if err := cmdReport([]string{
+		if err := cmdReport(t.Context(), []string{
 			"--baseline", writeRun(t, dir, empty),
 			"--current", writeRun(t, dir, healthyRun("after", 10)),
 			"--out", out,

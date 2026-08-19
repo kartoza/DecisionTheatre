@@ -83,7 +83,7 @@ func main() {
 	case "sweep":
 		err = cmdSweep(ctx, os.Args[2:])
 	case "report":
-		err = cmdReport(os.Args[2:])
+		err = cmdReport(ctx, os.Args[2:])
 	case "list":
 		err = cmdList(os.Args[2:])
 	case "-h", "--help", "help":
@@ -847,7 +847,7 @@ func checkDir(path, flagName string) error {
 
 // ---------------------------------------------------------------------------
 
-func cmdReport(args []string) error {
+func cmdReport(ctx context.Context, args []string) error {
 	fs := newFlagSet("report", "render an HTML (and optionally PDF) report from two results",
 		`Examples:
   dtbench report --pdf                              # the two most recent runs
@@ -866,6 +866,8 @@ runs are compared and the report says which ones they were.
 	subtitle := fs.String("subtitle", "", "report subtitle")
 	mark := fs.String("mark", "docs/assets/brand/kartoza-symbol-color.svg", "brand mark to place on the cover")
 	results := fs.String("results", defaultResults, "results directory to resolve names in")
+	repo := fs.String("repo", ".", "git checkout to read the merged pull requests from")
+	noChanges := fs.Bool("no-changes", false, "omit the list of what merged between the two builds")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -879,6 +881,20 @@ runs are compared and the report says which ones they were.
 
 	comparison := bench.Compare(base, cur)
 
+	// What merged between the two builds. Read from git, so it works with no
+	// network and no credentials; when the range cannot be established, Changes
+	// carries the reason and the report prints that instead of an empty section.
+	var changes bench.Changes
+	if !*noChanges {
+		changes = bench.ChangesBetween(ctx, *repo, bench.CommitOf(base), bench.CommitOf(cur))
+		switch {
+		case len(changes.PRs) > 0:
+			fmt.Fprintf(os.Stderr, "%d pull request(s) merged between these builds.\n\n", len(changes.PRs))
+		case changes.Unavailable != "":
+			fmt.Fprintf(os.Stderr, "Not attributing changes: %s\n\n", changes.Unavailable)
+		}
+	}
+
 	defaultTitle := "Performance report"
 	defaultSubtitle := fmt.Sprintf("%s compared with %s", base.Describe(), cur.Describe())
 
@@ -886,6 +902,7 @@ runs are compared and the report says which ones they were.
 		Title:    orDefault(*title, defaultTitle),
 		Subtitle: orDefault(*subtitle, defaultSubtitle),
 		MarkPath: *mark,
+		Changes:  changes,
 	})
 	if err != nil {
 		return err

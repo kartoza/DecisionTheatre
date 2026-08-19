@@ -34,6 +34,12 @@ type ReportOptions struct {
 
 	// Brand overrides the default palette. Zero value means DefaultBrand.
 	Brand *Brand
+
+	// Changes is what merged between the two builds. A comparison says a number
+	// moved; this is the only part of the report that offers any account of why.
+	// Zero value renders no section, which is correct when the caller had no
+	// checkout to read.
+	Changes Changes
 }
 
 // reportData is the shape the template consumes. It exists so the template can
@@ -78,6 +84,11 @@ type reportData struct {
 	NoiseFloorPercent  int
 
 	SponsorURL, RepoURL string
+
+	// Changes attributes the difference to work that landed. It is deliberately
+	// last in the document: it narrows the search for a cause, and a reader who
+	// meets it before the measurements may read a correlation as a cause.
+	Changes Changes
 }
 
 // reportFinding is one supporting number, sized for a card or a chart
@@ -152,6 +163,7 @@ func RenderHTML(c Comparison, opts ReportOptions) ([]byte, error) {
 	data.Warnings = append(data.Warnings, framingWarnings(c, said)...)
 	data.Findings = findings(c, data.Headline, data.NotRun)
 	data.Method = method(c)
+	data.Changes = opts.Changes
 
 	// The widest median in the comparison sets the bar scale, so bars are
 	// comparable within the report and never against some invented maximum.
