@@ -119,6 +119,19 @@ func (o *Options) applyDefaults() {
 	}
 }
 
+// logf writes a methodology note, tolerating an unset Log.
+//
+// applyDefaults installs a no-op, but runScenario is reachable without it — from
+// a test, or from any future caller that builds Options directly — and three
+// call sites dereferenced the callback unconditionally. Absence detection made
+// one of those reachable: a scenario the target answers with the SPA fallback
+// took the absent branch and segfaulted before it could record why.
+func (o Options) logf(format string, args ...any) {
+	if o.Log != nil {
+		o.Log(format, args...)
+	}
+}
+
 // Execute runs the suite and returns the result.
 //
 // Requests are issued one at a time. This measures latency, which is the
@@ -353,7 +366,7 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		if err != nil {
 			res.Absent = true
 			res.AbsentReason = err.Error()
-			opts.Log("  %s: %s", s.Name, err)
+			opts.logf("  %s: %s", s.Name, err)
 			return res
 		}
 		s.Body = body
@@ -368,7 +381,7 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		if headers == nil {
 			res.Absent = true
 			res.AbsentReason = reason
-			opts.Log("  %s: %s", s.Name, reason)
+			opts.logf("  %s: %s", s.Name, reason)
 			return res
 		}
 		extra = headers
@@ -471,7 +484,7 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		res.Absent = true
 		res.AbsentReason = lastReason
 		res.BytesMin = 0
-		opts.Log("  %s: %s", s.Name, lastReason)
+		opts.logf("  %s: %s", s.Name, lastReason)
 		return res
 	}
 

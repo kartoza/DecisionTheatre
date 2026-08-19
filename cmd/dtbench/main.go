@@ -328,14 +328,6 @@ The label is free text and is what you will recognise the run by later, so
 	if *timeout <= 0 {
 		return usagef("--timeout must be positive; got %s", *timeout)
 	}
-	if *warmup == 0 {
-		// Known limitation in the measurement code, surfaced rather than hidden:
-		// silently doing three requests the user asked not to do is worse than
-		// saying so. See NOTES-ux.md.
-		fmt.Fprint(os.Stderr,
-			"warning: --warmup 0 is not honoured by the measurement code; 3 warmup requests "+
-				"will still be made.\n")
-	}
 	if *warmup < 0 {
 		return usagef("--warmup cannot be negative; got %d", *warmup)
 	}
