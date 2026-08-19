@@ -191,8 +191,9 @@ full reproducible build.
 
 Per-machine settings — including the MapTiler API key the satellite basemap and
 font-glyph proxy need — go in a gitignored `.dt-env` file (copy `.dt-env.example`),
-which every entry point above reads identically. See
-[README.dev.md](../../README.dev.md#4-run-the-application) for the full list of knobs.
+which every entry point above reads identically. See `README.dev.md` in the project
+root ("Run the Application") for the full list of knobs — it lives outside this
+site's own `docs/` tree, so it isn't linkable from here.
 
 ## `nix run` commands
 
