@@ -168,6 +168,24 @@ func TestEveryQueryHonoursCancellation(t *testing.T) {
 				json.RawMessage(`{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}`))
 			return err
 		}},
+		{"GetCatchmentAreasByIDs", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.GetCatchmentAreasByIDs(ctx, []string{"1000000001"})
+			return err
+		}},
+		// The two aggregates could only join this list once they had an error
+		// to report a cancellation through; ComputeWhiskerBounds returned bare
+		// bounds and answered an abandoned request with the same empty result
+		// it gave a failed one.
+		{"AggregateCatchmentIndicators", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.AggregateCatchmentIndicators(ctx,
+				[]CatchmentIndicators{{ID: "1000000001", AreaKm2: 1, AOIFraction: 1}})
+			return err
+		}},
+		{"ComputeWhiskerBounds", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.ComputeWhiskerBounds(ctx,
+				[]CatchmentIndicators{{ID: "1000000001", AreaKm2: 1, AOIFraction: 1}})
+			return err
+		}},
 	}
 
 	for _, tc := range calls {

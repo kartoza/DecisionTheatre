@@ -154,10 +154,14 @@ Over HTTP, browser runtime, 147,837 ids posted in the body:
 
 | | before | after |
 | --- | --- | --- |
-| `POST /sites/{id}/whiskers` | **391 s**, then `i/o timeout` writing the response | **13.2 s**, 104,358 bytes of real bounds |
-| `POST /sites/{id}/summary` | (did not exist; `/catchments` returned `[]`) | **13.6 s**, 52,406 bytes |
-| `POST /sites/{id}/catchments` | 200 with `[]` (3 bytes) | **413** in 60 ms |
-| small site (11 catchments), whiskers | 82 ms | **42 ms** |
+| `POST /sites/{id}/whiskers` | **391 s**, then `i/o timeout` writing the response | **13-15 s**, 104,358 bytes of real bounds |
+| `POST /sites/{id}/summary` | (did not exist; `/catchments` returned `[]`) | **13-18 s**, 52,406 bytes |
+| `POST /sites/{id}/catchments` | 200 with `[]` (3 bytes) | **413** in 60-70 ms |
+| small site (11 catchments), whiskers | 82 ms | **42-47 ms** |
+
+Ranges, not single figures: the work is CPU-bound, so the numbers move by a few
+seconds depending on what else is running on the host — the wider end of each
+range is with both real-datapack suites running at once.
 
 Where the time goes now, per request: about 3-7 s reading catchment areas and
 about 10 s aggregating four whisker tables concurrently. The library-level
@@ -284,6 +288,20 @@ standard-library only (no `go.mod`/`go.sum`/`vendorHash` movement):
   with `EXPLAIN QUERY PLAN`. Both plans return identical results, so this is
   the only thing standing between the fast one and a silent return to a
   six-minute request.
+
+`internal/geodata/cancellation_test.go` — `GetCatchmentAreasByIDs`,
+`AggregateCatchmentIndicators` and `ComputeWhiskerBounds` are added to a
+colleague's `TestEveryQueryHonoursCancellation` table. The last two could only
+join it once they had an error to report a cancellation through — which is the
+same change that stopped them reporting a failure as an empty result. Every
+statement on the materialised path, including the weight table's inserts, runs
+on the request context; the only exception is the `DROP TABLE` in
+`weightSet.close`, which deliberately uses `context.Background()` so a cancelled
+request still returns a clean connection to the pool.
+
+`internal/api/real_datapack_test.go` — the Africa walkthrough over HTTP, which
+is where the timeout happened. Asserts each endpoint's status and that the
+whisker bounds are not the four nulls the issue was reported with.
 
 `internal/geodata/real_datapack_test.go` — the measurements, skipped unless
 `DT_DATAPACK_DIR` points at a real datapack (no hard-coded paths). These are
