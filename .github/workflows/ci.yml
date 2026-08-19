@@ -427,18 +427,21 @@ jobs:
           output-file: sbom.spdx.json
           artifact-name: sbom.spdx.json
 
+      # syft and grype come from the flake, pinned by flake.lock, like every other
+      # tool this project builds with. They were previously fetched by piping
+      # anchore's install scripts into a shell, which is the one thing a
+      # supply-chain step must not do: unpinned, unverified tools reporting on
+      # what we ship. This job already installs nix a few steps above.
       - name: Scan for known vulnerabilities
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin
-          syft ${{ steps.build.outputs.image }} -o json > sbom-syft.json
-          # An empty match set rather than a failed step when grype cannot
-          # produce a result: the report says "none reported", which is honest,
-          # and the SBOM is attached either way.
-          grype sbom:sbom.spdx.json -o json > cve-scan.json 2>/dev/null \
-            || echo '{"matches":[]}' > cve-scan.json
+          nix develop .#supplychain --command bash -euo pipefail -c '
+            syft ${{ steps.build.outputs.image }} -o json > sbom-syft.json
+            # An empty match set rather than a failed step when grype cannot
+            # produce a result: the report says "none reported", which is honest,
+            # and the SBOM is attached either way.
+            grype sbom:sbom.spdx.json -o json > cve-scan.json 2>/dev/null \
+              || echo "{\"matches\":[]}" > cve-scan.json
+          '
 
       - name: Assemble the report
         run: |
@@ -448,9 +451,9 @@ jobs:
               "$(du -h decision-theatre-image.tar.gz | cut -f1) compressed"
             printf 'Built from the flake: its contents are the runtime closure of the binary, so nothing states a dependency version twice.\n\n'
             printf '### Software bill of materials\n\n'
-            python3 scripts/sbom_table.py sbom-syft.json
+            nix develop .#supplychain --command python3 scripts/sbom_table.py sbom-syft.json
             printf '\n### Vulnerability scan\n\n'
-            python3 scripts/cve_table.py cve-scan.json
+            nix develop .#supplychain --command python3 scripts/cve_table.py cve-scan.json
           } > build-report.md
           cat build-report.md >> "$GITHUB_STEP_SUMMARY"
 
