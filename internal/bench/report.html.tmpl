@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ .Title }}</title>
+<style>
+  /* Colours and type come from docs/assets/css/kartoza-palette.json, the same
+     source the documentation and the generated diagrams read. */
+  :root {
+    --blue:{{ .Brand.Blue500 }}; --blue-100:{{ .Brand.Blue100 }}; --blue-300:{{ .Brand.Blue300 }};
+    --blue-700:{{ .Brand.Blue700 }}; --blue-900:{{ .Brand.Blue900 }};
+    --amber:{{ .Brand.Amber500 }}; --amber-100:{{ .Brand.Amber100 }}; --amber-700:{{ .Brand.Amber700 }};
+    --ink:{{ .Brand.InkDefault }}; --muted:{{ .Brand.InkMuted }}; --rule:{{ .Brand.InkRule }};
+    --cloud:{{ .Brand.SurfaceCloud }}; --white:{{ .Brand.SurfaceWhite }};
+    --success:{{ .Brand.Success }}; --success-tint:{{ .Brand.SuccessTint }};
+    --warn:{{ .Brand.Warn }}; --warn-tint:{{ .Brand.WarnTint }};
+    --error:{{ .Brand.Error }}; --error-tint:{{ .Brand.ErrorTint }};
+    --sans:{{ .Brand.FontSans }}; --mono:{{ .Brand.FontMono }};
+  }
+
+  @page { size: A4; margin: 16mm 14mm 18mm; }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: var(--sans); color: var(--ink); background: var(--cloud);
+    font-size: 11pt; line-height: 1.5;
+  }
+  .sheet { max-width: 210mm; margin: 0 auto; background: var(--white); }
+
+  /* ---- cover ---------------------------------------------------------- */
+  .cover {
+    background: linear-gradient(135deg, var(--blue-900) 0%, var(--blue-700) 55%, var(--blue) 100%);
+    color: var(--white); padding: 22mm 16mm 16mm; position: relative; overflow: hidden;
+  }
+  .cover::after {
+    content: ""; position: absolute; right: -60mm; top: -40mm;
+    width: 160mm; height: 160mm; transform: rotate(18deg);
+    background: rgba(255,255,255,.06);
+  }
+  .cover .mark { height: 16mm; margin-bottom: 8mm; }
+  .cover .mark svg, .cover .mark img { height: 100%; }
+  .cover h1 { margin: 0 0 2mm; font-size: 26pt; font-weight: 800; letter-spacing: -.01em; }
+  .cover .sub { margin: 0; font-size: 12pt; opacity: .92; max-width: 130mm; }
+  .cover .meta { margin-top: 10mm; display: flex; gap: 12mm; flex-wrap: wrap; font-size: 9.5pt; }
+  .cover .meta div { min-width: 40mm; }
+  .cover .meta .k { text-transform: uppercase; letter-spacing: .08em; opacity: .75; font-size: 8pt; }
+  .cover .meta .v { font-family: var(--mono); font-size: 10pt; }
+
+  main { padding: 12mm 16mm 16mm; }
+  h2 {
+    font-size: 15pt; margin: 12mm 0 4mm; color: var(--blue-900);
+    border-bottom: 2px solid var(--blue-300); padding-bottom: 2mm;
+  }
+  h2:first-child { margin-top: 0; }
+  h3 { font-size: 11.5pt; margin: 7mm 0 2mm; color: var(--blue-700); }
+  p { margin: 0 0 3mm; }
+  .lede { font-size: 11.5pt; color: var(--muted); }
+
+  /* ---- headline cards -------------------------------------------------- */
+  .cards { display: flex; gap: 4mm; flex-wrap: wrap; margin: 5mm 0 8mm; }
+  .card {
+    flex: 1 1 34mm; border: 1px solid var(--rule); border-radius: 2mm;
+    padding: 4mm; background: var(--white);
+  }
+  .card .n { font-size: 20pt; font-weight: 800; line-height: 1; font-family: var(--mono); }
+  .card .l { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-top: 2mm; }
+  .card.good .n { color: var(--success); }
+  .card.bad .n { color: var(--error); }
+  .card.flat .n { color: var(--muted); }
+  .card.warn .n { color: var(--amber-700); }
+
+  /* ---- callouts -------------------------------------------------------- */
+  .note {
+    border-left: 3px solid var(--amber); background: var(--amber-100);
+    padding: 3mm 4mm; margin: 4mm 0; font-size: 10pt;
+  }
+  .note.bad { border-left-color: var(--error); background: var(--error-tint); }
+  .note strong { display: block; margin-bottom: 1mm; }
+
+  /* ---- tables ---------------------------------------------------------- */
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 3mm 0 6mm; }
+  th {
+    text-align: left; font-size: 8pt; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); border-bottom: 1px solid var(--rule); padding: 2mm 2mm 1.5mm;
+    font-weight: 700;
+  }
+  td { padding: 2mm; border-bottom: 1px solid var(--cloud); vertical-align: top; }
+  td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+  tr:hover td { background: var(--blue-100); }
+  .scenario { font-weight: 700; }
+  .why { display: block; color: var(--muted); font-size: 8.5pt; font-weight: 400; margin-top: .8mm; }
+
+  .verdict { font-weight: 700; white-space: nowrap; font-size: 9pt; }
+  .verdict.faster { color: var(--success); }
+  .verdict.slower { color: var(--error); }
+  .verdict.unchanged { color: var(--muted); }
+  .verdict.broken { color: var(--error); }
+  .verdict.added, .verdict.removed { color: var(--amber-700); }
+
+  /* A bar, so a reader sees the shape before reading a number. */
+  .bar { height: 3mm; background: var(--cloud); border-radius: 1.5mm; overflow: hidden; min-width: 24mm; }
+  .bar span { display: block; height: 100%; background: var(--blue); }
+  .bar.slower span { background: var(--error); }
+  .bar.faster span { background: var(--success); }
+
+  .caveat { color: var(--amber-700); font-size: 8.5pt; display: block; margin-top: 1mm; }
+
+  footer {
+    margin-top: 10mm; padding: 6mm 16mm 10mm; border-top: 1px solid var(--rule);
+    font-size: 9pt; color: var(--muted); background: var(--cloud);
+  }
+  footer a { color: var(--blue-700); }
+
+  .mono { font-family: var(--mono); }
+  .avoid-break { break-inside: avoid; page-break-inside: avoid; }
+
+  @media print {
+    body { background: var(--white); }
+    .sheet { max-width: none; }
+    tr:hover td { background: transparent; }
+    h2 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <header class="cover">
+    {{ with .Mark }}<div class="mark">{{ . }}</div>{{ end }}
+    <h1>{{ .Title }}</h1>
+    <p class="sub">{{ .Subtitle }}</p>
+    <div class="meta">
+      <div><div class="k">Baseline</div><div class="v">{{ .BaselineLabel }}</div></div>
+      <div><div class="k">Compared with</div><div class="v">{{ .CurrentLabel }}</div></div>
+      <div><div class="k">Target</div><div class="v">{{ .TargetLabel }}</div></div>
+      <div><div class="k">Generated</div><div class="v">{{ .GeneratedAt }}</div></div>
+    </div>
+  </header>
+
+  <main>
+
+    <h2>What this says</h2>
+    <p class="lede">{{ .Lede }}</p>
+
+    <div class="cards">
+      <div class="card good"><div class="n">{{ .Headline.Faster }}</div><div class="l">Faster</div></div>
+      <div class="card bad"><div class="n">{{ .Headline.Slower }}</div><div class="l">Slower</div></div>
+      <div class="card flat"><div class="n">{{ .Headline.Unchanged }}</div><div class="l">Unchanged</div></div>
+      {{ if .Headline.Broken }}<div class="card bad"><div class="n">{{ .Headline.Broken }}</div><div class="l">Broken</div></div>{{ end }}
+      {{ if .Headline.Added }}<div class="card warn"><div class="n">{{ .Headline.Added }}</div><div class="l">New</div></div>{{ end }}
+      {{ if .Headline.Removed }}<div class="card warn"><div class="n">{{ .Headline.Removed }}</div><div class="l">Gone</div></div>{{ end }}
+    </div>
+
+    {{ range .Warnings }}
+    <div class="note"><strong>Read with care</strong>{{ . }}</div>
+    {{ end }}
+
+    {{ if .Broken }}
+    <div class="note bad">
+      <strong>{{ len .Broken }} scenario(s) stopped working</strong>
+      A scenario that fails is usually <em>faster</em>, so these are excluded from the timings rather than
+      counted as improvements: {{ .BrokenNames }}.
+    </div>
+    {{ end }}
+
+    <h2>Scenario by scenario</h2>
+    {{ range .Groups }}
+    <h3>{{ .Name }}</h3>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:34%">Scenario</th>
+          <th class="num">Before</th>
+          <th class="num">After</th>
+          <th class="num">Change</th>
+          <th style="width:16%">&nbsp;</th>
+          <th class="num">Bytes</th>
+          <th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Deltas }}
+        <tr class="avoid-break">
+          <td>
+            <span class="scenario">{{ .Name }}</span>
+            {{ with .Why }}<span class="why">{{ . }}</span>{{ end }}
+            {{ with .Caveat }}<span class="caveat">{{ . }}</span>{{ end }}
+          </td>
+          <td class="num">{{ .BeforeMs }}</td>
+          <td class="num">{{ .AfterMs }}</td>
+          <td class="num">{{ .ChangeLabel }}</td>
+          <td>
+            <div class="bar {{ .BarClass }}"><span style="width:{{ .BarWidth }}%"></span></div>
+          </td>
+          <td class="num">{{ .BytesLabel }}</td>
+          <td><span class="verdict {{ .VerdictClass }}">{{ .VerdictLabel }}</span></td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+    {{ end }}
+
+    <h2>How this was measured</h2>
+    <p>
+      Each scenario is one HTTP request, repeated {{ .Iterations }} times after {{ .Warmup }} discarded warmup
+      requests, issued one at a time. That measures latency — how long a user waits — rather than throughput.
+      Times are the median of the full response including reading the body, which for the large responses is
+      most of the wait. Bytes are what crossed the network, with compression negotiated as a browser would.
+    </p>
+    <p>
+      A change smaller than {{ .NoiseFloorPercent }}% is reported as unchanged. These runs come from a working
+      machine at sample counts in the tens, and a tighter threshold would produce confident verdicts that a
+      rerun contradicts. Where a verdict rests on distributions that overlap, it says so next to the number.
+    </p>
+
+  </main>
+
+  <footer>
+    <p>
+      Generated by <span class="mono">dtbench</span> · Decision Theatre.
+      Made with 💗 by <a href="https://kartoza.com">Kartoza</a> ·
+      <a href="{{ .SponsorURL }}">Donate!</a> ·
+      <a href="{{ .RepoURL }}">GitHub</a>
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
