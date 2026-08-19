@@ -102,5 +102,41 @@ check "a clean scan still carries the impact note" "$out" "What this image expos
 [ "$?" = "2" ] && ok "cve_table exits 2 with no argument" \
     || fail "cve_table exits 2 with no argument" "got $?"
 
+# --- argument handling -------------------------------------------------------
+#
+# The flag used to be found by discarding every argument starting with "--",
+# which removed the flag but not its value: `--limit 10 sbom.json` left "10" as
+# the first positional and the script tried to open a file called 10. Both
+# orderings are asserted, because only one of them was ever exercised.
+
+cat > "$TMP/two.json" <<'JSON'
+{"artifacts": [
+  {"name": "alpha", "version": "1", "type": "go", "licenses": ["MIT"]},
+  {"name": "beta",  "version": "2", "type": "go", "licenses": ["MIT"]}
+]}
+JSON
+
+out="$("$SBOM" --limit 1 "$TMP/two.json" 2>&1)"
+check "sbom_table accepts --limit before the file" "$out" "alpha"
+out="$("$SBOM" "$TMP/two.json" --limit 1 2>&1)"
+check "sbom_table accepts --limit after the file" "$out" "alpha"
+
+out="$("$SBOM" --limit 1 "$TMP/two.json" 2>&1)"
+case "$out" in
+    *"beta"*) fail "sbom_table honours --limit" "beta should be beyond the limit" ;;
+    *) ok "sbom_table honours --limit" ;;
+esac
+
+"$SBOM" --limit banana "$TMP/two.json" > /dev/null 2>&1
+[ "$?" = "2" ] && ok "sbom_table rejects a non-numeric --limit" \
+    || fail "sbom_table rejects a non-numeric --limit" "got $?"
+
+cat > "$TMP/onematch.json" <<'JSON'
+{"matches": [{"vulnerability": {"id": "CVE-2026-0001", "severity": "High"},
+              "artifact": {"name": "alpha", "version": "1"}}]}
+JSON
+out="$("$CVE" --limit 1 "$TMP/onematch.json" 2>&1)"
+check "cve_table accepts --limit before the file" "$out" "CVE-2026-0001"
+
 printf '\n  %d passed, %d failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

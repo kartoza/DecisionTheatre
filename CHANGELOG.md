@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Deployment documentation for the published container image** — how to pull it
+  from GHCR, how to run it with the data and resources directories mounted, and
+  what to do about permissions. Covers the two failures that produce a confusing
+  message rather than a useful one: GHCR's `denied` meaning both "you may not" and
+  "no such package", and the uppercase image path failing as `denied` rather than
+  `not found`. Records that a package is created private on first push and must be
+  made public once by hand, and that a 403 on the first release push is usually the
+  repository's Actions permissions rather than the package.
+
 - **Every pull request now publishes the container image, its SBOM and its
   vulnerability scan**, and annotates the pull request with both tables. The image
   is a `container-image` artefact kept for 7 days, so a change can be run before it
