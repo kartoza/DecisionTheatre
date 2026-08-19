@@ -119,6 +119,14 @@ type Run struct {
 	// can be reproduced. Zero when the order was the declared one.
 	ShuffleSeed int64 `json:"shuffleSeed,omitempty"`
 
+	// Coverage is how much of the server's route table this suite examined.
+	//
+	// Stored in the run because a scenario count says nothing about coverage
+	// and a reader has no other way to know what was left out. The first time
+	// anybody checked, 14 of 35 registered route patterns were probed while the
+	// suite reported 37 scenarios and looked thorough.
+	Coverage Coverage `json:"coverage"`
+
 	// GoVersion is the toolchain that built the tool, and — in a sweep, where
 	// the tool builds each revision with the toolchain it is itself running
 	// under — the toolchain that built the target. Two revisions compiled by

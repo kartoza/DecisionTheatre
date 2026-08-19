@@ -121,6 +121,27 @@ type Scenario struct {
 	// not in the datapack yet" is a fact about the range being swept, not a
 	// fault in the build.
 	Prepare func(ctx context.Context, client *http.Client, base string) (string, error)
+
+	// Sequence turns one scenario into several requests whose times and bytes
+	// are summed into a single sample.
+	//
+	// It exists for a specific and slightly awkward problem. Fifteen
+	// /api/metadata/* endpoints were unprobed, and probing them individually
+	// would have been worse than useless: each is well under a millisecond, so
+	// this harness's own resolution floor means not one of them could ever
+	// produce a verdict, while all fifteen would enlarge the family the Holm
+	// correction divides across — making every *other* scenario in the suite
+	// harder to call. Fifteen scenarios that cannot conclude anything, bought
+	// by weakening the ones that can.
+	//
+	// Summing them fixes both ends. The total is around 15 ms, comfortably
+	// above the floor and therefore actually testable, and it is a more
+	// faithful measurement anyway: the client fetches the whole metadata set on
+	// first paint, so the sum is what a user waits for. The cost is
+	// localisation — a regression in one of the fifteen shows up as a slower
+	// total without saying which — and metadata-colors stays as an individual
+	// canary partly for that reason.
+	Sequence []string
 }
 
 // expectedContentType is ContentType, or an inference from the path.
@@ -366,6 +387,122 @@ func Scenarios() []Scenario {
 			Group:    "Tiles",
 			Path:     "/data/tiles.json",
 			Why:      "Declares which layers are tiled and at what zooms — the client decides tiles-or-GeoJSON from this.",
+		},
+
+		// ---- Routes the suite used to leave unexamined ------------------
+		//
+		// Added after a check against the server's route table found 14 of 35
+		// registered patterns probed. Each of these earns its place by what a
+		// regression in it would cost a user, not by making a coverage figure
+		// look better; the ones that cannot be measured meaningfully are
+		// recorded in coverage.go instead of being given a scenario that fails.
+
+		{
+			Name:     "metadata-all",
+			Group:    "Metadata",
+			Path:     "/api/metadata/" + MetadataEndpoints[0],
+			Sequence: metadataSequence(),
+			MinBytes: 800,
+			Why: "Every metadata lookup the client fetches on first paint, timed as one wait — which is what it " +
+				"is for a user. Measured individually these are all sub-millisecond and none could ever produce " +
+				"a verdict; together they are around 15 ms and can.",
+		},
+		{
+			Name:     "tilesets",
+			Group:    "Tiles",
+			Path:     "/api/tilesets",
+			MinBytes: 5,
+			Why:      "The list of available tilesets, asked for before the map can decide what to render.",
+		},
+		{
+			Name:     "tileset-metadata",
+			Group:    "Tiles",
+			Path:     "/api/tilesets/africa/metadata",
+			MinBytes: 500,
+			Why: "The tileset's own metadata — layer names, zoom range, bounds. Read from the mbtiles metadata " +
+				"table, and on the map's critical path.",
+		},
+		{
+			Name:     "style-json",
+			Group:    "Tiles",
+			Path:     "/data/style.json",
+			MinBytes: 200,
+			Why:      "The MapLibre style document. Nothing renders until this returns, and it was unmeasured.",
+		},
+		{
+			Name:     "catchment-geometry",
+			Group:    "Statistics",
+			Path:     "/api/catchments/geometry/1121879850",
+			MinBytes: 100,
+			Why:      "One catchment's geometry, which is what selecting a catchment while building a site fetches.",
+		},
+
+		// The in-bbox pair. Two scenarios over the same query rather than one,
+		// because the only difference between them is whether geometry is
+		// included, and measured on the live server that flag is worth 44x in
+		// time and 139x in payload (48 ms / 59 KB against 1.1 ms / 423 B).
+		// Keeping both means a change to the geometry path shows up as a
+		// divergence between them rather than as a single number that moved.
+		{
+			Name:     "catchments-in-bbox-geometry",
+			Group:    "Statistics",
+			Method:   "POST",
+			Path:     "/api/catchments/in-bbox",
+			Body:     `{"minX":25,"minY":-26,"maxX":26,"maxY":-25}`,
+			MinBytes: 1000,
+			Why:      "Catchments in the viewport with their geometry — what the site builder draws while you drag a box.",
+		},
+		{
+			Name:     "catchments-in-bbox-ids",
+			Group:    "Statistics",
+			Method:   "POST",
+			Path:     "/api/catchments/in-bbox",
+			Body:     `{"minX":25,"minY":-26,"maxX":26,"maxY":-25,"includeGeometry":false}`,
+			MinBytes: 100,
+			Why: "The same query asking only for ids. The gap between this and the geometry form is the cost of " +
+				"the geometry, which is the number worth watching.",
+		},
+
+		// Expensive, and behind Heavy for that reason rather than because it is
+		// obscure: 2.86 s for eleven catchments on the live server.
+		{
+			Name:     "dissolve-catchments",
+			Group:    "Statistics",
+			Method:   "POST",
+			Path:     "/api/sites/dissolve-catchments",
+			Prepare:  dissolveBody(),
+			Heavy:    true,
+			MinBytes: 200,
+			Why: "Unioning selected catchments into a site boundary — the last step of creating a site. Measured " +
+				"at 2.86 s for eleven catchments, which makes it one of the most expensive requests the API serves.",
+		},
+
+		// Lifetime-cached, and the scenario says so because its number would
+		// otherwise be read as a cost.
+		{
+			Name:     "precalculate-full",
+			Group:    "Statistics",
+			Path:     "/api/precalculate/full",
+			MinBytes: 1000,
+			Why: "Area-weighted means for every attribute across the whole dataset, which the quad view asks for " +
+				"on startup. Measured on a freshly started server the first call took 25.9 SECONDS; every call " +
+				"after it took 1.8 ms, because the handler caches the result for the server's lifetime. This " +
+				"scenario's p50 is therefore a cache read and not a cost. Read cacheSpeedup, not the median: " +
+				"against a server this tool started itself the warm-up captures the real figure, and against a " +
+				"server that has been up a while nothing can.",
+		},
+
+		// Deployment endpoints. Cheap, and summed for the same reason the
+		// metadata block is: individually none of them can clear the resolution
+		// floor, so individually none of them could ever report anything.
+		{
+			Name:     "deployment-status",
+			Group:    "Baseline",
+			Path:     "/api/datapack/status",
+			Sequence: []string{"/api/datapack/download-info", "/api/executables/info"},
+			MinBytes: 30,
+			Why: "The three deployment-status endpoints the hosted build polls, timed together. Not on the map's " +
+				"critical path, but they are registered routes and a regression here would otherwise be invisible.",
 		},
 
 		// Revalidation. These two are the cheapest large win available to this

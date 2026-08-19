@@ -413,6 +413,110 @@ floor to 200 bytes, which catches this case and stays far below any real
 response — but the general point stands and is in the weakness list below: **a
 size floor catches an empty response, not a null one.**
 
+## 9. Coverage: the suite was probing 14 of 35 route patterns
+
+Tim was right that not every endpoint was probed, and the scenario count was
+actively hiding it: 37 scenarios looked thorough while most of the route table
+was untouched. **A scenario count measures effort; only the route table measures
+coverage.**
+
+The suite now carries an inventory of every registered route and computes
+coverage from the paths the scenarios actually request. Current figure, emitted
+into every run and stored in the results file:
+
+```
+39 of 64 registered routes probed; 5 cannot be measured meaningfully
+and 20 are deliberately left alone, each with a recorded reason.
+```
+
+(64 rather than 35 because I count method+pattern pairs and include
+`internal/server/server.go` and the desktop-only site routes, not just
+`RegisterRoutes`.)
+
+**Coverage is derived, never declared.** Scenarios do not list the routes they
+hit — the URLs they request are matched against the registered patterns. Manual
+bookkeeping rots; a derivation cannot. Tests enforce the rest: every unprobed
+route must carry a reason of at least 40 characters, no route may be listed
+twice, the counts must account for every route, and **any route marked probed
+that no scenario actually reaches fails the build**. That last one is what stops
+this silently rotting again.
+
+### What was added, and why each earns its place
+
+| scenario | measured | what a regression would cost |
+|---|---|---|
+| `metadata-all` | 9.19 ms / 45.4 KB | all 15 metadata lookups, first paint |
+| `catchments-in-bbox-geometry` | 9.10 ms / 57.6 KB | dragging a selection box |
+| `catchments-in-bbox-ids` | 0.34 ms / 423 B | the same query without geometry |
+| `dissolve-catchments` *(heavy)* | **2727 ms** / 2.2 KB | the last step of creating a site |
+| `precalculate-full` | 1.68 ms / 13.9 KB | quad view on startup — **see below** |
+| `tileset-metadata` | 1.36 ms / 15.0 KB | map critical path |
+| `style-json` | 0.17 ms / 1.4 KB | nothing renders until it returns |
+| `catchment-geometry` | 0.26 ms / 815 B | selecting a catchment |
+| `tilesets` | 0.07 ms / 11 B | map critical path |
+| `deployment-status` | 0.25 ms / 167 B | three deployment endpoints, summed |
+
+The in-bbox pair is two scenarios over one query on purpose: the only difference
+is the `includeGeometry` flag, and it is worth **27x in time and 139x in
+payload**. Keeping both means a change to the geometry path shows as a divergence
+between them rather than as one number that moved.
+
+### One probe did not stand for seventeen
+
+The suite probed `metadata/colors` alone. Measured, that assumption fails:
+
+```
+colors     930 B   0.58 ms      details   6,558 B   1.95 ms
+canmap     800 B   0.35 ms      xaxis...  6,558 B   1.44 ms
+```
+
+`details` is **seven times the payload and three times the time** of `colors`.
+They are not one cache behind one shape of response.
+
+But probing all fifteen individually would have been worse than useless. Each is
+sub-millisecond, so **my own 1 ms resolution floor means not one of them could
+ever produce a verdict** — while all fifteen would enlarge the family the Holm
+correction divides across, making every *other* scenario in the suite harder to
+call. Fifteen scenarios that can conclude nothing, bought by weakening the ones
+that can.
+
+So they are covered by one **sequence scenario** that requests all fifteen and
+sums them: 9.19 ms, comfortably testable, and a more faithful measurement anyway
+because the client fetches the whole set on first paint. The cost is
+localisation — a regression shows as a slower total without saying which endpoint
+— and `metadata-colors` stays as an individual canary. `groupingvalues` returns
+3 bytes (empty), which is worth someone checking.
+
+### Two routes cannot be probed at all
+
+`/api/compare` answers **404 `no such column: l.catchment_id`** for every
+parameter combination tried, including the documented `left`/`right`/`attribute`.
+Same root cause as `/api/scenario/{scenario}/{attribute}`. Neither gets a
+scenario — a scenario that can only ever fail is noise, not coverage — so both
+are recorded as unprobeable with the reason, which also means this file is where
+it will say they were broken once somebody fixes them.
+
+### The finding that came out of the coverage work
+
+**`/api/precalculate/full` takes 25.9 seconds on its first call and 1.8 ms on
+every call after it.** Measured on a freshly started server:
+
+```
+first call    HTTP 200   14,277 B   25.909 s
+second call                          0.0028 s
+third call                           0.0021 s
+```
+
+A **14,700x** difference, because the handler caches for the server's lifetime.
+The quad view requests this on startup, so **the first user after every restart
+waits 26 seconds.**
+
+This is the sharpest possible vindication of reporting caches rather than hiding
+them — and also a limit. Against a server this tool starts itself (a sweep) the
+warm-up captures the real figure and `cacheSpeedup` flags it. Against a
+long-running server **nothing can**: the value was computed once, hours ago, and
+there is no way to ask for it again. The scenario's `Why` says so in the report.
+
 ---
 
 ## Known weaknesses of the method
@@ -469,6 +573,15 @@ explicit about what it cannot show.
    Catching this class properly needs response-shape assertions, which is a
    larger change and arguably the QA engineer's territory rather than mine.
 
+12. **The route inventory is the one hand-maintained thing here.** A route added
+   to the server and not to `coverage.go` is invisible to the coverage figure —
+   the tests catch drift in the other direction (a route marked probed that no
+   scenario reaches) but cannot know about a route nobody told them about.
+
+13. **A lifetime-cached endpoint cannot be measured on a long-running server.**
+   `precalculate-full` is the example: 25.9 s once, 1.8 ms forever after. Only a
+   run against a server the tool started itself sees the real number.
+
 10. **The crossover bandwidth is exact; anything downstream of it is not.**
     Bytes saved over time added is a fact, but it assumes the whole payload
     crosses the link once and ignores TCP slow start, request concurrency and
@@ -517,6 +630,9 @@ explicit about what it cannot show.
 - `NoiseFloorPercent` is still exported and unchanged, but it is no longer the
   whole story — there is now an absolute floor and a significance test too.
   Describing the method as "changes under 10%" would now be inaccurate.
+- **Coverage belongs on the report**, near the top: `Run.Coverage.Describe()`
+  gives the sentence, or use the counts directly. A reader has no other way to
+  know what the suite did not look at, and the scenario count actively misleads.
 - New states to style: `absent` and `traded` verdicts, and a byte verdict
   independent of the timing verdict. `traded` should read as neither good nor
   bad — it is a trade whose direction depends on the reader's connection.
@@ -540,6 +656,14 @@ explicit about what it cannot show.
   `POST /api/sites/{africa}/catchments` returns `[]` and `/whiskers` returns four
   `null`s, for 147,837 valid catchment ids. Africa is the only tour that
   exercises the real server lookup rather than being answered from the request.
+- **`/api/precalculate/full` costs 25.9 s on the first call after a restart**,
+  cached for the server's lifetime thereafter. The quad view asks for it on
+  startup, so the first user after every deploy waits half a minute.
+- **`/api/sites/dissolve-catchments` takes 2.7 s for eleven catchments** and
+  returns 2.2 KB. It is the last step of creating a site.
+- **`/api/compare` is broken the same way as `/api/scenario/{s}/{a}`** —
+  404 `no such column: l.catchment_id`. Two endpoints, one root cause.
+- `/api/metadata/groupingvalues` returns 3 bytes — an empty document.
 - `/api/aggregate` at 4.77 s per attribute over the full domain, x6 per chart
   render, is the largest unmeasured cost in the application.
 - `GetDomainRange` runs two uncached SQLite queries on *every* choropleth and

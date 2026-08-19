@@ -194,6 +194,11 @@ func Execute(ctx context.Context, opts Options) (Run, error) {
 
 	scenarios := Scenarios()
 
+	// Coverage, computed from the suite rather than declared by it. Recorded in
+	// every run so a report can say what was not looked at; see coverage.go.
+	run.Coverage = MeasureCoverage(scenarios)
+	run.Notes = append(run.Notes, "Route coverage: "+run.Coverage.Describe())
+
 	// Order. Fixed by default so that whatever interference exists is the same
 	// on both sides of a later subtraction — see Options.Shuffle for why the
 	// obvious alternative is worse.
@@ -380,7 +385,7 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		if ctx.Err() != nil {
 			break
 		}
-		sm, err := once(ctx, client, s, target, extra)
+		sm, err := sampleOnce(ctx, client, s, base, target, extra)
 		if err == nil && sm.status < 400 {
 			warmups = append(warmups, float64(sm.total.Microseconds())/1000)
 		}
@@ -397,7 +402,7 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		if ctx.Err() != nil {
 			break
 		}
-		sample, err := once(ctx, client, s, target, extra)
+		sample, err := sampleOnce(ctx, client, s, base, target, extra)
 		if err != nil {
 			res.Errors++
 			// Kept verbatim so a report can say why, not merely how many.
@@ -521,6 +526,44 @@ func conditionalHeaders(ctx context.Context, client *http.Client, s Scenario, ta
 				"request would give is therefore unavailable on this build rather than measured as zero",
 			s.Path, sm.bytes)
 	}
+}
+
+// sampleOnce produces one sample, which for most scenarios is one request and
+// for a sequence scenario is the sum of several.
+//
+// Summing is the whole point of a sequence — see Scenario.Sequence — so the
+// pieces are deliberately not reported individually. What is kept from the
+// parts is the worst of them: the first failing status wins, so a sequence in
+// which one endpoint 404s does not average into a healthy-looking total.
+func sampleOnce(ctx context.Context, client *http.Client, s Scenario, base, target string, extra map[string]string) (sample, error) {
+	out, err := once(ctx, client, s, target, extra)
+	if err != nil || len(s.Sequence) == 0 {
+		return out, err
+	}
+
+	for _, p := range s.Sequence {
+		step := Scenario{Name: s.Name, Path: p, ContentType: s.ContentType}
+		stepTarget, err := step.URL(base)
+		if err != nil {
+			return out, err
+		}
+		next, err := once(ctx, client, step, stepTarget, extra)
+		if err != nil {
+			return out, err
+		}
+
+		out.total += next.total
+		out.ttfb += next.ttfb
+		out.bytes += next.bytes
+		// A sequence is only as healthy as its unhealthiest member.
+		if next.status >= out.status {
+			out.status = next.status
+		}
+		if next.contentType != "" && out.contentType == "" {
+			out.contentType = next.contentType
+		}
+	}
+	return out, nil
 }
 
 type sample struct {

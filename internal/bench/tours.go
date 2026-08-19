@@ -337,3 +337,53 @@ func thousands(n int) string {
 	}
 	return b.String()
 }
+
+// metadataSequence is the metadata endpoints after the first, which the
+// scenario's Path already covers.
+func metadataSequence() []string {
+	out := make([]string, 0, len(MetadataEndpoints)-1)
+	for _, m := range MetadataEndpoints[1:] {
+		out = append(out, "/api/metadata/"+m)
+	}
+	return out
+}
+
+// dissolveBody builds the body for the dissolve scenario from a tour's
+// catchment ids.
+//
+// Munywana's eleven, fetched from the target rather than transcribed, for the
+// same reason the site-posting scenarios fetch theirs: the ids have to exist in
+// the datapack being measured, and a build whose datapack lacks that tour
+// should report the scenario absent rather than time a 400.
+func dissolveBody() func(context.Context, *http.Client, string) (string, error) {
+	const munywana = "fb1066ef-978e-4744-ac62-570a7cb366ed"
+	return func(ctx context.Context, client *http.Client, base string) (string, error) {
+		var t tour
+		for _, candidate := range tours() {
+			if candidate.id == munywana {
+				t = candidate
+			}
+		}
+		raw, err := siteBody(t, nil)(ctx, client, base)
+		if err != nil {
+			return "", err
+		}
+		var wrapper struct {
+			Site struct {
+				CatchmentIDs []string `json:"catchmentIds"`
+			} `json:"site"`
+		}
+		if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+			return "", err
+		}
+		if len(wrapper.Site.CatchmentIDs) == 0 {
+			return "", fmt.Errorf("the %s tour document on this build carries no catchment ids, so there is "+
+				"nothing to dissolve", t.title)
+		}
+		body, err := json.Marshal(map[string]any{"catchmentIds": wrapper.Site.CatchmentIDs})
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	}
+}
