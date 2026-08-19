@@ -12,10 +12,11 @@ import (
 // makes each of those a deployment change rather than a code change.
 
 func TestSatelliteDefaults(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "test-key")
 	var cfg Config
 
 	url, attribution := cfg.Satellite()
-	if url != DefaultSatelliteStyleURL {
+	if url != DefaultSatelliteStyleURL() {
 		t.Errorf("url = %q, want the default", url)
 	}
 	if attribution != DefaultSatelliteAttribution {
@@ -54,10 +55,11 @@ func TestSatelliteDoesNotCreditTheDefaultProviderForAnotherURL(t *testing.T) {
 
 // An operator who sets only the attribution is describing the default imagery.
 func TestSatelliteAttributionCanBeOverriddenAlone(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "test-key")
 	cfg := Config{SatelliteAttribution: "© Someone else entirely"}
 
 	url, attribution := cfg.Satellite()
-	if url != DefaultSatelliteStyleURL {
+	if url != DefaultSatelliteStyleURL() {
 		t.Errorf("url = %q, want the default", url)
 	}
 	if attribution != "© Someone else entirely" {
@@ -67,7 +69,21 @@ func TestSatelliteAttributionCanBeOverriddenAlone(t *testing.T) {
 
 // The two features sharing this key must never drift onto different ones.
 func TestMapTilerAPIKeyIsEmbeddedInTheDefaultStyleURL(t *testing.T) {
-	if !strings.Contains(DefaultSatelliteStyleURL, MapTilerAPIKey) {
-		t.Errorf("DefaultSatelliteStyleURL = %q does not contain MapTilerAPIKey", DefaultSatelliteStyleURL)
+	t.Setenv(MapTilerAPIKeyEnvVar, "test-key")
+	if !strings.Contains(DefaultSatelliteStyleURL(), MapTilerAPIKey()) {
+		t.Errorf("DefaultSatelliteStyleURL() = %q does not contain MapTilerAPIKey()", DefaultSatelliteStyleURL())
+	}
+}
+
+// A deployment that forgets to set the key must not crash or leak a
+// placeholder — it degrades to a style URL with an empty key, which the
+// satellite proxy already handles as an ordinary upstream failure.
+func TestMapTilerAPIKeyEmptyWhenUnset(t *testing.T) {
+	t.Setenv(MapTilerAPIKeyEnvVar, "")
+	if got := MapTilerAPIKey(); got != "" {
+		t.Errorf("MapTilerAPIKey() = %q, want empty", got)
+	}
+	if !strings.HasSuffix(DefaultSatelliteStyleURL(), "key=") {
+		t.Errorf("DefaultSatelliteStyleURL() = %q, want it to end with an empty key= param", DefaultSatelliteStyleURL())
 	}
 }

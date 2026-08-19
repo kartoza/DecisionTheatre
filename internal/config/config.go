@@ -91,18 +91,35 @@ type Config struct {
 	DesktopMode bool
 }
 
-// MapTilerAPIKey is the key this deployment authenticates to MapTiler with,
-// for both the satellite style below and the font-glyph proxy in server.go
-// (handleGlyphProxy). One definition so the two features cannot drift onto
-// different keys.
-const MapTilerAPIKey = "cc4PpmmWZP73LjU1nsw3"
+// MapTilerAPIKeyEnvVar is the environment variable that supplies the
+// MapTiler key this deployment authenticates with, for both the satellite
+// style below and the font-glyph proxy in server.go (handleGlyphProxy). One
+// definition so the two features cannot drift onto different keys.
+//
+// Read from the environment rather than compiled in: a key baked into the
+// source is a key committed to git history forever, recoverable from any
+// clone regardless of what a later commit changes it to — which is exactly
+// what happened to the key this replaced. See scripts/run-app.sh and
+// .dt-env.example for how a developer machine supplies it.
+const MapTilerAPIKeyEnvVar = "DT_MAPTILER_API_KEY"
+
+// MapTilerAPIKey returns the configured key, or "" if MapTilerAPIKeyEnvVar is
+// unset. An empty key is not specially handled here: the satellite style and
+// font-glyph requests simply fail upstream, and both already degrade
+// gracefully (satellite.go falls back to the built-in basemap; the glyph
+// proxy renders without labels) rather than needing a second failure mode.
+func MapTilerAPIKey() string {
+	return os.Getenv(MapTilerAPIKeyEnvVar)
+}
 
 // DefaultSatelliteStyleURL is used when nothing is configured.
 //
 // MapTiler's Hybrid style: satellite imagery with OSM-derived roads and place
 // labels already composited in, as a single style rather than a raster tile
 // type on its own.
-const DefaultSatelliteStyleURL = "https://api.maptiler.com/maps/hybrid/style.json?key=" + MapTilerAPIKey
+func DefaultSatelliteStyleURL() string {
+	return "https://api.maptiler.com/maps/hybrid/style.json?key=" + MapTilerAPIKey()
+}
 
 // DefaultSatelliteAttribution matches DefaultSatelliteStyleURL — MapTiler's
 // documented required attribution. A Free-plan account additionally requires
@@ -124,12 +141,14 @@ const DefaultSatelliteQuotaLimit = 80_000
 // Satellite returns the configured style URL and its attribution, applying
 // the defaults.
 func (c Config) Satellite() (styleURL, attribution string) {
+	defaultStyleURL := DefaultSatelliteStyleURL()
 	styleURL = c.SatelliteStyleURL
-	if styleURL == "" {
-		styleURL = DefaultSatelliteStyleURL
+	usingDefault := styleURL == ""
+	if usingDefault {
+		styleURL = defaultStyleURL
 	}
 	attribution = c.SatelliteAttribution
-	if attribution == "" && styleURL == DefaultSatelliteStyleURL {
+	if attribution == "" && usingDefault {
 		// Only default the attribution alongside the default URL: crediting the
 		// default provider for somebody else's imagery would be worse than
 		// crediting nobody.

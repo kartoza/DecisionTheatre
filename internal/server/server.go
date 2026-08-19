@@ -549,7 +549,7 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 
 	upstreamURL := fmt.Sprintf(
 		"https://api.maptiler.com/fonts/%s/%s.pbf?key=%s",
-		fontstack, glyphRange, config.MapTilerAPIKey,
+		fontstack, glyphRange, config.MapTilerAPIKey(),
 	)
 	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {
