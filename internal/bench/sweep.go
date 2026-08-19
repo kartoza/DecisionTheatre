@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -59,6 +60,11 @@ type SweepOptions struct {
 
 	// KeepBinaries leaves the built binaries in place for inspection.
 	KeepBinaries bool
+
+	// WebkitCompat overrides the path to scripts/webkit-compat.sh. Empty means
+	// look in Repo first and the revision second — see webkitCompatScript for
+	// why that order is not the obvious one.
+	WebkitCompat string
 
 	// Bench is the measurement configuration applied to every revision.
 	Bench Options
@@ -174,6 +180,20 @@ func Sweep(ctx context.Context, opts SweepOptions, resultsDir string) ([]Run, []
 		return nil, []error{err}
 	}
 
+	// Establish the shim before building anything, and say so up front.
+	//
+	// A sweep that discovers revision by revision that it cannot build costs an
+	// hour before telling anyone. More importantly, the previous failure mode
+	// was survivable-looking — each revision "just" got skipped — and it is the
+	// aggregate that is fatal, so the check that matters is the one made before
+	// the first build.
+	if script := webkitCompatScript(opts, ""); script == "" {
+		opts.Log("warning: no scripts/webkit-compat.sh could be found in %s or on the given path.", opts.Repo)
+		opts.Log("         Revisions that import webview will fail to build. Pass --repo at a checkout that has it.")
+	} else {
+		opts.Log("build shim: %s (used for every revision, including those predating it)", script)
+	}
+
 	var runs []Run
 	var problems []error
 
@@ -198,6 +218,33 @@ func Sweep(ctx context.Context, opts SweepOptions, resultsDir string) ([]Run, []
 			opts.Log("      saved %s", filepath.Base(path))
 		}
 		runs = append(runs, run)
+	}
+
+	// Coverage accounting, stated plainly and stored inside the results rather
+	// than only printed.
+	//
+	// A sweep that measured four of twenty revisions is not a sweep of the
+	// range that was asked for, and the difference has to survive into the
+	// report: the numbers themselves look exactly the same either way. This is
+	// the second half of the webkit-shim fix — the shim stops most revisions
+	// failing, and this makes it impossible not to notice if they do anyway.
+	if len(runs) < len(revs) {
+		note := fmt.Sprintf(
+			"This sweep measured %d of the %d revisions it was asked to cover; %d could not be built or run. "+
+				"Any statement about the range as a whole is really a statement about the %d that worked.",
+			len(runs), len(revs), len(revs)-len(runs), len(runs))
+		problems = append(problems, errors.New(note))
+		for i := range runs {
+			runs[i].Notes = append(runs[i].Notes, note)
+			// Rewritten rather than only amended in memory: the stored file is
+			// what a report is generated from weeks later, and a caveat that
+			// exists only in this process's memory is a caveat nobody will read.
+			// Save is deterministic in its filename, so this overwrites.
+			if _, err := runs[i].Save(resultsDir); err != nil {
+				problems = append(problems, err)
+			}
+		}
+		opts.Log("\n%s", note)
 	}
 
 	return runs, problems
@@ -247,7 +294,7 @@ func measureRevision(ctx context.Context, opts SweepOptions, rev Revision) (Run,
 
 	build := exec.CommandContext(buildCtx, "go", "build", "-o", binary, ".")
 	build.Dir = tree
-	build.Env = append(os.Environ(), webkitCompatEnv(tree)...)
+	build.Env = append(os.Environ(), webkitCompatEnv(webkitCompatScript(opts, tree))...)
 	if out, err := build.CombinedOutput(); err != nil {
 		return zero, fmt.Errorf("build: %w: %s", err, lastLines(string(out), 3))
 	}
@@ -275,15 +322,57 @@ func measureRevision(ctx context.Context, opts SweepOptions, rev Revision) (Run,
 	return Execute(ctx, benchOpts)
 }
 
-// webkitCompatEnv reproduces what scripts/webkit-compat.sh sets.
+// webkitCompatScript finds the build shim to use for every revision.
+//
+// This function is the fix for a bug that would have quietly halved the range
+// this tool exists to measure, and the reasoning matters more than the code.
 //
 // webview_go asks pkg-config for webkit2gtk-4.0 with no build tag for 4.1, and
-// only 4.1 is packaged now, so a plain `go build` fails to import it. Calling the
-// repository's own script keeps one answer to that problem rather than a second
-// copy here that can drift.
-func webkitCompatEnv(tree string) []string {
-	script := filepath.Join(tree, "scripts", "webkit-compat.sh")
-	if _, err := os.Stat(script); err != nil {
+// only 4.1 is packaged now, so a plain `go build` fails to import it.
+// scripts/webkit-compat.sh writes a webkit2gtk-4.0.pc derived from the
+// installed 4.1 and exports the paths at it.
+//
+// The original version of this looked for that script *inside the revision
+// being built*. But the script was only added to the repository on
+// 2026-08-17 — after the performance work the sweep is meant to demonstrate had
+// already started. So for every revision older than that date the shim was
+// absent, the build got no PKG_CONFIG_PATH, the link failed, and the revision
+// was skipped as "failed to build". A sweep asked to cover the week would have
+// silently measured its last two days and reported that as the whole story:
+// the most damaging possible failure, because the output still looks like a
+// complete answer.
+//
+// Preferring the tool's own checkout fixes it, and is correct rather than a
+// fudge: nothing about the shim is revision-specific. It compensates for what
+// is installed on *this machine today*, not for anything in the source being
+// built, so the current copy is the right one to use for a two-year-old commit.
+// The revision's own copy is kept only as a fallback for the case where the
+// tool is run from somewhere that does not have one.
+func webkitCompatScript(opts SweepOptions, tree string) string {
+	candidates := []string{opts.WebkitCompat}
+	if opts.Repo != "" {
+		candidates = append(candidates, filepath.Join(opts.Repo, "scripts", "webkit-compat.sh"))
+	}
+	candidates = append(candidates, filepath.Join(tree, "scripts", "webkit-compat.sh"))
+
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, err := os.Stat(c); err == nil {
+			abs, err := filepath.Abs(c)
+			if err == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return ""
+}
+
+// webkitCompatEnv evaluates the shim and returns the environment it exports.
+func webkitCompatEnv(script string) []string {
+	if script == "" {
 		return nil
 	}
 	out, err := exec.Command("bash", "-c", "eval \"$("+script+")\" && env").Output()
@@ -358,7 +447,48 @@ func startServer(ctx context.Context, binary string, opts SweepOptions) (*runnin
 		server.stop()
 		return nil, fmt.Errorf("%w\nserver log:\n%s", err, tail)
 	}
+
+	// Confirm that the server we started is the one answering.
+	//
+	// This is not defensive programming for its own sake; it happened. The
+	// server does not fail when its port is taken — it logs "Port N in use,
+	// using port M instead" and listens on M. The busy() check above closes the
+	// obvious hole, but it is a dial at one instant and the relocation is
+	// decided later, so the two can disagree: a previous revision's process that
+	// has not finished dying, or anything else that grabs the port in between,
+	// and the sweep then measures a stranger.
+	//
+	// The failure is silent and total. Every revision would be measured against
+	// the same foreign server, every result would be identical, and the sweep
+	// would report a flat line — which reads as "nothing changed", a conclusion
+	// somebody might well believe. This was caught by exactly that happening
+	// during development: a probe pointed at port 8098 measured a leftover
+	// server from a previous session for three minutes and produced entirely
+	// plausible, entirely wrong numbers.
+	if err := confirmOwnPort(log.Name(), opts.Port); err != nil {
+		server.stop()
+		return nil, err
+	}
 	return server, nil
+}
+
+// confirmOwnPort fails when the server relocated away from the port the sweep
+// is about to measure.
+func confirmOwnPort(logPath string, port int) error {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		// Cannot read the log, so cannot check. Not fatal — say nothing rather
+		// than fail a sweep over a missing temporary file.
+		return nil
+	}
+	text := string(data)
+	if !strings.Contains(text, "in use, using port") {
+		return nil
+	}
+	return fmt.Errorf(
+		"the server could not take port %d and moved to another one, so whatever is answering on %d is a "+
+			"different process and measuring it would be meaningless.\nserver log:\n%s",
+		port, port, lastLines(text, 4))
 }
 
 func waitForHealth(ctx context.Context, base string, limit time.Duration) error {
