@@ -11,7 +11,7 @@ import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, us
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
-import { evictExpired } from '../lib/ttlCache';
+import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
 import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
 import {
   PRISM_STOPS,
@@ -587,7 +587,7 @@ export function formatNumber(n: number): string {
 // Module-level cache for pure (no site overrides) choropleth requests.
 // Multiple panes requesting the same scenario+attribute+bbox share one in-flight
 // fetch instead of firing N identical HTTP requests simultaneously.
-const _choroplethCache = new Map<string, { promise: Promise<ChoroplethData | null>; ts: number }>();
+const _choroplethCache: SharedCache<ChoroplethData> = new Map();
 const CHOROPLETH_CACHE_TTL_MS = 60_000;
 
 // Module-level caches for the two expensive synchronous intersection routines.
@@ -651,7 +651,7 @@ interface ChoroplethValues {
 // Companion to _choroplethCache for the values endpoint. Six panes x two
 // scenarios ask for the same viewport at the same moment; one fetch serves all
 // of them.
-const _choroplethValuesCache = new Map<string, { promise: Promise<ChoroplethValues | null>; ts: number }>();
+const _choroplethValuesCache: SharedCache<ChoroplethValues> = new Map();
 
 /**
  * Fetch the attribute values for the current viewport, for the vector-tile
@@ -668,6 +668,7 @@ async function fetchChoroplethValues(
   bounds: maplibregl.LngLatBounds,
   siteId?: string | null,
   idealOverrides?: Map<number, number>,
+  signal?: AbortSignal,
 ): Promise<ChoroplethValues | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -686,45 +687,49 @@ async function fetchChoroplethValues(
     params.set('siteId', siteId);
   }
 
+  // The same URL means different things once site ideal overrides are in play,
+  // so those requests are never shared or cached. This is deliberate; do not
+  // "optimise" it away without putting the overrides in the key.
   const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
   const key = params.toString();
-  const now = Date.now();
 
-  if (canCache) {
-    const hit = _choroplethValuesCache.get(key);
-    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
-    evictExpired(_choroplethValuesCache, CHOROPLETH_CACHE_TTL_MS, now);
-  }
+  const run = async (requestSignal?: AbortSignal): Promise<ChoroplethValues> => {
+    const resp = await fetch(`/api/catchment-values?${params}`, { signal: requestSignal });
+    if (!resp.ok) throw new Error(`catchment values request failed: HTTP ${resp.status}`);
+    return await resp.json() as ChoroplethValues;
+  };
 
-  const promise = (async (): Promise<ChoroplethValues | null> => {
-    try {
-      const resp = await fetch(`/api/catchment-values?${params}`);
-      if (!resp.ok) return null;
-      const data = await resp.json() as ChoroplethValues;
+  try {
+    const data = canCache
+      ? await sharedRequest(_choroplethValuesCache, key, CHOROPLETH_CACHE_TTL_MS, run, signal)
+      : await run(signal);
 
-      if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
-        for (let i = 0; i < data.ids.length; i++) {
-          const override = idealOverrides.get(data.ids[i]);
-          if (override !== undefined) data.values[i] = override;
-        }
+    if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
+      // Only reachable on the uncached path (overrides imply !canCache), which
+      // matters: this mutates the payload in place and a shared one has other
+      // readers.
+      for (let i = 0; i < data.ids.length; i++) {
+        const override = idealOverrides.get(data.ids[i]);
+        if (override !== undefined) data.values[i] = override;
       }
-
-      return data;
-    } catch (err) {
-      console.error('Failed to fetch catchment values:', err);
-      return null;
     }
-  })();
 
-  if (canCache) {
-    promise.catch(() => _choroplethValuesCache.delete(key));
-    _choroplethValuesCache.set(key, { promise, ts: now });
+    return data;
+  } catch (err) {
+    // A cancelled request is not a failure and must not be reported as "no
+    // data" — that would repaint the map as empty for a viewport the user has
+    // already left. Let the caller's staleness check deal with it.
+    if (isAbortError(err)) throw err;
+    console.error('Failed to fetch catchment values:', err);
+    return null;
   }
-  return promise;
 }
 
 /**
  * Fetch choropleth GeoJSON data for the current viewport.
+ *
+ * The expensive one: a full-domain request is seconds and megabytes, so a
+ * superseded one is cancelled rather than merely ignored.
  */
 async function fetchChoroplethData(
   scenario: Scenario,
@@ -733,7 +738,8 @@ async function fetchChoroplethData(
   zoom: number,
   siteId?: string | null,
   idealOverrides?: Map<number, number>,
-  valuesOnly = false
+  valuesOnly = false,
+  signal?: AbortSignal,
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -760,42 +766,26 @@ async function fetchChoroplethData(
     params.set('siteId', siteId);
   }
 
-  // Deduplicate concurrent requests for pure (non-site-specific) fetches.
+  // Deduplicate concurrent requests for pure (non-site-specific) fetches. As
+  // above, a site override makes the URL an incomplete description of the
+  // question, so those are neither shared nor cached.
   const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
-  if (canCache) {
-    const key = params.toString();
-    const now = Date.now();
-    const hit = _choroplethCache.get(key);
-    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
+  const key = params.toString();
 
-    // Keys embed the viewport bbox, which changes on nearly every pan/zoom -
-    // sweep stale entries so this cache doesn't grow unbounded for the life
-    // of the tab (see evictExpired).
-    evictExpired(_choroplethCache, CHOROPLETH_CACHE_TTL_MS, now);
-
-    const promise = (async (): Promise<ChoroplethData | null> => {
-      try {
-        const resp = await fetch(`/api/choropleth?${params}`);
-        if (!resp.ok) return null;
-        return await resp.json() as ChoroplethData;
-      } catch (err) {
-        console.error('Failed to fetch choropleth data:', err);
-        return null;
-      }
-    })();
-
-    promise.catch(() => _choroplethCache.delete(key));
-    _choroplethCache.set(key, { promise, ts: now });
-    return promise;
-  }
+  const run = async (requestSignal?: AbortSignal): Promise<ChoroplethData> => {
+    const resp = await fetch(`/api/choropleth?${params}`, { signal: requestSignal });
+    if (!resp.ok) throw new Error(`choropleth request failed: HTTP ${resp.status}`);
+    return await resp.json() as ChoroplethData;
+  };
 
   try {
-    const resp = await fetch(`/api/choropleth?${params}`);
-    if (!resp.ok) return null;
-    const data: ChoroplethData = await resp.json();
+    const data = canCache
+      ? await sharedRequest(_choroplethCache, key, CHOROPLETH_CACHE_TTL_MS, run, signal)
+      : await run(signal);
 
     // In browser mode the backend store is never updated, so apply per-catchment
-    // ideal overrides client-side for the future scenario.
+    // ideal overrides client-side for the future scenario. Uncached path only,
+    // so the mutation below cannot be seen by another caller.
     if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
       for (const feature of data.features) {
         if (feature.properties.HYBAS_ID === undefined) continue;
@@ -808,6 +798,7 @@ async function fetchChoroplethData(
 
     return data;
   } catch (err) {
+    if (isAbortError(err)) throw err;
     console.error('Failed to fetch choropleth data:', err);
     return null;
   }
@@ -921,6 +912,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   onIdentifyRef.current = onIdentify;
 
   // Store map extent change callback in ref
+  const lastExtentSignatureRef = useRef<string>('');
   const onMapExtentChangeRef = useRef(onMapExtentChange);
   onMapExtentChangeRef.current = onMapExtentChange;
 
@@ -1017,6 +1009,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
 
+  /**
+   * Ordering and cancellation for the choropleth pipeline.
+   *
+   * applyColors is invoked from sixteen places and is asynchronous throughout,
+   * so two runs are routinely in flight together — a pan while the previous
+   * pan's values are still on the wire, an attribute change during a scenario
+   * change. Nothing previously ordered them, so whichever response happened to
+   * land last painted the map, and the map could settle showing the values of a
+   * viewport, scenario or attribute the user had already left. That is the bug
+   * worth fixing here; the wasted work is secondary.
+   *
+   * Every run takes a ticket. Only the holder of the newest ticket is allowed
+   * to publish statistics or touch a layer, and superseding a run aborts its
+   * requests so the connection is freed rather than merely ignored.
+   */
+  const applyColorsRunRef = useRef(0);
+  const applyColorsAbortRef = useRef<AbortController | null>(null);
+
   // Whether the served tileset carries catchment geometry, and from which zoom.
   // Null until resolved, and null for good on a datapack whose tiles predate
   // catchment tiling — in which case every zoom uses the GeoJSON path, exactly
@@ -1034,6 +1044,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // right-side call below either takes a nullable map or is guarded.
     if (!leftMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
+
+    // Taken only once the run is certain to do something: an early bail on a
+    // map that is not there yet must not cancel a run that is.
+    applyColorsAbortRef.current?.abort();
+    const abort = new AbortController();
+    applyColorsAbortRef.current = abort;
+    const run = ++applyColorsRunRef.current;
+    /** True once a later run has taken over; nothing may be painted after that. */
+    const superseded = () => run !== applyColorsRunRef.current;
 
     if (!isChoroplethEnabledRef.current) {
       removeChoroplethLayers(leftMap, 'left');
@@ -1111,6 +1130,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (getAppRuntime() === 'browser' && siteId &&
         (c.leftScenario === 'future' || c.rightScenario === 'future')) {
       const catchments = await getSiteCatchments(siteId).catch(() => []);
+      if (superseded()) return;
       if (catchments.length > 0 && c.attribute) {
         browserIdealOverrides = new Map();
         for (const cat of catchments) {
@@ -1165,9 +1185,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (tileset && currentZoom >= tileset.minzoom) {
       try {
         const [leftValues, rightValues] = await Promise.all([
-          fetchChoroplethValues(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides),
-          fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides),
+          fetchChoroplethValues(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
+          fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
         ]);
+
+        // These answers describe the viewport, scenario and attribute captured
+        // when this run started. If a later run has begun, they describe the
+        // past — publishing them would leave the map and the statistics panel
+        // disagreeing with the controls.
+        if (superseded()) return;
 
         const { min, max } = resolveDomainRange([leftValues, rightValues]);
         publishStats(
@@ -1200,8 +1226,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             // cleared when what it means changes — scenario or attribute.
             stateKey: `${scenario}|${c.attribute}`,
           };
-          const apply = () => applyChoroplethLayer(
-            map, side, layerSource, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          const apply = () => {
+            // The deferred branch below can fire long after the map goes idle,
+            // by which time a later run may own the map.
+            if (superseded()) return;
+            applyChoroplethLayer(
+              map, side, layerSource, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          };
           if (map.loaded()) {
             apply();
           } else {
@@ -1212,7 +1243,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         applySide(leftMap, 'left', leftValues, c.leftScenario);
         applySide(rightMap, 'right', rightValues, c.rightScenario);
       } catch (err) {
-        console.error('Failed to apply choropleth:', err);
+        // A superseded run cancels its own requests; that is the design, not a
+        // failure to report.
+        if (!isAbortError(err)) console.error('Failed to apply choropleth:', err);
       }
       return;
     }
@@ -1220,9 +1253,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
-        fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
       ]);
+
+      if (superseded()) return;
 
       let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
 
@@ -1303,6 +1338,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           leftMap.once('idle', () => {
+            if (superseded()) return;
             applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
@@ -1316,6 +1352,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           rightMap.once('idle', () => {
+            if (superseded()) return;
             applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
@@ -1323,7 +1360,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         removeChoroplethLayers(rightMap, 'right');
       }
     } catch (err) {
-      console.error('Failed to apply choropleth:', err);
+      if (!isAbortError(err)) console.error('Failed to apply choropleth:', err);
     }
   // siteId belongs here: the body reads it in ten places — the choropleth fetch
   // for both panes, the browser-runtime ideal overrides, and three per-site
@@ -1388,6 +1425,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Compute full-dataset stats so "Full" range has stable values.
   useEffect(() => {
     let cancelled = false;
+    // Full-domain valuesOnly requests are the biggest payload the client asks
+    // for. When the attribute or scenario changes, the previous pair is dead
+    // weight — cancel it rather than let it finish into a discarded result.
+    const abort = new AbortController();
     const c = comparisonRef.current;
 
     if (!c.attribute) {
@@ -1405,8 +1446,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // sample/aggregate, so fetch every catchment's raw value regardless of
         // viewport zoom (zoom argument is ignored server-side in this mode).
         const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
+          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
+          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
         ]);
 
         if (cancelled) return;
@@ -1425,7 +1466,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           });
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !isAbortError(err)) {
           console.error('Failed to compute full zone statistics:', err);
         }
       }
@@ -1435,6 +1476,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
 
@@ -1564,6 +1606,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // not on global dataset extrema, once a site exists.
   useEffect(() => {
     let cancelled = false;
+    // Site-scoped valuesOnly requests are per-catchment over the site bbox and
+    // re-issued on every scenario, attribute, boundary and refresh change.
+    const abort = new AbortController();
 
     const updateSiteDomainRange = async () => {
       const c = comparisonRef.current;
@@ -1660,8 +1705,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // the grid-aggregated render path can supply neither, so fetch true
         // per-catchment values regardless of viewport zoom.
         const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
@@ -1771,7 +1816,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
         applyColors();
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !isAbortError(err)) {
           console.error('Failed to compute site zone stats:', err);
           siteZoneStatsRef.current = null;
           siteCatchmentIdsRef.current = null;
@@ -1784,6 +1829,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [siteId, siteBounds, siteGeometry, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors, refreshKey]);
 
@@ -2991,11 +3037,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Fetch new choropleth data when map moves (debounced)
     leftMap.on('moveend', () => {
       debouncedApplyColors();
-      // Report map extent changes
+      // Report map extent changes.
+      //
+      // This lands in App state, so every emission re-renders the whole pane
+      // tree and re-runs every effect that lists mapExtent — in quad view, six
+      // panes' worth of dial and chart aggregate fetches. moveend fires for
+      // plenty of things that leave the viewport exactly where it was
+      // (compare-map sync, a resize, a style reload, a re-fit onto the bounds
+      // already shown), so an unchanged extent is not reported at all.
       if (onMapExtentChangeRef.current) {
         const center = leftMap.getCenter();
         const bounds = leftMap.getBounds();
-        onMapExtentChangeRef.current({
+        const extent: MapExtent = {
           center: [center.lng, center.lat],
           zoom: leftMap.getZoom(),
           bounds: [
@@ -3004,7 +3057,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             bounds.getEast(),
             bounds.getNorth(),
           ],
-        });
+        };
+        const signature = `${extent.center.join(',')}|${extent.zoom}|${extent.bounds?.join(',') ?? ''}`;
+        if (signature !== lastExtentSignatureRef.current) {
+          lastExtentSignatureRef.current = signature;
+          onMapExtentChangeRef.current(extent);
+        }
       }
     });
     leftMap.on('zoomend', () => debouncedApplyColors());
@@ -3250,6 +3308,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (fetchTimerRef.current) {
         clearTimeout(fetchTimerRef.current);
       }
+      // A pane closing (leaving quad view, switching a pane to a chart) must
+      // not leave its choropleth requests running for a map that no longer
+      // exists. Bumping the ticket too, so a response already on its way back
+      // cannot paint a removed layer.
+      applyColorsRunRef.current += 1;
+      applyColorsAbortRef.current?.abort();
+      applyColorsAbortRef.current = null;
       unregisterMap(syncId);
       slider.removeEventListener('pointerdown', onSliderPointerDown);
       slider.removeEventListener('pointermove', onSliderPointerMove);
