@@ -4,7 +4,7 @@ import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, 
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
@@ -54,6 +54,8 @@ interface MapViewProps {
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
   colorScaleType: ColorScaleType;
+  /** Which zone's min/max the color scale (and legend) is stretched to. Defaults to 'domain'. */
+  rangeMode?: RangeMode;
   // Slider position synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -616,6 +618,45 @@ function resolveDomainRange(
   };
 }
 
+/** Combine left/right ZoneStats into one range, widest side wins on each end. */
+function combineStatsRange(
+  left: ZoneStats | null,
+  right: ZoneStats | null,
+): { min: number; max: number } | null {
+  const mins = [left?.min, right?.min].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  const maxes = [left?.max, right?.max].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  if (mins.length === 0 || maxes.length === 0) return null;
+  return { min: Math.min(...mins), max: Math.max(...maxes) };
+}
+
+/**
+ * The color scale actually painted onto the map. Unlike resolveDomainRange
+ * (the metadata cap, used verbatim for rangeMode 'domain'), 'extent' and
+ * 'site' stretch the scale to the min/max of whichever zone is selected, so
+ * local variation that is subtle against the full dataset's range still
+ * shows up as strong color contrast within that zone.
+ *
+ * Falls back down the chain (site → extent → domain) when the more local
+ * stats aren't available yet — e.g. the site-scoped fetch is still in
+ * flight the first time a site's map paints.
+ */
+function resolvePaintRange(
+  rangeMode: RangeMode,
+  domainRange: { min: number; max: number },
+  extentStats: { left: ZoneStats | null; right: ZoneStats | null },
+  siteStats: { left: ZoneStats | null; right: ZoneStats | null } | null,
+): { min: number; max: number } {
+  if (rangeMode === 'site') {
+    return combineStatsRange(siteStats?.left ?? null, siteStats?.right ?? null)
+      ?? combineStatsRange(extentStats.left, extentStats.right)
+      ?? domainRange;
+  }
+  if (rangeMode === 'extent') {
+    return combineStatsRange(extentStats.left, extentStats.right) ?? domainRange;
+  }
+  return domainRange;
+}
+
 /**
  * The vector-tile path's payload: catchment ids and their values for the
  * viewport, with no geometry. Mirrors CatchmentValuesResponse in
@@ -818,7 +859,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -1177,13 +1218,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // disagreeing with the controls.
         if (superseded()) return;
 
-        const { min, max } = resolveDomainRange([leftValues, rightValues]);
-        publishStats(
-          min,
-          max,
-          leftValues ? zoneStatsFromValues(leftValues.values) : null,
-          rightValues ? zoneStatsFromValues(rightValues.values) : null,
-        );
+        const domainRange = resolveDomainRange([leftValues, rightValues]);
+        const extentLeftStats = leftValues ? zoneStatsFromValues(leftValues.values) : null;
+        const extentRightStats = rightValues ? zoneStatsFromValues(rightValues.values) : null;
+        const { min, max } = resolvePaintRange(
+          rangeMode, domainRange, { left: extentLeftStats, right: extentRightStats }, siteZoneStatsRef.current);
+        publishStats(min, max, extentLeftStats, extentRightStats);
 
         const applySide = (
           // Nullable since the compare map is created only in compare mode:
@@ -1306,13 +1346,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftDisplay = leftData;
       const rightDisplay = rightData;
 
-      const { min, max } = resolveDomainRange([leftData, rightData]);
-      publishStats(
-        min,
-        max,
-        leftData ? computeZoneStats(leftData, c.attribute) : null,
-        rightData ? computeZoneStats(rightData, c.attribute) : null,
-      );
+      const domainRange = resolveDomainRange([leftData, rightData]);
+      const extentLeftStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
+      const extentRightStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+      const { min, max } = resolvePaintRange(
+        rangeMode, domainRange, { left: extentLeftStats, right: extentRightStats }, siteZoneStatsRef.current);
+      publishStats(min, max, extentLeftStats, extentRightStats);
 
       // Apply to left map - verify the map is ready
       if (leftDisplay && leftDisplay.features.length > 0) {
@@ -1360,7 +1399,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // rebuild this callback constantly — and it is one of the fifteen in the
   // tracking issue.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [colorScaleMode, colorScaleType, siteId]);
+  }, [colorScaleMode, colorScaleType, rangeMode, siteId]);
 
   const applyColorsRef = useRef(applyColors);
   useEffect(() => {
@@ -3651,7 +3690,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, attributeColors, attributeDetails]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
