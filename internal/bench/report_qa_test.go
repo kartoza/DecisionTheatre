@@ -1,6 +1,7 @@
 package bench
 
 import (
+	stdhtml "html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -8,9 +9,9 @@ import (
 	"testing"
 )
 
-// renderFor renders a comparison and fails the test if it cannot, so every test
+// renderForQA renders a comparison and fails the test if it cannot, so every test
 // below can work with the markup directly.
-func renderFor(t *testing.T, c Comparison, opts ReportOptions) string {
+func renderForQA(t *testing.T, c Comparison, opts ReportOptions) string {
 	t.Helper()
 	out, err := RenderHTML(c, opts)
 	if err != nil {
@@ -29,7 +30,7 @@ func TestAReportRendersAsACompleteDocument(t *testing.T) {
 	c := Compare(runOf(measured("health", 2), measured("choropleth", 400)),
 		runOf(measured("health", 2), measured("choropleth", 120)))
 
-	html := renderFor(t, c, ReportOptions{Title: "Performance report", Subtitle: "before against after"})
+	html := renderForQA(t, c, ReportOptions{Title: "Performance report", Subtitle: "before against after"})
 
 	for _, want := range []string{"<!doctype html", "<html", "</html>", "<title>", "Performance report"} {
 		if !strings.Contains(strings.ToLower(html), strings.ToLower(want)) {
@@ -41,7 +42,7 @@ func TestAReportRendersAsACompleteDocument(t *testing.T) {
 // Every Kartoza artefact carries the credit, donate and GitHub triplet, and the
 // report is the artefact a client actually sees.
 func TestAReportCarriesTheKartozaCreditTriplet(t *testing.T) {
-	html := renderFor(t, Compare(runOf(measured("a", 10)), runOf(measured("a", 10))), ReportOptions{})
+	html := renderForQA(t, Compare(runOf(measured("a", 10)), runOf(measured("a", 10))), ReportOptions{})
 
 	for _, want := range []string{"Kartoza", "https://kartoza.com", SponsorURL, RepoURL, "Donate!", "GitHub"} {
 		if !strings.Contains(html, want) {
@@ -62,7 +63,7 @@ func TestAReportNamesTheScenariosThatStoppedWorking(t *testing.T) {
 	c := Compare(runOf(measured("health", 2), measured("catchment-identify", 300)),
 		runOf(measured("health", 2), broken))
 
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 
 	if !strings.Contains(html, "catchment-identify") {
 		t.Error("the broken scenario is not named in the report")
@@ -87,33 +88,62 @@ func TestTheLedeRefusesToLeadWithAWinWhenSomethingIsBroken(t *testing.T) {
 		runOf(measured("health", 20), broken))
 
 	h := c.Summarise()
-	got := lede(c, h)
+	got, _ := lede(c, h)
 
-	if !strings.HasPrefix(got, "1 scenario(s) stopped working") {
-		t.Errorf("lede = %q, want it to open with the breakage", got)
+	// Asserted on order rather than on the opening phrase, which has been
+	// reworded once already. What must never change is that a reader meets the
+	// breakage before they meet any good news.
+	breakage := strings.Index(strings.ToLower(got), "stopped working")
+	if breakage < 0 {
+		t.Fatalf("lede = %q, want it to say a scenario stopped working", got)
 	}
-	improvement := strings.Index(got, "largest improvement")
-	breakage := strings.Index(got, "stopped working")
-	if improvement >= 0 && improvement < breakage {
-		t.Errorf("lede leads with the win before the breakage: %q", got)
+	firstSentence := strings.SplitN(got, ".", 2)[0]
+	if !strings.Contains(strings.ToLower(firstSentence), "stopped working") {
+		t.Errorf("lede = %q, want the breakage in the first sentence", got)
+	}
+	for _, goodNews := range []string{"improvement", "faster", "win"} {
+		if i := strings.Index(strings.ToLower(got), goodNews); i >= 0 && i < breakage {
+			t.Errorf("lede leads with %q before the breakage: %q", goodNews, got)
+		}
 	}
 }
 
 // Caveats must survive into the markup. Guards against a report that shows a
 // confident number while the reason to doubt it is dropped at render time.
 func TestCaveatsSurviveIntoTheRenderedReport(t *testing.T) {
-	base := spread(measured("choropleth", 100), 10, 400)
-	cur := spread(measured("choropleth", 60), 10, 400)
+	base := withSamples(measured("choropleth", 100), samplesAround(100, 40, 20))
+	cur := withSamples(measured("choropleth", 88), samplesAround(88, 40, 20))
 
 	c := Compare(runOf(base), runOf(cur))
-	if c.Deltas[0].Caveat == "" {
+	caveat := c.Deltas[0].Caveat
+	if caveat == "" {
 		t.Fatal("the fixture produced no caveat, so this test proves nothing")
 	}
 
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 
-	if !strings.Contains(html, "spreads overlap") {
-		t.Error("the overlap caveat did not reach the report")
+	// Asserted against whatever the comparison actually said rather than a
+	// remembered phrase: the guarantee is that the reason to doubt a number
+	// travels with the number, and that holds however the sentence is worded and
+	// wherever the design chooses to put it — it currently lives in an endnotes
+	// section keyed by scenario name rather than in the table row.
+	//
+	// Entity-decoded before comparing, because the contextual escaper renders a
+	// leading "+" in a confidence interval as &#43; and a byte comparison would
+	// fail on that alone.
+	plain := stdhtml.UnescapeString(html)
+	for _, sentence := range strings.Split(caveat, ". ") {
+		sentence = strings.TrimSpace(strings.TrimSuffix(sentence, "."))
+		if sentence == "" {
+			continue
+		}
+		if !strings.Contains(plain, sentence) {
+			t.Errorf("this part of the caveat did not reach the report: %q", sentence)
+		}
+	}
+	// And it is attached to the scenario it belongs to, not floating free.
+	if !strings.Contains(html, "choropleth") {
+		t.Error("the caveat is not associated with the scenario it describes")
 	}
 }
 
@@ -127,7 +157,7 @@ func TestWarningsAppearInTheRenderedReport(t *testing.T) {
 	cur.Iterations = 5
 
 	c := Compare(base, cur)
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 
 	if !strings.Contains(html, "Read with care") {
 		t.Error("the report has no warnings block")
@@ -151,12 +181,12 @@ func TestTheNumbersInTheReportAreTheNumbersInTheComparison(t *testing.T) {
 		runOf(measured("health", 2.345), measured("choropleth", 412), measured("stats", 4159.283)),
 		runOf(measured("health", 1.111), measured("choropleth", 98), measured("stats", 2010.5)))
 
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 
 	for _, d := range c.Deltas {
 		for what, want := range map[string]string{
-			"before": formatMs(d.Baseline.TotalMs.P50),
-			"after":  formatMs(d.Current.TotalMs.P50),
+			"before": FormatMs(d.Baseline.TotalMs.P50),
+			"after":  FormatMs(d.Current.TotalMs.P50),
 			"change": changeLabel(d),
 		} {
 			if !strings.Contains(html, want) {
@@ -182,7 +212,7 @@ func TestEveryScenarioInTheComparisonGetsARow(t *testing.T) {
 	d.Group = "" // no group at all
 
 	c := Compare(runOf(a, b, d), runOf(a, b, d))
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 
 	for _, name := range []string{"alpha", "bravo", "charlie"} {
 		if !strings.Contains(html, name) {
@@ -200,13 +230,25 @@ func TestEveryScenarioInTheComparisonGetsARow(t *testing.T) {
 // half-written page or an error. Guards against `dtbench report` on two
 // interrupted runs producing something that cannot be sent to anyone.
 func TestAnEmptyComparisonStillRendersAReadableReport(t *testing.T) {
-	html := renderFor(t, Compare(Run{}, Run{}), ReportOptions{})
+	html := renderForQA(t, Compare(Run{}, Run{}), ReportOptions{})
 
 	if !strings.Contains(html, "</html>") {
 		t.Error("the document is not complete")
 	}
-	if !strings.Contains(html, "Of 0 scenarios measured") {
-		t.Error("the report does not state plainly that nothing was measured")
+	// The wording moved from "Of 0 scenarios measured" to "No scenario produced
+	// comparable timings in both runs". Either is fine; what matters is that the
+	// report says outright that there is nothing here, rather than presenting an
+	// empty table and letting it read as "nothing changed".
+	lede, _ := lede(Compare(Run{}, Run{}), Comparison{}.Summarise())
+	if lede == "" {
+		t.Fatal("an empty comparison produced no lede at all")
+	}
+	if !strings.Contains(stdhtml.UnescapeString(html), lede) {
+		t.Errorf("the lede %q did not reach the report", lede)
+	}
+	lower := strings.ToLower(lede)
+	if !strings.Contains(lower, "no scenario") && !strings.Contains(lower, "0 scenario") {
+		t.Errorf("lede = %q, want it to state plainly that nothing was measured", lede)
 	}
 }
 
@@ -247,7 +289,7 @@ func TestUntrustedTextInAReportIsEscapedRatherThanRendered(t *testing.T) {
 	c := Compare(base, cur)
 	c.Warnings = append(c.Warnings, payload)
 
-	html := renderFor(t, c, ReportOptions{Title: payload, Subtitle: payload})
+	html := renderForQA(t, c, ReportOptions{Title: payload, Subtitle: payload})
 
 	if scriptTag.MatchString(html) {
 		t.Errorf("a <script> element from untrusted text survived into the report; "+
@@ -284,7 +326,7 @@ func TestHostileTextInAStoredResultsFileIsStillEscapedWhenRendered(t *testing.T)
 		t.Fatal(err)
 	}
 
-	html := renderFor(t, Compare(loaded, loaded), ReportOptions{})
+	html := renderForQA(t, Compare(loaded, loaded), ReportOptions{})
 
 	if scriptTag.MatchString(html) {
 		t.Errorf("a stored results file injected a script element into the report: %s",
@@ -310,7 +352,7 @@ func TestBarWidthsStayWithinTheirContainerAndInsideTheStyleAttribute(t *testing.
 		}
 	}
 
-	html := renderFor(t, c, ReportOptions{})
+	html := renderForQA(t, c, ReportOptions{})
 	if regexp.MustCompile(`width:\s*(\d+)%`).FindString(html) == "" {
 		t.Error("no bar width reached the markup")
 	}
@@ -332,7 +374,7 @@ func TestTheBrandMarkIsEmbeddedAsRawMarkupByDesign(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	html := renderFor(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
+	html := renderForQA(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
 		ReportOptions{MarkPath: mark})
 
 	if !strings.Contains(html, `<svg id="kartoza-mark">`) {
@@ -343,7 +385,7 @@ func TestTheBrandMarkIsEmbeddedAsRawMarkupByDesign(t *testing.T) {
 // A missing brand mark must not fail the report. The palette and the type are
 // most of the identity, and a report produced outside a checkout still has both.
 func TestAMissingBrandMarkDoesNotFailTheReport(t *testing.T) {
-	html := renderFor(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
+	html := renderForQA(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
 		ReportOptions{MarkPath: filepath.Join(t.TempDir(), "absent.svg")})
 
 	if !strings.Contains(html, "</html>") {
@@ -354,7 +396,7 @@ func TestAMissingBrandMarkDoesNotFailTheReport(t *testing.T) {
 // A caller who supplies no title must still get one. Guards against a report
 // whose browser tab and cover both read as empty.
 func TestAReportWithNoTitleFallsBackToAUsableOne(t *testing.T) {
-	html := renderFor(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))), ReportOptions{})
+	html := renderForQA(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))), ReportOptions{})
 
 	if !strings.Contains(html, "<title>Performance report</title>") {
 		t.Error("a report with no title given has no usable title")
@@ -378,8 +420,8 @@ func TestDurationsAreFormattedToThePrecisionTheMeasurementSupports(t *testing.T)
 		1000:     "1.00 s",
 		4159.283: "4.16 s",
 	} {
-		if got := formatMs(in); got != want {
-			t.Errorf("formatMs(%v) = %q, want %q", in, got, want)
+		if got := FormatMs(in); got != want {
+			t.Errorf("FormatMs(%v) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -387,41 +429,78 @@ func TestDurationsAreFormattedToThePrecisionTheMeasurementSupports(t *testing.T)
 // A large improvement reads better as a multiple than as a percentage, and a
 // change under one percent must not be dressed up as a result.
 func TestChangeLabelsReadTheWayAHumanWouldQuoteThem(t *testing.T) {
+	// The exact strings moved — "+30%" became "30% slower", "±0%" became
+	// "under 1 ms" — so these assert the two things a label has to get right:
+	// the size, in the form a human would quote it, and the direction. A label
+	// that says the right number in the wrong direction is the worst outcome
+	// available here, so direction is checked separately from magnitude.
 	for _, c := range []struct {
 		name       string
 		base, curr float64
-		want       string
+		wantSize   string
+		wantFaster bool
+		wantSlower bool
 	}{
-		{"a fifty-fold win reads as a multiple", 5000, 100, "50.0× faster"},
-		{"a doubling reads as a multiple", 200, 100, "2.0× faster"},
-		{"a halving reads as a multiple", 100, 200, "2.0× slower"},
-		{"a modest change reads as a percentage", 100, 130, "+30%"},
-		{"a modest win reads as a percentage", 100, 80, "-20%"},
-		{"a change under one percent reads as none", 100, 100.5, "±0%"},
+		{"a fifty-fold win reads as a multiple", 5000, 100, "50", true, false},
+		{"a doubling reads as a multiple", 200, 100, "2", true, false},
+		{"a halving reads as a multiple", 100, 200, "2", false, true},
+		{"a modest change reads as a percentage", 100, 130, "30", false, true},
+		{"a modest win reads as a percentage", 100, 80, "20", true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := onlyDelta(t, Compare(runOf(measured("a", c.base)), runOf(measured("a", c.curr))))
-			if got := changeLabel(d); got != c.want {
-				t.Errorf("changeLabel = %q, want %q", got, c.want)
+			got := changeLabel(d)
+
+			if !strings.Contains(got, c.wantSize) {
+				t.Errorf("changeLabel = %q, want it to carry the magnitude %q", got, c.wantSize)
+			}
+			lower := strings.ToLower(got)
+			faster := strings.Contains(lower, "faster") || strings.HasPrefix(got, "-")
+			slower := strings.Contains(lower, "slower") || strings.HasPrefix(got, "+")
+			if faster != c.wantFaster || slower != c.wantSlower {
+				t.Errorf("changeLabel = %q reads as faster=%v slower=%v, want faster=%v slower=%v",
+					got, faster, slower, c.wantFaster, c.wantSlower)
 			}
 		})
 	}
+
+	// A difference too small for the harness to attribute must not be quoted as
+	// a percentage at all. It used to read "±0%"; it now names the threshold. In
+	// either wording the requirement is that it makes no claim of direction.
+	t.Run("a difference below the floor claims nothing", func(t *testing.T) {
+		d := onlyDelta(t, Compare(runOf(measured("a", 100)), runOf(measured("a", 100.5))))
+		got := strings.ToLower(changeLabel(d))
+
+		if strings.Contains(got, "faster") || strings.Contains(got, "slower") {
+			t.Errorf("changeLabel = %q claims a direction for a half-millisecond difference", got)
+		}
+	})
 }
 
 // Added, removed and broken scenarios have no change to state, and must not
 // borrow a number from the one side that has data.
 func TestScenariosWithOnlyOneSideHaveNoChangeToState(t *testing.T) {
-	for _, c := range []struct {
-		verdict Verdict
-		want    string
-	}{
-		{Added, "new"},
-		{Removed, "gone"},
-		{Broken, "—"},
-	} {
-		got := changeLabel(Delta{Verdict: c.verdict, Baseline: measured("a", 100), Current: measured("a", 1)})
-		if got != c.want {
-			t.Errorf("changeLabel for %q = %q, want %q", c.verdict, got, c.want)
+	// The labels were reworded ("new" became "first result", "gone" became a
+	// dash). What must hold whatever the wording is that a scenario with data on
+	// only one side does not borrow that side's number and present it as a
+	// change: no percentage, no multiple, no direction.
+	for _, verdict := range []Verdict{Added, Removed, Broken, Absent} {
+		got := changeLabel(Delta{
+			Verdict:  verdict,
+			Baseline: measured("a", 100),
+			Current:  measured("a", 1),
+		})
+		lower := strings.ToLower(got)
+
+		if strings.ContainsAny(got, "%×") {
+			t.Errorf("changeLabel for %q = %q, which quotes a change that was never measured", verdict, got)
+		}
+		if strings.Contains(lower, "faster") || strings.Contains(lower, "slower") {
+			t.Errorf("changeLabel for %q = %q, which claims a direction with only one side of data",
+				verdict, got)
+		}
+		if strings.TrimSpace(got) == "" {
+			t.Errorf("changeLabel for %q is empty, leaving the cell blank rather than explained", verdict)
 		}
 	}
 }
@@ -462,8 +541,8 @@ func TestSizesAreRenderedInReadableUnits(t *testing.T) {
 		14 * 1024 * 1024:  "14.0 MB",
 		1024 * 1024 * 100: "100.0 MB",
 	} {
-		if got := humanBytes(in); got != want {
-			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
+		if got := HumanBytes(in); got != want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -485,12 +564,23 @@ func TestEveryVerdictHasAReadableLabel(t *testing.T) {
 // A scenario that was skipped or never sampled must show a placeholder rather
 // than a zero that reads as an instantaneous response.
 func TestASkippedOrUnsampledScenarioShowsAPlaceholderRatherThanZero(t *testing.T) {
-	skipped := ScenarioResult{Skipped: true}
-	if got := durationLabel(skipped); got != "skipped" {
-		t.Errorf("durationLabel for a skipped scenario = %q, want %q", got, "skipped")
-	}
-	if got := durationLabel(ScenarioResult{}); got != "—" {
-		t.Errorf("durationLabel with no samples = %q, want an em dash", got)
+	// "skipped" is now "not run". The requirement is that neither case renders
+	// as a number, because a zero in a duration column reads as an
+	// instantaneous response rather than as an absence.
+	for _, c := range []struct {
+		name string
+		in   ScenarioResult
+	}{
+		{"a skipped scenario", ScenarioResult{Skipped: true}},
+		{"a scenario with no samples", ScenarioResult{}},
+	} {
+		got := durationLabel(c.in)
+		if strings.TrimSpace(got) == "" {
+			t.Errorf("durationLabel for %s is empty, leaving the cell blank rather than explained", c.name)
+		}
+		if strings.ContainsAny(got, "0123456789") {
+			t.Errorf("durationLabel for %s = %q, which reads as a measurement", c.name, got)
+		}
 	}
 }
 

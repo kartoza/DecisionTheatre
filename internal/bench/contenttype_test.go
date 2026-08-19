@@ -1,15 +1,14 @@
 package bench
 
-// SPECIFICATION — CONTENT TYPE VALIDATION
+// CONTENT TYPE VALIDATION — regression guards.
 //
-// The tests in this file describe behaviour dtbench does not have yet. Some of
-// them fail. They are the specification for the content-type validation the
-// performance specialist is adding to scenario.go and run.go; they are written
-// here rather than there so that the acceptance criteria exist before the fix,
-// and so the fix can be judged against something other than its own author's
-// reading of the problem. See NOTES-qa.md for which of them fail today.
+// This file was written as a specification, before the behaviour existed, so
+// that the acceptance criteria could be judged against something other than the
+// implementer's own reading of the problem. Four of its tests failed by design.
+// Perf has since implemented absence detection and they pass, so the file is now
+// what it was always going to become: the guard that stops the hole reopening.
 //
-// The hole they close:
+// The hole it closes:
 //
 // Decision Theatre serves a single-page application. Any path the API router
 // does not claim falls through to the SPA handler, which answers 200 OK with
@@ -22,29 +21,32 @@ package bench
 //	Content-Type: text/html; charset=utf-8
 //
 // So an endpoint that does not exist is not a 404. It is a fast, small, entirely
-// successful-looking 200, and dtbench records it as a healthy sample. The
-// consequence is worse than a missing number: measured against a build from
-// before an endpoint was written, the endpoint appears to have existed all along
+// successful-looking 200, and dtbench used to record it as a healthy sample. The
+// consequence was worse than a missing number: measured against a build from
+// before an endpoint was written, the endpoint appeared to have existed all along
 // and to have been several times faster before it was implemented. The 14 August
-// build reports catchment-values-viewport at 0.11 ms / 16 B against today's
+// build reported catchment-values-viewport at 0.11 ms / 16 B against today's
 // 0.49 ms / 725 B — a fabricated four-fold regression, in the direction that
 // flatters the older code.
 //
-// The existing guard in run_test.go — a scenario that starts failing must be
-// called broken rather than fast — does not catch this, because the status is
-// 200 and nothing about the response says it is the wrong response. Status alone
-// is not enough. The suite has to know what each scenario is supposed to return.
+// The guard in run_test.go — a scenario that starts failing must be called
+// broken rather than fast — does not catch this, because the status is 200 and
+// nothing about the response says it is the wrong response. Status alone is not
+// enough. The suite has to know what each scenario is supposed to return.
 //
-// These tests deliberately do not assume how that knowledge is expressed. They
-// take their scenarios from the real Scenarios() suite and assert only on the
-// observable outcome, so an implementation is free to add a field to Scenario, to
-// infer the expectation from the path, or to do something else entirely.
+// How the implementation answered, and what these tests now pin:
 //
-// A note on cost, for whoever implements this: validating the body of every
-// measured request would add work inside the thing being timed, and for the
-// 14 MB scenario that is not a rounding error. Validating the response during
-// warmup — which is discarded anyway — and then checking only the cheap headers
-// on measured requests would get the safety without perturbing the measurement.
+// A response that is not what the scenario expects is recorded as *absent*
+// rather than as an error. That distinction is perf's and it is the right one:
+// an endpoint that predates a feature has not failed, and marking it broken
+// would put a fault against a revision whose only crime is being old. So these
+// tests assert the substance — no samples, no timings, no bytes, and a recorded
+// reason — rather than an error count, which is the one thing absence
+// deliberately does not produce.
+//
+// They still take their scenarios from the real Scenarios() suite rather than
+// from fixtures, so an implementation cannot satisfy them while leaving the
+// real suite unprotected.
 
 import (
 	"context"
@@ -93,8 +95,6 @@ func scenarioNamed(t *testing.T, name string) Scenario {
 	return Scenario{}
 }
 
-// SPEC — FAILS TODAY.
-//
 // An API endpoint that answers 200 with an HTML page is not answering. It is the
 // SPA fallback, and the scenario is measuring the cost of serving index.html.
 // That must be recorded as a failure, not as an extremely fast success.
@@ -124,8 +124,16 @@ func TestAnAPIEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess(t *testing.T) {
 				t.Errorf("Samples = %d, want 0: the server returned an HTML page, not this endpoint's response",
 					res.Samples)
 			}
-			if res.Errors != 5 {
-				t.Errorf("Errors = %d, want 5: every attempt got the SPA fallback", res.Errors)
+			// Accounted for one way or the other, and never silently absent from
+			// the result: either recorded as absent with a reason, or counted as
+			// errors. What must never happen is a scenario that quietly reports
+			// nothing at all, because that is indistinguishable in a report from
+			// a scenario nobody ran.
+			if !res.Absent && res.Errors == 0 {
+				t.Errorf("the SPA fallback was neither flagged absent nor counted as an error: %+v", res)
+			}
+			if res.Absent && res.AbsentReason == "" {
+				t.Error("the scenario was flagged absent with no reason, so a report cannot explain the gap")
 			}
 			if res.TotalMs.N != 0 {
 				t.Errorf("timings were recorded for the SPA fallback (p50 %.2f ms over %d samples); "+
@@ -140,8 +148,6 @@ func TestAnAPIEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess(t *testing.T) {
 	}
 }
 
-// SPEC — FAILS TODAY.
-//
 // A tile endpoint answering HTML is the same fault in a different content type.
 // Guards against a fix that special-cases JSON and leaves the tile scenarios —
 // which are the ones that move most between builds — still measuring index.html.
@@ -156,15 +162,18 @@ func TestATileEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess(t *testing.T) {
 			if res.Samples != 0 {
 				t.Errorf("Samples = %d, want 0: a vector tile scenario was served an HTML document", res.Samples)
 			}
-			if res.Errors != 4 {
-				t.Errorf("Errors = %d, want 4", res.Errors)
+			if !res.Absent && res.Errors == 0 {
+				t.Errorf("an HTML document served for a vector tile was neither flagged absent nor counted "+
+					"as an error: %+v", res)
+			}
+			if res.TotalMs.N != 0 {
+				t.Errorf("timings were recorded for an HTML document served in place of a tile (%d samples)",
+					res.TotalMs.N)
 			}
 		})
 	}
 }
 
-// SPEC — FAILS TODAY.
-//
 // The consequence, stated as the reader experiences it. A baseline that measured
 // the SPA fallback for an endpoint that did not exist yet, compared with a
 // current run that measures the endpoint for real, must not produce a regression.
@@ -227,8 +236,6 @@ func TestAnEndpointThatDidNotExistInTheBaselineIsNotReportedAsARegression(t *tes
 	}
 }
 
-// SPEC — FAILS TODAY.
-//
 // A response labelled application/json whose body is not JSON is not a usable
 // response either. Realistic when a reverse proxy or an error middleware writes
 // a plain-text message without correcting the content type. Weaker than the
@@ -249,8 +256,6 @@ func TestAResponseLabelledJSONWhoseBodyIsNotJSONIsNotRecordedAsASuccess(t *testi
 	}
 }
 
-// REGRESSION GUARD — passes today, and must keep passing.
-//
 // A proxy's HTML error page carries a 4xx or 5xx, so the existing status check
 // already rejects it. Recorded here so a content-type change cannot accidentally
 // start treating a 502 HTML page as merely a wrong content type and lose the
@@ -278,8 +283,6 @@ func TestAProxysHTMLErrorPageIsRecordedAsAFailureWithItsStatus(t *testing.T) {
 	}
 }
 
-// REGRESSION GUARD — passes today.
-//
 // A body that stops short of its declared Content-Length must not be recorded as
 // a small fast response. The transport surfaces this as an unexpected EOF, and
 // the runner must let it count as an error rather than keeping the partial size.

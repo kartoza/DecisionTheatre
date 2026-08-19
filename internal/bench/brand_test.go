@@ -115,7 +115,7 @@ func TestAnUnreadablePaletteIsAnExplainedError(t *testing.T) {
 // two fields as template.CSS; see the comment on Brand.
 func TestTheBrandReachesTheRenderedReport(t *testing.T) {
 	b := DefaultBrand()
-	html := renderFor(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))), ReportOptions{})
+	html := renderForQA(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))), ReportOptions{})
 
 	for _, want := range []string{b.Blue500, b.Amber500, b.InkDefault, b.SurfaceCloud, b.Error} {
 		if !strings.Contains(html, want) {
@@ -139,7 +139,7 @@ func TestASuppliedBrandOverridesTheDefault(t *testing.T) {
 	custom := DefaultBrand()
 	custom.Blue500 = "#010203"
 
-	html := renderFor(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
+	html := renderForQA(t, Compare(runOf(measured("a", 1)), runOf(measured("a", 1))),
 		ReportOptions{Brand: &custom})
 
 	if !strings.Contains(html, "#010203") {

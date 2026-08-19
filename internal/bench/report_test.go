@@ -91,8 +91,15 @@ func TestSubMillisecondDifferencesAreNotVerdicts(t *testing.T) {
 	cur := run("b", "0.4.0", scenario("health", "Baseline", 0.11, 0.005, 16))
 	c := Compare(base, cur)
 
-	if got := c.Deltas[0].Verdict; got != Slower {
-		t.Fatalf("precondition: the comparison should still call this %q, got %q", Slower, got)
+	// This guard was written when Compare still called a thirty-microsecond
+	// difference "slower" and the report had to decline to stand behind it.
+	// Perf has since added an absolute floor to the comparison itself, so the
+	// verdict now arrives already softened. Both layers are worth keeping — the
+	// report should not depend on the comparison getting this right — so the
+	// precondition accepts either and the assertion that matters is unchanged:
+	// whatever Compare said, the report does not present this as a regression.
+	if got := c.Deltas[0].Verdict; got != Slower && got != Unchanged {
+		t.Fatalf("precondition: expected the comparison to call this %q or %q, got %q", Slower, Unchanged, got)
 	}
 	if got := effectiveVerdict(c.Deltas[0]); got != Unchanged {
 		t.Errorf("the report should not stand behind that verdict; got %q", got)

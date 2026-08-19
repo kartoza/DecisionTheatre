@@ -26,11 +26,40 @@ func measured(name string, p50 float64) ScenarioResult {
 	}
 }
 
-// spread widens a result's observed range, for the tests about overlapping
-// distributions.
+// spread widens a result's observed range, for the tests that care about the
+// summary statistics rather than the samples behind them.
 func spread(s ScenarioResult, min, max float64) ScenarioResult {
 	s.TotalMs.Min = min
 	s.TotalMs.Max = max
+	return s
+}
+
+// samplesAround builds a deterministic, evenly spaced sample set centred on
+// centre and reaching half either side.
+//
+// Deterministic on purpose: a fixture built from a random generator makes a
+// statistical test flaky, and a flaky test about statistics is worse than no
+// test because it teaches everybody to rerun until it passes.
+func samplesAround(centre, half float64, n int) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		frac := float64(i)/float64(n-1)*2 - 1 // -1 .. +1
+		out[i] = centre + frac*half
+	}
+	return out
+}
+
+// withSamples attaches raw samples and recomputes the summary from them, so the
+// two cannot disagree.
+//
+// Needed because the comparison now runs a rank-sum test over the raw samples
+// and falls back to a weaker median-versus-spread check when they are missing. A
+// fixture with only summary statistics therefore exercises the fallback, not the
+// path the tool actually takes against a real run.
+func withSamples(s ScenarioResult, samples []float64) ScenarioResult {
+	s.SamplesMs = samples
+	s.Samples = len(samples)
+	s.TotalMs = Summarise(samples)
 	return s
 }
 
@@ -44,7 +73,11 @@ func runOf(results ...ScenarioResult) Run {
 		Host:          "workstation",
 		Iterations:    20,
 		Warmup:        3,
-		Scenarios:     results,
+		// Settled, because these fixtures stand for runs that were taken
+		// properly. A run that carries no settle evidence is a different case
+		// and is covered on its own — see the warm-up warning tests below.
+		Settled:   true,
+		Scenarios: results,
 	}
 }
 
@@ -360,35 +393,79 @@ func TestARunWithZeroScenariosReportsTheOtherRunsScenariosAsRemoved(t *testing.T
 // ---------------------------------------------------------------------------
 // Caveats
 
-// A verdict resting on distributions that overlap must say so. Guards against a
-// "40% faster" headline that rests on one fast sample.
+// A verdict resting on distributions that overlap must not be presented as a
+// result. Guards against a "40% faster" headline that rests on one fast sample.
+//
+// The mechanism moved and the guarantee got stronger. This used to assert a
+// hand-rolled min/max overlap check that hedged a Faster verdict with a caveat;
+// perf replaced it with a Mann-Whitney rank-sum test over the raw samples, and
+// an overlapping pair now fails to earn a confident verdict at all. That is the
+// better outcome, so it is what the test asserts.
 func TestAVerdictRestingOnOverlappingSpreadsCarriesACaveat(t *testing.T) {
-	base := spread(measured("a", 100), 10, 400)
-	cur := spread(measured("a", 60), 10, 400)
+	base := withSamples(measured("a", 100), samplesAround(100, 40, 20))
+	cur := withSamples(measured("a", 88), samplesAround(88, 40, 20))
 
 	d := onlyDelta(t, Compare(runOf(base), runOf(cur)))
 
-	if d.Verdict != Faster {
-		t.Fatalf("verdict = %q, want %q", d.Verdict, Faster)
+	// The medians differ by about 12 ms and 12%, so the fixture clears both size
+	// gates and can only be stopped by the significance test. Without this
+	// check the test would pass for the wrong reason the moment a threshold
+	// moved.
+	if math.Abs(d.AbsoluteChangeMs()) < PracticalFloorMs || math.Abs(d.RelativeChange) < NoiseFloor {
+		t.Fatalf("the fixture no longer clears the size gates (%.2f ms, %.1f%%), so this test proves nothing",
+			d.AbsoluteChangeMs(), d.RelativeChange*100)
 	}
-	if !strings.Contains(d.Caveat, "overlap") {
-		t.Errorf("caveat = %q, want it to warn that the spreads overlap", d.Caveat)
+	if !d.Test.Possible {
+		t.Fatal("raw samples were supplied but no significance test ran")
+	}
+	if d.Test.Significant {
+		t.Errorf("the rank-sum test called heavily overlapping samples significant (p=%.4f)", d.Test.AdjustedP)
+	}
+	if d.Verdict == Faster || d.Verdict == Slower {
+		t.Errorf("verdict = %q on samples that overlap: the medians differ, but individual samples do not "+
+			"separate, and a verdict here is a verdict about the timer", d.Verdict)
+	}
+	if d.Caveat == "" {
+		t.Error("no caveat explains why a 12% difference was not called a change")
 	}
 }
 
 // Cleanly separated distributions must not be hedged. Guards against a caveat on
 // every row, which trains a reader to ignore all of them.
+//
+// "Not hedged" had to be restated when the statistics changed. A clean result
+// now carries a sentence quantifying the shift, its confidence interval and the
+// corrected p-value, and that is not a hedge — it is the evidence, and it
+// belongs next to the number. What a clean result must never carry is language
+// of doubt, so that is what is asserted.
 func TestACleanlySeparatedVerdictIsNotHedged(t *testing.T) {
-	base := spread(measured("a", 400), 380, 420)
-	cur := spread(measured("a", 40), 35, 45)
+	base := withSamples(measured("a", 100), samplesAround(100, 3, 20))
+	cur := withSamples(measured("a", 85), samplesAround(85, 3, 20))
 
 	d := onlyDelta(t, Compare(runOf(base), runOf(cur)))
 
 	if d.Verdict != Faster {
-		t.Fatalf("verdict = %q, want %q", d.Verdict, Faster)
+		t.Fatalf("verdict = %q, want %q: the two sample sets do not overlap at all", d.Verdict, Faster)
 	}
-	if d.Caveat != "" {
-		t.Errorf("caveat = %q, want none: the distributions do not overlap", d.Caveat)
+	if !d.Test.Significant {
+		t.Errorf("the rank-sum test failed to separate two disjoint sample sets (p=%.4f)", d.Test.AdjustedP)
+	}
+
+	for _, doubt := range []string{
+		"cannot",
+		"not recorded",
+		"not distinguishable",
+		"rather than on a significance test",
+		"is not something these measurements can establish",
+		"more likely to be about the network",
+	} {
+		if strings.Contains(strings.ToLower(d.Caveat), doubt) {
+			t.Errorf("a cleanly separated result is hedged with %q: %s", doubt, d.Caveat)
+		}
+	}
+	// And the evidence is present rather than the row being bare.
+	if !strings.Contains(d.Caveat, "shift") {
+		t.Errorf("caveat = %q, want it to quantify what the test established", d.Caveat)
 	}
 }
 
@@ -407,8 +484,20 @@ func TestAPayloadThatChangedSizeWithoutChangingTimeIsSurfaced(t *testing.T) {
 		t.Fatalf("verdict = %q, want %q", d.Verdict, Unchanged)
 	}
 	closeTo(t, "BytesChange", d.BytesChange, -0.6)
-	if !strings.Contains(d.Caveat, "Response size") {
-		t.Errorf("caveat = %q, want it to mention the size change", d.Caveat)
+	if d.BytesVerdict != BytesSmaller {
+		t.Errorf("BytesVerdict = %q, want %q", d.BytesVerdict, BytesSmaller)
+	}
+
+	// Asserted on the facts the sentence has to carry rather than on its
+	// phrasing, which has already been rewritten once: how much it moved, both
+	// figures, and that this is not a claim about time.
+	for _, fact := range []string{"60", "1000", "400"} {
+		if !strings.Contains(d.Caveat, fact) {
+			t.Errorf("caveat does not carry %q, so a reader cannot check the claim: %s", fact, d.Caveat)
+		}
+	}
+	if !strings.Contains(strings.ToLower(d.Caveat), "time") {
+		t.Errorf("caveat = %q, want it to say the time did not move", d.Caveat)
 	}
 }
 
@@ -458,6 +547,64 @@ func TestComparingRunsFromDifferentMachinesWarns(t *testing.T) {
 
 	if !anyContains(c.Warnings, "different machines") {
 		t.Errorf("warnings = %v, want one about the load being generated elsewhere", c.Warnings)
+	}
+}
+
+// Two comparable runs must produce no warnings at all. Guards against warnings
+// that always appear and therefore say nothing.
+//
+// The fixtures carry settle evidence because a real run does. See the two tests
+// below for the case where a run says nothing about settling at all.
+
+// KNOWN BUG (dtbench, perf's): a run that carries no settle evidence is accused
+// of not having settled.
+//
+// The warning states a specific fact — "at least one of these runs began
+// measuring before its target had finished starting up" — but it fires on
+// Run.Settled being false, and false is also the zero value. A run recorded
+// before settling existed, a run whose settle probe could not reach the target,
+// and a run measured with settling disabled all look identical to a run that
+// genuinely started early. Absence of evidence is being reported as evidence.
+//
+// It is not cosmetic. Every schema-1 run in anybody's results directory now
+// carries this warning, on top of the schema-version warning immediately above
+// it in Compare which already explains that case correctly and truthfully. Two
+// warnings, one of them invented, on every historical comparison — and a
+// warning that appears on everything is a warning nobody reads, which is the
+// principle TestTwoComparableRunsProduceNoWarnings exists to protect.
+//
+// The fix is small: SettleSeconds is already recorded and is zero exactly when
+// no settle probe ran, so the condition wants to be "settling was attempted and
+// did not converge" rather than "Settled is not true". Left to perf, whose file
+// this is. Recorded here so the behaviour is pinned either way.
+func TestARunThatCarriesNoSettleEvidenceIsCurrentlyAccusedOfNotSettling(t *testing.T) {
+	base := runOf(measured("a", 10))
+	cur := runOf(measured("a", 10))
+	base.Settled, cur.Settled = false, false
+	base.SettleSeconds, cur.SettleSeconds = 0, 0 // never probed
+
+	c := Compare(base, cur)
+
+	if !anyContains(c.Warnings, "finished starting up") {
+		t.Fatalf("warnings = %v — the bug this test records has been fixed. Change it to assert that a run "+
+			"with no settle evidence produces no warm-up warning", c.Warnings)
+	}
+}
+
+// A run that genuinely began before its target settled must be warned about.
+// This is the case the warning is for, and it must survive any fix to the one
+// above.
+func TestARunThatGenuinelyDidNotSettleIsWarnedAbout(t *testing.T) {
+	base := runOf(measured("a", 10))
+	cur := runOf(measured("a", 10))
+	cur.Settled = false
+	cur.SettleSeconds = 90 // probed, and never converged
+
+	c := Compare(base, cur)
+
+	if !anyContains(c.Warnings, "finished starting up") {
+		t.Errorf("warnings = %v, want one about the target still warming up: the most expensive query in "+
+			"the suite costs 2.4x its steady-state figure inside that window", c.Warnings)
 	}
 }
 
@@ -598,27 +745,40 @@ func TestTheHeadlineTotalsThePayloadOfTheWholeSuite(t *testing.T) {
 }
 
 // KNOWN GAP (dtbench): when both runs are partly failing, the comparison falls
-// through to a timing verdict over whichever requests happened to succeed. The
-// broken check only fires when the current run has errors and the baseline has
-// none. An endpoint failing 50% of the time in both runs is therefore reported
-// as a clean speed comparison with no caveat at all. Recorded rather than fixed
-// because the fix belongs in run.go, which the performance specialist owns; see
-// NOTES-qa.md.
+// through to a timing verdict over whichever requests happened to succeed.
+//
+// The broken check still fires only when the current run has errors and the
+// baseline has none, so an endpoint failing half its requests in both runs is
+// reported as an ordinary speed comparison. Nothing in the verdict or the
+// caveat mentions that half the traffic failed, and the requests that fail are
+// often the slow ones, so the surviving median flatters whichever side is
+// sicker.
+//
+// This was recorded as a gap in the first QA pass and it is still open. The
+// statistics rewrite did not touch it — it changed how a difference is judged,
+// not whether a half-broken scenario should be judged at all. The fix belongs
+// in compare.go alongside the existing error check.
+//
+// The fixture carries raw samples so that the significance test runs and the
+// caveat contains only what the statistics established. That is the point: the
+// tool has plenty to say about the timing and nothing at all to say about the
+// failures.
 func TestBothRunsPartlyFailingIsCurrentlyReportedAsACleanTimingComparison(t *testing.T) {
-	base := measured("a", 500)
+	base := withSamples(measured("a", 100), samplesAround(100, 3, 20))
 	base.Errors = 10
-	base.Samples = 10
-	cur := measured("a", 100)
+	cur := withSamples(measured("a", 85), samplesAround(85, 3, 20))
 	cur.Errors = 10
-	cur.Samples = 10
 
 	d := onlyDelta(t, Compare(runOf(base), runOf(cur)))
 
 	if d.Verdict != Faster {
-		t.Fatalf("verdict = %q — the gap this test records has changed; if both-sides failure is now "+
-			"caveated, update the assertion to match", d.Verdict)
+		t.Fatalf("verdict = %q — the gap this test records has changed. If a half-failing pair is now "+
+			"held back from a timing verdict, assert that instead", d.Verdict)
 	}
-	if d.Caveat != "" {
-		t.Fatalf("caveat = %q — a caveat has been added; update this test to assert it", d.Caveat)
+	for _, mention := range []string{"fail", "error"} {
+		if strings.Contains(strings.ToLower(d.Caveat), mention) {
+			t.Fatalf("the caveat now mentions the failures (%q) — the gap has been closed, so rewrite this "+
+				"test to assert the new behaviour", d.Caveat)
+		}
 	}
 }

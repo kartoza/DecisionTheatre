@@ -153,7 +153,11 @@ func sampleRun() Run {
 		Iterations:    20,
 		Warmup:        3,
 		Host:          "workstation",
-		Notes:         []string{"The target reports its version as \"dev\"."},
+		// This fixture stands for a run that was taken properly, so it carries
+		// the settle evidence a real run carries. Without it the comparison
+		// warns that the target had not finished starting up.
+		Settled: true,
+		Notes:   []string{"The target reports its version as \"dev\"."},
 		Scenarios: []ScenarioResult{
 			{
 				Name: "health", Group: "Baseline", Why: "Round-trip with no work behind it.",

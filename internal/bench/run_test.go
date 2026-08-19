@@ -30,7 +30,13 @@ var probe = Scenario{Name: "probe", Group: "Test", Path: "/probe", Why: "under t
 // fastOptions keeps the runner from spending real time: warmup and iteration
 // counts are chosen per test, never the production defaults.
 func fastOptions(iterations, warmup int) Options {
-	return Options{Iterations: iterations, Warmup: warmup, HeavyIterations: 1, Timeout: 5 * time.Second}
+	o := Options{Iterations: iterations, Warmup: warmup, HeavyIterations: 1, Timeout: 5 * time.Second}
+	// Normalised the same way Execute normalises them, so these tests exercise
+	// the option handling the command line actually gets rather than a
+	// half-populated struct that only tests ever see.
+	o.applyDefaults()
+	o.SettleTimeout = 0 // runScenario never settles; keep the tests instant.
+	return o
 }
 
 // ---------------------------------------------------------------------------
@@ -536,12 +542,17 @@ func TestATargetWithATrailingSlashDoesNotProduceADoubledPath(t *testing.T) {
 		case paths <- r.URL.Path:
 		default:
 		}
-		_, _ = w.Write([]byte("ok"))
+		// Answered as the real endpoint answers. The runner now checks that a
+		// response is the kind the scenario expects, so a bare "ok" would be
+		// recorded as absent and this test would pass its path assertion while
+		// measuring nothing.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer srv.Close()
 
 	res := runScenario(context.Background(), testClient(0), srv.URL+"///",
-		Scenario{Name: "health", Path: "/api/health"}, fastOptions(1, 0))
+		scenarioNamed(t, "health"), fastOptions(1, 0))
 
 	if got := <-paths; got != "/api/health" {
 		t.Errorf("requested %q, want /api/health", got)
@@ -695,6 +706,7 @@ func TestATargetServingHTMLInsteadOfTheAPIProducesAnHonestRunNotAPanic(t *testin
 	if run.ServerVersion != "" {
 		t.Errorf("ServerVersion = %q, want empty: the target never said", run.ServerVersion)
 	}
+	measured := 0
 	for _, s := range run.Scenarios {
 		if s.Skipped {
 			continue
@@ -702,9 +714,25 @@ func TestATargetServingHTMLInsteadOfTheAPIProducesAnHonestRunNotAPanic(t *testin
 		if s.Samples != 0 {
 			t.Errorf("scenario %s recorded %d samples from a 502", s.Name, s.Samples)
 		}
-		if s.StatusCounts[http.StatusBadGateway] != 2 {
-			t.Errorf("scenario %s did not record the 502s: %v", s.Name, s.StatusCounts)
+		if s.TotalMs.N != 0 {
+			t.Errorf("scenario %s recorded timings for a 502 error page", s.Name)
 		}
+		// Every scenario that got as far as issuing a request must be able to
+		// say what came back. The suite now contains scenarios that give up
+		// before measuring — a conditional scenario that cannot prime its
+		// validator, a tour that cannot resolve its catchment — and those
+		// legitimately have no statuses to report. What must not happen is a
+		// scenario that made requests and recorded nothing about them.
+		if len(s.StatusCounts) == 0 {
+			continue
+		}
+		measured++
+		if s.StatusCounts[http.StatusBadGateway] == 0 {
+			t.Errorf("scenario %s made requests but did not record the 502s: %v", s.Name, s.StatusCounts)
+		}
+	}
+	if measured == 0 {
+		t.Fatal("no scenario recorded any status at all, so this test proved nothing")
 	}
 }
 
@@ -743,8 +771,22 @@ func TestDefaultOptionsAreASensibleMeasurement(t *testing.T) {
 	if o.Iterations < 10 {
 		t.Errorf("default Iterations = %d, too few for a percentile to mean anything", o.Iterations)
 	}
-	if o.Warmup < 1 {
-		t.Errorf("default Warmup = %d, want at least one discarded request", o.Warmup)
+	// Warmup is deliberately not defaulted here any more: perf made zero mean
+	// zero so that "--warmup 0" can express "measure the first request", which
+	// for several scenarios is the difference between 22 ms and 0.5 ms. The
+	// consequence is that the zero value of Options performs no warmup, so the
+	// guarantee moved to the command line, where the default is set — see
+	// TestTheCommandLineDefaultsToDiscardingWarmupRequests in cmd/dtbench.
+	if o.Warmup != 0 {
+		t.Errorf("default Warmup = %d, want 0: an unset Warmup now means none, and the safe default lives "+
+			"on the command-line flag", o.Warmup)
+	}
+	var unspecified Options
+	unspecified.Warmup = -1
+	unspecified.applyDefaults()
+	if unspecified.Warmup < 1 {
+		t.Errorf("Warmup = %d after asking for the default, want at least one discarded request",
+			unspecified.Warmup)
 	}
 	if o.HeavyIterations <= 0 || o.HeavyIterations >= o.Iterations {
 		t.Errorf("default HeavyIterations = %d, want a smaller cap than Iterations = %d",
@@ -755,19 +797,41 @@ func TestDefaultOptionsAreASensibleMeasurement(t *testing.T) {
 	}
 }
 
-// KNOWN BUG (dtbench): warmup cannot be switched off. applyDefaults promotes
-// both 0 and any negative value to 3, so `dtbench run --warmup 0` silently makes
-// three extra requests. That matters for anyone measuring cold-cache behaviour,
-// where the warmup is the thing being measured. The test records the behaviour
-// as it stands so the fix is visible when it lands; see NOTES-qa.md.
-func TestWarmupCannotCurrentlyBeSwitchedOff(t *testing.T) {
+// Warmup can be switched off, and asking for none must produce none.
+//
+// This was filed as a bug in the first QA pass: applyDefaults promoted both zero
+// and any negative value to three, so `--warmup 0` silently made three requests
+// the user had asked not to make. It mattered because that flag is the only way
+// to ask "how expensive is the first request", which for several scenarios here
+// is the difference between 22 ms and 0.5 ms. Perf has fixed it; this now pins
+// the fix, end to end, so the promotion cannot come back.
+func TestWarmupCanBeSwitchedOffAndZeroMeansZero(t *testing.T) {
 	var explicitlyZero Options
 	explicitlyZero.Warmup = 0
 	explicitlyZero.applyDefaults()
 
-	if explicitlyZero.Warmup != 3 {
-		t.Fatalf("Warmup = %d after asking for 0 — the bug this test records has been fixed; "+
-			"change the test to assert Warmup == 0", explicitlyZero.Warmup)
+	if explicitlyZero.Warmup != 0 {
+		t.Errorf("Warmup = %d after asking for 0, want 0", explicitlyZero.Warmup)
+	}
+
+	// And no warmup request is actually issued, which is the thing the flag
+	// promises rather than merely the field value.
+	var requests int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&requests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	res := runScenario(context.Background(), testClient(0), srv.URL,
+		scenarioNamed(t, "health"), fastOptions(4, 0))
+
+	if got := atomic.LoadInt64(&requests); got != 4 {
+		t.Errorf("the server saw %d requests, want exactly the 4 measured ones and no warmup", got)
+	}
+	if res.Samples != 4 {
+		t.Errorf("Samples = %d, want 4", res.Samples)
 	}
 }
 
