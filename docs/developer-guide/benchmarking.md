@@ -151,6 +151,34 @@ records which ones they were.
 | `--pdf` | off | Also print to PDF with a headless browser |
 | `--title`, `--subtitle` | derived | Override the cover text |
 | `--mark` | the Kartoza symbol | Brand mark for the cover |
+| `--repo` | `.` | Checkout to read merged pull requests from |
+| `--no-changes` | off | Omit the attribution section |
+
+### What landed between the builds
+
+The report ends with the pull requests merged between the two builds and the
+issues they reference, each linked, so a difference can be attributed to work
+rather than guessed at.
+
+This reads **git and nothing else** — no network, no token, no `gh` — so a report
+rendered on a laptop with no credentials produces the same list as one rendered
+in CI. Integration merges within a branch are excluded, because counting them
+would list the same work twice and attribute a change to a merge that did not
+introduce it. Each entry shows the merged work's own subject rather than
+`Merge pull request #130 from …`, and issues attach to the pull request whose own
+commits referenced them.
+
+The range comes from the revision each run recorded: the commit a sweep built,
+or the hash in the `git describe` version a server reports over `/api/info`.
+
+!!! warning "It narrows the search for a cause; it does not establish one"
+    Several pull requests in a range can move the same scenario, in opposite
+    directions. The section says this on the page, because a list of changes next
+    to a list of numbers invites being read as causation.
+
+    A build reporting its version as `dev` cannot be attributed to a commit. The
+    report then prints why rather than rendering an empty list, since an empty
+    section reads as "nothing merged".
 
 The PDF is printed with headless Chromium. If no browser is available the HTML is
 still written and the command says so rather than failing — the HTML is the
