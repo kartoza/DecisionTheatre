@@ -33,7 +33,10 @@ describe('choropleth vector-tile render path', () => {
   });
 
   it('fetches values, not geometry, once the tiled zoom range is in use', () => {
-    expect(mapView).toMatch(/fetch\(`\/api\/catchment-values\?\$\{params\}`\)/);
+    // The request options now carry an AbortSignal, so this no longer asserts
+    // the call ends immediately after the URL — only that the URL is the
+    // values endpoint and that a signal is threaded through it.
+    expect(mapView).toMatch(/fetch\(`\/api\/catchment-values\?\$\{params\}`, \{ signal: requestSignal \}\)/);
     // The values request carries no zoom: the server's detailed-vs-aggregated
     // choice does not apply when geometry comes from tiles.
     const valuesFetch = mapView.slice(
