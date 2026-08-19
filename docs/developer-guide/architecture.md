@@ -92,30 +92,41 @@ requires the backend.
 
 ## Map Rendering Architecture
 
-Each `MapView` creates **two** MapLibre GL instances, left and right, to support swipe
-comparison. In grid view the six panes therefore hold up to twelve WebGL contexts.
+Each `MapView` owns a left map and, **only while the compare swiper is on**, a right
+one. The right instance is created on entering compare mode and removed on leaving it,
+and a pane releases its maps entirely once it has stopped displaying one (after a short
+grace period, so flipping to a chart and straight back does not reload the map). A
+recreated map opens at the last view the sync registry saw, so the release is invisible.
+
+The ceiling is therefore *panes currently showing a map* x (compare mode ? 2 : 1), not a
+flat twelve. Grid view with all six panes on a map and the swiper on still reaches
+twelve; browsers cap simultaneous WebGL contexts at around sixteen and silently drop the
+oldest past that, so the swiper default (on, in `App.tsx`) is worth knowing about when
+diagnosing context loss.
 
 - **Base layers** (MapLibre GL JS) — ecoregions, countries, rivers, lakes, catchment
   outlines, populated places, served from MBTiles via `/tiles/`.
-- **Choropleth layer** (MapLibre GL JS GeoJSON source) — catchment polygons fetched from
-  `/api/choropleth` for the current viewport and coloured by a data-driven
-  `fill-color` expression built in `buildFillColorExpression`. Colouring happens GPU-side;
-  there is no per-feature JavaScript.
+- **Choropleth layer** — catchment polygons coloured by a data-driven `fill-color`
+  expression built in `buildFillColorExpression` (`frontend/src/lib/choroplethPaint.ts`).
+  Colouring happens GPU-side; there is no per-feature JavaScript. The polygons reach
+  the map by one of two transports, chosen by zoom:
+
+    - **Vector tiles**, from the tiled zoom range up (`catchments_lev12` in
+      `africa.mbtiles`, zoom 8-15 as generated). MapLibre fetches and tessellates each
+      tile once and reuses it for every later pan, zoom and attribute change. The
+      attribute values are fetched separately from `/api/catchment-values` — geometry-free
+      — and joined onto the tiles as **feature state**, so switching indicator moves
+      values only and never geometry.
+    - **GeoJSON**, below the tiled zoom range, from `/api/choropleth`. There the server
+      returns grid-aggregated cells rather than catchments (see
+      `queryCatchmentsGridAggregated`), which have no tiled equivalent.
+
+    The choice is made from the served TileJSON: if the tileset does not declare a
+    `catchments_lev12` layer *with* its zoom range, the GeoJSON path is used at every
+    zoom, exactly as before. A datapack built before catchments were tiled keeps working.
+
 - **3D extrusion** (optional) — catchments extruded by indicator value.
 - **Site boundary and edit handles** — small GeoJSON sources holding the user's own polygon.
-
-!!! warning "Expected to change"
-    The choropleth is currently a GeoJSON source, parsed on the main thread and uploaded
-    per map instance. It is expected to move into the vector tile pipeline. The
-    data-driven `fill-color` expression is correct and will be preserved.
-
-    Also expected to change: the right-hand map is currently created eagerly whether or
-    not the user is comparing, and map instances are not released when a pane switches
-    to a non-map view.
-
-    Tickets: *Serve the choropleth as vector tiles rather than a GeoJSON source*,
-    *Twelve WebGL contexts are created in grid view and never released*,
-    *Clamp devicePixelRatio on low-end devices*.
 
 ## Auxiliary Tile Servers
 
