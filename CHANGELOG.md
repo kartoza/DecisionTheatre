@@ -458,6 +458,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **Guided-tour documents were gzipped again for every visitor.** The compression
+  middleware pools gzip writers, not their output, so each static document under
+  `/data/walkthroughs/` was recompressed on every request. Measured on the real
+  datapack against the whole-of-Africa tour — 2,104,591 bytes — the same file
+  requested five times in a row cost 0.119, 0.111, 0.108, 0.096 and 0.085 s, with
+  no warm-up effect because there was nothing to warm. Requested uncompressed, the
+  same file served in 0.0022 s: roughly 2.5 ms of that is serving the file, and the
+  rest is gzip level 5 repeated for every visitor.
+
+  Compressing is the right trade — 2.01 MB down to 456 KB on the wire is worth far
+  more than 64 ms on any real connection. The waste was compressing the *same
+  bytes* over and over, for files that change only when the datapack does. They are
+  now compressed once and reused: the same five requests cost 0.084, 0.001, 0.002,
+  0.001 and 0.001 s, serving byte-identical content with unchanged `Content-Type`,
+  `Content-Encoding`, `Vary` and `Last-Modified`, and `If-Modified-Since` still
+  answering 304.
+
+  Cached bytes are keyed on the file's own size and modification time, and the
+  handler is rebuilt when a datapack is installed, so a swap cannot serve the
+  previous datapack's body. API responses are deliberately not cached: they vary
+  with query parameters and site state, and a cache keyed on path alone would serve
+  one user another's answer. Retention is capped at 32 MB, past which responses are
+  still compressed and served correctly and simply not retained.
+
 - **The application held twelve WebGL contexts in grid view and never gave one
   back.** Each `MapView` built two MapLibre instances — left and right — whether or
   not the user was comparing anything, and a pane latched "has shown a map" on first
