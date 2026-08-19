@@ -21,12 +21,37 @@ server or the wall clock.
 
 ## Status of the suite
 
-`go build ./...`, `go vet ./...` and `gofmt -l` are clean across the repository.
-`go test ./...` is clean **except for four tests that are meant to fail** — the
-content-type specification the coordinator asked for. Everything else, in every
-package in the repository, passes.
+**On `bench/integration`, everything passes.** `go build ./...`, `go vet ./...`,
+`gofmt -l` and `go test ./...` are clean across the repository, over three
+consecutive runs and under `-race`.
 
-    --- FAIL: TestAnAPIEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess      (11 subtests)
+The QA suite is 50 test functions in eight files:
+
+    internal/bench/result_test.go        24   percentiles, storage, identity
+    internal/bench/run_test.go           26   the HTTP runner, over httptest
+    internal/bench/compare_test.go       32   verdicts, caveats, warnings
+    internal/bench/report_qa_test.go     22   rendering, escaping, formatting
+    internal/bench/scenario_test.go      10   the suite and URL construction
+    internal/bench/brand_test.go          6   palette drift and branding
+    internal/bench/contenttype_test.go    6   absence detection
+    cmd/dtbench/main_qa_test.go          22   the four commands
+
+alongside the suites ux, perf and design brought, for 203 test functions in the
+two packages in total.
+
+Standard library only. No new module, so `go.mod`, `go.sum` and the flake's
+`vendorHash` are untouched. No test depends on the network, the datapack, a live
+server or the wall clock.
+
+### The four tests that used to fail here
+
+Earlier in this work `contenttype_test.go` failed by design — it was written as
+the specification for absence detection, before the behaviour existed, so the
+acceptance criteria would not be written by the same hand as the fix. Perf has
+implemented it and all four now pass. The file is now the regression guard, and
+the deviation from my brief is closed.
+
+--- FAIL: TestAnAPIEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess      (11 subtests)
     --- FAIL: TestATileEndpointAnsweringHTMLIsNotRecordedAsAFastSuccess      (2 subtests)
     --- FAIL: TestAnEndpointThatDidNotExistInTheBaselineIsNotReportedAsARegression
     --- FAIL: TestAResponseLabelledJSONWhoseBodyIsNotJSONIsNotRecordedAsASuccess
@@ -423,48 +448,221 @@ no silently wrong report** in any of them.
 
 ---
 
+## Integration pass — reconciling against ux, perf and design
+
+All four branches are merged into `bench/integration`. Twenty tests failed there,
+all but one of them mine, asserting behaviour my teammates deliberately changed.
+None have been deleted and none weakened into vacuity: each was rewritten to
+assert the substance it was guarding, against whatever mechanism now provides it.
+`go build`, `go vet`, `gofmt` and `go test ./...` are clean across the repository,
+including three consecutive runs and a `-race` run to check the statistical
+fixtures are not flaky.
+
+### Two bugs found during the pass, both fixed
+
+**A nil-callback segfault in `runScenario`.** `internal/bench/run.go` dereferenced
+`opts.Log` at three call sites without a nil check. `applyDefaults` installs a
+no-op, so the CLI never hit it, but any caller building `Options` directly did —
+and absence detection made one of those sites reachable for the first time:
+
+    panic: runtime error: invalid memory address or nil pointer dereference
+    bench.runScenario(...) internal/bench/run.go:474
+
+The crash mattered beyond itself. A panic aborts the whole test binary, so the
+six failures that came after it in the run were invisible. The coordinator's
+count of fourteen was really twenty. Fixed with an `Options.logf` helper that
+tolerates an unset callback.
+
+**The CLI told users a flag was ignored when it was obeyed.** Ux, working around
+perf's warmup bug, made `dtbench run --warmup 0` print:
+
+    warning: --warmup 0 is not honoured by the measurement code; 3 warmup
+             requests will still be made.
+
+Perf then fixed the promotion, so by the time the branches met, the warning was
+false. A tool that tells a user their flag was ignored when it was obeyed is
+worse than one that says nothing. Removed, and pinned by
+`TestAskingForNoWarmupIsHonouredAndNotContradicted`.
+
+### The warm-up warning: perf's bug, not my test's
+
+The coordinator asked me to decide, and it is perf's. The warning states a
+specific fact — "at least one of these runs began measuring before its target had
+finished starting up" — but it fires on `Run.Settled` being false, and false is
+also the zero value. A schema-1 run, a run whose settle probe could not reach the
+target, and a run measured with settling disabled are all indistinguishable from
+a run that genuinely started early. Absence of evidence is being reported as
+evidence.
+
+It is not cosmetic: every historical run in anybody's results directory now
+carries this warning *in addition to* the schema-version warning immediately
+above it in `Compare`, which already explains that case correctly. Two warnings,
+one invented, on every comparison against history — and a warning that appears on
+everything is a warning nobody reads.
+
+The fix is small and the data is already there: `SettleSeconds` is zero exactly
+when no probe ran, so the condition wants to be "settling was attempted and did
+not converge" rather than "Settled is not true". Left to perf, whose file it is,
+and pinned both ways meanwhile by
+`TestARunThatCarriesNoSettleEvidenceIsCurrentlyAccusedOfNotSettling` and
+`TestARunThatGenuinelyDidNotSettleIsWarnedAbout`.
+
+### Correction: the both-sides-failure gap is still open
+
+The coordinator read the new caveat on
+`TestBothRunsPartlyFailingIsCurrentlyReportedAsACleanTimingComparison` as perf
+having fixed it. It has not. That caveat is the generic "raw samples were not
+recorded" note, which my synthetic fixture triggered by carrying no samples — a
+different sentence about a different thing. `compare.go` still reads:
+
+    if cur.Errors > 0 && base.Errors == 0 {
+
+so a scenario failing half its requests in *both* runs still gets an ordinary
+speed comparison, and the requests that fail are often the slow ones. The test
+now supplies raw samples so the significance test runs, which makes the point
+sharper: the tool has a great deal to say about the timing and nothing at all to
+say about the fact that half the traffic failed. Still open, still perf's or
+whoever owns `delta()`.
+
+### One failure was not mine
+
+`TestSubMillisecondDifferencesAreNotVerdicts` in `report_test.go` fails without
+any of my changes — I confirmed by stashing them. Its precondition asserts that
+`Compare` still calls a 0.08 → 0.11 ms change "slower" so that the report layer
+can decline to stand behind it. Perf's `PracticalFloorMs` now catches it at the
+comparison layer, so the verdict arrives already softened. Both layers are worth
+keeping, so the precondition now accepts either and the assertion that matters —
+the report never presents thirty microseconds as a regression — is untouched.
+
+### The vacuity audit
+
+The coordinator was right that capturing only stdout broke these tests, and asked
+whether anything else was passing vacuously for the same reason. I checked every
+assertion in `cmd/dtbench` that reads captured output: all seven are positive
+(`if !strings.Contains(...)`), so against an empty string they fail loudly rather
+than passing quietly. There were no negative assertions — the form that would
+have gone silent — anywhere in the suite. The helper is renamed `captureOutput`,
+since `captureStdout` no longer describes what it does.
+
+### Review of the three rewrites
+
+All three were the right call.
+
+- **The unreachable-target run must not be saved.** Ux is right and I was wrong.
+  I had argued the failure should be "on the record"; a run measuring nothing that
+  then appears in `list` and can be chosen as a baseline is worse than losing the
+  invocation. I added one assertion: the refusal must name the target it could not
+  reach, so the user is not left guessing between target, port and server.
+- **The schema test against a live `httptest` server.** Necessarily so, since the
+  old version depended on a run against a closed port being saved.
+- **The URL-validation message.** Correct; I removed a dead variable.
+
+### How each group was reconciled
+
+*Perf changed the statistics.* The overlap and clean-separation tests now carry
+real samples through `withSamples`/`samplesAround`, so they exercise the rank-sum
+test rather than the summary-only fallback a synthetic `Stats` triggers. The
+overlap guarantee got *stronger* and the test says so: an overlapping pair used to
+earn a hedged "faster", and now earns no confident verdict at all. The
+clean-separation test had to restate "not hedged" — a significant result now
+carries a sentence quantifying the shift, its interval and the corrected p-value,
+which is evidence rather than doubt, so the test forbids language of doubt
+specifically and requires the evidence to be present.
+
+*Wording moved, substance did not.* The payload, list and summary tests now
+assert the facts a sentence has to carry — the magnitude, both figures, the
+scenario name, the reason for a blank — rather than the phrasing. The caveat
+test now takes whatever caveat `Compare` produced and asserts that text reaches
+the rendered HTML, entity-decoded first, which is both wording-agnostic and a
+stronger check than the phrase it replaced. It also confirmed the design's move
+of caveats into an endnotes section keyed by scenario name: still present, still
+attached to the right row.
+
+*Ux changed how runs are chosen.* My fixtures gave every run the same
+`StartedAt`, which was never realistic — runs are sequential — and ux's resolver
+correctly rejects a pair with the same timestamp and target as one run compared
+with itself. Fixtures now get distinct times. The "refuses without both sides"
+test was the one real contradiction: ux decided no arguments means the two most
+recent runs, which is the better design, so the guarantee is restated rather than
+the decision overruled. What it asserts now is that every unsatisfiable
+invocation ends in guidance, and that the convenience path says out loud which
+two runs it picked.
+
+*My own specification.* `contenttype_test.go` was written to fail, as the
+acceptance criteria for absence detection. Perf implemented it and it passes, so
+the file is now what it was always going to become — the regression guard. One
+assertion changed shape: I had required `Errors == iterations`, and perf records
+these as *absent* rather than failed. That distinction is perf's and it is right —
+an endpoint that predates a feature has not failed, and marking it broken puts a
+fault against a revision whose only crime is being old. The test now requires the
+scenario to be accounted for and explained, which is the thing that actually
+matters, and no longer dictates which of the two mechanisms does it.
+
+### Smaller notes for whoever picks these up
+
+- `chooseRuns` treats timestamp-plus-target as run identity. Filenames have
+  one-second resolution, so two runs saved in the same second against the same
+  target are already indistinguishable to it. Unlikely, not impossible.
+- There is no flag to control settling, so every `dtbench run` pays the settle
+  probe. It converges quickly against a fast target, but a target that will not
+  answer the probe costs the full timeout with no way to opt out.
+- The zero value of `Options` now performs no warmup. That is a deliberate
+  consequence of making `--warmup 0` expressible, but it means the safe default
+  lives only on the CLI flag, and a programmatic caller gets the unsafe one.
+  `TestTheCommandLineDefaultsToDiscardingWarmupRequests` guards the flag.
+
 ## Verdict
 
-**Not yet. The tool is close, and its bones are good, but I would not put these
-numbers in front of a client this week.**
+**Yes, with two named exceptions and one standing caution.** This is a change of
+position: at the end of the first pass I said not yet, for three reasons. Two of
+them are now fixed, by other people, properly.
 
-What is genuinely good, and I want to be clear about it because it is unusual:
-the design is honest where it counts. Provenance is recorded rather than inferred.
-Failures are kept out of the timings, so the classic "it got fast because it
-started 404ing" trap is closed for every case where the server actually says it
-failed. The noise floor exists at all and is documented as blunt on purpose. The
-report refuses to lead with a win when something is broken, caveats overlapping
-distributions, and warns about mismatched targets, hosts and sample counts. The
-escaping is correct. The storage round-trips, versions itself and tolerates older
-files. Most tools of this kind get none of that right.
+- **The SPA fallback is closed.** Perf's absence detection is a better answer
+  than the one I specified. An endpoint that does not exist is recorded as
+  *absent* with a reason, not as an error and certainly not as a fast success, so
+  a comparison spanning the addition of an endpoint no longer contains a
+  fabricated regression. The whole specification file passes.
+- **The noise floor is fixed, and then some.** I asked for an absolute floor
+  alongside the relative one. Perf added that and a Mann-Whitney rank-sum test
+  with a Holm correction across the suite, which is more than I asked for and
+  addresses something I had not raised: a report that names a "biggest win" is
+  picking the most extreme of fifteen results, and that needs correcting for.
+  The control run that embarrassed the tool in the first pass — same build, same
+  server, three wins and two regressions — could not produce those verdicts now.
+  Every one of them was sub-millisecond and none would clear the first gate.
+- **The PDF path still reports success it has not earned.** `WritePDF` checks
+  only that the file exists. It produced a branded, laid-out, entirely wordless
+  six-page document in my first end-to-end run and said `wrote ...pdf`. Nobody
+  has picked this up. It is the artefact that goes to a client and it is the one
+  thing the tool cannot tell is broken.
 
-Three things stand between it and trustworthy:
+The two open exceptions:
 
-1. **Finding 4 — the SPA fallback.** Until an endpoint that does not exist stops
-   being recorded as a fast, healthy sample, any comparison that spans the
-   addition of an endpoint contains a fabricated regression, in the direction that
-   flatters the older code. This is not hypothetical; it has already happened in
-   a real measurement. The four failing tests are the specification and the fix is
-   not large.
-2. **Finding 8 — the noise floor.** A control run of one build against itself
-   reported three wins and two regressions, and the headline was a 37% improvement
-   that does not exist. Anyone who reruns a comparison and gets a different set of
-   winners will stop believing the report, and they will be right to. Adding an
-   absolute floor alongside the relative one would fix it in a few lines.
-3. **Finding 7 — the PDF path reports success it has not earned.** The one
-   artefact that goes to a client is the one thing the tool cannot tell is broken.
+1. **Both-runs-partly-failing still gets a clean timing verdict** (above). An
+   endpoint failing half its requests in both runs is reported as an ordinary
+   speed comparison with nothing said about the failures.
+2. **The warm-up warning fires on absence of evidence** (above), putting an
+   invented warning on every comparison against a historical run.
 
-Findings 1, 2 and 3 are fixed here. Fix 4 and 8 and I would trust the numbers for
-the expensive scenarios — which are the ones anybody actually argues about —
-today. The sub-millisecond scenarios should be treated as a smoke test that the
-endpoint still answers, not as a performance measurement, whatever the floor ends
-up being; you cannot measure a 90-microsecond response to 10% from a developer
-machine with a browser open.
+Neither is severe on its own. Both are small fixes. Neither would produce a wrong
+number — the first withholds a caveat, the second adds a false one — so they are
+credibility problems rather than correctness problems, which in a tool whose only
+product is credibility is not nothing.
 
-One caveat on my own work: `sweep.go` is the largest untested surface in the
-package, and it is the command that would produce a multi-release trend chart —
-the most persuasive artefact the tool can make and the one I have verified least.
-Nothing I have done gives any confidence in it.
+The standing caution is unchanged and is now the largest thing I cannot vouch
+for: **`sweep.go` is still untested.** It builds each revision in a git worktree,
+starts a server and measures it — minutes per revision, a real checkout, a real
+build, a real port — and there is no way to test it that respects "no network, no
+wall clock, no live server". It is also the command that would produce a
+multi-release trend chart, which is the most persuasive artefact this tool can
+make. Nothing in 203 tests gives any confidence in it.
+
+So: the numbers for the expensive scenarios can go in front of a client, with the
+report's own caveats left in. The sub-millisecond scenarios should be read as a
+smoke test that the endpoint still answers — not because the tool handles them
+badly any more, but because it now correctly declines to say anything about them,
+and a reader needs to understand that "no change" there means "not measurable
+from here" rather than "identical".
 
 ---
 
