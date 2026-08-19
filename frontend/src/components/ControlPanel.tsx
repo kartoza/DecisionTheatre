@@ -713,11 +713,18 @@ function ControlPanel({
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
   const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
 
-  // The color scale always reflects the attribute's global domain across every
-  // catchment, independent of the selected zone range (Full/Extent/Site).
+  // The color scale is stretched to whichever zone is selected (Full/Extent/Site):
+  // 'Full' uses the attribute's global domain across every catchment, while
+  // 'Extent'/'Site' stretch to that zone's local min/max so subtle local
+  // variation isn't washed out by the full dataset's range. MapView publishes
+  // whichever range it actually painted with as domainRange, so this always
+  // matches what's on the map.
   const combinedDomainRange: { min: number; max: number } | null = mapStatistics?.domainRange
     ? { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max }
     : null;
+  const colorScaleRangeLabel = effectiveRangeMode === 'domain'
+    ? 'Full'
+    : effectiveRangeMode === 'extent' ? 'Extent' : 'Site';
   const [panelWidth, setPanelWidth] = useState(440);
   const [isResizing, setIsResizing] = useState(false);
   const resizeOriginX = useRef(0);
@@ -805,7 +812,7 @@ function ControlPanel({
 
           <Divider />
 
-          {viewMode !== 'dial' && onRangeModeChange && (
+          {!asModal && viewMode !== 'dial' && onRangeModeChange && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
@@ -1139,7 +1146,7 @@ function ControlPanel({
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
-                  COLOR SCALE (Domain Range)
+                  COLOR SCALE ({colorScaleRangeLabel})
                 </Text>
                 <ButtonGroup size="xs" isAttached variant="outline"> 
                   {/* <Button
