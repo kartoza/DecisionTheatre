@@ -64,6 +64,12 @@ type Server struct {
 	glyphCache      sync.Map
 	glyphCacheSizeB atomic.Int64
 
+	// Says once, on the first glyph request, that no MapTiler key is configured.
+	// Once rather than per request: a single map pane asks for a dozen ranges and
+	// grid view multiplies that by four, so logging each one would bury the
+	// message it is trying to deliver.
+	glyphKeyWarning sync.Once
+
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
 	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
 	// servers on sequential ports gives the browser N extra 6-connection pools
@@ -496,6 +502,18 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(tileJSON)
 }
 
+// writeEmptyGlyphs answers a glyph request with a valid, empty response.
+//
+// MapLibre treats this as "this font has no glyphs in this range" and carries on
+// drawing the map without those labels. It is deliberately not an error status:
+// a 4xx or 5xx makes MapLibre retry, and the whole reason this path exists is
+// that the upstream is not going to answer — no internet, no key, or a CDN that
+// is down. Not cached either, so the next request tries again.
+func writeEmptyGlyphs(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+}
+
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
 // each {fontstack}/{range} pair is fetched from the upstream MapTiler CDN and
 // stored in an in-process cache; all subsequent requests (from other map
@@ -513,32 +531,42 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamURL := fmt.Sprintf(
-		"https://api.maptiler.com/fonts/%s/%s.pbf?key=cc4PpmmWZP73LjU1nsw3",
-		fontstack, glyphRange,
-	)
+	// No key, no request. The alternative — asking MapTiler for a glyph with an
+	// empty key parameter — is answered with 403, and a 403 here is invisible:
+	// the proxy would fall through to the same empty response below, so the only
+	// evidence of a missing setting would be a map with no labels on it. Refusing
+	// to build the URL at all is what makes the log line above possible.
+	upstreamURL, ok := s.cfg.MapTilerGlyphURL(fontstack, glyphRange)
+	if !ok {
+		s.glyphKeyWarning.Do(func() {
+			log.Printf("Glyph proxy: no MapTiler key configured, so map labels will "+
+				"not be drawn. Set %s, pass --maptiler-key, or add \"maptiler_key\" "+
+				"to settings.json. Everything else works without it.",
+				config.MapTilerKeyEnv)
+		})
+		writeEmptyGlyphs(w)
+		return
+	}
+
 	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {
 		// CDN unreachable (no internet, timeout, etc.) — return an empty 200 so
 		// MapLibre skips these glyphs and continues rendering instead of hanging.
 		log.Printf("Glyph proxy: upstream fetch failed for %s/%s: %v", fontstack, glyphRange, err)
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.WriteHeader(http.StatusOK)
+		writeEmptyGlyphs(w)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Glyph proxy: upstream returned %d for %s/%s", resp.StatusCode, fontstack, glyphRange)
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.WriteHeader(http.StatusOK)
+		writeEmptyGlyphs(w)
 		return
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.WriteHeader(http.StatusOK)
+		writeEmptyGlyphs(w)
 		return
 	}
 

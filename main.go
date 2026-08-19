@@ -35,6 +35,10 @@ func main() {
 			"application has always used; see issue #65.")
 	satelliteAttribution := flag.String("satellite-attribution", "",
 		"Attribution shown for --satellite-tile-url. Required by most providers' licences.")
+	maptilerKey := flag.String("maptiler-key", "",
+		"MapTiler API key used to fetch map font glyphs. Also read from "+
+			config.MapTilerKeyEnv+" and from maptiler_key in settings.json. "+
+			"Without it the map draws without place labels; nothing else changes.")
 	bindAddress := flag.String("bind", config.DefaultBindAddress,
 		"Interface to listen on. Loopback by default; the API is unauthenticated, "+
 			"so use 0.0.0.0 only where something in front of it controls access.")
@@ -53,11 +57,17 @@ func main() {
 	resolvedDataDir := *dataDir
 	resolvedResourcesDir := *resourcesDir
 
+	// Loaded unconditionally now: the data pack path is not the only thing kept
+	// here any more — a desktop install's MapTiler key is too, and that is needed
+	// whether or not the directories were given on the command line.
+	settings, err := config.LoadSettings()
+	if err != nil {
+		log.Printf("Warning: could not load settings: %v", err)
+		settings = &config.Settings{}
+	}
+
 	if resolvedDataDir == "" || resolvedResourcesDir == "" {
-		settings, err := config.LoadSettings()
-		if err != nil {
-			log.Printf("Warning: could not load settings: %v", err)
-		} else if settings.DataPackPath != "" {
+		if settings.DataPackPath != "" {
 			packData := filepath.Join(settings.DataPackPath, "data")
 			packResources := filepath.Join(settings.DataPackPath, "resources")
 			if _, err := os.Stat(packData); err == nil {
@@ -122,6 +132,7 @@ func main() {
 		BindAddress:          *bindAddress,
 		SatelliteTileURL:     *satelliteTileURL,
 		SatelliteAttribution: *satelliteAttribution,
+		MapTilerKey:          config.ResolveMapTilerKey(*maptilerKey, settings),
 		// --headless is the server build; anything else opens the window below.
 		DesktopMode: !*headless,
 	}

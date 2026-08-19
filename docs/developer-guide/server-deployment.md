@@ -221,6 +221,42 @@ TLS_KEY_FILE=/etc/ssl/private/decision-theatre.key
 
 ---
 
+### `DT_MAPTILER_API_KEY`
+
+**Optional, but the deployment looks wrong without it.** The MapTiler API key
+used to fetch the font glyphs that map labels are drawn with.
+
+Nothing else depends on it. The vector tiles, the catchment geometries and every
+number in the interface come from this deployment's own files; MapTiler supplies
+only the fonts. So a deployment with no key starts normally and works normally,
+and its maps are drawn without place labels.
+
+The application refuses to contact MapTiler at all when the key is missing,
+rather than sending a request with an empty key and receiving a 403 that would
+be indistinguishable from a font that failed to load. It says so once, on the
+first map the first visitor opens:
+
+```text
+Glyph proxy: no MapTiler key configured, so map labels will not be drawn.
+```
+
+Get a key from [cloud.maptiler.com](https://cloud.maptiler.com) and restrict it
+to this deployment's domains in the MapTiler console. The key travels to the
+browser in no form at all — the server proxies the font requests through
+`/fonts/{fontstack}/{range}.pbf` and attaches the key itself — but a restricted
+key is still the right default.
+
+```env
+DT_MAPTILER_API_KEY=your-key-here
+```
+
+!!! warning "Do not put it in `frontend/.env`"
+    A `VITE_`-prefixed variable is substituted into the JavaScript bundle at
+    build time, which publishes it to every visitor and bakes it into every
+    release artefact. This is a backend setting.
+
+---
+
 ## Example `.env` for Production
 
 ```env
@@ -235,6 +271,9 @@ DT_RESOURCES_DIR=/srv/decision-theatre/resources
 # TLS — full chain required for Wits/Sectigo certificates
 TLS_CERT_FILE=/etc/ssl/certs/decision-theatre-fullchain.pem
 TLS_KEY_FILE=/etc/ssl/private/decision-theatre.key
+
+# MapTiler key for map label fonts. Blank is supported; see above.
+DT_MAPTILER_API_KEY=your-key-here
 ```
 
 ---
@@ -610,6 +649,34 @@ Use a full chain certificate file. Combine the leaf certificate with any interme
 ```bash
 cat leaf.crt intermediate.crt root.crt > certs/tls.crt
 ```
+
+### The map draws, but has no place labels
+
+The MapTiler key is missing or wrong. Check the app log:
+
+```bash
+docker compose logs app | grep -i glyph
+```
+
+`no MapTiler key configured` means `DT_MAPTILER_API_KEY` never reached the
+container — set it in `deployments/.env` and recreate the app service, since
+compose only reads that file when the container is created:
+
+```bash
+docker compose up -d --force-recreate app
+```
+
+`upstream returned 403` means the key arrived but MapTiler rejected it. Either
+it has been revoked, or the domain restriction in the MapTiler console does not
+list the hostname this deployment is served on. Confirm what the container
+actually has:
+
+```bash
+docker compose exec app printenv DT_MAPTILER_API_KEY
+```
+
+`upstream fetch failed` means the container has no route to
+`api.maptiler.com` — an egress firewall rather than a key problem.
 
 ### Container fails to write to `/app/data`
 

@@ -1,7 +1,10 @@
 {
   "version": 8,
   "name": "UoW Tiles",
-  "metadata": {"maputnik:renderer": "mbgljs"},
+  "metadata": {
+    "maputnik:renderer": "mbgljs",
+    "kartoza:glyphs": "Relative on purpose, and rewritten to an absolute URL by the server before this style reaches a browser. It points at the application's own /fonts proxy, which fetches from MapTiler using the key supplied at run time (DT_MAPTILER_API_KEY, --maptiler-key, or maptiler_key in settings.json). Do not put a key in this file: it is tracked in git and copied into every data pack. See issue #31."
+  },
   "center": [32.7, 4.65],
   "zoom": 2.75,
   "sources": {
@@ -11,7 +14,7 @@
     }
   },
   "sprite": "",
-  "glyphs": "https://api.maptiler.com/fonts/{fontstack}/{range}.pbf?key=cc4PpmmWZP73LjU1nsw3",
+  "glyphs": "/fonts/{fontstack}/{range}.pbf",
   "layers": [
     {
       "id": "Country Boundaries",

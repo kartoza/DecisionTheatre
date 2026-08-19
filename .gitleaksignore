@@ -9,17 +9,28 @@
 # been dealt with by rotation, because git history cannot be edited.
 
 # ---------------------------------------------------------------------------
-# MapTiler client key — public by design, restricted at MapTiler
+# MapTiler client key committed until 2026-08 — MUST BE REVOKED
 # ---------------------------------------------------------------------------
 #
-# The key appears in a glyph URL that the browser fetches directly, so it is
-# necessarily visible to anyone using the dashboard; hiding it in the repository
-# would not make it secret. It is restricted to the deployment's own domains at
-# MapTiler, which is the control that actually protects it.
+# The argument that used to stand here — that the browser fetched the glyph URL
+# directly, so the key was public anyway — was wrong on its own terms. The
+# server proxies those fetches through /fonts/{fontstack}/{range}.pbf and the
+# browser never saw the key; it was disclosed by being committed, not by being
+# used. Being disclosed, it was also usable against the account from anywhere
+# the domain restriction did not reach.
 #
-# Still tracked, deliberately, in internal/server/server.go and the two
-# style.json files. If that restriction is ever lifted, this exemption stops
-# being valid and the key must move to runtime configuration instead.
+# The key is gone from the tree: it now comes from run-time configuration with
+# no default compiled in, and no tracked file carries one. See issue #31 and
+# NOTES-maptiler.md.
+#
+# Removing it from the tree does not undo the disclosure. It remains in this
+# repository's history, and in every release binary and data pack built before
+# the change, so the key itself must be revoked at MapTiler. Until someone with
+# access to that account confirms it has been, treat it as live.
+#
+# The fingerprints below pin the historical commits only. History cannot be
+# edited, and an entry here cannot become a blanket exemption: a new occurrence
+# in a new commit is still reported, which is the point.
 e5f0ac7a86649bbe302bc7823f2a33fdc793bc3e:data/mbtiles/style.json:generic-api-key:14
 aa38bd4aa669babea620de9d9b65f1737741eea0:data/mbtiles/style.json:generic-api-key:14
 cd698f36e0c876fd1af77ab4efe835e490fdf0aa:resources/mbtiles/uow_tiles.json:generic-api-key:14

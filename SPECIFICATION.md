@@ -264,7 +264,7 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - `GET /data/tiles.json` - TileJSON metadata
 
 ### Fonts
-- `GET /fonts/{fontstack}/{range}.pbf` - Glyph proxy (fetched from CDN once, then served locally)
+- `GET /fonts/{fontstack}/{range}.pbf` - Glyph proxy (fetched from CDN once, then served locally). The MapTiler key is supplied at run time (`--maptiler-key`, `DT_MAPTILER_API_KEY`, or `maptiler_key` in `settings.json`) and attached here, server-side; it never reaches the client and no key is compiled in. With no key configured the route answers `200` with an empty body and the map draws without labels.
 
 ### Data
 - `GET /api/scenarios` - Available scenarios

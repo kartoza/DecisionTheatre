@@ -525,6 +525,19 @@ Returns TileJSON for the loaded tileset.
 Proxies MapLibre font glyphs, fetching from the upstream CDN once and serving locally
 thereafter. This avoids repeated external requests from each map instance in grid view.
 
+This is the only route that talks to MapTiler, and the only place the MapTiler
+key is used. It is attached server-side and never appears in `/data/style.json`,
+which is why the browser is handed this path rather than a MapTiler URL.
+
+When no key is configured the route still answers `200` with an empty body, and
+the server logs the reason once. That is the same answer it gives when the CDN
+is unreachable: MapLibre treats an empty response as "no glyphs in this range"
+and draws the map without those labels, whereas an error status makes it retry.
+No request is sent to MapTiler at all in that case — a URL with an empty `key=`
+would earn a `403` that looks exactly like a font that failed to load.
+
+See [`DT_MAPTILER_API_KEY`](server-deployment.md#dt_maptiler_api_key) for how to supply it.
+
 ## Static Data
 
 | Prefix | Serves from | Contents |

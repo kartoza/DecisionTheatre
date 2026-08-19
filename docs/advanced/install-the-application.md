@@ -97,10 +97,55 @@ A native window opens. To run without a window and use your browser instead:
 | `--data-dir` | *(auto)* | Where the map tiles, GeoPackage, metadata and lookups live |
 | `--port` | `8080` | HTTP port |
 | `--headless` | `false` | No desktop window |
+| `--maptiler-key` | *(none)* | Key for the fonts map labels are drawn with; see below |
 | `--version` | | Print the version and exit |
 
 With no `--data-dir`, the application looks for a previously installed data pack recorded
 in its settings file.
+
+### Map labels
+
+The place names on the map are drawn with fonts fetched from MapTiler, which
+needs an API key. Everything else — the tiles, the catchments, every number in
+the interface — comes from your data pack and works offline, so the application
+runs perfectly well without one. What you get without a key is a map with no
+labels on it, and one line in the log saying so.
+
+No key is shipped with the application. If you want labels, get one from
+[cloud.maptiler.com](https://cloud.maptiler.com) (the free tier is enough) and
+give it to the application in whichever of these suits how you start it:
+
+=== "Saved in settings"
+
+    The option for an installation you launch by clicking its icon. Add one line
+    to the settings file listed below, next to whatever is already in it:
+
+    ```json
+    {
+      "maptiler_key": "your-key-here"
+    }
+    ```
+
+    Restart the application afterwards; the file is read once at startup.
+
+=== "Environment variable"
+
+    ```bash
+    export DT_MAPTILER_API_KEY=your-key-here
+    ./decision-theatre
+    ```
+
+=== "Command line"
+
+    ```bash
+    ./decision-theatre --maptiler-key your-key-here
+    ```
+
+    Convenient for a one-off, but on a shared machine the key is visible to
+    anyone who can run `ps`.
+
+The most specific instruction wins: the flag overrides the environment variable,
+which overrides the settings file.
 
 !!! note "Where settings are kept"
     | Platform | Path |

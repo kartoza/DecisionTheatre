@@ -25,6 +25,15 @@ services:
       - /app/data
       - --resources-dir
       - /app/resources
+    environment:
+      # MapTiler key for map font glyphs, read from deployments/.env, which is
+      # gitignored. Passed as an environment variable rather than appended to
+      # `command` above on purpose: this file is tracked, and a flag value is
+      # also visible in `ps` to every user on the host.
+      #
+      # Leave it unset and the deployment still works — the maps simply draw
+      # without place labels. See docs/developer-guide/server-deployment.md.
+      DT_MAPTILER_API_KEY: ${DT_MAPTILER_API_KEY:-}
     expose:
       - "8080"
       - "8081"

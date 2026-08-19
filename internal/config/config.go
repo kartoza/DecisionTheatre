@@ -2,11 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/kartoza/decision-theatre/internal/fsutil"
 )
@@ -55,6 +58,21 @@ type Config struct {
 	// with the URL instead of being hardcoded in the client.
 	SatelliteAttribution string
 
+	// MapTilerKey authenticates the server's glyph fetches against
+	// api.maptiler.com. Fonts are the only thing it buys: the vector tiles are
+	// served from the local mbtiles file, so this is not what draws the map.
+	//
+	// It has no default and none is compiled in. The key that used to be written
+	// here in the source was published in the repository, in every release
+	// binary and in every data pack, which is why it now has to be supplied at
+	// run time — see issue #31. Empty is a supported state, not an error: the
+	// glyph proxy answers with no glyphs and the map renders without place
+	// labels, exactly as it already does on a machine with no internet.
+	//
+	// Never build a URL from this without going through MapTilerGlyphURL, which
+	// is what refuses to emit "key=" with nothing after it.
+	MapTilerKey string
+
 	// DesktopMode is true only when the process owns a desktop session and has
 	// opened the embedded WebView window.
 	//
@@ -95,6 +113,65 @@ func (c Config) Satellite() (tileURL, attribution string) {
 	return tileURL, attribution
 }
 
+// MapTilerKeyEnv names the environment variable the key can be supplied in.
+//
+// The environment rather than a flag is the intended route for a deployment: a
+// flag value is visible in `ps` to every user on the host and would have to be
+// written into deployments/docker-compose.yaml, which is tracked. The flag
+// exists as well because a developer running one command should not have to
+// export anything.
+const MapTilerKeyEnv = "DT_MAPTILER_API_KEY"
+
+// mapTilerGlyphEndpoint is the upstream glyph URL, without its key.
+const mapTilerGlyphEndpoint = "https://api.maptiler.com/fonts/%s/%s.pbf"
+
+// MapTilerGlyphURL builds the upstream URL for one font range, reporting false
+// when no key is configured.
+//
+// The boolean is the point of the signature. Returning a URL with an empty key
+// parameter would be answered by MapTiler with a 403, which reaches the user as
+// missing labels on the map with nothing in the interface to connect that to a
+// missing setting; the caller is made to notice the absence instead.
+//
+// fontstack and glyphRange arrive from the request path and are escaped, so a
+// crafted font name cannot append parameters of its own to the query string.
+func (c Config) MapTilerGlyphURL(fontstack, glyphRange string) (string, bool) {
+	key := strings.TrimSpace(c.MapTilerKey)
+	if key == "" {
+		return "", false
+	}
+	return fmt.Sprintf(mapTilerGlyphEndpoint,
+		url.PathEscape(fontstack), url.PathEscape(glyphRange),
+	) + "?key=" + url.QueryEscape(key), true
+}
+
+// ResolveMapTilerKey picks the key from the places it may be supplied, most
+// specific instruction first: the command line, then the environment, then the
+// saved settings.
+//
+// Three sources because there are three ways this application runs. A container
+// has an environment and no user; a desktop install that was double-clicked has
+// neither a command line nor an environment a person can reasonably set, so its
+// key lives in settings.json alongside the data pack path. settings may be nil.
+//
+// Surrounding whitespace is dropped. A key pasted into a file or a compose
+// environment block picks up a trailing newline easily, and MapTiler answers a
+// key with a newline in it the same way it answers a wrong one.
+func ResolveMapTilerKey(flagValue string, settings *Settings) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv(MapTilerKeyEnv)); v != "" {
+		return v
+	}
+	if settings != nil {
+		if v := strings.TrimSpace(settings.MapTilerKey); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ListenAddress returns the host:port to bind, applying the safe default.
 func (c Config) ListenAddress() string {
 	return c.ListenAddressForPort(c.Port)
@@ -131,6 +208,12 @@ type Settings struct {
 	ExecutableWindows    string `json:"executable_windows,omitempty"`
 	ExecutableLinux      string `json:"executable_linux,omitempty"`
 	ExecutableMacOS      string `json:"executable_macos,omitempty"`
+
+	// MapTilerKey is how a desktop install supplies the glyph key. It is the
+	// only route available to a build that was downloaded and double-clicked,
+	// which has no command line and no environment of its own. See
+	// Config.MapTilerKey for what happens when it is absent.
+	MapTilerKey string `json:"maptiler_key,omitempty"`
 }
 
 // SettingsDir returns the platform-appropriate config directory.
