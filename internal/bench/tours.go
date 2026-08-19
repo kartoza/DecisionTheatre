@@ -190,12 +190,20 @@ func tourScenarios() []Scenario {
 			// as the cost of computing whisker bounds — a flattering number for
 			// work the server never did.
 			Scenario{
-				Name:     "tour-" + t.slug + "-whiskers",
-				Group:    t.group(),
-				Method:   "POST",
-				Path:     "/api/sites/" + t.id + "/whiskers",
-				Prepare:  siteBody(t, stripIndicators),
-				MinBytes: 20,
+				Name:    "tour-" + t.slug + "-whiskers",
+				Group:   t.group(),
+				Method:  "POST",
+				Path:    "/api/sites/" + t.id + "/whiskers",
+				Prepare: siteBody(t, stripIndicators),
+				// 200 rather than 20, and the difference is a real finding.
+				// This endpoint answers 200 with
+				// {"referenceUpper":null,"referenceLower":null,...} — 86 bytes
+				// of nothing — for the Africa tour, while a tour that works
+				// returns tens of kilobytes. A floor of 20 would have recorded
+				// that as a fast success. See NOTES-performance.md: a size
+				// floor catches an empty response, and an all-null response is
+				// only caught if the floor is set above it.
+				MinBytes: 200,
 				Heavy:    t.heavy,
 				Why: "What the dial view asks for: the whisker bounds for this tour. The cached indicators are " +
 					"stripped from the request so this measures the computation rather than an echo of it.",

@@ -378,6 +378,41 @@ is stripped from the posted site because the handler short-circuits and echoes
 cached bounds back when it is present, which would have measured a JSON round
 trip and reported it as the cost of computing whisker bounds.
 
+### An application bug the suite found on its first heavy run
+
+Worth reporting on its own. **The Africa tour returns nothing for two of the four
+view modes.** Confirmed by hand against the live server, posting the real
+walkthrough document (2.18 MB body, 147,837 catchment ids):
+
+```
+POST /api/sites/6dede7c6-.../catchments   -> HTTP 200, 3 bytes, 0.17 s
+                                             []
+
+POST /api/sites/6dede7c6-.../whiskers     -> HTTP 200, 86 bytes, 0.14 s
+       {"referenceUpper":null,"referenceLower":null,
+        "currentUpper":null,"currentLower":null}
+```
+
+For contrast, Munywana (11 catchments) returns **89,285 bytes** of real data from
+the same whiskers endpoint.
+
+The distinguishing factor is visible in the documents: Africa is the **only tour
+with no embedded `catchments` array**, so it is the only one that exercises the
+real `GetCatchmentIndicatorsByIDs` server path. The other three are answered from
+data already in the request. So the flagship tour's table and dial views are
+empty, and the server path that would populate them returns nothing.
+
+**This is exactly what the size floor is for.** Without it the suite would have
+recorded `tour-africa-catchments: p50 0.17 ms` — comfortably the fastest heavy
+scenario in the suite — and a future comparison could have celebrated it.
+
+It also exposes the floor's limit, which I have recorded rather than papered
+over: the 3-byte `[]` was caught, but the 86-byte all-`null` whiskers response
+was **not**, because it is structurally a valid answer. I raised that scenario's
+floor to 200 bytes, which catches this case and stays far below any real
+response — but the general point stands and is in the weakness list below: **a
+size floor catches an empty response, not a null one.**
+
 ---
 
 ## Known weaknesses of the method
@@ -428,6 +463,11 @@ explicit about what it cannot show.
 9. **`MinBytes` floors are hand-set** and generously low. A payload that shrank
    below its floor for a legitimate reason would be misreported as absent. They
    are set well under current sizes, but they are a maintenance liability.
+   More importantly, **a size floor catches an empty response, not a null one**:
+   the Africa whiskers endpoint returns 86 bytes of four `null`s, which is
+   structurally valid and only caught because I raised that one floor above it.
+   Catching this class properly needs response-shape assertions, which is a
+   larger change and arguably the QA engineer's territory rather than mine.
 
 10. **The crossover bandwidth is exact; anything downstream of it is not.**
     Bytes saved over time added is a fact, but it assumes the whole payload
@@ -496,6 +536,10 @@ explicit about what it cannot show.
 - `/api/scenario/{scenario}/{attribute}` and `/api/compare` 404 with `no such
   column: catchment_id`. `GetScenarioData` hardcodes the id column while
   `resolveScenarioIDColumn` — which already handles this — sits unused beside it.
+- **The Africa tour's table and dial views are empty** — see the section above.
+  `POST /api/sites/{africa}/catchments` returns `[]` and `/whiskers` returns four
+  `null`s, for 147,837 valid catchment ids. Africa is the only tour that
+  exercises the real server lookup rather than being answered from the request.
 - `/api/aggregate` at 4.77 s per attribute over the full domain, x6 per chart
   render, is the largest unmeasured cost in the application.
 - `GetDomainRange` runs two uncached SQLite queries on *every* choropleth and
