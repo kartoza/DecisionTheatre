@@ -146,6 +146,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/sites/{id}/indicators", h.handleUpdateIndicators).Methods("PATCH")
 	r.HandleFunc("/sites/{id}/catchments", h.handleSiteCatchments).Methods("GET", "POST")
 	r.HandleFunc("/sites/{id}/whiskers", h.handleSiteWhiskers).Methods("GET", "POST")
+	// The bounded, server-side answer to what /catchments was being used to
+	// work out by hand: one weighted number per indicator per scenario, at any
+	// site size. See handleSiteSummary.
+	r.HandleFunc("/sites/{id}/summary", h.handleSiteSummary).Methods("GET", "POST")
 }
 
 // registerDesktopSiteRoutes registers the site routes that exist solely for the
@@ -645,7 +649,15 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	data := h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
+	data, err := h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
+	if err != nil {
+		// A failed read is reported as a failure. It used to arrive here as an
+		// empty map and be answered with "catchment not found", which told the
+		// user something false about their data rather than something true
+		// about the server.
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
+	}
 	if len(data) == 0 {
 		// An abandoned request also comes back empty here, and telling the
 		// client its catchment does not exist would be a lie - and would show
@@ -1515,8 +1527,12 @@ func (h *Handler) doSiteExtraction(ctx context.Context, id string) error {
 			return fmt.Errorf("get catchment data: %w", err)
 		}
 		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
+			// The fractions are the weights the site's stored indicators are
+			// computed from, and this result is persisted. Continuing without
+			// them would write numbers that are quietly wrong and then treat
+			// them as the site's own record of itself.
 			if aoiErr := h.gpkgStore.ApplyAOIFractions(ctx, catchmentData, site.Geometry); aoiErr != nil {
-				log.Printf("Warning: ApplyAOIFractions for %s: %v", id, aoiErr)
+				return fmt.Errorf("apply AOI fractions: %w", aoiErr)
 			}
 		}
 	}
@@ -1631,12 +1647,13 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
+			// Reported, not logged and stepped over: without the fractions
+			// every catchment weighs as though the site covered it entirely,
+			// so the indicators computed below would be wrong in a way
+			// indistinguishable from right.
 			if aoiErr := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); aoiErr != nil {
-				if geodata.IsCancellation(r.Context(), aoiErr) {
-					respondCancelled(w, r)
-					return
-				}
-				log.Printf("Warning: ApplyAOIFractions for browser site: %v", aoiErr)
+				respondStoreError(w, r, http.StatusInternalServerError, aoiErr)
+				return
 			}
 		}
 		if len(catchmentData) == 0 {
@@ -2052,7 +2069,18 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// handleSiteCatchments returns per-catchment breakdown data for aggregate calculations
+// handleSiteCatchments returns the per-catchment breakdown of a site.
+//
+// This is the one response in the API that carries a record per catchment, so
+// it is the one that has to be bounded: measured against the real datapack it
+// returns 1.16 GB for 32,766 catchments, and a whole-of-Africa site has
+// 147,837 of them. Above geodata.MaxDetailCatchments it is refused with 413
+// and a message naming the summary endpoint, which answers what the table,
+// chart and dial views are actually asking in a fixed few kilobytes.
+//
+// The slim view (?slim=true) is id, area and AOI fraction only - tens of bytes
+// per catchment rather than kilobytes - and stays available at any size, which
+// is what the map view needs for AOI filtering.
 func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	defer func() {
@@ -2064,121 +2092,63 @@ func (h *Handler) handleSiteCatchments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	id := vars["id"]
-
-	var site *sites.Site
-	var err error
-
-	if r.Method == http.MethodPost {
-		var req ExtractIndicatorsRequest
-		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-			respondError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-
-		if req.Runtime == "browser" {
-			if len(req.Site) == 0 {
-				respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
-				return
-			}
-
-			siteJSON, marshalErr := json.Marshal(req.Site)
-			if marshalErr != nil {
-				respondError(w, http.StatusBadRequest, "invalid site data in request body")
-				return
-			}
-
-			site = &sites.Site{}
-			if err = json.Unmarshal(siteJSON, site); err != nil {
-				respondError(w, http.StatusBadRequest, "invalid site data in request body")
-				return
-			}
-		} else {
-			if h.siteStore == nil {
-				respondError(w, http.StatusInternalServerError, "site store not initialized")
-				return
-			}
-			site, err = h.siteStore.Get(id)
-			if err != nil {
-				respondError(w, http.StatusNotFound, err.Error())
-				return
-			}
-		}
-	} else {
-		if h.siteStore == nil {
-			respondError(w, http.StatusInternalServerError, "site store not initialized")
-			return
-		}
-		site, err = h.siteStore.Get(id)
-		if err != nil {
-			respondError(w, http.StatusNotFound, err.Error())
-			return
-		}
-	}
-
-	if len(site.CatchmentIDs) == 0 && len(site.Catchments) == 0 {
-		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+	site, ok := h.siteFromRequest(w, r)
+	if !ok {
 		return
 	}
 
-	// slim=true: return only id+areaKm2+aoiFraction — used by MapView for AOI filtering.
-	// Avoids sending 100MB+ of indicator values the map view never reads.
 	slim := r.URL.Query().Get("slim") == "true"
 
-	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
+	if hasCachedCatchments(site) {
+		cached := siteCatchmentsToIndicators(site.Catchments)
 		if slim {
-			type slimCatchment struct {
-				ID          string  `json:"id"`
-				AreaKm2     float64 `json:"areaKm2"`
-				AOIFraction float64 `json:"aoiFraction,omitempty"`
-			}
-			result := make([]slimCatchment, len(site.Catchments))
-			for i, c := range site.Catchments {
-				result[i] = slimCatchment{ID: c.ID, AreaKm2: c.AreaKm2, AOIFraction: c.AOIFraction}
-			}
-			respondJSON(w, http.StatusOK, result)
+			respondJSON(w, http.StatusOK, toSlimCatchments(cached))
 			return
 		}
-		respondJSON(w, http.StatusOK, siteCatchmentsToIndicators(site.Catchments))
+		respondJSON(w, http.StatusOK, cached)
 		return
 	}
 
-	// Get indicator data for all catchments
+	if slim {
+		weights, err := h.siteCatchmentWeights(r, site)
+		if err != nil {
+			respondStoreError(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, toSlimCatchments(weights))
+		return
+	}
+
 	catchmentData, err := h.gpkgStore.GetCatchmentIndicatorsByIDs(r.Context(), site.CatchmentIDs)
 	if err != nil {
 		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
+		// A failed overlap computation is returned, not logged and stepped
+		// over. Continuing would leave every fraction at its 1.0 default, so
+		// the caller would be handed values weighted as though the site
+		// covered each catchment entirely - wrong numbers, presented exactly
+		// like right ones.
 		if err := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); err != nil {
-			if geodata.IsCancellation(r.Context(), err) {
-				respondCancelled(w, r)
-				return
-			}
-			log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
+			respondStoreError(w, r, http.StatusInternalServerError, err)
+			return
 		}
-	}
-
-	if slim {
-		type slimCatchment struct {
-			ID          string  `json:"id"`
-			AreaKm2     float64 `json:"areaKm2"`
-			AOIFraction float64 `json:"aoiFraction,omitempty"`
-		}
-		result := make([]slimCatchment, len(catchmentData))
-		for i, c := range catchmentData {
-			result[i] = slimCatchment{ID: c.ID, AreaKm2: c.AreaKm2, AOIFraction: c.AOIFraction}
-		}
-		respondJSON(w, http.StatusOK, result)
-		return
 	}
 
 	respondJSON(w, http.StatusOK, catchmentData)
 }
 
-// handleSiteWhiskers returns area-weighted upper/lower whisker bounds for a site's catchments.
-// It supports both webview (GET, site looked up from store) and browser runtime (POST with site in body).
+// handleSiteWhiskers returns area-weighted upper/lower whisker bounds for a
+// site's catchments. It serves both runtimes: the desktop build looks the site
+// up by id, the browser build posts it in the request body.
+//
+// The bounds are a weighted mean, so only each catchment's id, area and AOI
+// fraction are read - never its indicator values. That is what makes this
+// answerable for a site of any size: the per-catchment fetch this used to go
+// through is bounded at geodata.MaxDetailCatchments and would refuse a
+// continent, which is precisely how a whole-of-Africa site came to return four
+// nulls where its whiskers should be (issue #140).
 func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	defer func() {
@@ -2190,100 +2160,39 @@ func (h *Handler) handleSiteWhiskers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	id := vars["id"]
-
-	var site *sites.Site
-	var err error
-
-	if r.Method == http.MethodPost {
-		var req ExtractIndicatorsRequest
-		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
-			respondError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-
-		if req.Runtime == "browser" {
-			if len(req.Site) == 0 {
-				respondError(w, http.StatusBadRequest, "browser runtime requires site data in request body")
-				return
-			}
-			siteJSON, marshalErr := json.Marshal(req.Site)
-			if marshalErr != nil {
-				respondError(w, http.StatusBadRequest, "invalid site data in request body")
-				return
-			}
-			site = &sites.Site{}
-			if err = json.Unmarshal(siteJSON, site); err != nil {
-				respondError(w, http.StatusBadRequest, "invalid site data in request body")
-				return
-			}
-		} else {
-			if h.siteStore == nil {
-				respondError(w, http.StatusInternalServerError, "site store not initialized")
-				return
-			}
-			site, err = h.siteStore.Get(id)
-			if err != nil {
-				respondError(w, http.StatusNotFound, err.Error())
-				return
-			}
-		}
-	} else {
-		if h.siteStore == nil {
-			respondError(w, http.StatusInternalServerError, "site store not initialized")
-			return
-		}
-		site, err = h.siteStore.Get(id)
-		if err != nil {
-			respondError(w, http.StatusNotFound, err.Error())
-			return
-		}
-	}
-
-	if len(site.CatchmentIDs) == 0 && len(site.Catchments) == 0 {
-		respondError(w, http.StatusBadRequest, "site has no associated catchments")
+	id := mux.Vars(r)["id"]
+	site, ok := h.siteFromRequest(w, r)
+	if !ok {
 		return
 	}
 
 	// Return cached whisker bounds if already computed and stored in this site.
 	if site.Indicators != nil && len(site.Indicators.ReferenceLower) > 0 {
 		log.Printf("[perf] handleSiteWhiskers step=cached site_id=%s", id)
-		bounds := geodata.WhiskerBounds{
+		respondJSON(w, http.StatusOK, geodata.WhiskerBounds{
 			ReferenceLower: site.Indicators.ReferenceLower,
 			ReferenceUpper: site.Indicators.ReferenceUpper,
 			CurrentLower:   site.Indicators.CurrentLower,
 			CurrentUpper:   site.Indicators.CurrentUpper,
-		}
-		respondJSON(w, http.StatusOK, bounds)
+		})
 		return
 	}
 
-	catchmentData := []geodata.CatchmentIndicators(nil)
-	if len(site.Catchments) > 0 && (len(site.CatchmentIDs) == 0 || len(site.Catchments) == len(site.CatchmentIDs)) {
-		catchmentData = siteCatchmentsToIndicators(site.Catchments)
-	} else {
-		catchmentData, err = h.gpkgStore.GetCatchmentIndicatorsByIDs(r.Context(), site.CatchmentIDs)
-		if err != nil {
-			respondStoreError(w, r, http.StatusInternalServerError, err)
-			return
-		}
-		if len(site.Geometry) > 0 && site.CreationMethod != "catchments" {
-			if err := h.gpkgStore.ApplyAOIFractions(r.Context(), catchmentData, site.Geometry); err != nil {
-				if geodata.IsCancellation(r.Context(), err) {
-					respondCancelled(w, r)
-					return
-				}
-				log.Printf("Warning: failed to compute AOI fractions for site %s: %v", id, err)
-			}
-		}
+	weights, err := h.siteCatchmentWeights(r, site)
+	if err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
 	}
 
-	bounds := h.gpkgStore.ComputeWhiskerBounds(r.Context(), catchmentData)
-	// ComputeWhiskerBounds has no error return, so a cancelled request comes
-	// back as empty bounds. Persisting those would poison the site's cached
-	// whiskers for every later reader, and returning them would show a chart
-	// with no uncertainty range at all rather than no chart.
+	bounds, err := h.gpkgStore.ComputeWhiskerBounds(r.Context(), weights)
+	if err != nil {
+		// Empty bounds are not an acceptable stand-in for bounds that could
+		// not be computed. They are persisted onto the site below, so a
+		// swallowed failure did not blank one chart - it cached the blank for
+		// every later reader.
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
+	}
 	if clientGone(r) {
 		respondCancelled(w, r)
 		return

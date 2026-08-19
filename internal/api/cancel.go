@@ -32,6 +32,14 @@ func respondStoreError(w http.ResponseWriter, r *http.Request, status int, err e
 		respondCancelled(w, r)
 		return
 	}
+	// Asking for more per-catchment records than the API will serve is the
+	// client asking for the wrong thing, not the server failing. 413 with the
+	// limit in the message says so, and says it in a way a caller can act on
+	// by switching to the aggregate summary.
+	if errors.Is(err, geodata.ErrTooManyCatchments) {
+		respondError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
 	respondError(w, status, err.Error())
 }
 
@@ -43,12 +51,12 @@ func respondCancelled(w http.ResponseWriter, r *http.Request) {
 
 // clientGone reports whether this request's client has already disconnected.
 //
-// It exists for the two store calls whose signatures return no error at all
-// (GetCatchmentAttributes and ComputeWhiskerBounds): those return an empty
-// result for a cancellation exactly as they do for a genuine failure, so the
-// handler has to consult the context to know which it is. Giving them error
-// returns is the separately-tracked swallowed-error issue; this keeps the
-// cancellation path honest in the meantime without touching it.
+// Both of the store calls it was written for - GetCatchmentAttributes and
+// ComputeWhiskerBounds - now return errors, so a cancellation reaches the
+// handler as one. It is kept as a belt-and-braces check on the paths that
+// persist their result: a request whose client has already gone must not have
+// its answer cached onto the site, and the context is the only thing that
+// knows.
 func clientGone(r *http.Request) bool {
 	return errors.Is(r.Context().Err(), context.Canceled)
 }
