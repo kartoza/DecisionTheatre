@@ -232,6 +232,32 @@ func TestStatusesWithoutABodyAreNotCompressed(t *testing.T) {
 	}
 }
 
+// http.ServeContent answers a Range request with 206, a Content-Length for just
+// that slice, and a Content-Range naming uncompressed offsets. Gzipping the slice
+// invalidates all three: the bytes are no longer a standalone gzip stream, and
+// Content-Range would still describe the pre-compression file. This is what
+// produced ERR_HTTP2_PROTOCOL_ERROR for embedded frontend assets in production.
+func TestPartialContentIsNotCompressed(t *testing.T) {
+	body := bigJSON()
+	h := compressResponses(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Content-Range", "bytes 0-99/"+strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte(body[:100]))
+	}))
+	rec := get(t, h, "/assets/chakra-CdCWquJF.js", "gzip")
+
+	if rec.Code != http.StatusPartialContent {
+		t.Errorf("status = %d, want 206", rec.Code)
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Errorf("Content-Encoding = %q on a 206, would corrupt the range framing", enc)
+	}
+	if rec.Body.String() != body[:100] {
+		t.Error("206 body was altered")
+	}
+}
+
 // The status the handler chose must survive, or an error becomes a 200.
 func TestStatusCodeIsPreserved(t *testing.T) {
 	body := bigJSON()

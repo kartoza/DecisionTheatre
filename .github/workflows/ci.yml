@@ -116,6 +116,12 @@ jobs:
   # ==========================================
   lint-go:
     runs-on: ubuntu-latest
+    # Azure-hosted runners resolve apt mirrors through
+    # mirror+file:/etc/apt/apt-mirrors.txt, and azure.archive.ubuntu.com has been
+    # seen to stall with no response. Plain apt-get has no timeout for that, so it
+    # hangs until GitHub's own multi-hour job ceiling. This bounds the damage to one
+    # retry cycle instead.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -130,7 +136,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
           sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
 
       # webview_go asks pkg-config for webkit2gtk-4.0, which no current
@@ -181,6 +187,9 @@ jobs:
   # ==========================================
   test-go:
     runs-on: ubuntu-latest
+    # See the identical timeout on lint-go: an unresponsive azure.archive.ubuntu.com
+    # mirror can hang plain apt-get indefinitely.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -195,7 +204,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
           sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
 
       - name: webkit2gtk-4.0 compatibility shim

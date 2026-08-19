@@ -364,7 +364,7 @@ function ContentArea({
             );
           })}
 
-          {(quadActiveMode === 'dial' || quadActiveMode === 'chart') && onRangeModeChange && (
+          {onRangeModeChange && (
             <HStack spacing={1} pl={2} ml={2} borderLeft="1px" borderColor="gray.600">
               {RANGE_MODE_CONFIG.map((mode) => {
                 const isActive = rangeMode === mode.id;

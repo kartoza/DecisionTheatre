@@ -1,6 +1,7 @@
 package geodata_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kartoza/decision-theatre/internal/geodata"
@@ -33,7 +34,7 @@ func TestQueryCatchmentValueArraysReturnsIDsAndValuesInBBox(t *testing.T) {
 	store := newStore(t)
 
 	// A bbox covering the first two catchments only.
-	values, err := store.QueryCatchmentValueArrays("current", gpkgtest.Attribute, -0.5, -0.5, 1.5, 0.5)
+	values, err := store.QueryCatchmentValueArrays(context.Background(), "current", gpkgtest.Attribute, -0.5, -0.5, 1.5, 0.5)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValueArrays: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestQueryCatchmentValueArraysReturnsIDsAndValuesInBBox(t *testing.T) {
 func TestQueryCatchmentValueArraysSkipsNullValues(t *testing.T) {
 	store := newStore(t)
 
-	values, err := store.QueryCatchmentValueArrays("current", gpkgtest.Attribute, -5, -5, 5, 5)
+	values, err := store.QueryCatchmentValueArrays(context.Background(), "current", gpkgtest.Attribute, -5, -5, 5, 5)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValueArrays: %v", err)
 	}
@@ -82,11 +83,11 @@ func TestQueryCatchmentValueArraysSkipsNullValues(t *testing.T) {
 func TestQueryCatchmentValuesAgreesWithValueArrays(t *testing.T) {
 	store := newStore(t)
 
-	arrays, err := store.QueryCatchmentValueArrays("reference", gpkgtest.Attribute, -5, -5, 5, 5)
+	arrays, err := store.QueryCatchmentValueArrays(context.Background(), "reference", gpkgtest.Attribute, -5, -5, 5, 5)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValueArrays: %v", err)
 	}
-	fc, err := store.QueryCatchmentValues("reference", gpkgtest.Attribute, -5, -5, 5, 5)
+	fc, err := store.QueryCatchmentValues(context.Background(), "reference", gpkgtest.Attribute, -5, -5, 5, 5)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValues: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestQueryCatchmentValueArraysRejectsUnknownAttribute(t *testing.T) {
 
 	// The attribute name is interpolated into SQL, so an unvalidated one is an
 	// injection point; the allow-list is loaded from scenario_current's columns.
-	if _, err := store.QueryCatchmentValueArrays("current", `x" FROM sqlite_master; --`, -5, -5, 5, 5); err == nil {
+	if _, err := store.QueryCatchmentValueArrays(context.Background(), "current", `x" FROM sqlite_master; --`, -5, -5, 5, 5); err == nil {
 		t.Fatal("expected an error for an attribute that is not a known column")
 	}
 }
