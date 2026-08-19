@@ -28,13 +28,12 @@
      this file's <head>. See the comment there for why. */
   :root {
     --blue:{{ .Brand.Blue500 }}; --blue-100:{{ .Brand.Blue100 }}; --blue-300:{{ .Brand.Blue300 }};
-    --blue-700:{{ .Brand.Blue700 }}; --blue-900:{{ .Brand.Blue900 }};
+    --blue-900:{{ .Brand.Blue900 }};
     --amber:{{ .Brand.Amber500 }}; --amber-100:{{ .Brand.Amber100 }}; --amber-300:{{ .Brand.Amber300 }};
     --amber-900:{{ .Brand.Amber900 }};
     --ink:{{ .Brand.InkDefault }}; --muted:{{ .Brand.InkMuted }}; --rule:{{ .Brand.InkRule }};
     --cloud:{{ .Brand.SurfaceCloud }}; --white:{{ .Brand.SurfaceWhite }};
-    --success:{{ .Brand.Success }}; --success-tint:{{ .Brand.SuccessTint }};
-    --warn:{{ .Brand.Warn }}; --warn-tint:{{ .Brand.WarnTint }};
+    --success:{{ .Brand.Success }};
     --error:{{ .Brand.Error }}; --error-tint:{{ .Brand.ErrorTint }};
 
     /* The type stacks are written out rather than interpolated from
@@ -174,22 +173,59 @@
   @media screen { h2.evidence { margin-top: 8mm; } }
   p { margin: 0 0 3mm; orphans: 3; widows: 3; }
 
-  /* Prose is capped near 80 characters. The measure on an unconstrained A4
-     column is about 110, past the point where the eye loses the next line. */
-  .prose { max-width: 145mm; }
 
   /* ---- the answer ------------------------------------------------------ */
-  /* One bar, its segments in proportion to the verdict counts. The reader's
-     first question is "better or worse", and this answers it from across a
-     room, before a single number has been read.
+  /* Findings lead, verdict counts follow.
+
+     Counting verdicts is not the finding. On a real comparison the counts read
+     "0 faster · 0 slower · 7 unchanged" over a run in which the payload fell
+     from 5.7 MB to 1.7 MB, which is both true and the opposite of the story.
+     So the cards carry what actually moved, and the tally is demoted to a strip
+     underneath that answers "and did anything get slower" in one glance. */
+  .findings {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(38mm, 1fr));
+    gap: 3mm; margin: 4mm 0 4mm;
+  }
+  .finding {
+    /* min-width: 0 or a long Detail string widens its own grid column and
+       shoves every other card out of alignment. */
+    min-width: 0; border-top: 1mm solid var(--rule); padding-top: 2.5mm;
+    break-inside: avoid;
+  }
+  .finding .l {
+    font-size: 7.5pt; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 1.5mm;          /* 5.58:1 */
+  }
+  .finding .v {
+    font-size: 16pt; font-weight: 800; line-height: 1.05;
+    font-variant-numeric: var(--figures); overflow-wrap: break-word;
+  }
+  .finding .d { font-size: 8pt; color: var(--muted); margin-top: 1mm; overflow-wrap: break-word; }
+  /* Tone, on the keyline and the number. Not on the label or the detail: those
+     are read as text and blue and amber are never body text. */
+  .finding.good { border-top-color: var(--success); }
+  .finding.good .v { color: var(--success); }         /* 4.94:1 */
+  .finding.bad  { border-top-color: var(--error); }
+  .finding.bad .v { color: var(--error); }            /* 5.51:1 */
+  /* A cost that was accepted on purpose is amber, never red. Tiles that are
+     already compressed on the wire have not failed by not shrinking, and a
+     deliberate trade is not a regression. */
+  .finding.warn { border-top-color: var(--amber); }
+  .finding.warn .v { color: var(--amber-900); }       /* 5.52:1 */
+  /* No change is neutral. Drawing zero in red would be dishonest in the other
+     direction, which is the failure mode nobody checks for. */
+  .finding.flat { border-top-color: var(--rule); }
+  .finding.flat .v { color: var(--ink); }
+
+  /* One bar, its segments in proportion to the verdict counts.
 
      The proportions use flex-grow rather than percentages because the template
      has no arithmetic: `flex: 6` beside `flex: 2` is exactly six parts to two,
      divided by the layout engine from the raw counts. */
-  .tally { display: flex; width: 100%; height: 12mm; margin: 3.5mm 0 2.5mm; overflow: hidden; }
+  .tally { display: flex; width: 100%; height: 7mm; margin: 2mm 0 2mm; overflow: hidden; }
   .tally .seg {
     display: flex; align-items: center; justify-content: center; min-width: 0;
-    color: var(--white); font-size: 15pt; font-weight: 800; line-height: 1;
+    color: var(--white); font-size: 10pt; font-weight: 800; line-height: 1;
     font-variant-numeric: var(--figures);
   }
   /* Every fill below carries white type. Success 4.94:1, error 5.51:1, muted
@@ -322,18 +358,22 @@
      the <tr> too, which stops it being a table row: the cell dropped out of
      the fixed grid and rendered at the width of column one, turning a
      two-line caveat into a column of single words. */
-  tr.caveat-row td { padding-top: 0; }
+  /* The short caveat is a chip in the row it qualifies — a few words, always
+     visible, impossible to skim past. The full explanation is an endnote. Four
+     lines of hedging under every affected row used to double the height of the
+     table and, by being everywhere, stopped being read anywhere. */
   .caveat {
-    display: block; max-width: 150mm; font-size: 8.5pt; line-height: 1.4;
+    display: inline-block; margin-top: 1mm; font-size: 7.5pt; line-height: 1.3;
     background: var(--amber-100); border-left: 2px solid var(--amber);
-    padding: 1.8mm 3mm; margin: .5mm 0 1mm; color: var(--ink);
+    padding: .8mm 2mm; color: var(--ink);            /* 10.50:1 on the tint */
   }
   tbody.v-broken .caveat { background: var(--error-tint); border-left-color: var(--error); }
-  .caveat b {
-    display: block; color: var(--amber-900); font-size: 7.5pt;   /* 5.00:1 */
-    letter-spacing: .1em; text-transform: uppercase; margin-bottom: .6mm;
-  }
-  tbody.v-broken .caveat b { color: var(--error); }
+
+  .endnotes { font-size: 8pt; line-height: 1.4; margin-top: 2mm;
+              column-count: 2; column-gap: 8mm; }
+  .endnotes div { break-inside: avoid; margin-bottom: 2.2mm; }
+  .endnotes dt { font-weight: 700; }
+  .endnotes dd { margin: 0; color: var(--muted); }    /* 5.58:1 */
 
   /* Verdict. A shape as well as a colour, drawn with borders so it needs no
      glyph the font might be missing and no image the palette cannot reach. */
@@ -341,15 +381,26 @@
     display: inline-flex; align-items: center; gap: 1.6mm;
     font-weight: 700; font-size: 8.5pt; white-space: nowrap;
   }
-  .verdict::before { content: ""; display: block; flex: none; }
+  /* The base state is the neutral one, and every known verdict overrides it.
+     VerdictClass is whatever report.go decides to call the state, so a verdict
+     added later — "unmeasurable" is already on its way — arrives looking like a
+     deliberate neutral rather than like unstyled text. Styled by name below:
+     faster, slower, unchanged, broken, added, removed, unmeasurable. */
+  .verdict { color: var(--muted); }                              /* 5.58:1 */
+  .verdict::before {
+    content: ""; display: block; flex: none;
+    width: 2.4mm; height: .9mm; background: var(--muted);
+  }
   .verdict.faster { color: var(--success); }                     /* 4.94:1 */
   .verdict.faster::before {
-    width: 0; height: 0; border-left: 1.1mm solid transparent; border-right: 1.1mm solid transparent;
+    width: 0; height: 0; background: none;
+    border-left: 1.1mm solid transparent; border-right: 1.1mm solid transparent;
     border-top: 1.7mm solid var(--success);
   }
   .verdict.slower, .verdict.broken { color: var(--error); }      /* 5.51:1 */
   .verdict.slower::before {
-    width: 0; height: 0; border-left: 1.1mm solid transparent; border-right: 1.1mm solid transparent;
+    width: 0; height: 0; background: none;
+    border-left: 1.1mm solid transparent; border-right: 1.1mm solid transparent;
     border-bottom: 1.7mm solid var(--error);
   }
   .verdict.broken::before { width: 2.2mm; height: 2.2mm; background: var(--error); border-radius: 50%; }
@@ -394,14 +445,20 @@
   .glossary div { break-inside: avoid; margin-bottom: 2.2mm; }
   .glossary dt { font-weight: 700; }
   .glossary dd { margin: 0; color: var(--muted); }      /* 5.58:1 */
-  .glossary .g { font-weight: 700; color: var(--blue-900); font-size: 7.5pt;
-                 letter-spacing: .1em; text-transform: uppercase; margin: 0 0 1mm; }
 
-  /* The method is four facts and one warning, not two paragraphs of prose. */
-  .method { display: grid; grid-template-columns: 32mm 1fr; gap: 1.5mm 4mm; margin: 0 0 3mm;
-            font-size: 9pt; max-width: 160mm; break-inside: avoid; }
-  .method dt { font-weight: 700; color: var(--muted); }
-  .method dd { margin: 0; }
+  /* Four short lines from report.go, set two-up, in place of the two
+     paragraphs this template used to hard-code — which could and did
+     contradict the sample count and the noise floor actually used. */
+  .method { margin: 0 0 3mm; padding: 0; list-style: none; font-size: 9pt;
+            max-width: 160mm; break-inside: avoid;
+            column-count: 2; column-gap: 8mm; }
+  .method li { break-inside: avoid; margin-bottom: 1.5mm; padding-left: 4mm; position: relative; }
+  /* A drawn marker rather than a bullet character: list-style glyphs come from
+     the font, and this document cannot assume any font but its own. */
+  .method li::before {
+    content: ""; position: absolute; left: 0; top: 1.5mm;
+    width: 1.6mm; height: 1.6mm; background: var(--blue);
+  }
   .fineprint { font-size: 8.5pt; color: var(--muted); max-width: 150mm; margin: 0;
                break-before: avoid; break-inside: avoid; }
 
@@ -544,9 +601,29 @@
     </div>
     {{ end }}
 
+    {{ if .NotRun }}
+    <div class="note">
+      <strong>{{ .NotRun }} scenario(s) did not run</strong>
+      They are absent from every count below rather than folded into &ldquo;unchanged&rdquo;: a scenario
+      that did not run is not evidence that nothing changed. {{ .NotRunNames }}.
+    </div>
+    {{ end }}
+
     {{ range .Warnings }}
     <div class="note"><strong>Read with care</strong>{{ . }}</div>
     {{ end }}
+
+    {{/* The findings come before the tally, and the tally before the lede: what
+         moved, then whether anything got slower, then the sentence. */}}
+    <div class="findings">
+      {{ range .Findings }}
+      <div class="finding {{ .Tone }}">
+        <div class="l">{{ .Label }}</div>
+        <div class="v">{{ .Value }}</div>
+        {{ with .Detail }}<div class="d">{{ . }}</div>{{ end }}
+      </div>
+      {{ end }}
+    </div>
 
     <div class="tally">
       <span class="seg faster"    style="flex:{{ .Headline.Faster }}">{{ if .Headline.Faster }}{{ .Headline.Faster }}{{ end }}</span>
@@ -567,23 +644,6 @@
     </div>
 
     <p class="lede">{{ .Lede }}</p>
-
-    <h2>How this was measured</h2>
-    <dl class="method">
-      <dt>Samples</dt>
-      <dd>{{ .Iterations }} measured per scenario after {{ .Warmup }} discarded warmups, issued one at a time.</dd>
-      <dt>Statistic</dt>
-      <dd>Median of the whole response, body read included — latency, not throughput.</dd>
-      <dt>Bytes</dt>
-      <dd>What crossed the network, with compression negotiated as a browser would.</dd>
-      <dt>Noise floor</dt>
-      <dd>Anything under {{ .NoiseFloorPercent }}% is reported as unchanged.</dd>
-    </dl>
-    <p class="fineprint">
-      These runs come from a working machine at sample counts in the tens. A tighter threshold would
-      produce confident verdicts that a rerun contradicts, so where a verdict rests on distributions
-      that overlap, the row says so.
-    </p>
 
     <h2 class="evidence">Scenario by scenario</h2>
     <p class="scale-note">
@@ -625,7 +685,10 @@
         <tr class="group"><th scope="colgroup" colspan="7">{{ $group }}</th></tr>
         {{ end }}
         <tr>
-          <td><span class="scenario">{{ $d.Name }}</span></td>
+          <td>
+            <span class="scenario">{{ $d.Name }}</span>
+            {{ with $d.Caveat }}<span class="caveat">{{ . }}</span>{{ end }}
+          </td>
           <td class="num">{{ $d.BeforeMs }}</td>
           <td class="num">{{ $d.AfterMs }}</td>
           <td class="num change">{{ $d.ChangeLabel }}</td>
@@ -639,14 +702,23 @@
           <td class="num bytes">{{ $d.BytesLabel }}</td>
           <td><span class="verdict {{ $d.VerdictClass }}">{{ $d.VerdictLabel }}</span></td>
         </tr>
-        {{ with $d.Caveat }}
-        <tr class="caveat-row"><td colspan="7"><span class="caveat"><b>Read with care</b>{{ . }}</span></td></tr>
-        {{ end }}
       </tbody>
       {{ end }}
       {{ end }}
     </table>
     </div>
+
+    {{/* Only rendered when something needs hedging, so a clean comparison does
+         not carry an empty heading. */}}
+    {{ $anyLong := false }}{{ range .Groups }}{{ range .Deltas }}{{ if .CaveatLong }}{{ $anyLong = true }}{{ end }}{{ end }}{{ end }}
+    {{ if $anyLong }}
+    <h2>Caveats in full</h2>
+    <dl class="endnotes">
+      {{ range .Groups }}{{ range .Deltas }}{{ $name := .Name }}{{ with .CaveatLong }}
+      <div><dt>{{ $name }}</dt><dd>{{ . }}</dd></div>
+      {{ end }}{{ end }}{{ end }}
+    </dl>
+    {{ end }}
 
     <h2>What each scenario measures</h2>
     {{/* Group headings are left out here: the scenario names carry the grouping
@@ -662,6 +734,19 @@
       {{ end }}
       {{ end }}
     </dl>
+
+    <h2>How this was measured</h2>
+    {{/* The lines are report.go's, not the template's: they carry the actual
+         sample count and the actual noise floor, which a hard-coded sentence
+         here could and did contradict. */}}
+    <ul class="method">
+      {{ range .Method }}<li>{{ . }}</li>{{ end }}
+    </ul>
+    <p class="fineprint">
+      These runs come from a working machine at sample counts in the tens. A tighter threshold would
+      produce confident verdicts that a rerun contradicts, so where a verdict rests on distributions
+      that overlap, the row says so.
+    </p>
 
   </main>
 
