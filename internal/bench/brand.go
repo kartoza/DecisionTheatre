@@ -3,6 +3,7 @@ package bench
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"os"
 )
 
@@ -48,8 +49,21 @@ type Brand struct {
 	Error       string
 	ErrorTint   string
 
-	FontSans string
-	FontMono string
+	// The font stacks are template.CSS rather than string because they contain
+	// the quotes a CSS font-family needs — 'Helvetica Neue' — and html/template's
+	// CSS value filter rejects any interpolated value containing a quote,
+	// substituting the sentinel ZgotmplZ. As plain strings the report's --sans
+	// and --mono custom properties both rendered as "ZgotmplZ", so every report
+	// and every PDF came out in the browser's default serif with the sentinel
+	// visible in its stylesheet. TestTheBrandReachesTheRenderedReport covers it.
+	//
+	// The values are safe to mark as CSS: DefaultBrand's are compile-time
+	// constants and BrandFromFile reads a repository asset, the same trust level
+	// as the SVG brand mark. A caller pointing BrandFromFile at an untrusted file
+	// would be injecting CSS, which is the same caveat that already applies to
+	// ReportOptions.MarkPath.
+	FontSans template.CSS
+	FontMono template.CSS
 }
 
 // DefaultBrand is the palette as it stands in the source of truth.
@@ -155,8 +169,8 @@ func BrandFromFile(path string) (Brand, error) {
 		Error:       get(p.Status, "error", "status"),
 		ErrorTint:   get(p.Status, "errorTint", "status"),
 
-		FontSans: get(p.Font, "sans", "font"),
-		FontMono: get(p.Font, "mono", "font"),
+		FontSans: template.CSS(get(p.Font, "sans", "font")),
+		FontMono: template.CSS(get(p.Font, "mono", "font")),
 	}
 	if err != nil {
 		return Brand{}, err

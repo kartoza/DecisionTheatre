@@ -46,6 +46,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kartoza/decision-theatre/internal/bench"
 )
@@ -1190,7 +1191,10 @@ with labels and "last", "last-1" and so on.
 	for _, r := range runs {
 		build := r.ServerVersion
 		if r.Commit != "" {
-			build = r.Commit[:8] + " " + build
+			// Length-checked: a results file is data read off disk, and a run
+			// whose commit is shorter than eight characters used to panic the
+			// whole listing, taking every other result down with it.
+			build = shortCommit(r.Commit) + " " + build
 		}
 		attempted, succeeded := coverage(r)
 		fmt.Printf("%-32s %-14s %-7s %-22s %-16s %d of %d measured\n",
@@ -1280,14 +1284,31 @@ func isRemote(target string) bool {
 	return host != "127.0.0.1" && host != "localhost" && host != "::1"
 }
 
+// truncate shortens a string to n characters, marking the cut with an ellipsis.
+//
+// Counted and cut in runes, not bytes. Commit titles routinely carry accented
+// names, typographic dashes and the occasional emoji, and `dtbench sweep`
+// truncates every one of them to 62 characters; a byte-wise cut could land in
+// the middle of a rune and print a replacement character.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	if n <= 1 {
-		return s[:n]
+	if n == 1 {
+		return "…"
 	}
-	return s[:n-1] + "…"
+	return string([]rune(s)[:n-1]) + "…"
+}
+
+// shortCommit abbreviates a revision without slicing past its end.
+func shortCommit(c string) string {
+	if len(c) > 8 {
+		return c[:8]
+	}
+	return c
 }
 
 func orDefault(s, fallback string) string {
