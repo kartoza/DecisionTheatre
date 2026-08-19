@@ -16,7 +16,11 @@ import (
 // Stored runs are the point of this tool — a comparison against last month is
 // only possible if last month's file can still be read. Bump this when the shape
 // changes incompatibly, and keep the reader able to load older versions.
-const ResultsVersion = 1
+// Version 2 added the fields marked "schema 2" below. The additions are all
+// optional, so a version 1 file still loads and simply lacks them; a reader must
+// therefore treat a zero FloorMs or an empty SamplesMs as "not recorded" rather
+// than as a measurement of zero.
+const ResultsVersion = 2
 
 // A Run is one execution of the suite against one target.
 //
@@ -65,6 +69,88 @@ type Run struct {
 	// Notes carries anything the tool wants a reader to know — a skipped heavy
 	// scenario, a target that could not report its version.
 	Notes []string `json:"notes,omitempty"`
+
+	// --- schema 2 ---------------------------------------------------------
+
+	// FloorMs is the p50 of the cheapest scenario in the suite: a request with
+	// no work behind it. It is the round trip, and every other number in the
+	// run contains it.
+	//
+	// Against localhost it is around 0.1 ms and can be ignored. Against
+	// production it was measured at 222 ms, with every cheap scenario landing
+	// within a millisecond of that figure — at which point the suite is
+	// reporting the network and the server's contribution is a rounding error.
+	// Recording the floor is what lets a reader tell those two situations
+	// apart, and lets ServerMs subtract it.
+	FloorMs float64 `json:"floorMs,omitempty"`
+
+	// FloorDriftPercent is how far the floor moved between the start and the
+	// end of the run.
+	//
+	// The floor is measured twice for one reason: this tool runs on a developer
+	// machine that is also running an editor, a browser, and — as happened
+	// while this was being written — another copy of this tool driven by
+	// somebody else. A floor that moved during the run says the machine did
+	// not hold still, and every number in the run inherits that doubt.
+	FloorDriftPercent float64 `json:"floorDriftPercent,omitempty"`
+
+	// SettleSeconds is how long the tool waited, after the target first
+	// answered /api/health, for the target to stop getting faster.
+	//
+	// /api/health on this server returns 200 immediately and reads nothing. It
+	// is not a readiness signal: at the moment it first answers, a background
+	// goroutine is still unioning roughly 150,000 polygons into a grid geometry
+	// cache, and the zoomed-out choropleth query blocks on that cache. Measured
+	// on the real datapack, the cache took 12.5 s to build and the query cost
+	// 10.4 s inside that window against 4.3 s after it — a 2.4x penalty
+	// applied to whichever revision happened to be measured first.
+	SettleSeconds float64 `json:"settleSeconds,omitempty"`
+
+	// Settled is false when the target never stopped improving within the
+	// allowed time, meaning the numbers that follow were taken from a server
+	// that was still warming up.
+	Settled bool `json:"settled"`
+
+	// ScenarioOrder is the order scenarios were executed in, which is not
+	// necessarily the order they are declared or reported in.
+	ScenarioOrder []string `json:"scenarioOrder,omitempty"`
+
+	// ShuffleSeed is the seed used when the order was randomised, so the order
+	// can be reproduced. Zero when the order was the declared one.
+	ShuffleSeed int64 `json:"shuffleSeed,omitempty"`
+
+	// GoVersion is the toolchain that built the tool, and — in a sweep, where
+	// the tool builds each revision with the toolchain it is itself running
+	// under — the toolchain that built the target. Two revisions compiled by
+	// different Go versions are not a clean comparison of their source.
+	GoVersion string `json:"goVersion,omitempty"`
+}
+
+// ServerMs is a scenario duration with the round-trip floor removed: an
+// estimate of the time the server spent rather than the time the user waited.
+//
+// Both are legitimate and they answer different questions. "How long does a
+// user in Johannesburg wait" is the total; "did our code get faster" is closer
+// to this. It is an estimate and not a measurement — the floor is itself a
+// sample with its own spread, and subtracting it from a number of the same
+// order leaves almost nothing but noise — so callers should show it beside the
+// raw figure, never instead of it.
+func (r Run) ServerMs(ms float64) float64 {
+	v := ms - r.FloorMs
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// FloorDominated reports whether the round trip is large enough that this
+// figure is mostly network.
+//
+// Two-thirds is a judgement, not a derivation: below it the server is still the
+// larger term and a comparison of totals is defensible; above it a reader
+// quoting the total as evidence about the code is quoting the network.
+func (r Run) FloorDominated(ms float64) bool {
+	return ms > 0 && r.FloorMs/ms > 0.66
 }
 
 // A ScenarioResult is the distribution for one scenario.
@@ -104,6 +190,60 @@ type ScenarioResult struct {
 	// a change here explains a change in the numbers.
 	ETag         string `json:"etag,omitempty"`
 	CacheControl string `json:"cacheControl,omitempty"`
+
+	// --- schema 2 ---------------------------------------------------------
+	// Everything below was added after the first version of this tool produced
+	// a comparison whose headline was wrong in both directions. Each field
+	// exists to stop a specific way of being confidently wrong; the comments
+	// say which.
+
+	// Absent means the target answered, but not with this scenario's response —
+	// the route does not exist on this build, or the capability it measures is
+	// not implemented.
+	//
+	// This is a third state alongside "worked" and "broke", and the reason it
+	// has to exist is that this server answers an unrouted /api path with 200
+	// and an HTML page. Without this field those become fast successful
+	// samples, and a scenario added on Tuesday appears to have existed on
+	// Monday and to have been four times quicker. Absent is also the *expected*
+	// state for the early revisions of a sweep, so it must not read as a fault.
+	Absent       bool   `json:"absent,omitempty"`
+	AbsentReason string `json:"absentReason,omitempty"`
+
+	// ContentType as returned, recorded so a reader can check the judgement
+	// above rather than take it on trust.
+	ContentType string `json:"contentType,omitempty"`
+
+	// WarmupMs summarises the requests that were made and then discarded.
+	//
+	// Discarding them is right — a steady-state latency is the question — but
+	// discarding them *silently* hides the thing most likely to make the
+	// headline meaningless. Several endpoints here are dominated by a
+	// server-side cache that the first request populates, so the difference
+	// between this and TotalMs is the size of the cache effect, and it belongs
+	// in the record rather than in the bin.
+	WarmupMs Stats `json:"warmupMs"`
+
+	// CacheSpeedup is the first warmup request divided by the measured p50: how
+	// many times faster a repeat is than a first hit. Values well above 1 mean
+	// the p50 is a cache-hit measurement, and should be read as one.
+	CacheSpeedup float64 `json:"cacheSpeedup,omitempty"`
+
+	// SamplesMs are the raw measured totals, in milliseconds and in the order
+	// taken.
+	//
+	// Kept because summary statistics cannot be tested against each other: a
+	// rank-sum test needs the samples, and without one the tool can only
+	// compare two medians and hope. At twenty samples this costs a couple of
+	// hundred bytes per scenario, which is nothing against being able to say
+	// how likely a difference is to be noise. Order is preserved so a drift
+	// within a run stays visible.
+	SamplesMs []float64 `json:"samplesMs,omitempty"`
+
+	// Conditional records that this scenario measured a revalidation rather
+	// than a fetch, so its timings are not comparable with a fetch of the same
+	// URL.
+	Conditional bool `json:"conditional,omitempty"`
 }
 
 // Stats summarises a set of samples.
