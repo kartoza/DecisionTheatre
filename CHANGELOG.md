@@ -197,6 +197,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A client that gave up did not stop the work it had started.** No database call
+  took a `context.Context`, so when a user closed a tab, panned the map again, or
+  a proxy timed out, the query ran to completion against SQLite — holding a
+  connection and CPU for an answer nobody would read. The most expensive query in
+  the application takes over four seconds and the map issues one on every pan, so
+  abandoned work accumulated exactly when the server was already busy.
+
+  Every SQLite-touching method now takes a context and uses the `Context` query
+  variants, and a cancelled request is logged as cancelled rather than as a
+  failure. Cancellation is detected from both shapes it arrives in: `database/sql`
+  reports `context.Canceled`, while go-sqlite3 reports its own `SQLITE_INTERRUPT`
+  when a statement is stopped mid-flight. A blown deadline is deliberately *not*
+  treated as a cancellation — that is a real failure.
+
+  Some work is deliberately not cancellable, because it is started on behalf of
+  one request and serves all of them: the grid geometry cache build is guarded by
+  a `sync.Once`, so a cancellation would tear it down and nothing would restart
+  it, leaving the aggregated map path broken for the life of the process. What is
+  now cancellable there is the *wait*, not the build.
+
+  Ten result loops gained the `rows.Err()` check they lacked. This was required
+  rather than tidy: a cancelled scan ends iteration early, so without it a partial
+  choropleth or a partial statistics set would have been returned as complete —
+  threading a context would have created a new silent-failure path while closing
+  another.
+
 - **The container images built against a different WebKit than everything else ships.**
   `deployments/Dockerfile`, `deployments/Dockerfile.cross` and
   `deployments/Dockerfile.builder` all installed `libwebkit2gtk-4.0-dev`, while the
