@@ -39,7 +39,7 @@ func newFakeMapTilerUpstream(t *testing.T) *fakeMapTilerUpstream {
 
 	mux := http.NewServeMux()
 	u.Server = httptest.NewServer(mux)
-	t.Cleanup(u.Server.Close)
+	t.Cleanup(u.Close)
 
 	mux.HandleFunc("/style.json", func(w http.ResponseWriter, r *http.Request) {
 		style := map[string]interface{}{
