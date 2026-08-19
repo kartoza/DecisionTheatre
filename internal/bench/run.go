@@ -89,10 +89,14 @@ func (o *Options) applyDefaults() {
 	if o.Iterations <= 0 {
 		o.Iterations = 20
 	}
+	// A warmup of zero means zero.
+	//
+	// It used to be silently promoted to three, which made "--warmup 0"
+	// impossible to express — and that flag is the only way to ask the question
+	// "how expensive is the first request", which for several scenarios here is
+	// the difference between 22 ms and 0.5 ms. Negative now means "use the
+	// default"; zero is honoured.
 	if o.Warmup < 0 {
-		o.Warmup = 0
-	}
-	if o.Warmup == 0 {
 		o.Warmup = 3
 	}
 	if o.HeavyIterations <= 0 {
@@ -396,6 +400,8 @@ func runScenario(ctx context.Context, client *http.Client, base string, s Scenar
 		sample, err := once(ctx, client, s, target, extra)
 		if err != nil {
 			res.Errors++
+			// Kept verbatim so a report can say why, not merely how many.
+			res.LastError = err.Error()
 			continue
 		}
 

@@ -244,6 +244,16 @@ type ScenarioResult struct {
 	// than a fetch, so its timings are not comparable with a fetch of the same
 	// URL.
 	Conditional bool `json:"conditional,omitempty"`
+
+	// LastError is the transport error from the final failed request, verbatim.
+	//
+	// Errors were previously only counted, which left a report able to say that
+	// every request failed but not why — and "connection refused", "TLS
+	// handshake timeout" and "context deadline exceeded" call for three
+	// completely different responses from whoever reads it. Verbatim rather
+	// than classified: the Go error text already names the cause, and a
+	// classification would be one more thing to get wrong.
+	LastError string `json:"lastError,omitempty"`
 }
 
 // Stats summarises a set of samples.

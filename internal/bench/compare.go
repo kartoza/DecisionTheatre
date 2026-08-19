@@ -30,6 +30,16 @@ const (
 	// improvement would be actively misleading.
 	Broken Verdict = "broken"
 
+	// Traded is a change that costs server time and saves payload, or the
+	// reverse. It is the shape of nearly every payload optimisation, and it
+	// needs its own word because calling it "slower" is how this tool came to
+	// headline the best change of the week as a 830% regression.
+	//
+	// See transfer.go: measured over loopback, compression and every other
+	// size-reducing change is pure cost, because the transfer it saves takes no
+	// measurable time on the same machine.
+	Traded Verdict = "traded"
+
 	// Absent is a scenario the target could not answer because the endpoint or
 	// capability does not exist on that build.
 	//
@@ -117,6 +127,10 @@ type Delta struct {
 	// Test.Possible is false the verdict rests on the weaker summary-statistics
 	// check instead, and Caveat says so.
 	Test TestResult
+
+	// Trade describes a size-for-time change and where it breaks even. Consult
+	// it before reading RelativeChange as a regression.
+	Trade Trade
 
 	// FloorDominated marks a delta whose scenario is mostly round-trip time on
 	// both sides, so the totals are describing the network rather than the
@@ -380,12 +394,12 @@ func finaliseVerdict(d *Delta, baseline, current Run) {
 
 	// Gate 1: absolute size. Below the harness's own resolution, nothing can be
 	// concluded in either direction.
-	if abs < practicalFloorMs {
+	if abs < PracticalFloorMs {
 		d.Verdict = Unchanged
 		d.Caveat = joinCaveat(d.Caveat, fmt.Sprintf(
 			"The difference is %.2f ms, below the %.1f ms this harness can attribute to the server rather than to "+
 				"itself. Whether this endpoint changed is not something these measurements can establish.",
-			abs, practicalFloorMs))
+			abs, PracticalFloorMs))
 		annotateBytes(d)
 		return
 	}
@@ -420,6 +434,21 @@ func finaliseVerdict(d *Delta, baseline, current Run) {
 		d.Caveat = joinCaveat(d.Caveat,
 			"Raw samples were not recorded for at least one side, so this verdict rests on comparing medians "+
 				"against the observed spread rather than on a significance test.")
+	}
+
+	// A real, measurable difference in server time. Before naming it faster or
+	// slower, check whether it is really a trade — see transfer.go. Measured on
+	// the same machine as the server, a change that spends CPU to send fewer
+	// bytes shows all of its cost and none of its benefit, and calling that a
+	// regression argues against the work most worth doing.
+	d.Trade = tradeOff(d.AbsoluteChangeMs(), d.Baseline.BytesMax-d.Current.BytesMax)
+	if d.Trade.IsTrade && math.Abs(d.BytesChange) >= NoiseFloor {
+		d.Verdict = Traded
+		d.Caveat = joinCaveat(d.Caveat, d.Trade.Describe())
+		if d.Test.Possible {
+			d.Caveat = joinCaveat(d.Caveat, d.SignificanceNote())
+		}
+		return
 	}
 
 	if d.RelativeChange < 0 {
@@ -518,6 +547,10 @@ func firstNonEmpty(vals ...string) string {
 type Headline struct {
 	Faster, Slower, Unchanged, Broken, Added, Removed int
 
+	// Traded counts size-for-time changes, which are neither a win nor a
+	// regression until you say over what connection.
+	Traded int
+
 	// BiggestWin and BiggestRegression are the deltas worth naming.
 	BiggestWin        *Delta
 	BiggestRegression *Delta
@@ -533,6 +566,9 @@ type Headline struct {
 func (h Headline) describe() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d faster, %d slower, %d unchanged", h.Faster, h.Slower, h.Unchanged)
+	if h.Traded > 0 {
+		fmt.Fprintf(&b, ", %d traded (smaller but slower to produce, or the reverse)", h.Traded)
+	}
 	if h.Broken > 0 {
 		fmt.Fprintf(&b, ", %d BROKEN", h.Broken)
 	}
@@ -565,8 +601,14 @@ func (c Comparison) Summarise() Headline {
 			if h.BiggestRegression == nil || d.RelativeChange > h.BiggestRegression.RelativeChange {
 				h.BiggestRegression = d
 			}
+			// Note the asymmetry with Traded above: a trade can never become the
+			// headline regression, because the headline is the one number that
+			// gets quoted and "biggest regression: tour-viphya (+830%)" was a
+			// four-hundred-kilobyte saving.
 		case Unchanged:
 			h.Unchanged++
+		case Traded:
+			h.Traded++
 		case Broken:
 			h.Broken++
 		case Added:

@@ -133,9 +133,9 @@ func TestPracticalFloorIsAboveTheObservedSubMillisecondScatter(t *testing.T) {
 	// ranged 0.07 to 0.44 ms, and two runs minutes apart moved a median from
 	// 0.07 to 0.09 ms. The floor has to sit above that or it does nothing.
 	const observedScatterMs = 0.44
-	if practicalFloorMs < observedScatterMs {
+	if PracticalFloorMs < observedScatterMs {
 		t.Fatalf("the practical floor of %v ms is below the %v ms scatter actually observed, so differences "+
 			"smaller than the measurement noise would still be reported as verdicts",
-			practicalFloorMs, observedScatterMs)
+			PracticalFloorMs, observedScatterMs)
 	}
 }

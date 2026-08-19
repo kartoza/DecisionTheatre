@@ -25,7 +25,7 @@ import (
 // What follows fixes that with three independent gates, all of which a change
 // must pass before it is called a change:
 //
-//  1. It must be big enough to matter in absolute terms — see practicalFloorMs.
+//  1. It must be big enough to matter in absolute terms — see PracticalFloorMs.
 //  2. It must be big enough to matter in relative terms — NoiseFloor, kept.
 //  3. It must be unlikely to have arisen by chance — a Mann-Whitney rank-sum
 //     test over the raw samples, with a Holm correction because the suite asks
@@ -37,7 +37,7 @@ import (
 // difference between a report that survives being checked and one that does
 // not.
 
-// practicalFloorMs is the smallest difference in milliseconds this harness will
+// PracticalFloorMs is the smallest difference in milliseconds this harness will
 // attribute to the server rather than to itself.
 //
 // One millisecond. It is a judgement, and here is the evidence behind it. On
@@ -52,7 +52,11 @@ import (
 // improvement on a local target, and should not pretend otherwise. An endpoint
 // that goes from 0.11 ms to 0.08 ms may well have got faster; this method
 // cannot tell, and a method that cannot tell should say "unchanged".
-const practicalFloorMs = 1.0
+//
+// Exported so that a report can state the threshold it applied. Describing the
+// method as "changes under ten percent" stopped being accurate when this floor
+// and the significance test were added.
+const PracticalFloorMs = 1.0
 
 // significanceLevel is the family-wise error rate for the whole suite, not for
 // a single scenario — that is what the Holm correction below buys.
