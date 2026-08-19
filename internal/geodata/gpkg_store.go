@@ -1783,7 +1783,7 @@ func (s *GpkgStore) GetCatchmentAreasByIDs(ctx context.Context, ids []string) ([
 			var catchmentIDRaw interface{}
 			var area sql.NullFloat64
 			if err := rows.Scan(&catchmentIDRaw, &area); err != nil {
-				rows.Close()
+				rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
 				return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
 			}
 			results = append(results, CatchmentIndicators{
@@ -1985,7 +1985,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ctx context.Context, ids []strin
 
 			for rows.Next() {
 				if err := rows.Scan(scanArgs...); err != nil {
-					rows.Close()
+					rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
 					scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to scan %s: %w", tableName, err)}
 					return
 				}
@@ -2446,7 +2446,7 @@ func (s *GpkgStore) GetCatchmentsByIDs(ctx context.Context, ids []string) ([]Geo
 			var idRaw interface{}
 			var geojsonStr string
 			if err := rows.Scan(&idRaw, &geojsonStr); err != nil {
-				rows.Close()
+				rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
 				return nil, fmt.Errorf("failed to scan catchments: %w", err)
 			}
 

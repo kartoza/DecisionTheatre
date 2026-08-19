@@ -132,7 +132,7 @@ func TestCatchmentIDChunkSizeRespectsSQLiteVariableLimit(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return rows.Close()
+		return rows.Close() //nolint:sqlclosecheck // the caller's error path, deliberately returning the Close error
 	}
 
 	if err := prepares(sqliteMaxVariables); err != nil {
