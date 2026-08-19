@@ -4,15 +4,33 @@ import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, 
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, SiteIndicators } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { registerMap, unregisterMap } from '../hooks/useMapSync';
+import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
-import { evictExpired } from '../lib/ttlCache';
+import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
 import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
+import {
+  PRISM_STOPS,
+  attributeValueAccessor,
+  featureStateValueAccessor,
+  buildFillColorExpression,
+  buildOpacityColorExpression,
+  buildExtrusionExpression,
+  zoneStatsFromValues,
+  type ChoroplethValueAccessor,
+} from '../lib/choroplethPaint';
+import {
+  applyCatchmentValues,
+  CATCHMENT_TILE_SOURCE_LAYER,
+  catchmentTileSourceSpec,
+  fetchCatchmentTileset,
+  forgetCatchmentValues,
+  type CatchmentTileset,
+} from '../lib/choroplethTiles';
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -32,6 +50,8 @@ interface MapViewProps {
   onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
   colorScaleType: ColorScaleType;
+  /** Which zone's min/max the color scale (and legend) is stretched to. Defaults to 'domain'. */
+  rangeMode?: RangeMode;
   // Slider position synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -115,27 +135,6 @@ const CHOROPLETH_3D_RIGHT = 'choropleth-right-3d';
 const IDENTIFY_HIGHLIGHT_GLOW = 'identify-highlight-glow';
 const IDENTIFY_HIGHLIGHT_LINE = 'identify-highlight-line';
 
-// Prism colour gradient for data visualization
-// Spectrum: violet -> indigo -> blue -> cyan -> green -> yellow -> orange -> red
-const PRISM_STOPS: [number, string][] = [
-  [0, '#6a0dad'],       // violet
-  [0.143, '#4b0082'],   // indigo
-  [0.286, '#0074d9'],   // blue
-  [0.429, '#00bcd4'],   // cyan
-  [0.571, '#2ecc40'],   // green
-  [0.714, '#ffdc00'],   // yellow
-  [0.857, '#ff851b'],   // orange
-  [1, '#e8003f'],       // red
-];
-
-// Steepness (k) of the logistic curve used by the 'logistic' color scale type.
-// Higher values sharpen the transition around the domain midpoint.
-const LOGISTIC_STEEPNESS = 10;
-
-// Strength (C) of the log1p curve used by the 'logarithmic' color scale type.
-// Higher values exaggerate contrast among low values at the expense of high ones.
-const LOGARITHMIC_STRENGTH = 9;
-
 // CSS gradient for legend
 export const PRISM_CSS_GRADIENT =
   `linear-gradient(to right, ${PRISM_STOPS.map(([, c]) => c).join(', ')})`;
@@ -150,9 +149,6 @@ const CATCHMENT_ID_PROP = 'HYBAS_ID';
 // blowup - the actual zoom value is always forwarded, so the crossover is
 // controlled entirely on the backend.
 const MIN_CATCHMENT_ZOOM = 3;
-
-// Maximum extrusion height in metres for 3D mode
-const MAX_EXTRUSION_HEIGHT = 50000;
 
 // Choropleth fill-opacity depends on which basemap is showing beneath it:
 // the busier Google satellite imagery needs a touch of transparency to read
@@ -271,23 +267,6 @@ function padBoundsForFit(bounds: BoundingBox): [[number, number], [number, numbe
   ];
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const normalized = hex.trim().replace('#', '');
-  if (normalized.length === 3) {
-    const r = parseInt(normalized[0] + normalized[0], 16);
-    const g = parseInt(normalized[1] + normalized[1], 16);
-    const b = parseInt(normalized[2] + normalized[2], 16);
-    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
-  }
-  if (normalized.length === 6) {
-    const r = parseInt(normalized.slice(0, 2), 16);
-    const g = parseInt(normalized.slice(2, 4), 16);
-    const b = parseInt(normalized.slice(4, 6), 16);
-    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b };
-  }
-  return null;
-}
-
 // Debounce delay for fetching choropleth data on map move (ms)
 const FETCH_DEBOUNCE_MS = 300;
 
@@ -328,24 +307,10 @@ function computeZoneStats(data: ChoroplethData, attribute: string): ZoneStats | 
     }
   }
 
-  if (values.length === 0) return null;
-
-  let min = Infinity;
-  let max = -Infinity;
-  let sum = 0;
-
-  for (const v of values) {
-    if (v < min) min = v;
-    if (v > max) max = v;
-    sum += v;
-  }
-
-  return {
-    min,
-    max,
-    mean: sum / values.length,
-    count: values.length,
-  };
+  // The arithmetic itself lives in the paint library so that the vector-tile
+  // path, which has the values as a plain array and never builds a feature per
+  // catchment, summarises them identically rather than in a parallel copy.
+  return zoneStatsFromValues(values);
 }
 
 function simplifyBoundaryForComputation(geometry: GeoJSON.Geometry): GeoJSON.Geometry {
@@ -624,7 +589,7 @@ export function formatNumber(n: number): string {
 // Module-level cache for pure (no site overrides) choropleth requests.
 // Multiple panes requesting the same scenario+attribute+bbox share one in-flight
 // fetch instead of firing N identical HTTP requests simultaneously.
-const _choroplethCache = new Map<string, { promise: Promise<ChoroplethData | null>; ts: number }>();
+const _choroplethCache: SharedCache<ChoroplethData> = new Map();
 const CHOROPLETH_CACHE_TTL_MS = 60_000;
 
 // Module-level caches for the two expensive synchronous intersection routines.
@@ -644,7 +609,168 @@ function clearSiteComputationCaches(siteId: string): void {
 }
 
 /**
+ * The colour-scale domain both render paths share.
+ *
+ * Always the attribute's global domain across every catchment, independent of
+ * the selected zone range (Full/Extent/Site). The backend's max is
+ * scenario-specific (metadata.csv's curated maxval_curr/maxval_ref rather than a
+ * scan of every catchment), so the two sides can disagree when comparing
+ * reference against current — take the larger of the two so neither side's
+ * colors get clipped, and the result doesn't depend on which scenario happens to
+ * be on the left.
+ */
+function resolveDomainRange(
+  payloads: Array<{ domain_min?: number; domain_max?: number } | null>,
+): { min: number; max: number } {
+  const mins: number[] = [];
+  const maxes: number[] = [];
+  for (const payload of payloads) {
+    if (payload && payload.domain_min !== undefined && payload.domain_max !== undefined) {
+      mins.push(payload.domain_min);
+      maxes.push(payload.domain_max);
+    }
+  }
+  return {
+    min: mins.length > 0 ? Math.min(...mins) : 0,
+    max: maxes.length > 0 ? Math.max(...maxes) : 1,
+  };
+}
+
+/** Combine left/right ZoneStats into one range, widest side wins on each end. */
+function combineStatsRange(
+  left: ZoneStats | null,
+  right: ZoneStats | null,
+): { min: number; max: number } | null {
+  const mins = [left?.min, right?.min].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  const maxes = [left?.max, right?.max].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  if (mins.length === 0 || maxes.length === 0) return null;
+  return { min: Math.min(...mins), max: Math.max(...maxes) };
+}
+
+/**
+ * The color scale actually painted onto the map. Unlike resolveDomainRange
+ * (the metadata cap, used verbatim for rangeMode 'domain'), 'extent' and
+ * 'site' stretch the scale to the min/max of whichever zone is selected, so
+ * local variation that is subtle against the full dataset's range still
+ * shows up as strong color contrast within that zone.
+ *
+ * Falls back down the chain (site → extent → domain) when the more local
+ * stats aren't available yet — e.g. the site-scoped fetch is still in
+ * flight the first time a site's map paints.
+ */
+function resolvePaintRange(
+  rangeMode: RangeMode,
+  domainRange: { min: number; max: number },
+  extentStats: { left: ZoneStats | null; right: ZoneStats | null },
+  siteStats: { left: ZoneStats | null; right: ZoneStats | null } | null,
+): { min: number; max: number } {
+  if (rangeMode === 'site') {
+    return combineStatsRange(siteStats?.left ?? null, siteStats?.right ?? null)
+      ?? combineStatsRange(extentStats.left, extentStats.right)
+      ?? domainRange;
+  }
+  if (rangeMode === 'extent') {
+    return combineStatsRange(extentStats.left, extentStats.right) ?? domainRange;
+  }
+  return domainRange;
+}
+
+/**
+ * The vector-tile path's payload: catchment ids and their values for the
+ * viewport, with no geometry. Mirrors CatchmentValuesResponse in
+ * internal/api/handler.go.
+ */
+interface ChoroplethValues {
+  scenario: string;
+  attribute: string;
+  ids: number[];
+  values: number[];
+  domain_min: number;
+  domain_max: number;
+}
+
+// Companion to _choroplethCache for the values endpoint. Six panes x two
+// scenarios ask for the same viewport at the same moment; one fetch serves all
+// of them.
+const _choroplethValuesCache: SharedCache<ChoroplethValues> = new Map();
+
+/**
+ * Fetch the attribute values for the current viewport, for the vector-tile
+ * path. Geometry comes from the tiles, so this is the only thing a pan or an
+ * attribute change has to move over the wire.
+ *
+ * Site ideal overrides are applied here for the browser runtime exactly as
+ * fetchChoroplethData does for the GeoJSON path: the backend store is never
+ * updated in that runtime, so the edits live in browser storage.
+ */
+async function fetchChoroplethValues(
+  scenario: Scenario,
+  attribute: string,
+  bounds: maplibregl.LngLatBounds,
+  siteId?: string | null,
+  idealOverrides?: Map<number, number>,
+  signal?: AbortSignal,
+): Promise<ChoroplethValues | null> {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+
+  const params = new URLSearchParams({
+    scenario,
+    attribute,
+    minx: sw.lng.toString(),
+    miny: sw.lat.toString(),
+    maxx: ne.lng.toString(),
+    maxy: ne.lat.toString(),
+  });
+
+  const hasSiteOverride = siteId && scenario === 'future';
+  if (hasSiteOverride) {
+    params.set('siteId', siteId);
+  }
+
+  // The same URL means different things once site ideal overrides are in play,
+  // so those requests are never shared or cached. This is deliberate; do not
+  // "optimise" it away without putting the overrides in the key.
+  const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
+  const key = params.toString();
+
+  const run = async (requestSignal?: AbortSignal): Promise<ChoroplethValues> => {
+    const resp = await fetch(`/api/catchment-values?${params}`, { signal: requestSignal });
+    if (!resp.ok) throw new Error(`catchment values request failed: HTTP ${resp.status}`);
+    return await resp.json() as ChoroplethValues;
+  };
+
+  try {
+    const data = canCache
+      ? await sharedRequest(_choroplethValuesCache, key, CHOROPLETH_CACHE_TTL_MS, run, signal)
+      : await run(signal);
+
+    if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
+      // Only reachable on the uncached path (overrides imply !canCache), which
+      // matters: this mutates the payload in place and a shared one has other
+      // readers.
+      for (let i = 0; i < data.ids.length; i++) {
+        const override = idealOverrides.get(data.ids[i]);
+        if (override !== undefined) data.values[i] = override;
+      }
+    }
+
+    return data;
+  } catch (err) {
+    // A cancelled request is not a failure and must not be reported as "no
+    // data" — that would repaint the map as empty for a viewport the user has
+    // already left. Let the caller's staleness check deal with it.
+    if (isAbortError(err)) throw err;
+    console.error('Failed to fetch catchment values:', err);
+    return null;
+  }
+}
+
+/**
  * Fetch choropleth GeoJSON data for the current viewport.
+ *
+ * The expensive one: a full-domain request is seconds and megabytes, so a
+ * superseded one is cancelled rather than merely ignored.
  */
 async function fetchChoroplethData(
   scenario: Scenario,
@@ -653,7 +779,8 @@ async function fetchChoroplethData(
   zoom: number,
   siteId?: string | null,
   idealOverrides?: Map<number, number>,
-  valuesOnly = false
+  valuesOnly = false,
+  signal?: AbortSignal,
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -680,42 +807,26 @@ async function fetchChoroplethData(
     params.set('siteId', siteId);
   }
 
-  // Deduplicate concurrent requests for pure (non-site-specific) fetches.
+  // Deduplicate concurrent requests for pure (non-site-specific) fetches. As
+  // above, a site override makes the URL an incomplete description of the
+  // question, so those are neither shared nor cached.
   const canCache = !hasSiteOverride && (!idealOverrides || idealOverrides.size === 0);
-  if (canCache) {
-    const key = params.toString();
-    const now = Date.now();
-    const hit = _choroplethCache.get(key);
-    if (hit && now - hit.ts < CHOROPLETH_CACHE_TTL_MS) return hit.promise;
+  const key = params.toString();
 
-    // Keys embed the viewport bbox, which changes on nearly every pan/zoom -
-    // sweep stale entries so this cache doesn't grow unbounded for the life
-    // of the tab (see evictExpired).
-    evictExpired(_choroplethCache, CHOROPLETH_CACHE_TTL_MS, now);
-
-    const promise = (async (): Promise<ChoroplethData | null> => {
-      try {
-        const resp = await fetch(`/api/choropleth?${params}`);
-        if (!resp.ok) return null;
-        return await resp.json() as ChoroplethData;
-      } catch (err) {
-        console.error('Failed to fetch choropleth data:', err);
-        return null;
-      }
-    })();
-
-    promise.catch(() => _choroplethCache.delete(key));
-    _choroplethCache.set(key, { promise, ts: now });
-    return promise;
-  }
+  const run = async (requestSignal?: AbortSignal): Promise<ChoroplethData> => {
+    const resp = await fetch(`/api/choropleth?${params}`, { signal: requestSignal });
+    if (!resp.ok) throw new Error(`choropleth request failed: HTTP ${resp.status}`);
+    return await resp.json() as ChoroplethData;
+  };
 
   try {
-    const resp = await fetch(`/api/choropleth?${params}`);
-    if (!resp.ok) return null;
-    const data: ChoroplethData = await resp.json();
+    const data = canCache
+      ? await sharedRequest(_choroplethCache, key, CHOROPLETH_CACHE_TTL_MS, run, signal)
+      : await run(signal);
 
     // In browser mode the backend store is never updated, so apply per-catchment
-    // ideal overrides client-side for the future scenario.
+    // ideal overrides client-side for the future scenario. Uncached path only,
+    // so the mutation below cannot be seen by another caller.
     if (scenario === 'future' && idealOverrides && idealOverrides.size > 0) {
       for (const feature of data.features) {
         if (feature.properties.HYBAS_ID === undefined) continue;
@@ -728,164 +839,10 @@ async function fetchChoroplethData(
 
     return data;
   } catch (err) {
+    if (isAbortError(err)) throw err;
     console.error('Failed to fetch choropleth data:', err);
     return null;
   }
-}
-
-/**
- * Build a MapLibre expression producing the 0-1 normalized position of an
- * attribute's value within [min, max].
- *
- * - 'logistic' passes the linear ratio through a sigmoid centered on the
- *   domain midpoint, which compresses values near the extremes and expands
- *   contrast around the middle of the range - useful when most values
- *   cluster around the mean with a long tail.
- * - 'logarithmic' passes the linear ratio through a log1p curve, which
- *   expands contrast among low values at the expense of high ones - useful
- *   when most values are small with a few large outliers. log1p (rather than
- *   a plain log of the raw value) is used so the domain minimum, which can
- *   legitimately be 0, never hits an undefined log(0).
- */
-function buildNormalizedValueExpression(
-  attribute: string,
-  min: number,
-  range: number,
-  scaleType: ColorScaleType
-): maplibregl.ExpressionSpecification {
-  const linearRatio = [
-    '/',
-    ['-', ['coalesce', ['get', attribute], min], min],
-    range,
-  ] as maplibregl.ExpressionSpecification;
-
-  if (scaleType === 'linear') {
-    return linearRatio;
-  }
-
-  if (scaleType === 'logarithmic') {
-    return [
-      'let',
-      't',
-      linearRatio,
-      [
-        '/',
-        ['ln', ['+', 1, ['*', LOGARITHMIC_STRENGTH, ['var', 't']]]],
-        Math.log(1 + LOGARITHMIC_STRENGTH),
-      ],
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  return [
-    'let',
-    't',
-    linearRatio,
-    [
-      '/',
-      1,
-      ['+', 1, ['^', Math.E, ['*', -LOGISTIC_STEEPNESS, ['-', ['var', 't'], 0.5]]]],
-    ],
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-color based on attribute value and global min/max.
- */
-function buildFillColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor?: string | null,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // When a metadata base color is provided, blend from white (low values)
-  // to the base color (high values) instead of using opacity.
-  if (baseColor) {
-    const rgb = hexToRgb(baseColor);
-    if (!rgb) return baseColor;
-
-    const range = max - min;
-    if (range === 0) {
-      // Degenerate domain (every visible value equals min) - treat it as the
-      // low end of the white-to-baseColor scale rather than the high end.
-      return '#FFFFFF';
-    }
-
-    return [
-      'interpolate',
-      ['linear'],
-      buildNormalizedValueExpression(attribute, min, range, scaleType),
-      0,
-      '#FFFFFF',
-      1,
-      baseColor,
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  const range = max - min;
-  if (range === 0) {
-    // Single value - use middle color
-    return PRISM_STOPS[Math.floor(PRISM_STOPS.length / 2)][1];
-  }
-
-  // Build interpolate expression: normalize value to 0-1 then map to colors
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
-  ] as maplibregl.ExpressionSpecification;
-}
-
-function buildOpacityColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor: string,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // Blend color from white (low values) to the metadata base color
-  // (high values). Opacity will be handled separately by layer paint.
-  const rgb = hexToRgb(baseColor);
-  if (!rgb) return baseColor;
-
-  const range = max - min;
-  if (range === 0) {
-    // Degenerate domain (every visible value equals min) - treat it as the
-    // low end of the white-to-baseColor scale rather than the high end.
-    return '#FFFFFF';
-  }
-
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    0,
-    '#FFFFFF',
-    1,
-    baseColor,
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-extrusion-height based on attribute value.
- */
-function buildExtrusionExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | number {
-  const range = max - min;
-  if (range === 0) {
-    return MAX_EXTRUSION_HEIGHT / 2;
-  }
-
-  return [
-    '*',
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    MAX_EXTRUSION_HEIGHT,
-  ] as maplibregl.ExpressionSpecification;
 }
 
 function setCatchmentOutlinesSoftness(map: maplibregl.Map, soften: boolean) {
@@ -920,12 +877,18 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
+  // Null whenever compare mode is off — see createRightMap in the map-init
+  // effect. Everything that mirrors work onto the right side has to tolerate
+  // its absence.
   const rightMapRef = useRef<maplibregl.Map | null>(null);
+  // Set by the map-init effect; the compare-mode effect below drives them.
+  const ensureRightMapRef = useRef<(() => maplibregl.Map) | null>(null);
+  const destroyRightMapRef = useRef<(() => void) | null>(null);
   const viewportBoundsRef = useRef<maplibregl.LngLatBoundsLike | null>(null);
   const leftClipContainerRef = useRef<HTMLDivElement | null>(null);
   const compareContainerRef = useRef<HTMLDivElement | null>(null);
@@ -933,7 +896,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const sliderHandleRef = useRef<HTMLDivElement | null>(null);
   const sliderDockedRef = useRef<'left' | 'right' | null>(null);
   const isDragging = useRef(false);
-  const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
+  // `right` reads as "the right map, if any, has loaded". The right map only
+  // exists in compare mode (see createRightMap below), so when it is absent the
+  // right side is trivially ready and every mapsReady.current.right check in
+  // this file stays correct without a null dance at each one.
+  const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: true });
   const resizeFrameRef = useRef<number | null>(null);
 
   // Compare swiper state (split-screen on/off)
@@ -986,6 +953,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   onIdentifyRef.current = onIdentify;
 
   // Store map extent change callback in ref
+  const lastExtentSignatureRef = useRef<string>('');
   const onMapExtentChangeRef = useRef(onMapExtentChange);
   onMapExtentChangeRef.current = onMapExtentChange;
 
@@ -1082,6 +1050,30 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
 
+  /**
+   * Ordering and cancellation for the choropleth pipeline.
+   *
+   * applyColors is invoked from sixteen places and is asynchronous throughout,
+   * so two runs are routinely in flight together — a pan while the previous
+   * pan's values are still on the wire, an attribute change during a scenario
+   * change. Nothing previously ordered them, so whichever response happened to
+   * land last painted the map, and the map could settle showing the values of a
+   * viewport, scenario or attribute the user had already left. That is the bug
+   * worth fixing here; the wasted work is secondary.
+   *
+   * Every run takes a ticket. Only the holder of the newest ticket is allowed
+   * to publish statistics or touch a layer, and superseding a run aborts its
+   * requests so the connection is freed rather than merely ignored.
+   */
+  const applyColorsRunRef = useRef(0);
+  const applyColorsAbortRef = useRef<AbortController | null>(null);
+
+  // Whether the served tileset carries catchment geometry, and from which zoom.
+  // Null until resolved, and null for good on a datapack whose tiles predate
+  // catchment tiling — in which case every zoom uses the GeoJSON path, exactly
+  // as before.
+  const catchmentTilesetRef = useRef<CatchmentTileset | null>(null);
+
   /** Fetch and apply choropleth data to both maps based on current viewport.
    *  Only shown when zoomed in past MIN_CATCHMENT_ZOOM. */
   const applyColors = useCallback(async () => {
@@ -1089,8 +1081,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap) return;
+    // rightMap may legitimately be null: it only exists in compare mode. Every
+    // right-side call below either takes a nullable map or is guarded.
+    if (!leftMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
+
+    // Taken only once the run is certain to do something: an early bail on a
+    // map that is not there yet must not cancel a run that is.
+    applyColorsAbortRef.current?.abort();
+    const abort = new AbortController();
+    applyColorsAbortRef.current = abort;
+    const run = ++applyColorsRunRef.current;
+    /** True once a later run has taken over; nothing may be painted after that. */
+    const superseded = () => run !== applyColorsRunRef.current;
 
     if (!isChoroplethEnabledRef.current) {
       removeChoroplethLayers(leftMap, 'left');
@@ -1168,6 +1171,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (getAppRuntime() === 'browser' && siteId &&
         (c.leftScenario === 'future' || c.rightScenario === 'future')) {
       const catchments = await getSiteCatchments(siteId).catch(() => []);
+      if (superseded()) return;
       if (catchments.length > 0 && c.attribute) {
         browserIdealOverrides = new Map();
         for (const cat of catchments) {
@@ -1180,12 +1184,120 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     }
 
+    const attributeColor = colorScaleMode === 'metadata'
+      ? attributeColorsRef.current?.[c.attribute]
+      : undefined;
+
+    /** Publish the domain range and extent statistics. Shared by both paths. */
+    const publishStats = (
+      min: number,
+      max: number,
+      leftStats: ZoneStats | null,
+      rightStats: ZoneStats | null,
+    ) => {
+      lastDomainRangeRef.current = { min, max };
+      // Extent-based stats are always derived from the current viewport.
+      extentZoneStatsRef.current = { left: leftStats, right: rightStats };
+      if (onStatisticsChangeRef.current) {
+        onStatisticsChangeRef.current({
+          domainRange: { min, max },
+          leftStats,
+          rightStats,
+          fullStats: fullZoneStatsRef.current,
+          siteStats: siteZoneStatsRef.current,
+        });
+      }
+    };
+
+    // Vector-tile path. From the tileset's minimum zoom up, the catchment
+    // geometry is already in the tile pipeline, so only the values are fetched
+    // and they are joined onto the tiles as feature state. MapLibre keeps the
+    // tessellated geometry across pans, zooms and attribute switches, which is
+    // the whole point: the GeoJSON path re-parsed and re-tessellated every
+    // catchment in view on every viewport change, once per map instance.
+    //
+    // The site catchment-id inference below is deliberately not run here: it
+    // works by intersecting fetched geometry against the site boundary, and
+    // there is no fetched geometry on this path. It is a fallback in any case —
+    // the authoritative ids come from the server's AOI fractions (see the stats
+    // effect), which is also why it is already skipped for anything but a very
+    // small feature count.
+    const tileset = catchmentTilesetRef.current;
+    if (tileset && currentZoom >= tileset.minzoom) {
+      try {
+        const [leftValues, rightValues] = await Promise.all([
+          fetchChoroplethValues(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
+          fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
+        ]);
+
+        // These answers describe the viewport, scenario and attribute captured
+        // when this run started. If a later run has begun, they describe the
+        // past — publishing them would leave the map and the statistics panel
+        // disagreeing with the controls.
+        if (superseded()) return;
+
+        const domainRange = resolveDomainRange([leftValues, rightValues]);
+        const extentLeftStats = leftValues ? zoneStatsFromValues(leftValues.values) : null;
+        const extentRightStats = rightValues ? zoneStatsFromValues(rightValues.values) : null;
+        const { min, max } = resolvePaintRange(
+          rangeMode, domainRange, { left: extentLeftStats, right: extentRightStats }, siteZoneStatsRef.current);
+        publishStats(min, max, extentLeftStats, extentRightStats);
+
+        const applySide = (
+          // Nullable since the compare map is created only in compare mode:
+          // this is the tile path's equivalent of the guards the GeoJSON path
+          // carries. Without it the right side is asked to paint a map that
+          // does not exist.
+          map: maplibregl.Map | null,
+          side: 'left' | 'right',
+          values: ChoroplethValues | null,
+          scenario: Scenario,
+        ) => {
+          if (!map) return;
+          if (!values || values.ids.length === 0) {
+            removeChoroplethLayers(map, side);
+            return;
+          }
+          const layerSource = {
+            kind: 'tiles' as const,
+            tileset,
+            values,
+            // Feature state persists across viewport changes, so it has to be
+            // cleared when what it means changes — scenario or attribute.
+            stateKey: `${scenario}|${c.attribute}`,
+          };
+          const apply = () => {
+            // The deferred branch below can fire long after the map goes idle,
+            // by which time a later run may own the map.
+            if (superseded()) return;
+            applyChoroplethLayer(
+              map, side, layerSource, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          };
+          if (map.loaded()) {
+            apply();
+          } else {
+            map.once('idle', apply);
+          }
+        };
+
+        applySide(leftMap, 'left', leftValues, c.leftScenario);
+        applySide(rightMap, 'right', rightValues, c.rightScenario);
+      } catch (err) {
+        // A superseded run cancels its own requests; that is the design, not a
+        // failure to report.
+        if (!isAbortError(err)) console.error('Failed to apply choropleth:', err);
+      }
+      return;
+    }
+
     try {
       // Fetch data for both scenarios in parallel
       const [leftData, rightData] = await Promise.all([
-        fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides),
+        fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
+        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
       ]);
+
+      if (superseded()) return;
 
       let siteCatchmentIds = siteId ? siteCatchmentIdsRef.current : null;
 
@@ -1252,75 +1364,42 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const leftDisplay = leftData;
       const rightDisplay = rightData;
 
-      // Color scale always uses the attribute's global domain across every
-      // catchment, independent of the selected zone range (Full/Extent/Site).
-      // The backend's max is now scenario-specific (metadata.csv's curated
-      // maxval_curr/maxval_ref rather than a scan of every catchment), so the
-      // two sides can disagree when comparing reference against current —
-      // take the larger of the two so neither side's colors get clipped, and
-      // the result doesn't depend on which scenario happens to be on the left.
-      let min = 0;
-      let max = 1;
-      const domainMins: number[] = [];
-      const domainMaxes: number[] = [];
-      if (leftData && leftData.domain_min !== undefined && leftData.domain_max !== undefined) {
-        domainMins.push(leftData.domain_min);
-        domainMaxes.push(leftData.domain_max);
-      }
-      if (rightData && rightData.domain_min !== undefined && rightData.domain_max !== undefined) {
-        domainMins.push(rightData.domain_min);
-        domainMaxes.push(rightData.domain_max);
-      }
-      if (domainMins.length > 0) min = Math.min(...domainMins);
-      if (domainMaxes.length > 0) max = Math.max(...domainMaxes);
-      lastDomainRangeRef.current = { min, max };
-
-      // Extent-based stats are always derived from the current viewport.
-      const leftExtentStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
-      const rightExtentStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
-      extentZoneStatsRef.current = { left: leftExtentStats, right: rightExtentStats };
-
-      if (onStatisticsChangeRef.current) {
-        onStatisticsChangeRef.current({
-          domainRange: { min, max },
-          leftStats: leftExtentStats,
-          rightStats: rightExtentStats,
-          fullStats: fullZoneStatsRef.current,
-          siteStats: siteZoneStatsRef.current,
-        });
-      }
-
-      const attributeColor = colorScaleMode === 'metadata'
-        ? attributeColorsRef.current?.[c.attribute]
-        : undefined;
+      const domainRange = resolveDomainRange([leftData, rightData]);
+      const extentLeftStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
+      const extentRightStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+      const { min, max } = resolvePaintRange(
+        rangeMode, domainRange, { left: extentLeftStats, right: extentRightStats }, siteZoneStatsRef.current);
+      publishStats(min, max, extentLeftStats, extentRightStats);
 
       // Apply to left map - verify the map is ready
       if (leftDisplay && leftDisplay.features.length > 0) {
         if (leftMap.loaded()) {
-          applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           leftMap.once('idle', () => {
-            applyChoroplethLayer(leftMap, 'left', leftDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+            if (superseded()) return;
+            applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
         removeChoroplethLayers(leftMap, 'left');
       }
 
-      // Apply to right map - verify the map is ready
-      if (rightDisplay && rightDisplay.features.length > 0) {
+      // Apply to right map - verify it exists (compare mode only) and is ready
+      if (rightMap && rightDisplay && rightDisplay.features.length > 0) {
         if (rightMap.loaded()) {
-          applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+          applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
         } else {
           rightMap.once('idle', () => {
-            applyChoroplethLayer(rightMap, 'right', rightDisplay, c.attribute, min, max, extruded, attributeColor, colorScaleType);
+            if (superseded()) return;
+            applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
           });
         }
       } else {
         removeChoroplethLayers(rightMap, 'right');
       }
     } catch (err) {
-      console.error('Failed to apply choropleth:', err);
+      if (!isAbortError(err)) console.error('Failed to apply choropleth:', err);
     }
   // siteId belongs here: the body reads it in ten places — the choropleth fetch
   // for both panes, the browser-runtime ideal overrides, and three per-site
@@ -1338,12 +1417,25 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // rebuild this callback constantly — and it is one of the fifteen in the
   // tracking issue.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [colorScaleMode, colorScaleType, siteId]);
+  }, [colorScaleMode, colorScaleType, rangeMode, siteId]);
 
   const applyColorsRef = useRef(applyColors);
   useEffect(() => {
     applyColorsRef.current = applyColors;
   }, [applyColors]);
+
+  // Resolve the catchment tileset once (the lookup itself is module-cached, so
+  // twelve panes make one request) and repaint, because the first applyColors
+  // may well have run against a still-null ref and taken the GeoJSON path.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCatchmentTileset().then((tileset) => {
+      if (cancelled || !tileset) return;
+      catchmentTilesetRef.current = tileset;
+      applyColorsRef.current();
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Reset site stats when boundary geometry changes so stats recompute.
   useEffect(() => {
@@ -1372,6 +1464,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Compute full-dataset stats so "Full" range has stable values.
   useEffect(() => {
     let cancelled = false;
+    // Full-domain valuesOnly requests are the biggest payload the client asks
+    // for. When the attribute or scenario changes, the previous pair is dead
+    // weight — cancel it rather than let it finish into a discarded result.
+    const abort = new AbortController();
     const c = comparisonRef.current;
 
     if (!c.attribute) {
@@ -1389,8 +1485,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // sample/aggregate, so fetch every catchment's raw value regardless of
         // viewport zoom (zoom argument is ignored server-side in this mode).
         const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true),
+          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
+          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
         ]);
 
         if (cancelled) return;
@@ -1409,7 +1505,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           });
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !isAbortError(err)) {
           console.error('Failed to compute full zone statistics:', err);
         }
       }
@@ -1419,6 +1515,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [comparison.leftScenario, comparison.rightScenario, comparison.attribute]);
 
@@ -1427,7 +1524,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) return;
 
     removeChoroplethLayers(leftMap, 'left');
     removeChoroplethLayers(rightMap, 'right');
@@ -1516,7 +1613,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const geometry = boundaryGeometryRef.current;
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!geometry || !leftMap || !rightMap) return;
+    if (!geometry || !leftMap) return;
 
     const applyToMap = (map: maplibregl.Map) => {
       if (map.isStyleLoaded()) {
@@ -1539,7 +1636,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     applyToMap(leftMap);
-    applyToMap(rightMap);
+    if (rightMap) applyToMap(rightMap);
   // useCallback has a missing dependency: 'addBoundaryLayersIfMissing'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, []);
@@ -1548,6 +1645,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // not on global dataset extrema, once a site exists.
   useEffect(() => {
     let cancelled = false;
+    // Site-scoped valuesOnly requests are per-catchment over the site bbox and
+    // re-issued on every scenario, attribute, boundary and refresh change.
+    const abort = new AbortController();
 
     const updateSiteDomainRange = async () => {
       const c = comparisonRef.current;
@@ -1644,8 +1744,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // the grid-aggregated render path can supply neither, so fetch true
         // per-catchment values regardless of viewport zoom.
         const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true),
+          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
+          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 
@@ -1755,7 +1855,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
         applyColors();
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !isAbortError(err)) {
           console.error('Failed to compute site zone stats:', err);
           siteZoneStatsRef.current = null;
           siteCatchmentIdsRef.current = null;
@@ -1768,15 +1868,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [siteId, siteBounds, siteGeometry, comparison.leftScenario, comparison.rightScenario, comparison.attribute, applyColors, refreshKey]);
 
   /**
    * Remove choropleth layers from a map.
    */
-  function removeChoroplethLayers(map: maplibregl.Map, side: string) {
-    // Safety check: map.style is undefined after map.remove() is called
-    if (!map.style) return;
+  function removeChoroplethLayers(map: maplibregl.Map | null, side: string) {
+    // The right map is absent outside compare mode, and map.style is undefined
+    // after map.remove() — either way there is nothing to strip.
+    if (!map?.style) return;
 
     const layerId = `choropleth-${side}`;
     const edgeBlendLayerId = `${layerId}-edge-blend`;
@@ -1794,17 +1896,98 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (map.getSource(sourceId)) {
       map.removeSource(sourceId);
     }
+    // Feature state lives on the source, so removing it discards the join;
+    // the bookkeeping that tracks which ids carry a value has to go too, or
+    // the next application would think it had already set them.
+    forgetCatchmentValues(map, sourceId);
 
     setCatchmentOutlinesSoftness(map, false);
   }
 
   /**
-   * Apply choropleth layer to a map with GeoJSON data.
+   * Where a choropleth layer's geometry and values come from.
+   *
+   * 'tiles' is the fast path: geometry from the vector tile pipeline, values
+   * joined on as feature state. 'geojson' is the fallback for the low-zoom
+   * range the tiles do not cover, where the backend serves grid-aggregated
+   * cells instead of catchments (see queryCatchmentsGridAggregated).
+   */
+  type ChoroplethLayerSource =
+    | { kind: 'geojson'; data: ChoroplethData }
+    | { kind: 'tiles'; tileset: CatchmentTileset; values: ChoroplethValues; stateKey: string };
+
+  /**
+   * Ensure the per-side choropleth source exists and holds the current data.
+   *
+   * Returns the source layer name for tile sources, or undefined for GeoJSON -
+   * every layer added below needs it, and getting it wrong is silent (the layer
+   * renders nothing rather than erroring).
+   *
+   * A source can never change type in place, so crossing the zoom threshold
+   * between the two paths tears the old source down first. That is also why the
+   * layers are removed with it: MapLibre refuses to leave a layer pointing at a
+   * source that has gone.
+   */
+  function ensureChoroplethSource(
+    map: maplibregl.Map,
+    side: string,
+    sourceId: string,
+    source: ChoroplethLayerSource,
+  ): string | undefined {
+    const wanted = source.kind === 'tiles' ? 'vector' : 'geojson';
+    const existing = map.getSource(sourceId);
+    if (existing && existing.type !== wanted) {
+      removeChoroplethLayers(map, side);
+    }
+
+    if (source.kind === 'geojson') {
+      const geojsonSource = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (geojsonSource) {
+        geojsonSource.setData(source.data as unknown as GeoJSON.FeatureCollection);
+      } else {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: source.data as unknown as GeoJSON.FeatureCollection,
+        });
+      }
+      return undefined;
+    }
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, catchmentTileSourceSpec(source.tileset));
+    }
+
+    // Feature state, not a source update: the geometry in the tiles is already
+    // loaded and tessellated, and re-setting it is exactly the work this path
+    // exists to avoid. MapLibre carries the state onto tiles that load later,
+    // so panning into new ground needs no re-application.
+    const applied = applyCatchmentValues(
+      map,
+      sourceId,
+      source.tileset.sourceLayer,
+      source.stateKey,
+      source.values.ids,
+      source.values.values,
+    );
+    if (applied.cleared > 0) {
+      console.debug(`[perf] choropleth-${side} feature state: set ${applied.set}, cleared ${applied.cleared}`);
+    }
+
+    return source.tileset.sourceLayer;
+  }
+
+  /**
+   * Apply the choropleth layers to a map.
+   *
+   * The paint expressions are identical on both paths; only how they reach a
+   * catchment's value differs (feature properties vs. feature state). Colouring
+   * remains a data-driven expression evaluated on the GPU - nothing here walks
+   * features in JavaScript.
    */
   function applyChoroplethLayer(
     map: maplibregl.Map,
     side: string,
-    data: ChoroplethData,
+    source: ChoroplethLayerSource,
     attribute: string,
     min: number,
     max: number,
@@ -1823,15 +2006,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         ? CHOROPLETH_FILL_OPACITY_SATELLITE
         : CHOROPLETH_FILL_OPACITY_DEFAULT;
 
-      const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
-      if (source) {
-        source.setData(data as unknown as GeoJSON.FeatureCollection);
-      } else {
-        map.addSource(sourceId, {
-          type: 'geojson',
-          data: data as unknown as GeoJSON.FeatureCollection,
-        });
-      }
+      const sourceLayer = ensureChoroplethSource(map, side, sourceId, source);
+      const value: ChoroplethValueAccessor = source.kind === 'tiles'
+        ? featureStateValueAccessor()
+        : attributeValueAccessor(attribute);
+      // Spread into each addLayer call: 'source-layer' must be absent, not
+      // undefined, for a GeoJSON source.
+      const sourceLayerSpec = sourceLayer ? { 'source-layer': sourceLayer } : {};
 
       setCatchmentOutlinesSoftness(map, true);
 
@@ -1848,11 +2029,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             id: layer3dId,
             type: 'fill-extrusion',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
               'fill-extrusion-color': useOpacityScale && attributeColor
-                ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-                : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
-              'fill-extrusion-height': buildExtrusionExpression(attribute, min, max, scaleType),
+                ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+                : buildFillColorExpression(value, min, max, attributeColor, scaleType),
+              'fill-extrusion-height': buildExtrusionExpression(value, min, max, scaleType),
               'fill-extrusion-base': 0,
               'fill-extrusion-opacity': fillOpacity,
             },
@@ -1862,13 +2044,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             layer3dId,
             'fill-extrusion-color',
             useOpacityScale && attributeColor
-              ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-              : buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+              ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+              : buildFillColorExpression(value, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(
             layer3dId,
             'fill-extrusion-height',
-            buildExtrusionExpression(attribute, min, max, scaleType),
+            buildExtrusionExpression(value, min, max, scaleType),
           );
           map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', fillOpacity);
         }
@@ -1882,8 +2064,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             id: layerId,
             type: 'fill',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
-              'fill-color': buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+              'fill-color': buildFillColorExpression(value, min, max, attributeColor, scaleType),
               // Keep boundaries soft so adjacent catchments blend visually.
               'fill-outline-color': CHOROPLETH_OUTLINE_COLOR,
               'fill-opacity': fillOpacity,
@@ -1893,21 +2076,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           map.setPaintProperty(
             layerId,
             'fill-color',
-            buildFillColorExpression(attribute, min, max, attributeColor, scaleType),
+            buildFillColorExpression(value, min, max, attributeColor, scaleType),
           );
           map.setPaintProperty(layerId, 'fill-outline-color', CHOROPLETH_OUTLINE_COLOR);
           map.setPaintProperty(layerId, 'fill-opacity', fillOpacity);
         }
 
         const edgeColorExpression = useOpacityScale && attributeColor
-          ? buildOpacityColorExpression(attribute, min, max, attributeColor, scaleType)
-          : buildFillColorExpression(attribute, min, max, attributeColor, scaleType);
+          ? buildOpacityColorExpression(value, min, max, attributeColor, scaleType)
+          : buildFillColorExpression(value, min, max, attributeColor, scaleType);
 
         if (!map.getLayer(edgeBlendLayerId)) {
           map.addLayer({
             id: edgeBlendLayerId,
             type: 'line',
             source: sourceId,
+            ...sourceLayerSpec,
             paint: {
               'line-color': edgeColorExpression,
               'line-width': CHOROPLETH_EDGE_BLEND_WIDTH,
@@ -1985,7 +2169,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const toggleGoogleBasemap = useCallback(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
 
     const nextVal = !isGoogleBasemapRef.current;
     isGoogleBasemapRef.current = nextVal;
@@ -2007,10 +2191,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     reapplyAfterStyleLoad(leftMap);
-    reapplyAfterStyleLoad(rightMap);
-
     leftMap.setStyle(newStyle);
-    rightMap.setStyle(newStyle);
+    if (rightMap) {
+      reapplyAfterStyleLoad(rightMap);
+      rightMap.setStyle(newStyle);
+    }
 
     // Re-apply boundary and choropleth layers after styles settle
     window.setTimeout(() => {
@@ -2818,12 +3003,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
 
+    // A map instance is transient now: this effect re-runs, compare mode adds
+    // and removes the right map, and a pane releases its maps when it stops
+    // showing one. Opening at the last view the sync registry saw keeps that
+    // invisible — a recreated map would otherwise snap back to the world view.
+    // Pitch stays under the 3D toggle's control rather than being restored.
+    const restoredView = getLastMapView();
+
     // Create left map with all interactions enabled
     const leftMap = new maplibregl.Map({
       container: leftContainer,
       style: mapStyle,
-      center: [20, 0],
-      zoom: 3,
+      center: restoredView?.center ?? [20, 0],
+      zoom: restoredView?.zoom ?? 3,
+      bearing: restoredView?.bearing ?? 0,
       pitch: is3DModeRef.current ? 60 : 0,
       attributionControl: false,
       fadeDuration: 0,
@@ -2839,32 +3032,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     });
     leftMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
 
-    // Create right map with all interactions enabled
-    const rightMap = new maplibregl.Map({
-      container: rightContainer,
-      style: mapStyle,
-      center: [20, 0],
-      zoom: 3,
-      pitch: is3DModeRef.current ? 60 : 0,
-      attributionControl: false,
-      fadeDuration: 0,
-      pixelRatio: mapPixelRatio(),
-      scrollZoom: true,
-      dragPan: true,
-      dragRotate: true,
-      doubleClickZoom: true,
-      boxZoom: true,
-      keyboard: true,
-      touchZoomRotate: true,
-      touchPitch: true,
-    });
-    rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
-
     const applyViewportLimits = () => {
       const bounds = viewportBoundsRef.current;
       if (!bounds) return;
       applyZoomOutClipToBounds(leftMap, bounds);
-      applyZoomOutClipToBounds(rightMap, bounds);
+      const rightMap = rightMapRef.current;
+      if (rightMap) applyZoomOutClipToBounds(rightMap, bounds);
     };
 
     void (async () => {
@@ -2892,23 +3065,29 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }
 
     leftMap.on('move', () => {
-      syncMaps(leftMap, rightMap);
+      const rightMap = rightMapRef.current;
+      if (rightMap) syncMaps(leftMap, rightMap);
       updateIdentifyOverlayPosition();
     });
-    rightMap.on('move', () => syncMaps(rightMap, leftMap));
 
     // Identify click handlers - pass side info for correct layer querying
     leftMap.on('click', (e) => handleIdentifyClick(leftMap, e, 'left'));
-    rightMap.on('click', (e) => handleIdentifyClick(rightMap, e, 'right'));
 
     // Fetch new choropleth data when map moves (debounced)
     leftMap.on('moveend', () => {
       debouncedApplyColors();
-      // Report map extent changes
+      // Report map extent changes.
+      //
+      // This lands in App state, so every emission re-renders the whole pane
+      // tree and re-runs every effect that lists mapExtent — in quad view, six
+      // panes' worth of dial and chart aggregate fetches. moveend fires for
+      // plenty of things that leave the viewport exactly where it was
+      // (compare-map sync, a resize, a style reload, a re-fit onto the bounds
+      // already shown), so an unchanged extent is not reported at all.
       if (onMapExtentChangeRef.current) {
         const center = leftMap.getCenter();
         const bounds = leftMap.getBounds();
-        onMapExtentChangeRef.current({
+        const extent: MapExtent = {
           center: [center.lng, center.lat],
           zoom: leftMap.getZoom(),
           bounds: [
@@ -2917,7 +3096,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             bounds.getEast(),
             bounds.getNorth(),
           ],
-        });
+        };
+        const signature = `${extent.center.join(',')}|${extent.zoom}|${extent.bounds?.join(',') ?? ''}`;
+        if (signature !== lastExtentSignatureRef.current) {
+          lastExtentSignatureRef.current = signature;
+          onMapExtentChangeRef.current(extent);
+        }
       }
     });
     leftMap.on('zoomend', () => debouncedApplyColors());
@@ -2952,21 +3136,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       signalReady();
       resizeAndRefresh(leftMap);
       if (mapsReady.current.right) {
-        resizeAndRefresh(rightMap);
-        applyColorsRef.current();
-        setAreMapsReady(true);
-        reapplyBoundaryLayers();
-        // Deferred retry: ensures boundary is on top after applyColors async
-        // continuation and React boundary effect have both completed.
-        requestAnimationFrame(() => reapplyBoundaryLayers());
-      }
-    });
-    rightMap.on('load', () => {
-      mapsReady.current.right = true;
-      signalReady();
-      resizeAndRefresh(rightMap);
-      if (mapsReady.current.left) {
-        resizeAndRefresh(leftMap);
+        const rightMap = rightMapRef.current;
+        if (rightMap) resizeAndRefresh(rightMap);
         applyColorsRef.current();
         setAreMapsReady(true);
         reapplyBoundaryLayers();
@@ -2982,10 +3153,96 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const readyTimeoutId = setTimeout(signalReady, 15_000);
 
     leftMapRef.current = leftMap;
-    rightMapRef.current = rightMap;
 
     // Register the left map for cross-pane sync
     const syncId = registerMap(leftMap);
+
+    // The compare (right) map is created on demand rather than up front.
+    // Two MapLibre instances per pane meant twelve WebGL contexts in quad
+    // view, against a browser ceiling of about sixteen past which the oldest
+    // context is silently dropped — and integrated GPUs run out of memory
+    // well before that count. Half of them were drawing nothing whenever the
+    // compare swiper was off. See issue #76.
+    function createRightMap(): maplibregl.Map {
+      const existing = rightMapRef.current;
+      if (existing) return existing;
+
+      // Open on the left map's current view so revealing the split shows the
+      // same place the user is already looking at; the move handlers below
+      // only keep the two in step from the next movement onwards.
+      const leftCenter = leftMap.getCenter();
+      const rightMap = new maplibregl.Map({
+        container: rightContainer,
+        // Re-read the basemap choice rather than reusing the style captured at
+        // init: the user may have toggled the satellite basemap since.
+        style: isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl),
+        center: [leftCenter.lng, leftCenter.lat],
+        zoom: leftMap.getZoom(),
+        bearing: leftMap.getBearing(),
+        pitch: leftMap.getPitch(),
+        attributionControl: false,
+        fadeDuration: 0,
+        pixelRatio: mapPixelRatio(),
+        scrollZoom: true,
+        dragPan: true,
+        dragRotate: true,
+        doubleClickZoom: true,
+        boxZoom: true,
+        keyboard: true,
+        touchZoomRotate: true,
+        touchPitch: true,
+      });
+      rightMap.addControl(new maplibregl.NavigationControl(), 'bottom-left');
+
+      mapsReady.current.right = false;
+      rightMapRef.current = rightMap;
+
+      rightMap.on('move', () => syncMaps(rightMap, leftMap));
+      rightMap.on('click', (e) => handleIdentifyClick(rightMap, e, 'right'));
+
+      // The site-boundary effect wires a styledata listener per map, but it
+      // only runs on site changes and readiness — a map created after that
+      // would never re-add its boundary after a style swap.
+      rightMap.on('styledata', () => reapplyBoundaryLayers());
+
+      rightMap.on('load', () => {
+        mapsReady.current.right = true;
+        signalReady();
+        resizeAndRefresh(rightMap);
+        if (mapsReady.current.left) {
+          resizeAndRefresh(leftMap);
+          applyColorsRef.current();
+          setAreMapsReady(true);
+          reapplyBoundaryLayers();
+          // Deferred retry: ensures boundary is on top after applyColors async
+          // continuation and React boundary effect have both completed.
+          requestAnimationFrame(() => reapplyBoundaryLayers());
+        }
+      });
+
+      applyViewportLimits();
+      updateMapSizes();
+      return rightMap;
+    }
+
+    function destroyRightMap(): void {
+      const rightMap = rightMapRef.current;
+      if (!rightMap) return;
+      // Clear the ref before removing, so anything reading it mid-teardown
+      // sees "no right map" rather than a destroyed instance — the same
+      // ordering the effect cleanup below uses.
+      rightMapRef.current = null;
+      mapsReady.current.right = true;
+      rightMap.remove();
+    }
+
+    ensureRightMapRef.current = createRightMap;
+    destroyRightMapRef.current = destroyRightMap;
+
+    // This effect re-runs on its dependencies, and the lifecycle effect below
+    // only reacts to changes in compare mode, so restore the right map here if
+    // compare mode is already on.
+    if (isSwiperEnabledRef.current) createRightMap();
 
     // Slider drag handling with proper isolation from map events
     let sliderPointerId: number | null = null;
@@ -2999,7 +3256,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       slider.setPointerCapture(e.pointerId);
       // Disable map interactions while dragging slider
       leftMap.dragPan.disable();
-      rightMap.dragPan.disable();
+      rightMapRef.current?.dragPan.disable();
     }
 
     function onSliderPointerMove(e: PointerEvent) {
@@ -3061,7 +3318,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       sliderPointerId = null;
       // Re-enable map interactions
       leftMap.dragPan.enable();
-      rightMap.dragPan.enable();
+      rightMapRef.current?.dragPan.enable();
 
       // Ensure a final resize after drag ends; add a tiny delay for layout settle
       window.setTimeout(() => {
@@ -3070,7 +3327,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             resizeFrameRef.current = null;
             updateMapSizes();
             leftMap.resize();
-            rightMap.resize();
+            rightMapRef.current?.resize();
             updateIdentifyOverlayPosition();
           });
         }
@@ -3084,12 +3341,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     return () => {
       clearTimeout(readyTimeoutId);
-      mapsReady.current = { left: false, right: false };
+      mapsReady.current = { left: false, right: true };
       onReadyFiredRef.current = false;
       setAreMapsReady(false);
       if (fetchTimerRef.current) {
         clearTimeout(fetchTimerRef.current);
       }
+      // A pane closing (leaving quad view, switching a pane to a chart) must
+      // not leave its choropleth requests running for a map that no longer
+      // exists. Bumping the ticket too, so a response already on its way back
+      // cannot paint a removed layer.
+      applyColorsRunRef.current += 1;
+      applyColorsAbortRef.current?.abort();
+      applyColorsAbortRef.current = null;
       unregisterMap(syncId);
       slider.removeEventListener('pointerdown', onSliderPointerDown);
       slider.removeEventListener('pointermove', onSliderPointerMove);
@@ -3098,10 +3362,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // Clear refs BEFORE removing maps to prevent other cleanup effects from
       // trying to access destroyed map instances
       leftMapRef.current = null;
-      rightMapRef.current = null;
+      ensureRightMapRef.current = null;
+      destroyRightMapRef.current = null;
+      destroyRightMap();
       removeIdentifyOverlay(false);
       leftMap.remove();
-      rightMap.remove();
       leftClipContainerRef.current = null;
       compareContainerRef.current = null;
       sliderRef.current = null;
@@ -3118,15 +3383,32 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
 
+  // Compare mode owns the right map's lifetime: created on entering, released
+  // on leaving, so a pane that is not comparing holds one WebGL context rather
+  // than two (issue #76).
+  //
+  // Declared directly after the map-init effect and before every effect that
+  // touches the right map, which matters twice over. React runs all changed
+  // effects' cleanups before any effect body, so the effects listing
+  // isSwiperEnabled detach from a live instance before this one removes it;
+  // and effect bodies run in declaration order, so those same effects see the
+  // new instance on the way back in.
+  useEffect(() => {
+    if (isSwiperEnabled) {
+      ensureRightMapRef.current?.();
+    } else {
+      destroyRightMapRef.current?.();
+    }
+  }, [isSwiperEnabled]);
+
   // Resize maps when layout changes or container size updates
   useEffect(() => {
     const container = mapContainerRef.current;
     const leftClipContainer = leftClipContainerRef.current;
     const rightClipContainer = compareContainerRef.current;
     const leftMap = leftMapRef.current;
-    const rightMap = rightMapRef.current;
 
-    if (!container || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) {
+    if (!container || !leftClipContainer || !rightClipContainer || !leftMap) {
       return;
     }
 
@@ -3135,18 +3417,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (!leftContainer || !rightContainer) return;
 
     const updateSizes = () => {
+      // The compare map is read from the ref on each call rather than captured:
+      // this effect outlives several compare-mode toggles, and a container
+      // resize has to reach whichever instance exists at that moment.
+      const rightMap = rightMapRef.current;
       const parentWidth = container.offsetWidth;
       const rightClipWidth = rightClipContainer.offsetWidth;
       leftContainer.style.width = `${parentWidth}px`;
       rightContainer.style.width = `${parentWidth}px`;
       rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
       leftMap.resize();
-      rightMap.resize();
+      rightMap?.resize();
 
       const bounds = viewportBoundsRef.current;
       if (bounds) {
         applyZoomOutClipToBounds(leftMap, bounds);
-        applyZoomOutClipToBounds(rightMap, bounds);
+        if (rightMap) applyZoomOutClipToBounds(rightMap, bounds);
       }
 
       if (siteId) {
@@ -3190,7 +3476,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!container || !leftClipContainer || !rightClipContainer || !slider || !leftMap || !rightMap) {
+    if (!container || !leftClipContainer || !rightClipContainer || !slider || !leftMap) {
       return;
     }
 
@@ -3222,7 +3508,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
 
     leftMap.resize();
-    rightMap.resize();
+    rightMap?.resize();
   }, [isSwiperEnabled]);
 
   // Synchronize slider position when prop changes (from another pane)
@@ -3237,7 +3523,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!container || !slider || !handle || !leftClipContainer || !rightClipContainer || !leftMap || !rightMap) return;
+    if (!container || !slider || !handle || !leftClipContainer || !rightClipContainer || !leftMap) return;
 
     // Don't update if we're currently dragging (to avoid feedback loop)
     if (isDragging.current) return;
@@ -3309,13 +3595,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
 
     leftMap.resize();
-    rightMap.resize();
+    rightMap?.resize();
   }, [swiperPosition, isSwiperEnabled]);
 
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) return;
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) return;
 
     if (isChoroplethEnabled) {
       applyColorsRef.current();
@@ -3375,14 +3661,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, attributeColors, attributeDetails]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
     if (!mapsReady.current.left || !mapsReady.current.right) return;
 
     // Helper to remove highlight layers from a map
@@ -3397,28 +3683,37 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const addHighlight = (map: maplibregl.Map, side: 'left' | 'right', catchmentId: string) => {
       removeHighlight(map);
 
-      // Use the same per-side choropleth GeoJSON source the color layer already
-      // renders from (always present once a choropleth is showing) rather than
-      // the base style's "UoW Tiles" vector source, which doesn't exist at all
-      // when the Google satellite basemap is active — the default for browser
-      // runtime — leaving the highlight silently missing.
+      // Use the same per-side choropleth source the color layer already renders
+      // from (always present once a choropleth is showing) rather than the base
+      // style's "UoW Tiles" vector source, which doesn't exist at all when the
+      // Google satellite basemap is active — the default for browser runtime —
+      // leaving the highlight silently missing.
       const sourceId = `choropleth-source-${side}`;
 
       // Check if the source exists
-      if (!map.getSource(sourceId)) {
+      const choroplethSource = map.getSource(sourceId);
+      if (!choroplethSource) {
         console.warn('Identify highlight: source not found:', sourceId);
         return;
       }
 
-      // Parse catchmentId as number for filtering (HYBAS_ID is numeric)
+      // On the vector-tile path the source has a layer within it, and the tiles
+      // may encode HYBAS_ID as a string — to-number normalises both encodings
+      // so the same filter works whichever transport is in use.
+      const sourceLayerSpec = choroplethSource.type === 'vector'
+        ? { 'source-layer': CATCHMENT_TILE_SOURCE_LAYER }
+        : {};
       const catchmentIdNum = parseInt(catchmentId, 10);
+      const idFilter: maplibregl.FilterSpecification =
+        ['==', ['to-number', ['get', CATCHMENT_ID_PROP]], catchmentIdNum];
 
       // Add outer glow layer (neon blue)
       map.addLayer({
         id: IDENTIFY_HIGHLIGHT_GLOW,
         type: 'line',
         source: sourceId,
-        filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
+        ...sourceLayerSpec,
+        filter: idFilter,
         paint: {
           'line-color': '#00BFFF',  // Bright blue
           'line-width': 12,
@@ -3432,7 +3727,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         id: IDENTIFY_HIGHLIGHT_LINE,
         type: 'line',
         source: sourceId,
-        filter: ['==', ['get', CATCHMENT_ID_PROP], catchmentIdNum],
+        ...sourceLayerSpec,
+        filter: idFilter,
         paint: {
           'line-color': '#AEEFFF',  // Pale blue
           'line-width': 4,
@@ -3443,14 +3739,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Remove existing highlights
     removeHighlight(leftMap);
-    removeHighlight(rightMap);
+    if (rightMap) removeHighlight(rightMap);
 
     // Add highlight if there's an identify result
     if (identifyResult?.catchmentID) {
       addHighlight(leftMap, 'left', identifyResult.catchmentID);
-      addHighlight(rightMap, 'right', identifyResult.catchmentID);
+      if (rightMap) addHighlight(rightMap, 'right', identifyResult.catchmentID);
     }
-  }, [identifyResult]);
+  // isSwiperEnabled: the right map is created and destroyed with compare mode,
+  // so a highlight raised while it was absent has to be mirrored onto it.
+  }, [identifyResult, isSwiperEnabled]);
 
   // Fetch and display site boundary when siteId changes or maps become ready
   useEffect(() => {
@@ -3458,12 +3756,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const rightMap = rightMapRef.current;
 
     // Wait until maps are ready (state-based trigger ensures re-run)
-    if (!leftMap || !rightMap || !areMapsReady) return;
+    if (!leftMap || !areMapsReady) return;
+
+    // rightMap is null outside compare mode, so the per-map helpers below take
+    // a nullable map and no-op on absence — that keeps every left/right pair of
+    // calls in this effect as it was.
 
     // Helper to remove site boundary layers from a map
-    const removeSiteBoundary = (map: maplibregl.Map) => {
+    const removeSiteBoundary = (map: maplibregl.Map | null) => {
       // Safety check: map.style is undefined after map.remove() is called
-      if (!map.style) return;
+      if (!map?.style) return;
       if (map.getLayer(SITE_BOUNDARY_LINE)) map.removeLayer(SITE_BOUNDARY_LINE);
       if (map.getLayer(SITE_BOUNDARY_GLOW_MIDDLE)) map.removeLayer(SITE_BOUNDARY_GLOW_MIDDLE);
       if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) map.removeLayer(SITE_BOUNDARY_OFFWHITE);
@@ -3478,7 +3780,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       addBoundaryLayersIfMissing(map, normalized);
     };
 
-    const addSiteBoundaryWhenReady = (map: maplibregl.Map, geometry: GeoJSON.Geometry) => {
+    const addSiteBoundaryWhenReady = (map: maplibregl.Map | null, geometry: GeoJSON.Geometry) => {
+      if (!map) return;
       if (map.style) {
         addSiteBoundary(map, geometry);
         moveSiteBoundaryToTop(map);
@@ -3503,8 +3806,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       addSiteBoundaryWhenReady(map, geometry);
     };
 
-    const updateSiteBoundarySource = (map: maplibregl.Map, geometry: GeoJSON.Geometry): boolean => {
-      if (!map.style) return false;
+    const updateSiteBoundarySource = (map: maplibregl.Map | null, geometry: GeoJSON.Geometry): boolean => {
+      if (!map?.style) return false;
       const source = map.getSource(SITE_BOUNDARY_SOURCE) as maplibregl.GeoJSONSource;
       if (!source) return false;
 
@@ -3582,17 +3885,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             zoomToLoadedSiteBounds();
           };
 
-          if (leftMap.loaded() && rightMap.loaded()) {
+          const allLoaded = () => leftMap.loaded() && (rightMap?.loaded() ?? true);
+
+          if (allLoaded()) {
             addToMaps();
           } else {
             // Wait for both maps to be ready
             const checkAndAdd = () => {
-              if (leftMap.loaded() && rightMap.loaded()) {
+              if (allLoaded()) {
                 addToMaps();
               }
             };
             leftMap.once('idle', checkAndAdd);
-            rightMap.once('idle', checkAndAdd);
+            rightMap?.once('idle', checkAndAdd);
           }
         } else {
           zoomToLoadedSiteBounds();
@@ -3601,16 +3906,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       .catch((err) => console.error('Failed to fetch site boundary:', err));
 
     const handleLeftStyleData = () => ensureBoundaryLayers(leftMap);
-    const handleRightStyleData = () => ensureBoundaryLayers(rightMap);
 
     leftMap.on('styledata', handleLeftStyleData);
-    rightMap.on('styledata', handleRightStyleData);
+    // The compare map's equivalent listener is wired in createRightMap, since
+    // that map can outlive or postdate any single run of this effect.
 
     // Cleanup on unmount or siteId change
     return () => {
       siteCatchmentIdsRef.current = null;
       leftMap.off('styledata', handleLeftStyleData);
-      rightMap.off('styledata', handleRightStyleData);
       if (leftMapRef.current) removeSiteBoundary(leftMapRef.current);
       if (rightMapRef.current) removeSiteBoundary(rightMapRef.current);
     };
@@ -4031,7 +4335,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const updateEditVerticesLayer = useCallback((vertices: [number, number][]) => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap) return;
+    if (!leftMap) return;
 
     const updateMapVertices = (map: maplibregl.Map) => {
       // Safety check: map.style is undefined after map.remove() is called
@@ -4098,7 +4402,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     if (leftMap.style) updateMapVertices(leftMap);
-    if (rightMap.style) updateMapVertices(rightMap);
+    if (rightMap?.style) updateMapVertices(rightMap);
   }, []);
 
   // Remove edit vertices layers
@@ -4123,7 +4427,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const updateBoundaryDisplay = useCallback((vertices: [number, number][]) => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
-    if (!leftMap || !rightMap || !siteGeometryRef.current) return;
+    if (!leftMap || !siteGeometryRef.current) return;
 
     const newGeometry = buildGeometryFromVertices(vertices, siteGeometryRef.current);
 
@@ -4143,7 +4447,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
 
     updateSource(leftMap);
-    updateSource(rightMap);
+    if (rightMap) updateSource(rightMap);
 
     // Keep the ref in sync so any style/resize-triggered re-apply of the
     // boundary layers (e.g. reapplyBoundaryLayers) uses the live-edited
@@ -4156,9 +4460,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !mapsReady.current.left || !mapsReady.current.right) {
+    if (!leftMap || !mapsReady.current.left || !mapsReady.current.right) {
       return;
     }
+
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
 
     if (isBoundaryEditMode && siteGeometryRef.current) {
       // Enter edit mode
@@ -4170,8 +4480,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       zoomToSiteRef.current({ pitch: 0 });
 
       // Change cursor to indicate draggable points
-      leftMap.getCanvas().style.cursor = 'grab';
-      rightMap.getCanvas().style.cursor = 'grab';
+      for (const map of maps) map.getCanvas().style.cursor = 'grab';
 
       // Set up drag handlers
       const handleMouseDown = (e: maplibregl.MapMouseEvent, map: maplibregl.Map) => {
@@ -4217,10 +4526,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       const handleMouseUp = () => {
         if (draggingVertexIndexRef.current !== null) {
           draggingVertexIndexRef.current = null;
-          leftMap.getCanvas().style.cursor = 'grab';
-          rightMap.getCanvas().style.cursor = 'grab';
-          leftMap.dragPan.enable();
-          rightMap.dragPan.enable();
+          for (const map of maps) {
+            map.getCanvas().style.cursor = 'grab';
+            map.dragPan.enable();
+          }
 
           // Notify parent of the updated geometry
           if (onBoundaryUpdateRef.current && siteGeometryRef.current) {
@@ -4230,33 +4539,27 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         }
       };
 
-      const onLeftMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, leftMap);
-      const onRightMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, rightMap);
+      const cleanups: Array<() => void> = [];
+      for (const map of maps) {
+        const onMouseDown = (e: maplibregl.MapMouseEvent) => handleMouseDown(e, map);
+        map.on('mousedown', onMouseDown);
+        map.on('mousemove', handleMouseMove);
+        map.on('mouseup', handleMouseUp);
+        cleanups.push(() => {
+          map.off('mousedown', onMouseDown);
+          map.off('mousemove', handleMouseMove);
+          map.off('mouseup', handleMouseUp);
+          map.getCanvas().style.cursor = '';
+        });
+      }
 
-      leftMap.on('mousedown', onLeftMouseDown);
-      rightMap.on('mousedown', onRightMouseDown);
-      leftMap.on('mousemove', handleMouseMove);
-      rightMap.on('mousemove', handleMouseMove);
-      leftMap.on('mouseup', handleMouseUp);
-      rightMap.on('mouseup', handleMouseUp);
-
-      return () => {
-        leftMap.off('mousedown', onLeftMouseDown);
-        rightMap.off('mousedown', onRightMouseDown);
-        leftMap.off('mousemove', handleMouseMove);
-        rightMap.off('mousemove', handleMouseMove);
-        leftMap.off('mouseup', handleMouseUp);
-        rightMap.off('mouseup', handleMouseUp);
-        leftMap.getCanvas().style.cursor = '';
-        rightMap.getCanvas().style.cursor = '';
-      };
+      return () => cleanups.forEach((cleanup) => cleanup());
     } else {
       // Exit edit mode
       removeEditVerticesLayers();
       editVerticesRef.current = [];
       draggingVertexIndexRef.current = null;
-      leftMap.getCanvas().style.cursor = '';
-      rightMap.getCanvas().style.cursor = '';
+      for (const map of maps) map.getCanvas().style.cursor = '';
     }
     // siteGeometry intentionally excluded: this effect sets up/tears down
     // the vertex-drag handlers for entering/exiting edit mode. It read
@@ -4268,14 +4571,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // exiting edit mode. siteGeometryRef.current is used instead so this
     // only reacts to isBoundaryEditMode transitions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBoundaryEditMode, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
+  }, [isBoundaryEditMode, isSwiperEnabled, extractVertices, updateEditVerticesLayer, removeEditVerticesLayers, updateBoundaryDisplay, buildGeometryFromVertices]);
 
   // Handle catchment add/remove click events
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !isBoundaryEditMode || !catchmentEditMode) {
+    if (!leftMap || !isBoundaryEditMode || !catchmentEditMode) {
       return;
     }
 
@@ -4283,50 +4586,48 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       setVertexEditMode(null);
     }
 
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
+
     // Change cursor based on mode
     const cursor = catchmentEditMode === 'add' ? ADD_CATCHMENT_CURSOR : REMOVE_CATCHMENT_CURSOR;
-    leftMap.getCanvas().style.cursor = cursor;
-    rightMap.getCanvas().style.cursor = cursor;
 
-    // Prevent drag-pan from stealing the click for catchment edits
-    leftMap.dragPan.disable();
-    rightMap.dragPan.disable();
+    const cleanups: Array<() => void> = [];
+    for (const map of maps) {
+      map.getCanvas().style.cursor = cursor;
+      // Prevent drag-pan from stealing the click for catchment edits
+      map.dragPan.disable();
 
-    const onLeftClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(leftMap, e);
-    const onRightClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(rightMap, e);
-    const onLeftMove = () => {
-      leftMap.getCanvas().style.cursor = cursor;
-    };
-    const onRightMove = () => {
-      rightMap.getCanvas().style.cursor = cursor;
-    };
+      const onClick = (e: maplibregl.MapMouseEvent) => handleCatchmentEditClick(map, e);
+      const onMove = () => {
+        map.getCanvas().style.cursor = cursor;
+      };
+      map.on('click', onClick);
+      map.on('mousemove', onMove);
 
-    leftMap.on('click', onLeftClick);
-    rightMap.on('click', onRightClick);
-    leftMap.on('mousemove', onLeftMove);
-    rightMap.on('mousemove', onRightMove);
+      cleanups.push(() => {
+        map.off('click', onClick);
+        map.off('mousemove', onMove);
+        map.dragPan.enable();
+        // Restore cursor based on whether we're still in edit mode
+        if (isBoundaryEditModeRef.current) {
+          map.getCanvas().style.cursor = 'grab';
+        }
+      });
+    }
 
-    return () => {
-      leftMap.off('click', onLeftClick);
-      rightMap.off('click', onRightClick);
-      leftMap.off('mousemove', onLeftMove);
-      rightMap.off('mousemove', onRightMove);
-      leftMap.dragPan.enable();
-      rightMap.dragPan.enable();
-      // Restore cursor based on whether we're still in edit mode
-      if (isBoundaryEditModeRef.current) {
-        leftMap.getCanvas().style.cursor = 'grab';
-        rightMap.getCanvas().style.cursor = 'grab';
-      }
-    };
-  }, [isBoundaryEditMode, catchmentEditMode, handleCatchmentEditClick]);
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [isBoundaryEditMode, isSwiperEnabled, catchmentEditMode, handleCatchmentEditClick]);
 
   // Handle vertex delete/add mode
   useEffect(() => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
 
-    if (!leftMap || !rightMap || !isBoundaryEditMode || !vertexEditMode) {
+    if (!leftMap || !isBoundaryEditMode || !vertexEditMode) {
       return;
     }
 
@@ -4334,9 +4635,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       setCatchmentEditMode(null);
     }
 
+    // The compare map exists only while compare mode is on, so edit
+    // interactions are wired onto whichever instances are live right now.
+    // isSwiperEnabled is in the dependency list below so one created or
+    // released mid-edit is picked up.
+    const maps = rightMap ? [leftMap, rightMap] : [leftMap];
+
     const cursor = vertexEditMode === 'delete' ? DELETE_VERTEX_CURSOR : ADD_VERTEX_CURSOR;
-    leftMap.getCanvas().style.cursor = cursor;
-    rightMap.getCanvas().style.cursor = cursor;
+    for (const map of maps) map.getCanvas().style.cursor = cursor;
 
     const handleVertexDelete = (map: maplibregl.Map, e: maplibregl.MapMouseEvent) => {
       const features = map.queryRenderedFeatures(e.point, {
@@ -4383,45 +4689,35 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     };
 
-    const onLeftClick = (e: maplibregl.MapMouseEvent) => {
-      if (vertexEditMode === 'delete') {
-        handleVertexDelete(leftMap, e);
-      } else {
-        handleVertexAdd(e);
-      }
-    };
-    const onRightClick = (e: maplibregl.MapMouseEvent) => {
-      if (vertexEditMode === 'delete') {
-        handleVertexDelete(rightMap, e);
-      } else {
-        handleVertexAdd(e);
-      }
-    };
-    const onLeftMove = () => {
-      leftMap.getCanvas().style.cursor = cursor;
-    };
-    const onRightMove = () => {
-      rightMap.getCanvas().style.cursor = cursor;
-    };
+    const cleanups: Array<() => void> = [];
+    for (const map of maps) {
+      const onClick = (e: maplibregl.MapMouseEvent) => {
+        if (vertexEditMode === 'delete') {
+          handleVertexDelete(map, e);
+        } else {
+          handleVertexAdd(e);
+        }
+      };
+      const onMove = () => {
+        map.getCanvas().style.cursor = cursor;
+      };
 
-    leftMap.on('click', onLeftClick);
-    rightMap.on('click', onRightClick);
-    leftMap.on('mousemove', onLeftMove);
-    rightMap.on('mousemove', onRightMove);
+      map.on('click', onClick);
+      map.on('mousemove', onMove);
 
-    return () => {
-      leftMap.off('click', onLeftClick);
-      rightMap.off('click', onRightClick);
-      leftMap.off('mousemove', onLeftMove);
-      rightMap.off('mousemove', onRightMove);
-      if (isBoundaryEditModeRef.current) {
-        leftMap.getCanvas().style.cursor = 'grab';
-        rightMap.getCanvas().style.cursor = 'grab';
-      }
-    };
+      cleanups.push(() => {
+        map.off('click', onClick);
+        map.off('mousemove', onMove);
+        if (isBoundaryEditModeRef.current) {
+          map.getCanvas().style.cursor = 'grab';
+        }
+      });
+    }
+
+    return () => cleanups.forEach((cleanup) => cleanup());
   // useEffect has missing dependencies: 'ADD_VERTEX_CURSOR', 'DELETE_VERTEX_CURSOR', and 'notifyBoundaryUpdate'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [isBoundaryEditMode, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
+  }, [isBoundaryEditMode, isSwiperEnabled, vertexEditMode, updateEditVerticesLayer, updateBoundaryDisplay, buildGeometryFromVertices, insertVertexAtClosestSegment]);
 
   // Reset catchment edit mode when boundary edit mode is disabled
   useEffect(() => {

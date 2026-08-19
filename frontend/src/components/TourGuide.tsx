@@ -81,7 +81,7 @@ const STEPS: TourStep[] = [
     icon: <FiActivity size={28} />,
     title: 'View Modes',
     description:
-      'Use these buttons to switch the pane between Map, Chart, Dial, and Table. In quad-pane mode all four views are shown at once.',
+      'Use these buttons to switch the pane between Map, Chart, Dial, and Table. In grid-view mode all four views are shown at once.',
     targetId: 'tour-view-modes',
     navigateTo: 'explore',
     image: tourViewModesImg,
