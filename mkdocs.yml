@@ -129,6 +129,7 @@ nav:
       - Keeping the Flake Importable: developer-guide/flake-lock-step.md
       - Coding Standards: developer-guide/coding-standards.md
       - Testing: developer-guide/testing.md
+      - Benchmarking: developer-guide/benchmarking.md
       - Data Preparation: developer-guide/data-preparation.md
       - Datapack Format: developer-guide/datapack-format.md
       - Preparing a Release: developer-guide/releasing.md

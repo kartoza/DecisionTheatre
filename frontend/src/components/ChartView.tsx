@@ -20,8 +20,9 @@ function Plot(props: PlotProps) {
     </Suspense>
   );
 }
-import { getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
+import { isAbortError } from '../lib/sharedRequest';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
 import { computeAOIWeightedScenarioValues } from '../utils/indicators';
 
@@ -537,6 +538,28 @@ function ChartView({
     return () => { cancelled = true; whiskerCancelled = true; };
   }, [siteIndicators, siteId, visible, rangeMode]);
 
+  /**
+   * The bbox these aggregates are scoped to, as a string, or '' when the range
+   * mode does not use one.
+   *
+   * Both effects below listed mapExtent, which is a new object on every map
+   * move. Each issues six /api/aggregate requests; a full-domain one measures
+   * around 4.8 seconds. In Full-domain mode the extent is never read, so every
+   * pan was firing six seconds-long queries per pane whose answers were
+   * identical to the ones already held. This is the single largest piece of
+   * wasted work on the interaction path.
+   */
+  const aggregateExtentQuery = useMemo(() => {
+    if (rangeMode !== 'extent' || !mapExtent?.bounds) return '';
+    const [minx, miny, maxx, maxy] = mapExtent.bounds;
+    return new URLSearchParams({
+      minx: String(minx),
+      miny: String(miny),
+      maxx: String(maxx),
+      maxy: String(maxy),
+    }).toString();
+  }, [rangeMode, mapExtent]);
+
   useEffect(() => {
     if (!visible || !chartGroup || !chartAxisLabelFilter) {
       setGroupedRangeData(null);
@@ -557,24 +580,31 @@ function ChartView({
       return;
     }
 
-    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+    if (rangeMode === 'extent' && !aggregateExtentQuery) {
       setGroupedRangeData(null);
       setGroupedRangeLoading(false);
       return;
     }
 
     let cancelled = false;
+    const abort = new AbortController();
     setGroupedRangeLoading(true);
 
-    const fetchWithRetry = async (url: string): Promise<Response> => {
+    /**
+     * Retry kept from the original: these are long queries and a transient
+     * failure used to lose the whole chart. It sits outside fetchAggregate
+     * rather than inside it because a rejected shared request is dropped from
+     * the cache, so each attempt is a genuinely fresh one. A cancellation is
+     * not retried — nobody is waiting for the answer.
+     */
+    const aggregateWithRetry = async (params: URLSearchParams): Promise<Record<string, number>> => {
       const maxAttempts = 3;
       let lastErr: unknown;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
-          const resp = await fetch(url);
-          if (resp.ok) return resp;
-          lastErr = new Error(`HTTP ${resp.status}`);
+          return await fetchAggregate(params, abort.signal);
         } catch (err) {
+          if (isAbortError(err)) throw err;
           lastErr = err;
         }
         if (attempt < maxAttempts) {
@@ -595,24 +625,12 @@ function ChartView({
 
       const merged: Record<string, number> = {};
       for (const batch of batches) {
-        const params = new URLSearchParams({
-          scenario,
-          attributes: batch.join(','),
-        });
+        const params = new URLSearchParams(aggregateExtentQuery);
+        params.set('scenario', scenario);
+        params.set('attributes', batch.join(','));
         if (bound) params.set('bound', bound);
 
-        if (rangeMode === 'extent' && mapExtent?.bounds) {
-          const [minx, miny, maxx, maxy] = mapExtent.bounds;
-          params.set('minx', String(minx));
-          params.set('miny', String(miny));
-          params.set('maxx', String(maxx));
-          params.set('maxy', String(maxy));
-        }
-
-        const resp = await fetchWithRetry(`/api/aggregate?${params.toString()}`);
-
-        const payload = await resp.json() as Record<string, number>;
-        Object.assign(merged, payload);
+        Object.assign(merged, await aggregateWithRetry(params));
       }
 
       return merged;
@@ -642,8 +660,9 @@ function ChartView({
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
-  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, mapExtent, groupedDisplayColumns]);
+  }, [visible, chartGroup, chartAxisLabelFilter, rangeMode, aggregateExtentQuery, groupedDisplayColumns]);
 
   // Fetch aggregate ref/cur for the single selected attribute in extent/domain mode.
   // The grouped chart has its own equivalent (groupedRangeData); this covers the summary chart.
@@ -653,37 +672,32 @@ function ChartView({
       setSummaryRangeLoading(false);
       return;
     }
-    if (rangeMode === 'extent' && !mapExtent?.bounds) {
+    if (rangeMode === 'extent' && !aggregateExtentQuery) {
       setSummaryRangeData(null);
       setSummaryRangeLoading(false);
       return;
     }
 
     let cancelled = false;
+    const abort = new AbortController();
     setSummaryRangeLoading(true);
 
-    const fetchAggregate = async (scenario: Scenario, bound?: 'lower' | 'upper'): Promise<Record<string, number>> => {
-      const params = new URLSearchParams({ scenario, attributes: attribute });
+    const summaryAggregate = async (scenario: Scenario, bound?: 'lower' | 'upper'): Promise<Record<string, number>> => {
+      const params = new URLSearchParams(aggregateExtentQuery);
+      params.set('scenario', scenario);
+      params.set('attributes', attribute);
       if (bound) params.set('bound', bound);
-      if (rangeMode === 'extent' && mapExtent?.bounds) {
-        const [minx, miny, maxx, maxy] = mapExtent.bounds;
-        params.set('minx', String(minx));
-        params.set('miny', String(miny));
-        params.set('maxx', String(maxx));
-        params.set('maxy', String(maxy));
-      }
-      const resp = await fetch(`/api/aggregate?${params.toString()}`);
-      if (!resp.ok) return {};
-      return resp.json() as Promise<Record<string, number>>;
+      // An empty object on failure, as before — the chart draws what it has.
+      return fetchAggregate(params, abort.signal).catch(() => ({} as Record<string, number>));
     };
 
     Promise.all([
-      fetchAggregate('reference'),
-      fetchAggregate('current'),
-      fetchAggregate('reference', 'lower'),
-      fetchAggregate('reference', 'upper'),
-      fetchAggregate('current', 'lower'),
-      fetchAggregate('current', 'upper'),
+      summaryAggregate('reference'),
+      summaryAggregate('current'),
+      summaryAggregate('reference', 'lower'),
+      summaryAggregate('reference', 'upper'),
+      summaryAggregate('current', 'lower'),
+      summaryAggregate('current', 'upper'),
     ])
       .then(([reference, current, referenceLower, referenceUpper, currentLower, currentUpper]) => {
         if (cancelled) return;
@@ -696,8 +710,8 @@ function ChartView({
         setSummaryRangeLoading(false);
       });
 
-    return () => { cancelled = true; };
-  }, [visible, attribute, rangeMode, mapExtent]);
+    return () => { cancelled = true; abort.abort(); };
+  }, [visible, attribute, rangeMode, aggregateExtentQuery]);
 
   // Build summary chart data (existing behavior)
   const summaryData = useMemo(() => {

@@ -5,6 +5,7 @@ import { getAppRuntime } from '../types/runtime';
 import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
+import { sharedRequest, type SharedCache } from '../lib/sharedRequest';
 import { loadSite, loadSites, saveSite, saveSites } from '../lib/siteStore';
 
 const API_BASE = '/api';
@@ -1077,6 +1078,74 @@ export async function getSiteAOIFractions(siteId: string): Promise<{ id: string;
   evictExpired(_aOIFractionsCache, CACHE_TTL_MS, now);
   _aOIFractionsCache.set(siteId, { promise, ts: now });
   return promise;
+}
+
+/**
+ * `/api/aggregate` is the most expensive thing the client asks for — a
+ * full-domain aggregate for a single attribute measures around 4.8 seconds
+ * server-side — and it was the least coordinated. Three call sites issue it
+ * (the dial's range values, and the chart view's grouped and summary series,
+ * the latter two six requests at a time), once per pane, and every one of them
+ * re-ran whenever the map extent object changed identity, whether or not the
+ * range mode even used the extent.
+ *
+ * Routing all of them through one deduplicated, cancellable cache means twelve
+ * panes asking the same question in the same tick produce one request, and a
+ * pan cancels the answer nobody is waiting for any more.
+ *
+ * Caching by the full query string is safe here in a way it is not for the
+ * choropleth: the handler reads scenario, attributes, bbox and bound and
+ * nothing else — no site, no user state — so the URL really is the whole of
+ * the question. (Compare fetchChoroplethValues in MapView, which deliberately
+ * refuses to cache when site ideal overrides are in play, because there the
+ * same URL means different things to different users.)
+ *
+ * Five minutes, because the underlying GeoPackage does not change within a
+ * session; the ceiling is really "how long until the user notices a stale
+ * number", and nothing in this dataset can go stale.
+ */
+const AGGREGATE_CACHE_TTL_MS = 5 * 60_000;
+
+const _aggregateCache: SharedCache<Record<string, number>> = new Map();
+
+/** Test seam: the caches are module state and must not leak between tests. */
+export function __clearAggregateCache(): void {
+  _aggregateCache.clear();
+}
+
+/** Test seam: how many distinct aggregate requests are live. */
+export function __aggregateCacheSize(): number {
+  return _aggregateCache.size;
+}
+
+/**
+ * Fetch area-weighted aggregates, sharing one request per distinct question.
+ *
+ * Abort `signal` when the answer stops being wanted; the underlying request is
+ * only cancelled once no caller wants it. Rejects rather than returning an
+ * empty object on a non-2xx, so a transient failure is not cached as "no data"
+ * for the rest of the TTL window.
+ */
+export function fetchAggregate(
+  params: URLSearchParams,
+  signal?: AbortSignal,
+): Promise<Record<string, number>> {
+  // Sorted so that two call sites building the same question in a different
+  // order still share one request.
+  const key = new URLSearchParams(params);
+  key.sort();
+
+  return sharedRequest(
+    _aggregateCache,
+    key.toString(),
+    AGGREGATE_CACHE_TTL_MS,
+    async (requestSignal) => {
+      const resp = await fetch(`${API_BASE}/aggregate?${key.toString()}`, { signal: requestSignal });
+      if (!resp.ok) throw new Error(`aggregate request failed: HTTP ${resp.status}`);
+      return await resp.json() as Record<string, number>;
+    },
+    signal,
+  );
 }
 
 // FullDomainData holds precomputed area-weighted means for all attributes

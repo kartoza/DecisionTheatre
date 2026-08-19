@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every pull request now publishes the container image, its SBOM and its
+  vulnerability scan**, and annotates the pull request with both tables. The image
+  is a `container-image` artefact kept for 7 days, so a change can be run before it
+  merges without building anything locally.
+
+- **Every release publishes the image to GHCR** as
+  `ghcr.io/kartoza/decisiontheatre:<version>` and `:latest`, with the image
+  tarball, SPDX SBOM and Grype scan attached as release assets and the same tables
+  appended to the release notes.
+
+  The scan does not fail the build. A CVE in a system library is a fact to weigh,
+  not automatically a defect here, and a gate that trips on every Negligible
+  finding in glibc trains people to ignore it — gating belongs to an agreed
+  severity policy. `scripts/sbom_table.py` and `scripts/cve_table.py` render the
+  reports, with 18 tests covering deduplication, licence shapes, severity ordering
+  and the empty cases.
+
+### Removed
+
+- **The `container-build` CI job.** Building the image from the flake is the only
+  path now tested, so a pull request builds one image instead of two.
+  `deployments/Dockerfile` remains for the moment because compose still builds
+  from it and the nightly redeploy depends on the toolchain image beside it;
+  it is no longer built or tested in CI.
+
 - **The container image can be built from the flake.** `nix build .#container`,
   `./scripts/build-container.sh` or `make container` produce a Docker image whose
   contents are the runtime closure of the binary the flake already builds.
@@ -208,6 +233,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the site, which had made the copy permanent. The embedded copy is now
   marked sticky: it is not a cached copy of something fetchable, it is the only
   copy, so neither the TTL check nor the eviction sweep may discard it.
+- **A client that gave up did not stop the work it had started.** No database call
+  took a `context.Context`, so when a user closed a tab, panned the map again, or
+  a proxy timed out, the query ran to completion against SQLite — holding a
+  connection and CPU for an answer nobody would read. The most expensive query in
+  the application takes over four seconds and the map issues one on every pan, so
+  abandoned work accumulated exactly when the server was already busy.
+
+  Every SQLite-touching method now takes a context and uses the `Context` query
+  variants, and a cancelled request is logged as cancelled rather than as a
+  failure. Cancellation is detected from both shapes it arrives in: `database/sql`
+  reports `context.Canceled`, while go-sqlite3 reports its own `SQLITE_INTERRUPT`
+  when a statement is stopped mid-flight. A blown deadline is deliberately *not*
+  treated as a cancellation — that is a real failure.
+
+  Some work is deliberately not cancellable, because it is started on behalf of
+  one request and serves all of them: the grid geometry cache build is guarded by
+  a `sync.Once`, so a cancellation would tear it down and nothing would restart
+  it, leaving the aggregated map path broken for the life of the process. What is
+  now cancellable there is the *wait*, not the build.
+
+  Ten result loops gained the `rows.Err()` check they lacked. This was required
+  rather than tidy: a cancelled scan ends iteration early, so without it a partial
+  choropleth or a partial statistics set would have been returned as complete —
+  threading a context would have created a new silent-failure path while closing
+  another.
 
 - **The container images built against a different WebKit than everything else ships.**
   `deployments/Dockerfile`, `deployments/Dockerfile.cross` and
@@ -469,6 +519,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accumulated, under `frontend/` and `resources/mbtiles/`.
 
 ### Performance
+
+- **Saving one site cost as much as saving all of them.** The three bulk callers
+  loaded every stored site, changed one, and wrote them all back, so `JSON.parse`
+  and `JSON.stringify` ran across the whole store on the main thread for every
+  edit — and the cost grew with everything a user had ever saved rather than with
+  what changed.
+
+  A record cache now keeps, per site, the object last handed out and the exact
+  string it serialises to. Reads re-parse only when the stored string differs, an
+  untouched site is recognised by reference and never re-serialised, and the index
+  is rewritten only when membership or order actually changed.
+
+  Measured in jsdom, editing one site out of 200 with the store at 4,091,627
+  characters — 78% of this machine's measured 5,241,856-character localStorage
+  ceiling — **saving fell from 24.94 ms to 0.28 ms and reloading from 17.90 ms to
+  0.60 ms**. The figure that matters is that the new cost barely moves between a
+  807,000-character store (0.21 ms) and a 4.1-million one (0.28 ms): it is now
+  proportional to the edit, not to the store.
+
+  Nothing is deferred, debounced or batched, so no durability window is
+  introduced — these records are the user's only copy of their work. A cache entry
+  is written only when the underlying write succeeded and is dropped when it
+  failed, so a quota exception can never leave the application believing a site is
+  stored.
+
+- **The application held twelve WebGL contexts in grid view and never gave one
+  back.** Each `MapView` built two MapLibre instances — left and right — whether or
+  not the user was comparing anything, and a pane latched "has shown a map" on first
+  display and kept the map mounted behind `opacity: 0` for the rest of the session.
+  Six panes, two contexts each, permanently. Browsers cap simultaneous contexts at
+  around sixteen and silently drop the oldest past that ("Too many active WebGL
+  contexts"), and integrated GPUs run out of memory well before that count.
+
+  The right map is now created on entering compare mode and removed on leaving it,
+  and a pane releases its maps once it has stopped displaying one. MapLibre
+  instances constructed by a six-pane grid, counted under the test harness:
+
+  | grid view, six panes | before | after |
+  |---|---:|---:|
+  | all on a map, compare off | 12 | **6** |
+  | all on a map, compare on | 12 | 12 |
+  | two on a map, four on chart/dial/table | 12 | **4** |
+
+  The compare swiper defaults to on, so the worst case is unchanged; what has gone
+  is paying for maps nothing is displaying.
+
+  Releasing a map is not free, so a pane keeps its map for fifteen seconds after
+  switching away — flipping to a chart and straight back does not reload anything.
+  The sync registry now remembers the last view any map reported, and a new
+  instance opens there rather than at the default world view, so a release and
+  recreate does not move the map under the user.
+
+- **Panning the map re-asked questions whose answers could not have changed.**
+  `ViewPane` and `ChartView` both listed the map extent as an effect dependency
+  regardless of range mode, and the extent is a fresh object on every move — so a
+  pan re-issued full-domain queries that do not depend on the extent at all. At
+  4.77 seconds per full-domain `/api/aggregate` request, a scripted six-pane
+  session of one mount and five pans issued **216 chart-pane requests where 6 were
+  needed, and 72 dial-pane requests where 2 were** — roughly 1,030 seconds of
+  server work reduced to about 29.
+
+  Overlapping work is now ordered as well as reduced. `applyColors` is called from
+  sixteen places and is asynchronous throughout, so runs routinely overlapped and
+  nothing sequenced them: whichever response arrived last painted the map,
+  regardless of which viewport, scenario or attribute the user had asked for. Each
+  run now carries a monotonic ticket that is checked after every await, and
+  superseding a run aborts the requests it no longer needs.
+
+  A shared-request primitive replaces two hand-rolled promise caches. It shares one
+  in-flight request per key, cancels it when nothing wants it, and counts
+  subscribers — so one pane navigating away cannot cancel a request the other
+  eleven are waiting on.
+
+  The choropleth request count is deliberately unchanged: the existing cache
+  already deduplicated those across panes. What changed there is that superseded
+  requests are now cancelled rather than merely ignored, which frees the
+  connection instead of leaving both ends busy.
+
+- **A transient server error was cached as "no data" for a full minute.** The
+  choropleth cache stored a promise that swallowed its own errors and resolved to
+  `null`, so a single 500 response left the map blank for the whole 60-second TTL
+  even after the server recovered. Rejections are no longer cached.
 
 - **The choropleth is served as vector tiles instead of a GeoJSON source.** The tile
   pipeline already carried the catchment polygons — `gpkg_to_mbtiles.sh` tiles
