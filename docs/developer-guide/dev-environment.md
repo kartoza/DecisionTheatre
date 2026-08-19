@@ -286,7 +286,7 @@ terminal.
 |---|---|
 | `secrets-scan` | TruffleHog (verified only) and Gitleaks |
 | `file-checks` | Large-file and unwanted-file scan |
-| `lint-go` | `golangci-lint` |
+| `lint-go` | `scripts/gofmt-check.sh`, then `golangci-lint` against `.golangci.yml` |
 | `lint-frontend` | `npx tsc --noEmit` only |
 | `test-go` | `go test -race -coverprofile=coverage.out ./...` |
 | `test-frontend` | `npm test` |
@@ -303,7 +303,7 @@ parallel packaging jobs, then a published GitHub Release.
 To reproduce CI locally:
 
 ```bash
-dt check          # fmt, lint, test
+dt check          # fmt-check, lint, test — the same questions CI asks, in order
 nix build && ./result/bin/decision-theatre --version
 trivy fs --severity CRITICAL,HIGH .
 ```

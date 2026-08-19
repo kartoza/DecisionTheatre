@@ -207,7 +207,10 @@ func dirSize(dir string) (int64, int) {
 	// managed to see.
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			// Returning nil means "skip this entry and keep walking", which is
+			// WalkDir's contract; returning err would abandon the whole
+			// inventory over one unreadable subdirectory.
+			return nil //nolint:nilerr // skipping the entry is the intent, see above
 		}
 		if d.IsDir() {
 			return nil

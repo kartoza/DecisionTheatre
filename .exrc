@@ -38,6 +38,7 @@ nnoremap <leader>pH :terminal dt<CR>
 nnoremap <leader>pt :terminal make test-all<CR>
 nnoremap <leader>pl :terminal make lint<CR>
 nnoremap <leader>pf :terminal make fmt<CR>
+nnoremap <leader>pg :terminal make fmt-check<CR>
 nnoremap <leader>pk :terminal make check<CR>
 
 " Docs and data

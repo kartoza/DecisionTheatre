@@ -5,36 +5,78 @@
 <figure markdown>
   ![The gates a change passes through before reaching main](../assets/diagrams/generated/quality-gates.svg)
   <figcaption class="static">
-    Two gates are not fully closed yet — see the notes below.
+    The formatting gate is closed as of the linter configuration work; the
+    diagram still shows it open. See the notes below.
   </figcaption>
 </figure>
 
 
 ### Formatting
 
-All Go code must be formatted with `gofmt`. Run:
+All Go code is formatted with `gofmt -s`, and CI rejects anything that is not.
 
 ```bash
-dt fmt
+dt fmt          # format everything in place
+dt fmt-check    # report anything unformatted; change nothing
 ```
+
+Both are the same script, `scripts/gofmt-check.sh`, which is also what the `lint-go`
+job runs as its first step. There is deliberately only one implementation: if the gate
+and the formatter were two commands they would eventually disagree about `-s`, about
+which files are vendored, or about both, and the disagreement would only ever be
+discovered by a red build.
+
+The check runs in about a second — it needs no cgo, no webkit and no linter binary —
+so it is the first thing CI asks and the cheapest thing to run before a push. The
+`gofmt` pre-commit hook (`dt hooks`) formats staged files with the same flags.
 
 ### Linting
 
-We use [golangci-lint](https://golangci-lint.run/) with default settings and a 5-minute timeout:
+[golangci-lint](https://golangci-lint.run/) runs against the committed
+`.golangci.yml`:
 
 ```bash
 dt lint
+# apply what can be applied automatically:
+dt lint -- --fix
 # or directly:
 golangci-lint run --timeout 5m
 ```
 
-!!! warning "Expected to change"
-    There is no `.golangci.yml`, and CI pins the linter to `version: latest`, so the
-    active rule set varies with the release date rather than with a committed
-    configuration. Nothing verifies formatting either — `dt fmt` rewrites files but is
-    manual, and CI does not check `gofmt -l`.
+The version is pinned in `.github/workflows/ci.yml` to the one the development shell
+provides, so `dt lint` and CI apply the same rules to the same code.
 
-    Ticket: *golangci-lint runs on defaults and there is no gofmt gate*.
+#### What is enabled, and why
+
+`.golangci.yml` is commented linter by linter — every entry names the class of defect
+it catches *in this codebase*, because a rule nobody can justify is a rule that gets
+`//nolint`-ed the first time it is inconvenient. Beyond the standard set (`errcheck`,
+`govet`, `ineffassign`, `staticcheck`, `unused`) the configuration aims at four
+things this project has actually been bitten by:
+
+| Concern | Linters |
+|---|---|
+| An error checked and then discarded, so the caller is told it worked | `nilerr`, `nilnesserr`, `nilnil` |
+| Handles and connections that are opened and never closed | `sqlclosecheck`, `bodyclose` |
+| Code that is wrong with no runtime symptom | `gocheckcompilerdirectives`, `musttag`, `canonicalheader`, `recvcheck`, `fatcontext`, `durationcheck`, `reassign`, `exhaustive` |
+| Suppressions and test hygiene | `nolintlint`, `usetesting` |
+
+Two rules about the file itself:
+
+- **The tree runs clean.** Every enabled linter passes on `main` today. Nothing is
+  hidden behind a path exclusion, so a finding in your build is a finding in your
+  change.
+- **What is *not* enabled is written down too.** The bottom of `.golangci.yml` lists
+  the linters that are worth having, the exact debt that blocks each one, and the
+  ones considered and declined with the reason. Enabling one is meant to be a
+  deliberate act with a known cost, not a discovery.
+
+!!! note "Adding a linter"
+    Measure first — `golangci-lint run` with it enabled, over the whole tree — and
+    either clear what it finds in the same change or leave it in the list at the
+    bottom of the file. Note that golangci-lint truncates its own output by default
+    (`max-same-issues: 3`); `.golangci.yml` turns that off, so what you see is
+    everything.
 
 ### Conventions
 

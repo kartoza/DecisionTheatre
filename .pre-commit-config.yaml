@@ -38,9 +38,13 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # -s as well as -w, matching `dt fmt`, `dt fmt-check` and the gofmt step
+      # in CI. Without it this hook and the gate disagree by exactly one rule:
+      # the hook would leave an unsimplified composite literal in place and CI
+      # would then reject the commit it had just blessed.
       - id: go-fmt
         name: gofmt
-        entry: gofmt -l -w
+        entry: gofmt -s -l -w
         language: system
         types: [go]
         exclude: '^internal/webview_go/'

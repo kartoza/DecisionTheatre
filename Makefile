@@ -35,7 +35,7 @@ GOLINT := golangci-lint
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
 .PHONY: container
-.PHONY: fmt lint check deps
+.PHONY: fmt fmt-check lint check deps
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: protect-branch
 .PHONY: docs docs-serve
@@ -144,12 +144,29 @@ test-all: test test-frontend test-scripts
 # Code quality
 # ============================
 
+## fmt: Format every Go file in place, with gofmt -s.
+##
+## Delegates to the same script the gate uses, so "formatted" means one thing:
+## the same file list, the same exclusions, the same flags.
 fmt:
-	$(GOFMT) -s -w .
-	$(GO) fmt ./...
+	@./scripts/gofmt-check.sh --fix
 
+## fmt-check: Is everything formatted? Reports; changes nothing.
+##
+## This is exactly what the lint-go job runs first in CI, and it needs neither
+## cgo nor a linter binary, so it answers in about a second. Run it before you
+## push and formatting never reaches review.
+fmt-check:
+	@./scripts/gofmt-check.sh
+
+## lint: golangci-lint over the Go sources, using .golangci.yml.
+##
+## The configuration is committed and the version is pinned in
+## .github/workflows/ci.yml to the one the development shell provides, so this
+## and CI apply the same rules. Run `dt lint -- --fix` to apply what can be
+## applied automatically.
 lint:
-	$(GOLINT) run --timeout 5m
+	$(GOLINT) run --timeout 5m $(ARGS)
 
 ## check-data: Check the data directory and print a summary of its contents
 ##
@@ -169,7 +186,12 @@ walkthrough-manifest:
 ## deployment gates and documentation keep working.
 validate-data: check-data
 
-check: fmt lint test
+## check: Everything CI checks about the Go sources, in CI's order.
+##
+## fmt-check rather than fmt: this answers "would CI pass?", and a target that
+## silently rewrites your files cannot answer that question. `dt fmt` is the
+## one that changes things.
+check: fmt-check lint test
 
 # ============================
 # Health and flake lock step
