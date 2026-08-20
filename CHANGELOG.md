@@ -173,6 +173,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chrome, the React toolbar and the imperatively-built swiper handle, so their
   timing cannot drift apart. The swiper's divider line stays visible: it marks
   which side of the comparison is which, and is information rather than a control.
+  It does thin from 12px to 3px at rest, though, and widens with everything else
+  on hover — most of that width exists to be grabbed, which only matters once the
+  pointer is on the pane. Its width, fill and shadow used to be set inline from
+  JavaScript in six places across two duplicated blocks; they are one CSS rule
+  now, and `MapView` sets a `data-docked` attribute and nothing else.
 
   The hiding is scoped to `@media (hover: hover) and (pointer: fine)`, because on a
   touch screen there is no hover to bring a control back with; it lifts on

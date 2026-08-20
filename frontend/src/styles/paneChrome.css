@@ -60,3 +60,66 @@
     transition: none;
   }
 }
+
+/*
+ * The compare swiper's divider line.
+ *
+ * The line is information, not a control: it says which side of the map belongs
+ * to which scenario, so unlike the handle it stays visible. But at 12px across
+ * six panes it was one of the loudest things on the screen, and most of that
+ * width exists to be grabbed — which only matters once the pointer is on the
+ * pane. So it rests thin and thickens with the rest of the chrome.
+ *
+ * These four properties used to be set inline from JavaScript, in six places
+ * across two duplicated blocks. They are one rule now; MapView sets
+ * data-docked and nothing else.
+ */
+.dt-swiper-line {
+  width: 12px;
+  background: white;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+  transition: width 200ms ease, background 200ms ease, box-shadow 200ms ease;
+}
+
+/*
+ * Docked to an edge: the line itself disappears and the handle becomes a
+ * half-circle tab against the frame, which is the only way back.
+ */
+.dt-swiper-line[data-docked='left'],
+.dt-swiper-line[data-docked='right'] {
+  width: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dt-swiper-line {
+    width: 3px;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+  }
+
+  .dt-pane:hover .dt-swiper-line,
+  .dt-pane:focus-within .dt-swiper-line,
+  body.dt-tour-active .dt-swiper-line {
+    width: 12px;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Docked stays docked, hovered or not: there is no line to widen. */
+  .dt-pane:hover .dt-swiper-line[data-docked='left'],
+  .dt-pane:hover .dt-swiper-line[data-docked='right'],
+  .dt-pane:focus-within .dt-swiper-line[data-docked='left'],
+  .dt-pane:focus-within .dt-swiper-line[data-docked='right'],
+  body.dt-tour-active .dt-swiper-line[data-docked='left'],
+  body.dt-tour-active .dt-swiper-line[data-docked='right'] {
+    width: 6px;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-swiper-line {
+    transition: none;
+  }
+}

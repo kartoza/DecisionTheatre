@@ -26,6 +26,7 @@ vi.mock('../components/DialChart', () => ({ default: () => <div /> }));
 vi.mock('../components/AggregateTable', () => ({ default: () => <div /> }));
 
 const CSS = readFileSync('src/styles/paneChrome.css', 'utf8');
+const MAPVIEW = readFileSync('src/components/MapView.tsx', 'utf8');
 
 const comparison: ComparisonState = {
   leftScenario: 'current',
@@ -115,6 +116,41 @@ describe('pane chrome stylesheet', () => {
 
   it('selects the class the tour override sets', () => {
     expect(CSS).toContain('body.dt-tour-active .dt-pane-chrome');
+  });
+});
+
+describe('the compare swiper divider', () => {
+  it('rests thin and thickens with the rest of the chrome', () => {
+    const hover = CSS.indexOf('@media (hover: hover) and (pointer: fine)');
+    const thin = CSS.indexOf('width: 3px');
+    expect(thin).toBeGreaterThan(hover);
+    expect(CSS).toContain('.dt-pane:hover .dt-swiper-line');
+    expect(CSS).toContain('.dt-pane:focus-within .dt-swiper-line');
+  });
+
+  it('stays visible rather than hiding like the handle', () => {
+    // The line says which side of the map is which scenario. Losing it is
+    // losing information, not losing a control.
+    expect(CSS).not.toContain('.dt-swiper-line {\n  opacity: 0');
+    const base = CSS.slice(CSS.indexOf('.dt-swiper-line {'));
+    expect(base.slice(0, base.indexOf('}'))).toContain('background: white');
+  });
+
+  it('is driven by an attribute MapView sets, not by inline styles', () => {
+    // Six sets of inline width/background/box-shadow across two duplicated
+    // blocks used to do this. Inline styles would out-specify the rule above,
+    // so a stray one silently disables the whole behaviour.
+    expect(MAPVIEW).not.toMatch(/slider\.style\.(width|background|boxShadow)/);
+    // Both docking paths — the drag handler and the synced-position effect.
+    expect(MAPVIEW.match(/slider\.dataset\.docked/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('keeps a docked divider docked whether hovered or not', () => {
+    // Docked, the line is gone and the handle is a half-circle tab against the
+    // frame — the only way back. Widening it on hover would draw a white bar
+    // over a map that is clipped to zero width on that side.
+    expect(CSS).toContain("body.dt-tour-active .dt-swiper-line[data-docked='right']");
+    expect(CSS).toContain(".dt-pane:hover .dt-swiper-line[data-docked='left']");
   });
 });
 

@@ -2836,19 +2836,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Create the slider with touch-action to prevent browser gestures
     const slider = document.createElement('div');
+    // Width, fill, shadow and their transition come from the .dt-swiper-line
+    // rule: inline styles would out-specify it, and the resting width depends on
+    // whether the pane is hovered, which JS here has no business knowing.
+    slider.className = 'dt-swiper-line';
+    slider.dataset.docked = '';
     slider.style.cssText = `
       position:absolute;
       top:0;
       left:0%;
-      width:12px;
       height:100%;
-      background:white;
       z-index:10;
       cursor:ew-resize;
-      box-shadow:0 0 8px rgba(0,0,0,0.4);
       transform:translateX(-50%);
       touch-action:none;
-      transition:background 0.2s ease, box-shadow 0.2s ease, width 0.2s ease;
     `;
 
     // Slider handle
@@ -2890,6 +2891,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     function updateSliderVisuals(docked: 'left' | 'right' | null) {
       if (docked === sliderDockedRef.current) return;
       sliderDockedRef.current = docked;
+      // Width, fill and shadow are the stylesheet's — see styles/paneChrome.css,
+      // which also thins the line while the pane is not hovered.
+      slider.dataset.docked = docked ?? '';
 
       // When docked to an edge, the map on that side is clipped to zero
       // width, so its scenario label would sit over the other side's map
@@ -2899,27 +2903,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (docked === 'left') {
         // Docked left - half circle on right side
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '0 50% 50% 0';
         handle.style.left = '100%';
         handle.style.transform = 'translate(0, -50%)';
         handle.innerHTML = ARROW_RIGHT;
       } else if (docked === 'right') {
         // Docked right - half circle on left side
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '50% 0 0 50%';
         handle.style.left = '0';
         handle.style.transform = 'translate(-100%, -50%)';
         handle.innerHTML = ARROW_LEFT;
       } else {
         // Undocked - normal state
-        slider.style.background = 'white';
-        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
-        slider.style.width = '12px';
         handle.style.borderRadius = '50%';
         handle.style.left = '50%';
         handle.style.transform = 'translate(-50%, -50%)';
@@ -3566,6 +3561,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (newDockedState !== sliderDockedRef.current) {
       sliderDockedRef.current = newDockedState;
+      slider.dataset.docked = newDockedState ?? '';
 
       // Same rationale as updateSliderVisuals: the docked-away side's map
       // is clipped to zero width, so its scenario label would otherwise
@@ -3574,25 +3570,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (rightLabelEl) rightLabelEl.style.display = newDockedState === 'right' ? 'none' : 'block';
 
       if (newDockedState === 'left') {
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '0 50% 50% 0';
         handle.style.left = '100%';
         handle.style.transform = 'translate(0, -50%)';
         handle.innerHTML = ARROW_RIGHT;
       } else if (newDockedState === 'right') {
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '50% 0 0 50%';
         handle.style.left = '0';
         handle.style.transform = 'translate(-100%, -50%)';
         handle.innerHTML = ARROW_LEFT;
       } else {
-        slider.style.background = 'white';
-        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
-        slider.style.width = '12px';
         handle.style.borderRadius = '50%';
         handle.style.left = '50%';
         handle.style.transform = 'translate(-50%, -50%)';
