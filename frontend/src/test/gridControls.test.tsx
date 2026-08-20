@@ -17,6 +17,7 @@ import { render, screen, within, cleanup, fireEvent } from '@testing-library/rea
 import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import GridControls from '../components/GridControls';
+import Header from '../components/Header';
 import { resetSatelliteConfig, applyServerSatelliteConfig } from '../lib/satelliteBasemap';
 
 type Props = ComponentProps<typeof GridControls>;
@@ -126,5 +127,41 @@ describe('GridControls map toggles', () => {
     ]) {
       expect(within(menu).getByText(label)).toBeInTheDocument();
     }
+  });
+});
+
+describe('Header placement', () => {
+  /**
+   * The cluster was gated on `currentPage === 'map'` and vanished in explore
+   * mode — which renders the same six-pane grid, just without a site selected.
+   * The pane grid is the thing these controls act on, and only that render
+   * passes gridControls, so the props are the gate.
+   */
+  const gridControls = {
+    viewMode: 'map' as const,
+    onViewModeChange: () => {},
+    siteId: null,
+    is3DMode: false,
+    onIs3DModeChange: () => {},
+  };
+
+  it.each(['map', 'explore'] as const)('shows the controls on the %s page', (page) => {
+    render(
+      <ChakraProvider theme={theme}>
+        <Header onToggleDocs={() => {}} isDocsOpen={false} currentPage={page} gridControls={gridControls} />
+      </ChakraProvider>,
+    );
+    expect(screen.getAllByRole('radiogroup', { name: 'View for all panes' }).length)
+      .toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Show 3D extrusion').length).toBeGreaterThan(0);
+  });
+
+  it('shows nothing when no grid is on screen to control', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <Header onToggleDocs={() => {}} isDocsOpen={false} currentPage="landing" />
+      </ChakraProvider>,
+    );
+    expect(screen.queryByRole('radiogroup', { name: 'View for all panes' })).toBeNull();
   });
 });

@@ -2308,7 +2308,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Choropleth visibility is read through a ref inside applyColors, so a change
   // has to re-run it; nothing else would notice.
+  // Choropleth visibility is read through a ref inside applyColors, so a change
+  // has to re-run it; nothing else would notice. Only a *change*, though: the
+  // initial paint is already driven by the maps-ready effect, and a second run
+  // at mount would abort that one and start again.
+  const appliedChoroplethRef = useRef(isChoroplethEnabled);
   useEffect(() => {
+    if (appliedChoroplethRef.current === isChoroplethEnabled) return;
+    appliedChoroplethRef.current = isChoroplethEnabled;
     // Through the ref, as elsewhere in this file: applyColors is rebuilt on
     // every render, so depending on it directly would re-run this constantly.
     applyColorsRef.current();

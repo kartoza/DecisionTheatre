@@ -136,9 +136,14 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
 
       <Spacer />
 
-      {gridControls && currentPage === 'map' && (
-        <GridControls {...gridControls} />
-      )}
+      {/*
+        Gated on the props being supplied, not on the page name. The pane grid
+        renders on 'map' and on 'explore' — exploring without a site selected is
+        the same screen — and only that render passes gridControls at all, so
+        the props are the signal. Naming a page here hid the whole cluster in
+        explore mode.
+      */}
+      {gridControls && <GridControls {...gridControls} />}
 
       <Spacer />
 
