@@ -26,6 +26,8 @@ import { getAppRuntime } from '../types/runtime';
 import rewildLogo from '../assets/logo-vertical-white-3x 1.png';
 import fefaLogo from '../assets/JM_FEFA_Logo_Light_LightLightText_RGB_72dpi_aw.png';
 import { colors } from '../styles/colors';
+import GridControls from './GridControls';
+import type { RangeMode, ViewMode } from '../types';
 
 interface HeaderProps {
   onToggleDocs: () => void;
@@ -37,9 +39,24 @@ interface HeaderProps {
   isBoundaryEditMode?: boolean;
   onToggleTargetModal?: () => void;
   isTargetModalOpen?: boolean;
+
+  // The grid-wide controls, previously a full-width bar above the panes. They
+  // are passed rather than read from context because every piece of this state
+  // already lives in App, and threading it here keeps one owner.
+  gridControls?: {
+    viewMode: ViewMode;
+    onViewModeChange: (mode: ViewMode) => void;
+    rangeMode?: RangeMode;
+    onRangeModeChange?: (mode: RangeMode) => void;
+    onAddPane?: () => void;
+    onOpenTargets?: () => void;
+    hasTargets?: boolean;
+    siteId?: string | null;
+    isExtracting?: boolean;
+  };
 }
 
-function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, onEditBoundary, isBoundaryEditMode }: HeaderProps) {
+function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, onEditBoundary, isBoundaryEditMode, gridControls }: HeaderProps) {
   const { info } = useServerInfo();
   const isBrowser = getAppRuntime() === 'browser';
   const bgColor = useColorModeValue('white', colors.darkGray);
@@ -106,6 +123,12 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
           </>
         )}
       </HStack>
+
+      <Spacer />
+
+      {gridControls && currentPage === 'map' && (
+        <GridControls {...gridControls} />
+      )}
 
       <Spacer />
 

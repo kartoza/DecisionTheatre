@@ -1,5 +1,5 @@
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
@@ -15,7 +15,8 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs } from './hooks/useApi';
+import { editableTargetKeys } from './lib/editableTargets';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -795,6 +796,19 @@ function App() {
     return () => window.removeEventListener('dt:demo-pane-state', handler);
   }, [handlePaneStateChange]);
 
+  const { targetInputs } = useAttributeTargetInputs();
+  const hasEditableTargets = useMemo(
+    () => editableTargetKeys(currentSite?.indicators, targetInputs, variableTypes, attributeDetails).length > 0,
+    [currentSite?.indicators, targetInputs, variableTypes, attributeDetails],
+  );
+
+  // The grid-wide controls act on every pane, so they take no pane index. The
+  // old signature took one and ignored it in quad layout, which read as a
+  // per-pane control and was not.
+  const handleGridViewModeChange = useCallback((mode: ViewMode) => {
+    setViewModes((prev) => prev.map(() => mode));
+  }, []);
+
   const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
     setViewModes((prev) => {
       if (layoutMode === 'quad') {
@@ -1143,6 +1157,17 @@ function App() {
         isBoundaryEditMode={isBoundaryEditMode}
         onToggleTargetModal={handleToggleTargetModal}
         isTargetModalOpen={isTargetModalOpen}
+        gridControls={{
+          viewMode: viewModes[focusedPane] ?? viewModes[0] ?? 'map',
+          onViewModeChange: handleGridViewModeChange,
+          rangeMode,
+          onRangeModeChange: setRangeMode,
+          onAddPane: handleAddPane,
+          onOpenTargets: handleToggleTargetModal,
+          hasTargets: hasEditableTargets,
+          siteId: currentSiteId,
+          isExtracting: isExtractingIndicators,
+        }}
       />
 
       <Flex flex={1} overflow="hidden" position="relative">
@@ -1162,7 +1187,6 @@ function App() {
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
             onOpenControlPanel={handleOpenGridControlPanel}
-            onAddPane={handleAddPane}
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
@@ -1191,9 +1215,7 @@ function App() {
             chartGraphModes={chartGraphModes}
             mapExtent={mapExtent}
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
-            isExtractingIndicators={isExtractingIndicators}
             isTargetModalOpen={isTargetModalOpen}
-            onOpenTargetModal={onOpenTargetModal}
             onCloseTargetModal={onCloseTargetModal}
             refreshKey={mapRefreshSeq}
             quadColumns={quadColumns}

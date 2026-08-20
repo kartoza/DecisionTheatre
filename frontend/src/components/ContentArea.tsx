@@ -1,7 +1,7 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, IconButton, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiTable, FiTarget } from 'react-icons/fi';
 import ViewPane from './ViewPane';
+import { editableTargetKeys as editableTargetKeysFor } from '../lib/editableTargets';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
@@ -17,7 +17,6 @@ interface ContentAreaProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
-  onAddPane: () => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
@@ -48,10 +47,8 @@ interface ContentAreaProps {
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
-  isExtractingIndicators?: boolean;
   // For target modal control from parent
   isTargetModalOpen?: boolean;
-  onOpenTargetModal?: () => void;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
   quadColumns?: QuadColumns;
@@ -81,21 +78,6 @@ const paneVariants = {
   }),
 };
 
-const QUAD_VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string }> = {
-  map: { icon: <FiMap />, label: 'Map' },
-  chart: { icon: <FiBarChart2 />, label: 'Chart' },
-  dial: { icon: <FiActivity />, label: 'Dial' },
-  table: { icon: <FiTable />, label: 'Table' },
-};
-
-const QUAD_VIEW_MODES: ViewMode[] = ['map', 'chart', 'dial', 'table'];
-
-const RANGE_MODE_CONFIG: { id: RangeMode; label: string; icon: React.ReactElement }[] = [
-  { id: 'domain', label: 'Full', icon: <FiGlobe size={14} /> },
-  { id: 'extent', label: 'Extent', icon: <FiSquare size={14} /> },
-  { id: 'site', label: 'Site', icon: <FiTarget size={14} /> },
-];
-
 function formatVariableType(value: string): string {
   return value
     .replace(/_/g, ' ')
@@ -113,7 +95,6 @@ function ContentArea({
   onFocusPane,
   onGoQuad,
   onOpenControlPanel,
-  onAddPane,
   onRemovePane,
   onIdentify,
   identifyResult,
@@ -142,9 +123,7 @@ function ContentArea({
   chartGraphModes,
   mapExtent,
   onSiteIndicatorsChange,
-  isExtractingIndicators,
   isTargetModalOpen,
-  onOpenTargetModal,
   onCloseTargetModal,
   refreshKey,
   quadColumns = 2,
@@ -162,40 +141,11 @@ function ContentArea({
   const [isSavingTargets, setIsSavingTargets] = useState(false);
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
-  const quadActiveMode: ViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
 
-  const editableTargetKeys = useMemo(() => {
-    const availableKeys = new Set<string>();
-    Object.keys(siteIndicators?.ideal ?? {}).forEach((k) => availableKeys.add(k));
-    Object.keys(siteIndicators?.reference ?? {}).forEach((k) => availableKeys.add(k));
-    Object.keys(siteIndicators?.current ?? {}).forEach((k) => availableKeys.add(k));
-
-    const keys = Object.entries(targetInputs)
-      .filter(([, allowed]) => allowed)
-      .map(([key]) => key)
-      .filter((key) => availableKeys.has(key))
-      .filter((key) => {
-        const refVal = siteIndicators?.reference?.[key];
-        const curVal = siteIndicators?.current?.[key];
-        return (typeof refVal === 'number' && Number.isFinite(refVal)) ||
-               (typeof curVal === 'number' && Number.isFinite(curVal));
-      })
-      .filter((key) => {
-        if (variableTypes[key] !== 'Herbivores') return true;
-        const refVal = siteIndicators?.reference?.[key];
-        const curVal = siteIndicators?.current?.[key];
-        const refNum = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
-        const curNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : 0;
-        return refNum > 0 || curNum > 0;
-      });
-    return keys
-      .filter((key, idx, arr) => arr.indexOf(key) === idx)
-      .sort((a, b) => {
-        const aLabel = attributeDetails[a] ?? a;
-        const bLabel = attributeDetails[b] ?? b;
-        return aLabel.localeCompare(bLabel);
-      });
-  }, [attributeDetails, siteIndicators, targetInputs, variableTypes]);
+  const editableTargetKeys = useMemo(
+    () => editableTargetKeysFor(siteIndicators, targetInputs, variableTypes, attributeDetails),
+    [attributeDetails, siteIndicators, targetInputs, variableTypes],
+  );
 
   const targetGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -256,9 +206,6 @@ function ContentArea({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTargetModalOpen]);
 
-  const openTargetModal = () => {
-    if (typeof onOpenTargetModal === 'function') onOpenTargetModal();
-  };
 
   // Broadcast open/close so the guided tour can hide itself while the modal
   // is visible. Using a ref to skip the initial mount dispatch.
@@ -334,103 +281,13 @@ function ContentArea({
       display="flex"
       flexDirection="column"
     >
-      {isQuad && (
-        <HStack
-          spacing={1}
-          px={2}
-          py={2}
-          bg="gray.800"
-          borderBottom="1px"
-          borderColor="gray.700"
-          justify="center"
-        >
-          {QUAD_VIEW_MODES.map((viewMode) => {
-            const config = QUAD_VIEW_MODE_CONFIG[viewMode];
-            const isActive = quadActiveMode === viewMode;
-            return (
-              <Tooltip key={viewMode} label={`Show ${config.label} in all panes`} placement="bottom">
-                <IconButton
-                  aria-label={`Show ${config.label} in all panes`}
-                  icon={config.icon}
-                  onClick={() => onViewModeChange(focusedPane, viewMode)}
-                  variant="ghost"
-                  color={isActive ? 'white' : 'gray.300'}
-                  bg={isActive ? 'cyan.500' : 'transparent'}
-                  _hover={{ bg: isActive ? 'cyan.400' : 'whiteAlpha.200' }}
-                  size="sm"
-                  borderRadius="md"
-                />
-              </Tooltip>
-            );
-          })}
-
-          {onRangeModeChange && (
-            <HStack spacing={1} pl={2} ml={2} borderLeft="1px" borderColor="gray.600">
-              {RANGE_MODE_CONFIG.map((mode) => {
-                const isActive = rangeMode === mode.id;
-                const isDisabled = mode.id === 'site' && !siteId;
-                return (
-                  <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : `${mode.label} range`} placement="bottom">
-                    <Button
-                      size="sm"
-                      leftIcon={mode.icon as React.ReactElement}
-                      onClick={() => !isDisabled && onRangeModeChange(mode.id)}
-                      variant="ghost"
-                      bg={isActive ? 'cyan.500' : 'transparent'}
-                      color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
-                      _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
-                      fontSize="xs"
-                      fontWeight={isActive ? '600' : '400'}
-                      px={3}
-                      cursor={isDisabled ? 'not-allowed' : 'pointer'}
-                    >
-                      {mode.label}
-                    </Button>
-                  </Tooltip>
-                );
-              })}
-            </HStack>
-          )}
-
-          <Tooltip label="Add pane" placement="bottom">
-            <IconButton
-              aria-label="Add pane"
-              icon={<FiPlus />}
-              onClick={onAddPane}
-              variant="ghost"
-              color="gray.200"
-              _hover={{ bg: 'whiteAlpha.200' }}
-              size="sm"
-              borderRadius="md"
-              ml={2}
-            />
-          </Tooltip>
-
-          {isExtractingIndicators && !siteIndicators && (
-            <HStack spacing={2} ml={2} color="gray.400">
-              <Spinner size="xs" color="cyan.400" />
-              <Box fontSize="sm">Extracting indicators…</Box>
-            </HStack>
-          )}
-
-          {siteIndicators && editableTargetKeys.length > 0 && (
-            <Tooltip label="Edit target values" placement="bottom">
-              <Button
-                id="demo-edit-targets-btn"
-                size="sm"
-                leftIcon={<FiEdit2 size={14} />}
-                onClick={openTargetModal}
-                variant="ghost"
-                color="gray.200"
-                _hover={{ bg: 'whiteAlpha.200' }}
-                ml={2}
-              >
-                Targets
-              </Button>
-            </Tooltip>
-          )}
-        </HStack>
-      )}
+      {/*
+        The grid-wide controls used to be a full-width bar here: four view-mode
+        icons, three range-mode buttons, add-pane and the target editor. They
+        cost a horizontal band of vertical space on the most space-starved
+        screen in the application, and they are now in the header, in a gap that
+        was empty. See GridControls.
+      */}
 
       <Box
         position="relative"
