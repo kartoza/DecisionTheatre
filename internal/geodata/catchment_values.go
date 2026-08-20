@@ -1,6 +1,7 @@
 package geodata
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -153,7 +154,7 @@ const maxValueScenarios = 3
 // Scenarios that resolve to the same table (reference and future both read
 // scenario_reference) are read once and fanned out, so asking for both costs
 // nothing extra.
-func (s *GpkgStore) QueryCatchmentValues(scenarios []string, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
+func (s *GpkgStore) QueryCatchmentValues(ctx context.Context, scenarios []string, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] QueryCatchmentValues scenarios=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d",
@@ -216,7 +217,7 @@ func (s *GpkgStore) QueryCatchmentValues(scenarios []string, attribute string, m
 		  )
 	`, selects.String(), joins.String(), notNull.String())
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}

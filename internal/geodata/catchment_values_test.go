@@ -1,7 +1,7 @@
-<<<<<<< HEAD
 package geodata
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/kartoza/decision-theatre/internal/gpkgtest"
 )
 
 // legacyFeature is the shape QueryCatchmentValues used to emit, one per
@@ -170,7 +171,7 @@ func decodeSeries(t *testing.T, encoded []byte) []interface{} {
 func TestCatchmentValuesCarryEveryCatchment(t *testing.T) {
 	store := openValuesFixture(t, 500)
 
-	values, err := store.QueryCatchmentValues([]string{"current"}, "NPP_gm2", -180, -90, 180, 90)
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"current"}, "NPP_gm2", -180, -90, 180, 90)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValues: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestCatchmentValuesCarryEveryCatchment(t *testing.T) {
 func TestCatchmentValuesRespectTheBoundingBox(t *testing.T) {
 	store := openValuesFixture(t, 100)
 
-	values, err := store.QueryCatchmentValues([]string{"current"}, "NPP_gm2", 0, -1, 0.5, 1)
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"current"}, "NPP_gm2", 0, -1, 0.5, 1)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValues: %v", err)
 	}
@@ -211,7 +212,7 @@ func TestCatchmentValuesRespectTheBoundingBox(t *testing.T) {
 func TestColumnarStatisticsMatchTheGeoJSONShape(t *testing.T) {
 	store := openValuesFixture(t, 2000)
 
-	values, err := store.QueryCatchmentValues([]string{"current"}, "NPP_gm2", -180, -90, 180, 90)
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"current"}, "NPP_gm2", -180, -90, 180, 90)
 	if err != nil {
 		t.Fatalf("QueryCatchmentValues: %v", err)
 	}
@@ -295,20 +296,121 @@ func TestSeriesValuesRoundTripExactly(t *testing.T) {
 	for i, want := range awkward {
 		if math.Float64bits(decoded[i]) != math.Float64bits(want) {
 			t.Errorf("value %d did not round trip: sent %v, got %v", i, want, decoded[i])
-=======
-package geodata_test
+		}
+	}
+}
 
-import (
-	"context"
-	"testing"
+// A catchment a scenario has no value for has to be representable, because all
+// series share one ID array.
+func TestMissingValuesMarshalAsNull(t *testing.T) {
+	series := &ScenarioValues{}
+	series.append(1.5, true)
+	series.append(0, false)
+	series.append(math.Inf(1), true)
 
-	"github.com/kartoza/decision-theatre/internal/geodata"
-	"github.com/kartoza/decision-theatre/internal/gpkgtest"
-)
+	encoded, err := json.Marshal(series)
+	if err != nil {
+		t.Fatalf("marshalling series: %v", err)
+	}
+	if string(encoded) != "[1.5,null,null]" {
+		t.Errorf("expected [1.5,null,null], got %s", encoded)
+	}
+}
 
-// newStore opens a GpkgStore over a synthetic datapack laid out around the
-// origin: three catchments in a row at longitudes 0, 1 and 2.
-func newStore(t *testing.T) *geodata.GpkgStore {
+// Both scenarios of a comparison come back from one query, sharing one ID
+// array. That sharing is the saving, so it is worth asserting explicitly.
+func TestTwoScenariosShareOneIDArray(t *testing.T) {
+	store := openValuesFixture(t, 200)
+
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"current", "reference"}, "NPP_gm2", -180, -90, 180, 90)
+	if err != nil {
+		t.Fatalf("QueryCatchmentValues: %v", err)
+	}
+
+	if len(values.Series) != 2 {
+		t.Fatalf("expected two series, got %d", len(values.Series))
+	}
+	for _, scenario := range []string{"current", "reference"} {
+		series := values.Series[scenario]
+		if series == nil {
+			t.Fatalf("no series for %s", scenario)
+		}
+		if len(series.Values) != len(values.IDs) {
+			t.Errorf("%s series is not aligned to ids: %d values, %d ids", scenario, len(series.Values), len(values.IDs))
+		}
+	}
+	if values.Series["current"].Values[0] == values.Series["reference"].Values[0] {
+		t.Error("the two scenarios returned the same value; they read different tables")
+	}
+
+	// Same answer as two separate single-scenario queries would have given.
+	single, err := store.QueryCatchmentValues(context.Background(), []string{"reference"}, "NPP_gm2", -180, -90, 180, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range single.IDs {
+		if single.IDs[i] != values.IDs[i] {
+			t.Fatalf("id %d differs between the combined and single query", i)
+		}
+		if single.Series["reference"].Values[i] != values.Series["reference"].Values[i] {
+			t.Fatalf("value %d differs between the combined and single query", i)
+		}
+	}
+}
+
+// reference and future read the same table. They must still get independent
+// series, because the API layer overlays a site's edited targets onto future
+// and must not thereby edit reference.
+func TestFutureAndReferenceDoNotShareStorage(t *testing.T) {
+	store := openValuesFixture(t, 10)
+
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"reference", "future"}, "NPP_gm2", -180, -90, 180, 90)
+	if err != nil {
+		t.Fatalf("QueryCatchmentValues: %v", err)
+	}
+
+	before := values.Series["reference"].Values[0]
+	values.Series["future"].Set(0, 42)
+	if values.Series["reference"].Values[0] != before {
+		t.Error("editing the future series changed the reference series")
+	}
+	if values.Series["future"].Values[0] != 42 {
+		t.Error("the future series was not edited")
+	}
+}
+
+func TestQueryCatchmentValuesRejectsBadInput(t *testing.T) {
+	store := openValuesFixture(t, 5)
+
+	if _, err := store.QueryCatchmentValues(context.Background(), []string{"current"}, "NPP_gm2; DROP TABLE catchments_lev12", -180, -90, 180, 90); err == nil {
+		t.Error("an attribute outside the column list was accepted")
+	}
+	if _, err := store.QueryCatchmentValues(context.Background(), nil, "NPP_gm2", -180, -90, 180, 90); err == nil {
+		t.Error("a request with no scenario was accepted")
+	}
+	if _, err := store.QueryCatchmentValues(context.Background(), []string{"a", "b", "c", "d"}, "NPP_gm2", -180, -90, 180, 90); err == nil {
+		t.Error("a request for more series than the datapack has scenarios was accepted")
+	}
+}
+
+func TestBuildIDIndexAddressesEveryCatchment(t *testing.T) {
+	store := openValuesFixture(t, 50)
+
+	values, err := store.QueryCatchmentValues(context.Background(), []string{"current"}, "NPP_gm2", -180, -90, 180, 90)
+	if err != nil {
+		t.Fatalf("QueryCatchmentValues: %v", err)
+	}
+
+	index := values.BuildIDIndex()
+	for i, id := range values.IDs {
+		if index[id] != i {
+			t.Fatalf("id %d maps to position %d, expected %d", id, index[id], i)
+		}
+	}
+}
+
+// newStore opens a GpkgStore over a synthetic datapack using gpkgtest.Build.
+func newStore(t *testing.T) *GpkgStore {
 	t.Helper()
 
 	dir := gpkgtest.Build(t, t.TempDir(), []gpkgtest.Catchment{
@@ -320,7 +422,7 @@ func newStore(t *testing.T) *geodata.GpkgStore {
 		{ID: 1000000003, Lat: 0, Long: 2, SizeDeg: 0.5, Current: nil, Reference: gpkgtest.Float(3)},
 	}, 0, 100)
 
-	store, err := geodata.NewGpkgStore(dir)
+	store, err := NewGpkgStore(dir)
 	if err != nil {
 		t.Fatalf("NewGpkgStore: %v", err)
 	}
@@ -352,36 +454,10 @@ func TestQueryCatchmentValueArraysReturnsIDsAndValuesInBBox(t *testing.T) {
 	for id, v := range want {
 		if got[id] != v {
 			t.Errorf("catchment %d: got %v, want %v", id, got[id], v)
->>>>>>> origin/main
 		}
 	}
 }
 
-<<<<<<< HEAD
-// A catchment a scenario has no value for has to be representable, because all
-// series share one ID array.
-func TestMissingValuesMarshalAsNull(t *testing.T) {
-	series := &ScenarioValues{}
-	series.append(1.5, true)
-	series.append(0, false)
-	series.append(math.Inf(1), true)
-
-	encoded, err := json.Marshal(series)
-	if err != nil {
-		t.Fatalf("marshalling series: %v", err)
-	}
-	if string(encoded) != "[1.5,null,null]" {
-		t.Errorf("expected [1.5,null,null], got %s", encoded)
-	}
-}
-
-// Both scenarios of a comparison come back from one query, sharing one ID
-// array. That sharing is the saving, so it is worth asserting explicitly.
-func TestTwoScenariosShareOneIDArray(t *testing.T) {
-	store := openValuesFixture(t, 200)
-
-	values, err := store.QueryCatchmentValues([]string{"current", "reference"}, "NPP_gm2", -180, -90, 180, 90)
-=======
 func TestQueryCatchmentValueArraysSkipsNullValues(t *testing.T) {
 	store := newStore(t)
 
@@ -401,115 +477,6 @@ func TestQueryCatchmentValueArraysSkipsNullValues(t *testing.T) {
 	}
 }
 
-// The values array and the GeoJSON feature collection are two shapes of one
-// query. If they ever disagree about which catchments are in view, the
-// vector-tile choropleth and the statistics panel would describe different data.
-func TestQueryCatchmentValuesAgreesWithValueArrays(t *testing.T) {
-	store := newStore(t)
-
-	arrays, err := store.QueryCatchmentValueArrays(context.Background(), "reference", gpkgtest.Attribute, -5, -5, 5, 5)
-	if err != nil {
-		t.Fatalf("QueryCatchmentValueArrays: %v", err)
-	}
-	fc, err := store.QueryCatchmentValues(context.Background(), "reference", gpkgtest.Attribute, -5, -5, 5, 5)
->>>>>>> origin/main
-	if err != nil {
-		t.Fatalf("QueryCatchmentValues: %v", err)
-	}
-
-<<<<<<< HEAD
-	if len(values.Series) != 2 {
-		t.Fatalf("expected two series, got %d", len(values.Series))
-	}
-	for _, scenario := range []string{"current", "reference"} {
-		series := values.Series[scenario]
-		if series == nil {
-			t.Fatalf("no series for %s", scenario)
-		}
-		if len(series.Values) != len(values.IDs) {
-			t.Errorf("%s series is not aligned to ids: %d values, %d ids", scenario, len(series.Values), len(values.IDs))
-		}
-	}
-	if values.Series["current"].Values[0] == values.Series["reference"].Values[0] {
-		t.Error("the two scenarios returned the same value; they read different tables")
-	}
-
-	// Same answer as two separate single-scenario queries would have given.
-	single, err := store.QueryCatchmentValues([]string{"reference"}, "NPP_gm2", -180, -90, 180, 90)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range single.IDs {
-		if single.IDs[i] != values.IDs[i] {
-			t.Fatalf("id %d differs between the combined and single query", i)
-		}
-		if single.Series["reference"].Values[i] != values.Series["reference"].Values[i] {
-			t.Fatalf("value %d differs between the combined and single query", i)
-=======
-	if len(fc.Features) != len(arrays.IDs) {
-		t.Fatalf("feature count %d != value count %d", len(fc.Features), len(arrays.IDs))
-	}
-	for i, f := range fc.Features {
-		if f.ID != arrays.IDs[i] {
-			t.Errorf("feature %d id %d != array id %d", i, f.ID, arrays.IDs[i])
-		}
-		if v, ok := f.Properties[gpkgtest.Attribute].(float64); !ok || v != arrays.Values[i] {
-			t.Errorf("feature %d value %v != array value %v", i, f.Properties[gpkgtest.Attribute], arrays.Values[i])
->>>>>>> origin/main
-		}
-	}
-}
-
-<<<<<<< HEAD
-// reference and future read the same table. They must still get independent
-// series, because the API layer overlays a site's edited targets onto future
-// and must not thereby edit reference.
-func TestFutureAndReferenceDoNotShareStorage(t *testing.T) {
-	store := openValuesFixture(t, 10)
-
-	values, err := store.QueryCatchmentValues([]string{"reference", "future"}, "NPP_gm2", -180, -90, 180, 90)
-	if err != nil {
-		t.Fatalf("QueryCatchmentValues: %v", err)
-	}
-
-	before := values.Series["reference"].Values[0]
-	values.Series["future"].Set(0, 42)
-	if values.Series["reference"].Values[0] != before {
-		t.Error("editing the future series changed the reference series")
-	}
-	if values.Series["future"].Values[0] != 42 {
-		t.Error("the future series was not edited")
-	}
-}
-
-func TestQueryCatchmentValuesRejectsBadInput(t *testing.T) {
-	store := openValuesFixture(t, 5)
-
-	if _, err := store.QueryCatchmentValues([]string{"current"}, "NPP_gm2; DROP TABLE catchments_lev12", -180, -90, 180, 90); err == nil {
-		t.Error("an attribute outside the column list was accepted")
-	}
-	if _, err := store.QueryCatchmentValues(nil, "NPP_gm2", -180, -90, 180, 90); err == nil {
-		t.Error("a request with no scenario was accepted")
-	}
-	if _, err := store.QueryCatchmentValues([]string{"a", "b", "c", "d"}, "NPP_gm2", -180, -90, 180, 90); err == nil {
-		t.Error("a request for more series than the datapack has scenarios was accepted")
-	}
-}
-
-func TestBuildIDIndexAddressesEveryCatchment(t *testing.T) {
-	store := openValuesFixture(t, 50)
-
-	values, err := store.QueryCatchmentValues([]string{"current"}, "NPP_gm2", -180, -90, 180, 90)
-	if err != nil {
-		t.Fatalf("QueryCatchmentValues: %v", err)
-	}
-
-	index := values.BuildIDIndex()
-	for i, id := range values.IDs {
-		if index[id] != i {
-			t.Fatalf("id %d maps to position %d, expected %d", id, index[id], i)
-		}
-=======
 func TestQueryCatchmentValueArraysRejectsUnknownAttribute(t *testing.T) {
 	store := newStore(t)
 
@@ -517,6 +484,5 @@ func TestQueryCatchmentValueArraysRejectsUnknownAttribute(t *testing.T) {
 	// injection point; the allow-list is loaded from scenario_current's columns.
 	if _, err := store.QueryCatchmentValueArrays(context.Background(), "current", `x" FROM sqlite_master; --`, -5, -5, 5, 5); err == nil {
 		t.Fatal("expected an error for an attribute that is not a known column")
->>>>>>> origin/main
 	}
 }

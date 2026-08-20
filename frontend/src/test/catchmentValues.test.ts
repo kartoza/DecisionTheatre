@@ -322,7 +322,10 @@ describe('MapView statistics fetches', () => {
   it('never issues a values fetch per scenario', () => {
     // A single-scenario call would take a bare scenario rather than a pair.
     expect(mapView).not.toMatch(/fetchCatchmentValues\(\s*c\.(left|right)Scenario/);
-    expect(mapView).not.toMatch(/fetchChoroplethData\([^)]*valuesOnly/);
+    // The function signature legitimately has a `valuesOnly` parameter; what
+    // must not appear is a *call* that passes valuesOnly=true, because stats
+    // are now fetched via fetchCatchmentValues, not fetchChoroplethData.
+    expect(mapView).not.toMatch(/fetchChoroplethData\([^;]*,\s*true[\s,)]/s);
   });
 
   it('reads the columnar response directly rather than rebuilding features', () => {

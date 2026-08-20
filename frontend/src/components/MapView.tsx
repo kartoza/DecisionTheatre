@@ -11,7 +11,6 @@ import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, us
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
-<<<<<<< HEAD
 import { evictExpired } from '../lib/ttlCache';
 import type { CatchmentSeries, CatchmentValues } from '../lib/catchmentValues';
 import {
@@ -22,8 +21,6 @@ import {
   selectScenario,
   zoneStatsFromSeries,
 } from '../lib/catchmentValues';
-import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
-=======
 import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
 import {
   satelliteStyleUrl,
@@ -48,7 +45,6 @@ import {
   forgetCatchmentValues,
   type CatchmentTileset,
 } from '../lib/choroplethTiles';
->>>>>>> origin/main
 
 interface MapViewProps {
   comparison: ComparisonState;
@@ -804,13 +800,9 @@ async function fetchChoroplethData(
   bounds: maplibregl.LngLatBounds,
   zoom: number,
   siteId?: string | null,
-<<<<<<< HEAD
-  idealOverrides?: Map<number, number>
-=======
   idealOverrides?: Map<number, number>,
   valuesOnly = false,
   signal?: AbortSignal,
->>>>>>> origin/main
 ): Promise<ChoroplethData | null> {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -824,6 +816,11 @@ async function fetchChoroplethData(
     maxy: ne.lat.toString(),
     zoom: zoom.toString(),
   });
+
+  if (valuesOnly) {
+    params.set('valuesOnly', '1');
+    params.delete('zoom');
+  }
 
   const hasSiteOverride = siteId && scenario === 'future';
   if (hasSiteOverride) {
@@ -868,7 +865,6 @@ async function fetchChoroplethData(
   }
 }
 
-<<<<<<< HEAD
 // Module-level cache for columnar values requests, on the same terms as
 // _choroplethCache above: keyed by the full query string, swept by TTL.
 const _catchmentValuesCache = new Map<string, { promise: Promise<CatchmentValues | null>; ts: number }>();
@@ -958,164 +954,6 @@ async function fetchCatchmentValues(
 
   return data;
 }
-
-/**
- * Build a MapLibre expression producing the 0-1 normalized position of an
- * attribute's value within [min, max].
- *
- * - 'logistic' passes the linear ratio through a sigmoid centered on the
- *   domain midpoint, which compresses values near the extremes and expands
- *   contrast around the middle of the range - useful when most values
- *   cluster around the mean with a long tail.
- * - 'logarithmic' passes the linear ratio through a log1p curve, which
- *   expands contrast among low values at the expense of high ones - useful
- *   when most values are small with a few large outliers. log1p (rather than
- *   a plain log of the raw value) is used so the domain minimum, which can
- *   legitimately be 0, never hits an undefined log(0).
- */
-function buildNormalizedValueExpression(
-  attribute: string,
-  min: number,
-  range: number,
-  scaleType: ColorScaleType
-): maplibregl.ExpressionSpecification {
-  const linearRatio = [
-    '/',
-    ['-', ['coalesce', ['get', attribute], min], min],
-    range,
-  ] as maplibregl.ExpressionSpecification;
-
-  if (scaleType === 'linear') {
-    return linearRatio;
-  }
-
-  if (scaleType === 'logarithmic') {
-    return [
-      'let',
-      't',
-      linearRatio,
-      [
-        '/',
-        ['ln', ['+', 1, ['*', LOGARITHMIC_STRENGTH, ['var', 't']]]],
-        Math.log(1 + LOGARITHMIC_STRENGTH),
-      ],
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  return [
-    'let',
-    't',
-    linearRatio,
-    [
-      '/',
-      1,
-      ['+', 1, ['^', Math.E, ['*', -LOGISTIC_STEEPNESS, ['-', ['var', 't'], 0.5]]]],
-    ],
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-color based on attribute value and global min/max.
- */
-function buildFillColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor?: string | null,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // When a metadata base color is provided, blend from white (low values)
-  // to the base color (high values) instead of using opacity.
-  if (baseColor) {
-    const rgb = hexToRgb(baseColor);
-    if (!rgb) return baseColor;
-
-    const range = max - min;
-    if (range === 0) {
-      // Degenerate domain (every visible value equals min) - treat it as the
-      // low end of the white-to-baseColor scale rather than the high end.
-      return '#FFFFFF';
-    }
-
-    return [
-      'interpolate',
-      ['linear'],
-      buildNormalizedValueExpression(attribute, min, range, scaleType),
-      0,
-      '#FFFFFF',
-      1,
-      baseColor,
-    ] as maplibregl.ExpressionSpecification;
-  }
-
-  const range = max - min;
-  if (range === 0) {
-    // Single value - use middle color
-    return PRISM_STOPS[Math.floor(PRISM_STOPS.length / 2)][1];
-  }
-
-  // Build interpolate expression: normalize value to 0-1 then map to colors
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
-  ] as maplibregl.ExpressionSpecification;
-}
-
-function buildOpacityColorExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  baseColor: string,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
-  // Blend color from white (low values) to the metadata base color
-  // (high values). Opacity will be handled separately by layer paint.
-  const rgb = hexToRgb(baseColor);
-  if (!rgb) return baseColor;
-
-  const range = max - min;
-  if (range === 0) {
-    // Degenerate domain (every visible value equals min) - treat it as the
-    // low end of the white-to-baseColor scale rather than the high end.
-    return '#FFFFFF';
-  }
-
-  return [
-    'interpolate',
-    ['linear'],
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    0,
-    '#FFFFFF',
-    1,
-    baseColor,
-  ] as maplibregl.ExpressionSpecification;
-}
-
-/**
- * Build a MapLibre expression for fill-extrusion-height based on attribute value.
- */
-function buildExtrusionExpression(
-  attribute: string,
-  min: number,
-  max: number,
-  scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | number {
-  const range = max - min;
-  if (range === 0) {
-    return MAX_EXTRUSION_HEIGHT / 2;
-  }
-
-  return [
-    '*',
-    buildNormalizedValueExpression(attribute, min, range, scaleType),
-    MAX_EXTRUSION_HEIGHT,
-  ] as maplibregl.ExpressionSpecification;
-}
-
-=======
->>>>>>> origin/main
 function setCatchmentOutlinesSoftness(map: maplibregl.Map, soften: boolean) {
   if (!map.getLayer(CATCHMENTS_OUTLINES_LAYER_ID)) return;
 
@@ -1754,19 +1592,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       try {
         // These stats must reflect the true full dataset, not a render-sized
         // sample/aggregate, so fetch every catchment's raw value regardless of
-<<<<<<< HEAD
         // viewport zoom. One request covers both scenarios: same extent, same
         // attribute, and they share the ID column.
         const values = await fetchCatchmentValues(
           [c.leftScenario, c.rightScenario], c.attribute, fullBounds,
         );
-=======
-        // viewport zoom (zoom argument is ignored server-side in this mode).
-        const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
-        ]);
->>>>>>> origin/main
 
         if (cancelled) return;
 
@@ -2023,19 +1853,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         // filterDatasetByCatchmentIds below needs a real HYBAS_ID per catchment,
         // and the AOI-weighted stats need every matching catchment's raw value -
         // the grid-aggregated render path can supply neither, so fetch true
-<<<<<<< HEAD
         // per-catchment values regardless of viewport zoom. Both scenarios come
         // from one request over one extent (see fetchCatchmentValues).
         const [values, siteCatchments] = await Promise.all([
           fetchCatchmentValues(
             [c.leftScenario, c.rightScenario], c.attribute, siteBoundsLL, siteId, siteIdealOverrides,
           ),
-=======
-        // per-catchment values regardless of viewport zoom.
-        const [leftData, rightData, siteCatchments] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
-          fetchChoroplethData(c.rightScenario, c.attribute, siteBoundsLL, 0, siteId, siteIdealOverrides, true, abort.signal),
->>>>>>> origin/main
           getSiteAOIFractions(siteId).catch(() => []),
         ]);
 

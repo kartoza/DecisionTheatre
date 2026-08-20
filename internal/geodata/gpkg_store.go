@@ -668,11 +668,7 @@ func (s *GpkgStore) queryCatchmentsDetailed(ctx context.Context, tableName, attr
 	}, nil
 }
 
-<<<<<<< HEAD
-// ensureGridGeometryCache kicks off buildGridGeometryCache exactly once. Safe
-// to call from every request; only the first call actually starts the build.
-=======
-// CatchmentValues is a bbox's attribute values with no geometry at all, held as
+// CatchmentValueArrays is a bbox's attribute values with no geometry at all, held as
 // two parallel arrays rather than one object per catchment.
 //
 // This is the join payload for the vector-tile choropleth: geometry arrives from
@@ -683,52 +679,17 @@ func (s *GpkgStore) queryCatchmentsDetailed(ctx context.Context, tableName, attr
 // GeoJSON Feature per catchment spends roughly ten times as many bytes on
 // repeated JSON scaffolding ("type", "geometry", "properties", the attribute
 // name) as it does on the id and value that are the actual content.
-type CatchmentValues struct {
+type CatchmentValueArrays struct {
 	// IDs and Values are index-aligned: Values[i] is the attribute value for
 	// the catchment whose HYBAS_ID is IDs[i].
 	IDs    []int64   `json:"ids"`
 	Values []float64 `json:"values"`
 }
 
-// QueryCatchmentValues returns every catchment's attribute value within a bounding
-// box, with no geometry and no LIMIT. It exists for statistics (min/max/mean/count)
-// where accuracy across the true full dataset matters and per-catchment HYBAS_ID is
-// required (e.g. filtering to a site's catchments), unlike QueryCatchments' render
-// paths, which trade some accuracy/detail for a bounded, renderable feature count.
-// Callers never hand this to a map source, so shipping one feature per catchment
-// (with a null geometry) doesn't carry the rendering cost that motivated those
-// other paths.
-func (s *GpkgStore) QueryCatchmentValues(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
-	values, err := s.QueryCatchmentValueArrays(ctx, scenario, attribute, minx, miny, maxx, maxy)
-	if err != nil {
-		return nil, err
-	}
-
-	features := make([]GeoJSONFeature, 0, len(values.IDs))
-	for i, id := range values.IDs {
-		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       id,
-			Geometry: json.RawMessage("null"),
-			Properties: map[string]interface{}{
-				"HYBAS_ID": id,
-				attribute:  values.Values[i],
-			},
-		})
-	}
-
-	return &FeatureCollection{
-		Type:     "FeatureCollection",
-		Features: features,
-	}, nil
-}
-
-// QueryCatchmentValueArrays is the geometry-free bbox query both value-shaped
-// callers share: QueryCatchmentValues wraps it back into GeoJSON features for
-// the statistics path, and the /catchment-values endpoint serves it directly to
-// the vector-tile choropleth. Keeping one query means the two can never drift
-// on which catchments they consider in view.
-func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
+// QueryCatchmentValueArrays returns every catchment's attribute value within a bounding
+// box as parallel arrays, with no geometry and no LIMIT. It is used by the
+// /catchment-values endpoint for the vector-tile choropleth join path.
+func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValueArrays, error) {
 	start := time.Now()
 	count := 0
 	defer func() {
@@ -760,7 +721,7 @@ func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, att
 	// Non-nil slices: these are marshalled straight to JSON, and a nil slice
 	// encodes as null, which the client would have to special-case on every
 	// empty viewport.
-	result := &CatchmentValues{IDs: []int64{}, Values: []float64{}}
+	result := &CatchmentValueArrays{IDs: []int64{}, Values: []float64{}}
 	for rows.Next() {
 		// HYBAS_ID is scanned through float64 because the column is text in
 		// some datapacks and integer in others; the existing detailed path
@@ -792,7 +753,6 @@ func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, att
 // starts a fresh attempt with a fresh set of readiness channels. That is the
 // difference between a transient database error costing one choropleth and it
 // costing every choropleth until someone restarts the process.
->>>>>>> origin/main
 func (s *GpkgStore) ensureGridGeometryCache() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

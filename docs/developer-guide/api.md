@@ -141,16 +141,11 @@ if the ID is not found.
 
 ### `GET /api/choropleth`
 
-<<<<<<< HEAD
 The main map data endpoint. Returns a GeoJSON `FeatureCollection` of catchment polygons
 with the requested attribute in each feature's properties — unless `valuesOnly=1`, which
-returns the columnar shape described below.
-=======
-Returns a GeoJSON `FeatureCollection` of catchment polygons with the requested attribute
-in each feature's properties. Used below the zoom range covered by the catchment vector
-tiles, where the server returns grid-aggregated cells rather than catchments; above it the
-map uses `/api/catchment-values` against the tiled geometry instead.
->>>>>>> origin/main
+returns the columnar shape described below. Used below the zoom range covered by the catchment
+vector tiles, where the server returns grid-aggregated cells rather than catchments; above it
+the map uses `/api/catchment-values` against the tiled geometry instead.
 
 | Query parameter | Description |
 |---|---|

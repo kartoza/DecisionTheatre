@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +81,8 @@ func (e *badScenarioError) Error() string { return "unknown scenario: " + e.name
 // because the two have almost nothing in common past bbox parsing: there is no
 // zoom tier to select, no geometry to simplify or aggregate, and no feature
 // wrapper to build.
-func (h *Handler) respondCatchmentValues(w http.ResponseWriter, q url.Values, attribute string, minx, miny, maxx, maxy float64) {
+func (h *Handler) respondCatchmentValues(w http.ResponseWriter, r *http.Request, attribute string, minx, miny, maxx, maxy float64) {
+	q := r.URL.Query()
 	scenarios, err := parseScenarioList(q.Get("scenario"))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
@@ -90,7 +90,7 @@ func (h *Handler) respondCatchmentValues(w http.ResponseWriter, q url.Values, at
 	}
 
 	queryStart := time.Now()
-	values, err := h.gpkgStore.QueryCatchmentValues(scenarios, attribute, minx, miny, maxx, maxy)
+	values, err := h.gpkgStore.QueryCatchmentValues(r.Context(), scenarios, attribute, minx, miny, maxx, maxy)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.HasPrefix(err.Error(), "invalid attribute:") ||
@@ -125,15 +125,15 @@ func (h *Handler) respondCatchmentValues(w http.ResponseWriter, q url.Values, at
 	// wins; no caller of this endpoint colours anything from it - they compute
 	// min/max/mean from the values themselves - but dropping the fields would
 	// be a gratuitous break.
-	domainRange := h.choroplethDomainRange(attribute, scenarios[0])
+	domainMin, domainMax := h.domainRangeFor(r.Context(), scenarios[0], attribute)
 
 	response := CatchmentValuesResponse{
 		Type:      CatchmentValuesType,
 		Attribute: attribute,
 		Scenarios: scenarios,
 		IDs:       values.IDs,
-		DomainMin: domainRange.Min,
-		DomainMax: domainRange.Max,
+		DomainMin: domainMin,
+		DomainMax: domainMax,
 	}
 	if len(scenarios) == 1 {
 		response.Values = values.Series[scenarios[0]]
@@ -174,30 +174,4 @@ func (h *Handler) idealOverridesFor(siteID, attribute string) map[int64]float64 
 	return overrides
 }
 
-// choroplethDomainRange returns the colour-scale bounds for an attribute in a
-// scenario.
-//
-// It prefers metadata.csv's curated maxval_curr/maxval_ref over the scanned
-// domain_maxima table for the max bound - these are authoritative per-scenario
-// ceilings rather than a value derived from scanning every catchment. "future"
-// (target) values are edited starting from current, so they share current's
-// ceiling. Falls back to the scanned max when a column is missing/blank for
-// this attribute, and to a zero range when the domain tables are absent.
-func (h *Handler) choroplethDomainRange(attribute, scenario string) *geodata.DomainRange {
-	domainStart := time.Now()
-	domainRange, err := h.gpkgStore.GetDomainRange(attribute)
-	log.Printf("[perf] handleChoropleth step=getDomainRange attribute=%s duration_ms=%d", attribute, time.Since(domainStart).Milliseconds())
-	if err != nil {
-		log.Printf("Warning: could not get domain range for %s: %v", attribute, err)
-		domainRange = &geodata.DomainRange{Min: 0, Max: 0}
-	}
 
-	maxvalByScenario := h.metaCache.MaxValReference
-	if scenario != "reference" {
-		maxvalByScenario = h.metaCache.MaxValCurrent
-	}
-	if metaMax, ok := maxvalByScenario[attribute]; ok {
-		domainRange.Max = metaMax
-	}
-	return domainRange
-}
