@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/kartoza/decision-theatre/internal/gpkgtest"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // legacyFeature is the shape QueryCatchmentValues used to emit, one per
@@ -277,8 +277,13 @@ func TestColumnarStatisticsMatchTheGeoJSONShape(t *testing.T) {
 func TestSeriesValuesRoundTripExactly(t *testing.T) {
 	series := &ScenarioValues{}
 	awkward := []float64{
-		1234.5678901234, 0.1, 1e-7, 1e21, -0.0, 3.141592653589793,
+		1234.5678901234, 0.1, 1e-7, 1e21, 3.141592653589793,
 		math.SmallestNonzeroFloat64, math.MaxFloat64,
+		// Not the literal -0.0: in Go that is a constant expression equal to
+		// 0.0, so the case this list means to cover -- the one value whose sign
+		// only exists in its bits, and the reason the comparison below is on
+		// bits rather than on ==  -- was never actually being tested.
+		math.Copysign(0, -1),
 	}
 	for _, v := range awkward {
 		series.append(v, true)

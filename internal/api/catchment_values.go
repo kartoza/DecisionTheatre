@@ -173,5 +173,3 @@ func (h *Handler) idealOverridesFor(siteID, attribute string) map[int64]float64 
 	}
 	return overrides
 }
-
-
