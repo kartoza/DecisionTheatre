@@ -40,7 +40,7 @@ func routerFor(t *testing.T, desktop bool) *mux.Router {
 		DataDir:     dir,
 		Version:     "test",
 		DesktopMode: desktop,
-	})
+	}, nil)
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 	return r
@@ -214,7 +214,7 @@ func TestServerModeRequestCannotDeleteASiteFromDisk(t *testing.T) {
 
 	h := NewHandler(nil, nil, siteStore, config.Config{
 		Port: 0, DataDir: dir, Version: "test", DesktopMode: false,
-	})
+	}, nil)
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 
@@ -274,7 +274,7 @@ func TestDesktopModeRequestCanDeleteASite(t *testing.T) {
 
 	h := NewHandler(nil, nil, siteStore, config.Config{
 		Port: 0, DataDir: dir, Version: "test", DesktopMode: true,
-	})
+	}, nil)
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 

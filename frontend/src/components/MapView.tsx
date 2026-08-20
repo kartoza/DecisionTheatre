@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
+import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text, useToast } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2, FiGlobe } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
@@ -12,7 +12,11 @@ import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
-import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
+import {
+  satelliteStyleUrl,
+  satelliteUnavailable,
+  subscribeSatelliteUnavailable,
+} from '../lib/satelliteBasemap';
 import {
   PRISM_STOPS,
   attributeValueAccessor,
@@ -87,28 +91,6 @@ function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
   // If the resolved style is already in memory (i.e. a prior pane already fetched it),
   // pass the object directly so MapLibre skips the HTTP request entirely.
   return _cachedStyle ?? url;
-}
-
-// Satellite raster basemap.
-//
-// A function rather than a constant: the tile template is supplied at runtime by
-// /api/info, and a module-level constant is evaluated at import time — before that
-// response can possibly have arrived — so it would always have captured the
-// default. See lib/satelliteBasemap.ts.
-function satelliteBasemapStyle(): maplibregl.StyleSpecification {
-  return {
-    version: 8,
-    sources: {
-      satellite: {
-        type: 'raster',
-        tiles: [satelliteTileUrl()],
-        tileSize: 256,
-        attribution: satelliteAttribution(),
-        maxzoom: 21,
-      },
-    },
-    layers: [{ id: 'satellite-tiles', type: 'raster', source: 'satellite' }],
-  };
 }
 
 // Fragment shading cost scales with the square of the device pixel ratio: a 2x
@@ -2165,18 +2147,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // Google basemap toggle state. Defaults on for the browser runtime.
   const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const isGoogleBasemapRef = useRef(getAppRuntime() === 'browser');
+  const toast = useToast();
 
-  const toggleGoogleBasemap = useCallback(() => {
+  // Shared by the toggle button and the quota-exceeded auto-revert below, so
+  // the two cannot drift into applying the switch differently.
+  const applyBasemapStyle = useCallback((nextVal: boolean) => {
     const leftMap = leftMapRef.current;
     const rightMap = rightMapRef.current;
     if (!leftMap) return;
 
-    const nextVal = !isGoogleBasemapRef.current;
     isGoogleBasemapRef.current = nextVal;
     setIsGoogleBasemap(nextVal);
 
-    const newStyle: maplibregl.StyleSpecification | string = nextVal
-      ? satelliteBasemapStyle()
+    const newStyle: string = nextVal
+      ? (window.location.origin + satelliteStyleUrl())
       : (window.location.origin + '/data/style.json');
 
     const reapplyAfterStyleLoad = (map: maplibregl.Map) => {
@@ -2203,6 +2187,43 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       applyColorsRef.current();
     }, 400);
   }, [reapplyBoundaryLayers]);
+
+  const toggleGoogleBasemap = useCallback(() => {
+    const nextVal = !isGoogleBasemapRef.current;
+
+    if (nextVal && satelliteUnavailable()) {
+      toast({
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Showing the default map instead.',
+        status: 'warning',
+        duration: 8000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    applyBasemapStyle(nextVal);
+  }, [applyBasemapStyle, toast]);
+
+  // If satellite becomes unavailable (quota spent, or — at startup, before
+  // /api/info has resolved — no provider turns out to be configured) while it
+  // is actively showing, revert to the built-in basemap rather than leaving
+  // the map to fail tile-by-tile.
+  useEffect(() => {
+    return subscribeSatelliteUnavailable((unavailable) => {
+      if (!unavailable || !isGoogleBasemapRef.current) return;
+      applyBasemapStyle(false);
+      toast({
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Switched to the default map.',
+        status: 'warning',
+        duration: 8000,
+        isClosable: true,
+      });
+    });
+  }, [applyBasemapStyle, toast]);
 
   // Toggle split-screen swiper on/off
   const toggleSwiper = useCallback(() => {
@@ -2997,8 +3018,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     warmStyleCache(styleUrl);
     // Use the cached object if available (staggered panes will find it ready),
     // otherwise fall back to the URL so MapLibre fetches it normally. Browser
-    // runtime starts on the Google basemap (see isGoogleBasemapRef default).
-    const mapStyle = isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl);
+    // runtime starts on the satellite basemap (see isGoogleBasemapRef default).
+    // The satellite style has no equivalent warm cache: it is small, and every
+    // pane's fetch already hits this server's own in-memory cache (see
+    // internal/server/satellite.go's styleCache) rather than the upstream
+    // provider, so there is no repeated external request to save here.
+    const mapStyle = isGoogleBasemapRef.current
+      ? window.location.origin + satelliteStyleUrl()
+      : getStyleForMap(styleUrl);
 
     // Set initial sizes BEFORE creating maps so they initialize with correct dimensions
     updateMapSizes();
@@ -3175,7 +3202,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         container: rightContainer,
         // Re-read the basemap choice rather than reusing the style captured at
         // init: the user may have toggled the satellite basemap since.
-        style: isGoogleBasemapRef.current ? satelliteBasemapStyle() : getStyleForMap(styleUrl),
+        style: isGoogleBasemapRef.current
+          ? window.location.origin + satelliteStyleUrl()
+          : getStyleForMap(styleUrl),
         center: [leftCenter.lng, leftCenter.lat],
         zoom: leftMap.getZoom(),
         bearing: leftMap.getBearing(),
@@ -4917,9 +4946,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           )}
 
           {/* Google basemap toggle */}
-          <Tooltip label={isGoogleBasemap ? "Switch to default basemap" : "Switch to Google satellite"} placement="right">
+          <Tooltip label={isGoogleBasemap ? "Switch to default basemap" : "Switch to satellite"} placement="right">
             <IconButton
-              aria-label="Toggle Google basemap"
+              aria-label="Toggle satellite basemap"
               icon={<FiGlobe />}
               size="sm"
               colorScheme={isGoogleBasemap ? "blue" : "gray"}

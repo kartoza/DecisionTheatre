@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/kartoza/decision-theatre/internal/api"
 	"github.com/kartoza/decision-theatre/internal/config"
+	"github.com/kartoza/decision-theatre/internal/httputil"
 )
 
 //go:embed all:static
@@ -46,6 +47,10 @@ type Server struct {
 	// geocode rate-limits and caches place-name lookups so the upstream policy
 	// is honoured once for the whole deployment; see geocode.go.
 	geocode *geocodeLimiter
+
+	// satellite fetches, caches and quota-limits satellite imagery tiles from
+	// the configured upstream provider; see satellite.go.
+	satellite *satelliteTileProxy
 
 	// stores and routes are swapped, never mutated in place: a datapack install
 	// replaces both from a background goroutine while requests are being served.
@@ -91,6 +96,25 @@ func New(cfg config.Config) (*Server, error) {
 
 	s.geocode = newGeocodeLimiter(cfg.Version)
 
+	// Persisted alongside settings.json so a restart does not reset what most
+	// providers treat as a running monthly total. A failure to locate or read it
+	// is not fatal: LoadSatelliteUsage always returns a usable, if unpersisted,
+	// counter — see its doc comment.
+	settingsDir := cfg.SatelliteUsageDir
+	if settingsDir == "" {
+		var err error
+		settingsDir, err = config.SettingsDir()
+		if err != nil {
+			log.Printf("Warning: could not determine settings directory, satellite usage will not persist: %v", err)
+			settingsDir = os.TempDir()
+		}
+	}
+	satelliteUsage, err := config.LoadSatelliteUsage(settingsDir)
+	if err != nil {
+		log.Printf("Warning: could not load satellite usage: %v", err)
+	}
+	s.satellite = newSatelliteTileProxy(cfg, satelliteUsage)
+
 	s.setRouter(s.buildRouter())
 
 	// Pre-warm the tile cache in the background so that low-zoom tiles are
@@ -119,7 +143,7 @@ func (s *Server) buildRouter() *mux.Router {
 	cfg := s.cfg
 	cfg.DataDir = current.dataDir
 	cfg.ResourcesDir = current.resourcesDir
-	apiHandler := api.NewHandler(current.tiles, current.gpkg, current.sites, cfg)
+	apiHandler := api.NewHandler(current.tiles, current.gpkg, current.sites, cfg, s.satellite.usage)
 	apiHandler.RegisterRoutes(apiRouter)
 
 	// Data pack management routes. Serving the pack and the installers is the
@@ -133,6 +157,17 @@ func (s *Server) buildRouter() *mux.Router {
 	// Place-name search, proxied so the upstream usage policy can be met at all;
 	// see geocode.go. Public: both builds offer search.
 	router.HandleFunc("/api/geocode", s.handleGeocode).Methods("GET")
+
+	// Satellite imagery, proxied so every tile the Hybrid style references can
+	// be counted and quota-enforced, and so the MapTiler key stays server-side;
+	// see satellite.go. Public: both builds show the basemap.
+	router.HandleFunc("/api/satellite-style.json", s.handleSatelliteStyle).Methods("GET")
+	router.HandleFunc("/api/satellite-tilejson/{source:[a-zA-Z0-9_-]+}",
+		s.handleSatelliteTileJSON).Methods("GET")
+	router.HandleFunc("/api/satellite-tile/{source:[a-zA-Z0-9_-]+}/{z:[0-9]+}/{x:[0-9]+}/{y:[0-9]+}",
+		s.handleSatelliteTile).Methods("GET")
+	router.HandleFunc("/api/satellite-sprite{variant:(?:\\.json|\\.png|@2x\\.json|@2x\\.png)}",
+		s.handleSatelliteSprite).Methods("GET")
 
 	// Desktop-only. In server mode these paths are simply absent, so they 404
 	// through the SPA fallback rather than existing and refusing — there is
@@ -194,6 +229,20 @@ func (s *Server) buildRouter() *mux.Router {
 		docsFileServer := http.StripPrefix("/docs/", http.FileServer(http.FS(docsContent)))
 		router.PathPrefix("/docs/").Handler(docsFileServer)
 	}
+
+	// Anything under /api that matched no route above is an API request for
+	// something that does not exist, and must be told so in the language it asked
+	// in. Without this it falls through to the SPA handler below and gets 200 with
+	// a page of HTML — so a client sees a successful response it cannot parse.
+	//
+	// Registered after every API route and before the SPA fallback, because mux
+	// matches in order. This matters more since the desktop-only routes were
+	// gated: in server mode those paths are unrouted, and a stale or misdirected
+	// client hitting one deserves a 404 rather than an index page.
+	router.PathPrefix("/api/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httputil.RespondError(w, http.StatusNotFound,
+			"no such endpoint: "+r.Method+" "+r.URL.Path)
+	})
 
 	// Static frontend files (embedded)
 	staticContent, err := fs.Sub(staticFS, "static")
@@ -520,8 +569,8 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upstreamURL := fmt.Sprintf(
-		"https://api.maptiler.com/fonts/%s/%s.pbf?key=cc4PpmmWZP73LjU1nsw3",
-		fontstack, glyphRange,
+		"https://api.maptiler.com/fonts/%s/%s.pbf?key=%s",
+		fontstack, glyphRange, config.MapTilerAPIKey(),
 	)
 	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {

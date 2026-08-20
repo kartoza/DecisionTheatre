@@ -33,3 +33,9 @@
 
 # Rebuild frontend, docs and binary on every launch.
 #DT_FORCE_BUILD=1
+
+# Key for the MapTiler satellite basemap and font-glyph proxy. Without it,
+# those features fail upstream and the app falls back to the built-in
+# basemap / unlabelled glyphs rather than erroring outright — but you'll want
+# your own key for a working satellite view. Get one at maptiler.com.
+#DT_MAPTILER_API_KEY=

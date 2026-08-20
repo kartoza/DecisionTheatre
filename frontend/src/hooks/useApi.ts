@@ -6,7 +6,7 @@ import { WALKTHROUGH_SITE_IDS } from '../constants/walkthroughSites';
 import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
 import { sharedRequest, type SharedCache } from '../lib/sharedRequest';
-import { loadSite, loadSites, saveSite, saveSites } from '../lib/siteStore';
+import { loadSite, loadSites, saveSite, saveSites, deleteSite as deleteSiteRecord } from '../lib/siteStore';
 
 const API_BASE = '/api';
 /**
@@ -102,14 +102,25 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return response.json();
 }
 
+// How often to re-fetch /api/info after the first load. Version/data-loaded
+// status never changes at runtime, but satellite_quota_exceeded can flip mid
+// session — this is what lets a map that is actively showing satellite
+// imagery notice the quota was spent and fall back, without a page reload.
+const SERVER_INFO_POLL_MS = 60_000;
+
 export function useServerInfo() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchJSON<ServerInfo>(`${API_BASE}/info`)
-      .then(setInfo)
-      .catch((e) => setError(e.message));
+    const load = () => {
+      fetchJSON<ServerInfo>(`${API_BASE}/info`)
+        .then(setInfo)
+        .catch((e) => setError(e.message));
+    };
+    load();
+    const interval = setInterval(load, SERVER_INFO_POLL_MS);
+    return () => clearInterval(interval);
   }, []);
 
   return { info, error };
@@ -684,7 +695,16 @@ export async function listSites(): Promise<Site[]> {
 // share a single in-flight request rather than firing N identical network calls.
 const CACHE_TTL_MS = 30_000;
 const _siteCache = new Map<string, { promise: Promise<Site | null>; ts: number }>();
-const _catchmentsCache = new Map<string, { promise: Promise<CatchmentIndicators[]>; ts: number }>();
+// `sticky` marks a breakdown that came embedded in a walkthrough document. It is
+// not a cached copy of something the server holds — the server has never heard of
+// a walkthrough site, and GET /api/sites/{id}/catchments 404s for one — so it must
+// not expire. Before this it aged out after CACHE_TTL_MS and the refetch returned
+// an empty array, silently emptying the aggregate table, charts and dials thirty
+// seconds after a walkthrough was opened.
+const _catchmentsCache = new Map<
+  string,
+  { promise: Promise<CatchmentIndicators[]>; ts: number; sticky?: boolean }
+>();
 
 // Walkthrough demo sites embed their own per-catchment breakdown directly in
 // the static JSON they're loaded from (they were never created through the
@@ -697,7 +717,7 @@ export function primeSiteCatchmentsFromEmbedded(site: Site): void {
     ?? (site as SiteWithCatchments).catchmentIndicators
     ?? (site as SiteWithCatchments).catchmentData;
   if (Array.isArray(embedded) && embedded.length > 0) {
-    _catchmentsCache.set(site.id, { promise: Promise.resolve(embedded), ts: Date.now() });
+    _catchmentsCache.set(site.id, { promise: Promise.resolve(embedded), ts: Date.now(), sticky: true });
   }
 }
 
@@ -962,9 +982,16 @@ export async function patchSiteIndicators(
 
 export async function deleteSite(id: string): Promise<void> {
   if (isBrowserRuntime()) {
-    const sites = loadLocalSites();
-    const nextSites = sites.filter((site) => site.id !== id);
-    saveLocalSites(sortSitesByCreatedAtDesc(nextSites));
+    // The dedicated single-record primitive, not load-all/filter/save-all: a
+    // delete should only ever need to free space, never touch another site's
+    // record. Going through saveLocalSites used to read and potentially
+    // rewrite every *other* site too (normalising legacy formatting drift),
+    // and that rewrite could itself throw under a genuinely full quota —
+    // meaning a delete, the one operation that should get you out of "full",
+    // could fail before it ever reached the removal.
+    if (!deleteSiteRecord(id)) {
+      throw new Error('Failed to delete site: browser storage write failed.');
+    }
     return;
   }
 
@@ -980,7 +1007,7 @@ export async function deleteSite(id: string): Promise<void> {
 export async function getSiteCatchments(siteId: string): Promise<CatchmentIndicators[]> {
   const now = Date.now();
   const hit = _catchmentsCache.get(siteId);
-  if (hit && now - hit.ts < CACHE_TTL_MS) return hit.promise;
+  if (hit && (hit.sticky || now - hit.ts < CACHE_TTL_MS)) return hit.promise;
 
   const promise = (async (): Promise<CatchmentIndicators[]> => {
     if (isBrowserRuntime()) {
