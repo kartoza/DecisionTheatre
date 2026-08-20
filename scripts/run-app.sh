@@ -38,6 +38,11 @@ set -euo pipefail
 #   DT_FORCE_BUILD=1 Rebuild frontend, docs and binary unconditionally.
 #   DT_HEADLESS=1    Deprecated spelling of DT_MODE=server.
 #   DT_WEBVIEW_DIAG=1  Same as --diag.
+#   DT_MAPTILER_API_KEY  Satellite basemap and font-glyph proxy key (see
+#                    internal/config.MapTilerAPIKey). Read directly by the
+#                    binary, not turned into a flag — a flag value is visible
+#                    to anyone who can run `ps` on the machine, which a key
+#                    should not be.
 #
 # Those knobs can also be set per-machine in a gitignored .dt-env file in the
 # project root — see .dt-env.example. Machine-specific choices belong there, not
@@ -75,6 +80,7 @@ DT_VARS=(
     DT_HEADLESS
     DT_SKIP_BUILD
     DT_FORCE_BUILD
+    DT_MAPTILER_API_KEY
 )
 
 # Load per-machine defaults from .dt-env. Anything already present in the
@@ -188,6 +194,13 @@ ARGS=()
 [ -n "${DT_DATA_DIR:-}" ] && ARGS+=(--data-dir "$DT_DATA_DIR")
 [ -n "${DT_RESOURCES_DIR:-}" ] && ARGS+=(--resources-dir "$DT_RESOURCES_DIR")
 [ "$DT_MODE" = "server" ] && ARGS+=(--headless)
+
+# Not a flag (see the comment on DT_MAPTILER_API_KEY above) — exported instead
+# so the exec'd binary picks it up via os.Getenv. `. "$env_file"` above sets
+# shell variables, not exported ones, so this is the step that actually makes
+# a value from .dt-env reach the process; a value already in the real
+# environment was exported by whatever set it and needs nothing here.
+[ -n "${DT_MAPTILER_API_KEY:-}" ] && export DT_MAPTILER_API_KEY
 
 # Caller arguments last so they override anything derived from the environment.
 ARGS+=("${PASSTHROUGH[@]}")

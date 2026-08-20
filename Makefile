@@ -105,8 +105,15 @@ serve:
 dev: run
 
 # Go backend with air hot-reload on :8080 (port configured in .air.toml)
+#
+# air execs the binary directly rather than through scripts/run-app.sh, so
+# .dt-env is never sourced on this path — unlike `make run`/`make serve`. It
+# is sourced here instead, so DT_MAPTILER_API_KEY (and anything else in
+# .dt-env) still reaches the process air launches. `set -a` while sourcing is
+# required, not cosmetic: a plain `. ./.dt-env` only sets shell variables,
+# which a child process like air does not inherit — only exported ones do.
 dev-backend:
-	air
+	@set -a; [ -f .dt-env ] && . ./.dt-env; set +a; exec air
 
 # Vite dev server with HMR (proxies /api, /tiles, /data, /docs to :8080)
 dev-frontend:
@@ -119,6 +126,7 @@ dev-all:
 	@echo "Open http://localhost:5173 for live development"
 	@echo ""
 	@trap 'kill 0' EXIT; \
+	set -a; [ -f .dt-env ] && . ./.dt-env; set +a; \
 	air & \
 	sleep 2 && cd $(FRONTEND_DIR) && npx vite
 
