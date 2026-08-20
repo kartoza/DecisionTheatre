@@ -3686,7 +3686,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (leftLabel) {
       const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
       leftLabel.textContent = leftInfo?.label || comparison.leftScenario;
-      leftLabel.style.borderLeft = `3px solid ${leftInfo?.color || '#fff'}`;
+      // On the inward edge, the same as the right label's. Now that the label
+      // is flush in the top-left corner, its left edge is against the pane
+      // frame — an accent there reads as part of the frame rather than as the
+      // scenario's colour. Both labels point their accent at the map between
+      // them, which is what the colour identifies.
+      leftLabel.style.borderRight = `3px solid ${leftInfo?.color || '#fff'}`;
       // Keep it hidden if the swiper is docked left (left map clipped to
       // zero width), unless the swiper is off, in which case dock state is
       // irrelevant and the left map fills the view.
@@ -3696,6 +3701,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (rightLabel) {
       const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
+      // Already inward-facing: this one sits in the top-right corner, so its
+      // left edge is the one over the map.
       rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
       rightLabel.style.display = isSwiperEnabled && sliderDockedRef.current !== 'right' ? 'block' : 'none';
     }

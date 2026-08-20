@@ -205,7 +205,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half the size: 13–14px type at 6–8px padding becomes 10px at 2px, taking the
   scenario labels from roughly 28px tall to 16px and the factor label from 33px to
   16px. The three were three copies of the same twelve declarations and now share
-  one base, with each supplying only its position and its exposed corners.
+  one base, with each supplying only its position and its exposed corners. The
+  scenario colour accent on the left label moved to that label's right edge, so
+  both accents face the map between them: with the label flush in the corner, an
+  accent on its outer edge reads as part of the pane frame rather than as the
+  scenario's colour.
 
   Accessibility along the way: the view and range switches are `radiogroup`s with
   one tab stop, arrow-key traversal and `aria-checked`, where they had been
