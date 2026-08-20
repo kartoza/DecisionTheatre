@@ -1,6 +1,7 @@
 import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
+import { navigationPaneIndex } from '../lib/navigationPane';
 import { editableTargetKeys as editableTargetKeysFor } from '../lib/editableTargets';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
@@ -278,6 +279,16 @@ function ContentArea({
     ? paneStates.map((_, index) => index)
     : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
 
+  // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
+  // rather than fixed, because which pane is bottom-left changes: panes are
+  // removable, the columns toggle between two and three, and a pane showing a
+  // chart cannot host a map control.
+  const navigationPane = navigationPaneIndex(
+    visibleIndices,
+    isQuad ? quadColumns : 1,
+    (paneIndex) => viewModes[paneIndex] === 'map',
+  );
+
   return (
     <Box
       position="relative"
@@ -352,6 +363,7 @@ function ContentArea({
                   isChoroplethEnabled={isChoroplethEnabled}
                   isGoogleBasemap={isGoogleBasemap}
                   onGoogleBasemapChange={onGoogleBasemapChange}
+                  showNavigation={i === navigationPane}
                   swiperPosition={swiperPosition}
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
@@ -407,6 +419,7 @@ function ContentArea({
             isChoroplethEnabled={isChoroplethEnabled}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={onGoogleBasemapChange}
+            showNavigation={visibleIndices[0] === navigationPane}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}

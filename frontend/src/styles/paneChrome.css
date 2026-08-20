@@ -123,3 +123,19 @@
     transition: none;
   }
 }
+
+/*
+ * One zoom cluster for a grid of maps.
+ *
+ * Every map registers with useMapSync and moving any one moves all the others,
+ * so six zoom clusters were six ways to do the same thing to the same six maps.
+ * lib/navigationPane.ts picks which pane keeps its own; the rest carry this
+ * class. The control stays in the DOM because which pane owns it changes while
+ * the application runs, and hiding is reactive where addControl is not.
+ *
+ * .maplibregl-ctrl-bottom-left is MapLibre's own positioning class, part of the
+ * stylesheet the library ships for placing controls in a corner.
+ */
+.dt-no-nav .maplibregl-ctrl-bottom-left {
+  display: none;
+}

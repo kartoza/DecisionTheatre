@@ -154,6 +154,23 @@ describe('the compare swiper divider', () => {
   });
 });
 
+describe('the zoom cluster', () => {
+  it('hides MapLibre\'s own control on every pane but one', () => {
+    // MapLibre's positioning class, part of the stylesheet the library ships.
+    expect(CSS).toContain('.dt-no-nav .maplibregl-ctrl-bottom-left');
+    expect(CSS).toContain('display: none');
+  });
+
+  it('is not skipped at construction, so it can follow the layout', () => {
+    // Which pane is bottom-left changes while the application runs — a pane is
+    // removed, the columns toggle, a pane switches to chart view — and the maps
+    // are built once. Gating addControl would freeze the cluster on whichever
+    // pane happened to be bottom-left when its map was created.
+    expect(MAPVIEW).toContain("addControl(new maplibregl.NavigationControl(), 'bottom-left')");
+    expect(MAPVIEW).not.toMatch(/if \(showNavigation[^)]*\)\s*\w*[Mm]ap\.addControl/);
+  });
+});
+
 describe('usePaneChromeForced', () => {
   it('lifts the hiding while a tour is on screen, and puts it back after', () => {
     const { rerender, unmount } = renderHook(

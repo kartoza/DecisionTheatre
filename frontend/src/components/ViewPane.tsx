@@ -50,6 +50,7 @@ interface ViewPaneProps {
   isChoroplethEnabled?: boolean;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
+  showNavigation?: boolean;
   // Slider synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -123,6 +124,7 @@ function ViewPane({
   isChoroplethEnabled,
   isGoogleBasemap,
   onGoogleBasemapChange,
+  showNavigation,
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
@@ -611,6 +613,7 @@ function ViewPane({
           isChoroplethEnabled={isChoroplethEnabled}
           isGoogleBasemap={isGoogleBasemap}
           onGoogleBasemapChange={onGoogleBasemapChange}
+          showNavigation={showNavigation}
           swiperPosition={swiperPosition}
           onSwiperPositionChange={onSwiperPositionChange}
           refreshKey={refreshKey}

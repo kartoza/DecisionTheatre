@@ -179,6 +179,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JavaScript in six places across two duplicated blocks; they are one CSS rule
   now, and `MapView` sets a `data-docked` attribute and nothing else.
 
+  **One zoom cluster for the grid, not six.** Every map drew its own zoom in /
+  zoom out / compass control at the bottom left. They were not six controls: every
+  map registers with `useMapSync`, and moving any one moves all the others, so all
+  six did the same thing to the same six maps. It now appears on the bottom-left
+  map only — resolved against what is actually showing a map, so a grid whose
+  bottom-left widget is a chart still has a zoom control, one row up or one column
+  across. The choice is recomputed rather than fixed, because panes are removable,
+  the columns toggle between two and three, and a pane can switch view at any time.
+
   The hiding is scoped to `@media (hover: hover) and (pointer: fine)`, because on a
   touch screen there is no hover to bring a control back with; it lifts on
   `:focus-within` as well as `:hover`, so a keyboard user can see where they are;

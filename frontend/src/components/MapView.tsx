@@ -66,6 +66,18 @@ interface MapViewProps {
   isChoroplethEnabled?: boolean;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
+  /**
+   * Whether this map shows the zoom / compass cluster. Every map in a grid is
+   * synced through useMapSync, so one cluster drives all of them and the rest
+   * would be the same control drawn again — see lib/navigationPane.ts.
+   *
+   * Hidden with a class rather than by skipping addControl: which pane owns the
+   * cluster changes while the application runs — a pane is removed, the columns
+   * toggle between two and three, a pane switches to chart view — and the maps
+   * are built once. Adding and removing controls on each of those would be a
+   * lifecycle problem in exchange for nothing.
+   */
+  showNavigation?: boolean;
   /** Increment to force a choropleth refresh (e.g. after indicator save). */
   refreshKey?: number;
   /** Called once when both map instances have finished loading. */
@@ -864,7 +876,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -4744,6 +4756,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   return (
     <Box
       ref={mapContainerRef}
+      className={showNavigation ? undefined : 'dt-no-nav'}
       position="absolute"
       top={0}
       left={0}
