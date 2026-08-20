@@ -35,7 +35,8 @@ GOLINT := golangci-lint
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
 .PHONY: container
-.PHONY: fmt fmt-check lint check deps
+.PHONY: fmt fmt-check lint vet check deps
+.PHONY: check-shell check-nix check-secrets check-drift
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: protect-branch
 .PHONY: docs docs-serve
@@ -177,6 +178,37 @@ fmt-check:
 lint:
 	$(GOLINT) run --timeout 5m $(ARGS)
 
+## vet: go vet over the module.
+##
+## Deliberately NOT part of `check`, and deliberately absent from CI: `lint`
+## subsumes it, and scripts/vet-check.sh records the comparison that
+## establishes that rather than asserting it. It exists because the pre-commit
+## hook needs something faster than a five-minute linter, and because a hook
+## and a task should not be two spellings of the same command.
+vet:
+	@./scripts/vet-check.sh $(ARGS)
+
+## check-shell: shellcheck over every shell script in the repository.
+##
+## The file list is derived from git — anything with a .sh extension or a shell
+## shebang — so scripts outside scripts/ are covered too.
+check-shell:
+	@./scripts/shell-check.sh $(ARGS)
+
+## check-nix: is flake.nix nixpkgs-fmt formatted? ARGS="--fix" to reformat.
+check-nix:
+	@./scripts/nix-check.sh $(ARGS)
+
+## check-secrets: gitleaks over the full history. ARGS="--staged" for what the
+## pre-commit hook scans.
+check-secrets:
+	@./scripts/secrets-check.sh $(ARGS)
+
+## check-drift: has the data contract in internal/datacheck/spec.go drifted
+## away from the code that reads it?
+check-drift:
+	@./scripts/drift-check.sh $(ARGS)
+
 ## check-data: Check the data directory and print a summary of its contents
 ##
 ## The checks live in Go (internal/datacheck) and run through
@@ -195,12 +227,23 @@ walkthrough-manifest:
 ## deployment gates and documentation keep working.
 validate-data: check-data
 
-## check: Everything CI checks about the Go sources, in CI's order.
+## check: The gates CI applies that can be answered locally in under a minute.
 ##
 ## fmt-check rather than fmt: this answers "would CI pass?", and a target that
 ## silently rewrites your files cannot answer that question. `dt fmt` is the
 ## one that changes things.
-check: fmt-check lint test
+##
+## What is here and what is not, deliberately:
+##
+##   vet          omitted — lint subsumes it. See scripts/vet-check.sh.
+##   check-drift  omitted — `test` runs the same contract tests via ./...
+##   check-flake  omitted — it is fast, but `hooks` already runs it on commit;
+##                run `dt check-flake` after touching go.mod or package-lock.
+##   frontend     omitted — `dt test-all` adds the npm suites.
+##   nix build, trivy, the container jobs: CI only. Nothing local reproduces
+##                them in under a minute, and pretending otherwise would make
+##                this target mean less, not more.
+check: fmt-check lint check-shell check-nix check-secrets test
 
 # ============================
 # Health and flake lock step

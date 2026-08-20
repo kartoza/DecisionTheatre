@@ -19,21 +19,28 @@ set -euo pipefail
 #   ./scripts/gofmt-check.sh --fix      rewrite the offending files instead
 #   ./scripts/gofmt-check.sh --github   report, and annotate the CI run
 #
+# Annotations are automatic in GitHub Actions; --github is for seeing what they
+# would look like from a terminal.
+#
 # Runs in about a second. It needs nothing but gofmt — no cgo, no webkit, no
 # module download — which is why CI runs it before anything slow.
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CHECK_PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export CHECK_PROJECT_ROOT
 
-cd "$PROJECT_ROOT"
+# shellcheck source=lib-check.sh
+. "$SCRIPT_DIR/lib-check.sh"
+
+cd "$CHECK_PROJECT_ROOT"
 
 mode="check"
 case "${1:-}" in
     --fix) mode="fix" ;;
-    --github) mode="github" ;;
+    --github) export CHECK_ANNOTATE=1 ;;
     -h | --help)
-        sed -n '4,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '4,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     "") ;;
@@ -48,13 +55,7 @@ esac
 #
 # internal/webview_go/ is vendored upstream code and .golangci.yml excludes it
 # for the same reason; reformatting it would only make the next update conflict.
-mapfile -t files < <(
-    git ls-files --cached --others --exclude-standard -z -- '*.go' \
-        | tr '\0' '\n' \
-        | grep -v '^internal/webview_go/' \
-        | grep -v '^\.go/' \
-        || true
-)
+mapfile -t files < <(check_files '*.go' | grep -v '^internal/webview_go/' | grep -v '^\.go/')
 
 if [ ${#files[@]} -eq 0 ]; then
     echo "gofmt-check: no Go files to check"
@@ -75,11 +76,9 @@ fi
 
 count="$(printf '%s\n' "$unformatted" | wc -l | tr -d ' ')"
 
-if [ "$mode" = "github" ]; then
-    while IFS= read -r f; do
-        echo "::error file=$f::$f is not gofmt -s formatted. Run 'dt fmt' and commit the result."
-    done <<<"$unformatted"
-fi
+while IFS= read -r f; do
+    check_annotate error "$f is not gofmt -s formatted. Run 'dt fmt' and commit the result." "$f"
+done <<<"$unformatted"
 
 {
     echo

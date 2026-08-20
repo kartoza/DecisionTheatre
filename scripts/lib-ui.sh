@@ -8,7 +8,7 @@
 # the same output is readable in a pipe, a file or a CI log.
 #
 # Provides: ui_ok, ui_warn, ui_err, ui_note, ui_group, ui_rule, ui_title,
-#           ui_summary, and the counters UI_ERRORS / UI_WARNINGS.
+#           ui_summary, ui_annotate, and the counters UI_ERRORS / UI_WARNINGS.
 # =============================================================================
 
 if [ -t 1 ]; then
@@ -68,13 +68,33 @@ ui_line() {
 
 ui_ok() { ui_line "${UI_GREEN}✓${UI_RST}" "$1" "$2" "${3:-}"; }
 
+# ui_annotate LEVEL LABEL MESSAGE [DETAIL]
+#
+# In GitHub Actions, an error or warning also becomes an annotation, so the
+# finding appears on the pull request instead of only in a log nobody opens.
+#
+# This lives here rather than in the workflow so that the message on the pull
+# request is the script's own — the one written next to the check, by whoever
+# understood it. The flake lock step used to state its guidance twice, once in
+# sync-flake.sh and once inline in ci.yml, and the two were free to disagree
+# about what to tell you to run.
+#
+# Silent everywhere else, so scripts call it unconditionally.
+ui_annotate() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || [ -n "${CHECK_ANNOTATE:-}" ] || return 0
+    local level="$1" label="$2" message="$3" detail="${4:-}"
+    printf '::%s::%s: %s%s\n' "$level" "$label" "$message" "${detail:+ — $detail}"
+}
+
 ui_warn() {
     ui_line "${UI_YELLOW}!${UI_RST}" "$1" "$2" "${3:-}"
+    ui_annotate warning "$1" "$2" "${3:-}"
     UI_WARNINGS=$((UI_WARNINGS + 1))
 }
 
 ui_err() {
     ui_line "${UI_RED}✗${UI_RST}" "$1" "$2" "${3:-}"
+    ui_annotate error "$1" "$2" "${3:-}"
     UI_ERRORS=$((UI_ERRORS + 1))
 }
 

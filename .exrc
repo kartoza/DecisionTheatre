@@ -39,6 +39,11 @@ nnoremap <leader>pt :terminal make test-all<CR>
 nnoremap <leader>pl :terminal make lint<CR>
 nnoremap <leader>pf :terminal make fmt<CR>
 nnoremap <leader>pg :terminal make fmt-check<CR>
+nnoremap <leader>pV :terminal make vet<CR>
+nnoremap <leader>pC :terminal make check-shell<CR>
+nnoremap <leader>pN :terminal make check-nix<CR>
+nnoremap <leader>pG :terminal make check-secrets<CR>
+nnoremap <leader>pD :terminal make check-drift<CR>
 nnoremap <leader>pk :terminal make check<CR>
 
 " Docs and data
