@@ -40,6 +40,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -862,6 +863,7 @@ runs are compared and the report says which ones they were.
 	current := fs.String("current", "", `run to report on: label, filename, path, or "last"`)
 	out := fs.String("out", "benchmark-report.html", "HTML output path")
 	pdf := fs.Bool("pdf", false, "also print to PDF with a headless browser")
+	open := fs.Bool("open", false, "open the report when it is written")
 	title := fs.String("title", "", "report title")
 	subtitle := fs.String("subtitle", "", "report subtitle")
 	mark := fs.String("mark", "docs/assets/brand/kartoza-symbol-color.svg", "brand mark to place on the cover")
@@ -941,11 +943,61 @@ runs are compared and the report says which ones they were.
 	}
 
 	fmt.Fprintf(os.Stderr, "%s\n", reportDigest(comparison))
-	fmt.Fprintf(os.Stderr, "\nOpen it with:  xdg-open %s\n", *out)
+
+	// The PDF when there is one: it is the artefact meant for a reader, and the
+	// HTML beside it is the same content. Opening is off by default because this
+	// runs in CI, where launching a viewer is at best noise.
+	target := *out
+	for _, path := range written {
+		if strings.HasSuffix(path, ".pdf") {
+			target = path
+		}
+	}
+	if *open {
+		if err := openInViewer(target); err != nil {
+			// Not fatal: the report exists and its path is on stdout. Failing the
+			// command because no viewer is installed would be disproportionate.
+			fmt.Fprintf(os.Stderr, "note: could not open %s (%v)\n", target, err)
+			fmt.Fprintf(os.Stderr, "Open it with:  xdg-open %s\n", target)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "\nOpen it with:  xdg-open %s\n", target)
+	}
+
 	for _, path := range written {
 		fmt.Println(path)
 	}
 	return nil
+}
+
+// openInViewer hands a path to the desktop's handler.
+//
+// Detached deliberately: xdg-open on some desktops does not return until the
+// viewer exits, and a benchmark command that appears to hang until the reader
+// closes a PDF is worse than one that prints a path.
+func openInViewer(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	bin, err := exec.LookPath(opener)
+	if err != nil {
+		return fmt.Errorf("%s is not on PATH", opener)
+	}
+
+	cmd := exec.Command(bin, abs)
+	cmd.Stdout, cmd.Stderr = nil, nil
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Not waited on, so the viewer outlives this process; Release lets the child
+	// be reparented rather than left as a zombie.
+	return cmd.Process.Release()
 }
 
 // reportDigest is the finding, on the terminal, in the same words the report

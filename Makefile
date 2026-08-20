@@ -34,6 +34,7 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
+.PHONY: bench bench-report bench-list bench-sweep
 .PHONY: container
 .PHONY: fmt fmt-check lint check deps
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
@@ -140,6 +141,47 @@ test-scripts:
 	@./scripts/tests/report-tables-test.sh
 
 test-all: test test-frontend test-scripts
+
+# ============================
+# Benchmarking
+# ============================
+
+## bench: Measure the running server and save the result.
+##
+## Needs a server: start one with `dt run` first. The result is JSON under
+## benchmarks/results/, kept, because a comparison against last month is only
+## possible if last month's file is still there.
+##
+## DT_BENCH_TARGET overrides the address, DT_BENCH_LABEL the label:
+##   make bench DT_BENCH_LABEL=before
+bench:
+	@$(GO) run ./cmd/dtbench run \
+		--target $(or $(DT_BENCH_TARGET),http://127.0.0.1:8080) \
+		$(if $(DT_BENCH_LABEL),--label $(DT_BENCH_LABEL),)
+
+## bench-report: Compare the two most recent runs and open the report.
+##
+## With no arguments it takes the two most recent runs and names which ones it
+## chose. DT_BENCH_BASELINE and DT_BENCH_CURRENT accept a label, a filename, or
+## a position such as last-3.
+bench-report:
+	@$(GO) run ./cmd/dtbench report --pdf --open \
+		$(if $(DT_BENCH_BASELINE),--baseline $(DT_BENCH_BASELINE),) \
+		$(if $(DT_BENCH_CURRENT),--current $(DT_BENCH_CURRENT),)
+
+## bench-list: Show the stored benchmark results.
+bench-list:
+	@$(GO) run ./cmd/dtbench list
+
+## bench-sweep: Build each revision in a range, measure it, save the results.
+##
+## Slow — every revision is a full build — so it lists what it would do and
+## stops unless DT_BENCH_FROM is set:
+##   make bench-sweep DT_BENCH_FROM=v0.4.0
+bench-sweep:
+	@$(GO) run ./cmd/dtbench sweep \
+		$(if $(DT_BENCH_FROM),--from $(DT_BENCH_FROM),--dry-run) \
+		$(if $(DT_BENCH_TO),--to $(DT_BENCH_TO),)
 
 # ============================
 # Code quality

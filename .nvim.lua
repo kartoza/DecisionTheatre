@@ -41,6 +41,8 @@ local mappings = {
   -- Quality and health
   { "t", "make test-all", "Test (Go + frontend)" },
   { "l", "make lint", "Lint" },
+  { "m", "make bench", "Measure the running server" },
+  { "M", "make bench-report", "Compare and open the report" },
   { "f", "make fmt", "Format" },
   { "g", "make fmt-check", "Is everything gofmt-clean? (what CI asks first)" },
   { "k", "make check", "Check (fmt-check + lint + test)" },
