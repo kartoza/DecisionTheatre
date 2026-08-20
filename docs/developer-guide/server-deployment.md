@@ -78,42 +78,176 @@ The application is now accessible at both `http://<your-server>/` and `https://<
 
 ---
 
-## Two ways to build the image
+## Getting the image
 
-| | Built by | Needs | Dependencies come from |
-|---|---|---|---|
-| `deployments/Dockerfile` | `docker compose up --build` | Docker | An apt list maintained by hand |
-| **The flake** | `./scripts/build-container.sh` (or `make container`) | Nix and Docker | The runtime closure of the binary Nix builds |
+The image is built from the flake. Its contents are the **runtime closure** of the
+binary Nix builds, so nothing states a dependency version twice — which is what
+went wrong before: a hand-written apt list installed WebKit **4.0** while the
+flake, CI and the Debian packaging all targeted **4.1**, and omitted a plugin
+`mkdocs.yml` requires, so for a while no image could be built at all.
 
-Both produce a working image and both are exercised in CI. The difference is
-where the dependency list comes from.
+There are three ways to get it, in order of how most people should.
 
-The Dockerfile names its runtime packages by hand, which means there are two
-statements of what the application needs — the flake's and the Dockerfile's — and
-nothing keeps them in step. They did fall out of step: the Dockerfile installed
-WebKit **4.0** while the flake, CI and the Debian packaging all targeted **4.1**,
-and it omitted a plugin `mkdocs.yml` requires, so for a while no image could be
-built at all.
-
-The flake-built image has no second list. Its contents are the closure of the
-binary, so it contains what the application actually links against, and it cannot
-disagree with `nix build` about a version.
+### 1. Pull a released image from GHCR
 
 ```bash
-# Build and load it
-./scripts/build-container.sh
-
-# Then point compose at it instead of building
-DT_IMAGE=decision-theatre:0.4.0 docker compose up -d
+docker pull ghcr.io/kartoza/decisiontheatre:0.4.0   # an immovable version pin
+docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest release
 ```
 
-`DT_IMAGE` defaults to `decision-theatre:latest`, which is what compose builds
-from the Dockerfile — so an existing deployment that does not set it keeps
-behaving exactly as before. Compose only builds when the named image is absent,
-so naming an image you have already loaded uses it as-is.
+Every release publishes both tags, along with the image tarball, its SBOM and its
+vulnerability scan as release assets.
 
-The tag is the version in `flake.nix`; `./scripts/build-container.sh` prints it,
-and `nix eval --raw .#container.imageTag` reports it on its own.
+!!! note "The image path is lowercase"
+    GHCR rejects an uppercase path, and this repository is `kartoza/DecisionTheatre`.
+    So it is `ghcr.io/kartoza/decisiontheatre`, not `…/DecisionTheatre`. Pulling the
+    capitalised form fails with a confusing `denied` rather than `not found`.
+
+#### Running it
+
+The image needs a data directory and a resources directory, exactly as the compose
+service does. Nothing is baked in — the datapack is never part of the image.
+
+```bash
+docker run -d --name decision-theatre \
+  -p 8080:8080 \
+  -v /srv/decision-theatre/data:/app/data \
+  -v /srv/decision-theatre/resources:/app/resources:ro \
+  ghcr.io/kartoza/decisiontheatre:0.4.0
+```
+
+Then `curl http://127.0.0.1:8080/api/health` should answer `{"status":"ok"}`.
+
+The image's default command already carries the flags the deployment needs —
+`--headless --bind 0.0.0.0 --port 8080 --data-dir /app/data --resources-dir
+/app/resources` — so you only override them if you want something different.
+
+!!! note "The API is unauthenticated, and read-only"
+    In server mode nothing the API exposes writes anything. The two routes that
+    could — `POST /api/datapack/install`, which replaces the data directory, and
+    `POST /api/dialog/open-file`, which opens a native file picker — are
+    registered only when `DesktopMode` is set, so in a container they are absent
+    from the route table entirely. The remaining `POST`/`PATCH` routes compute a
+    result and return it; none of them persists.
+
+    So exposing this is not a data-integrity risk. Two things are still worth
+    weighing before putting it on a public address:
+
+    - **A single request can be expensive.** A full-domain statistics query
+      returns roughly 14.7 MB and takes about 4 seconds, and nothing rate-limits
+      it. That is an availability and bandwidth consideration rather than a
+      security one, but it is cheap to abuse.
+    - **`/api/geocode` proxies to OpenStreetMap's Nominatim**, whose usage policy
+      the server exists to honour on behalf of every browser tab — see
+      `internal/server/geocode.go`. A publicly reachable instance is an open relay
+      to a third party under *your* identifying User-Agent, and the policy is
+      yours to keep.
+
+    `--bind 0.0.0.0` is correct inside a container: the process must accept
+    connections from outside its own network namespace to be reachable at all.
+
+To use it with the compose stack instead, point `DT_IMAGE` at it:
+
+```bash
+DT_IMAGE=ghcr.io/kartoza/decisiontheatre:0.4.0 docker compose up -d
+```
+
+#### Permission to pull
+
+**If the package is public**, no authentication is needed — `docker pull` works for
+anyone, including a machine that has never logged in to GitHub. That is the
+intended state for this project.
+
+**If the package is private**, a pull returns:
+
+```
+Error response from daemon: denied
+```
+
+which is GHCR's answer both to "you may not" and to "there is no such package", so
+it does not tell you which. Authenticate with a token that has the `read:packages`
+scope:
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+Use a **classic** personal access token with `read:packages`, or a fine-grained
+token with the *Packages: read* permission. A password will not work — GHCR accepts
+tokens only.
+
+##### Making it public (maintainers, once)
+
+A package is created **private** on its first push, whatever the repository's
+visibility. Someone with admin on the package has to change it:
+
+1. Go to `https://github.com/orgs/kartoza/packages`
+2. Open `decisiontheatre` → **Package settings**
+3. Under **Danger Zone** → **Change visibility** → **Public**
+
+The release workflow does not attempt this: `GITHUB_TOKEN` does not carry
+org-level package administration, so a script that tried would fail confusingly
+rather than doing it. It is a one-time manual step.
+
+While you are there, check **Manage Actions access** lists this repository with
+*Write* — the workflow needs it to push. That link is created automatically when
+the image is first pushed with `GITHUB_TOKEN` from this repository, so it normally
+requires nothing.
+
+##### If the first release push fails with 403
+
+The repository's own Actions permissions are the usual cause, not the package:
+**Settings → Actions → General → Workflow permissions** must be **Read and write
+permissions**. A workflow can only narrow what the repository allows, so
+`packages: write` in the workflow file is silently not granted when that setting is
+read-only.
+
+### 2. Take the image from a pull request
+
+Every pull request builds the image and attaches it, its SBOM and its CVE scan as
+a **`container-image` artefact kept for 7 days**. The pull request is annotated
+with the package inventory and the scan results, and the comment carries the
+commands. This is how you try a change before it merges:
+
+```bash
+# Download `container-image` from the Actions run linked in the PR comment
+unzip container-image.zip
+docker load < decision-theatre-image.tar.gz
+docker run --rm -p 8080:8080 decision-theatre:0.4.0
+```
+
+### 3. Build it yourself
+
+Needs Nix and Docker:
+
+```bash
+./scripts/build-container.sh     # builds and loads it, then prints the tag
+make container                   # the same
+nix build .#container            # just the tarball, at ./result
+```
+
+The tag is the version declared in `flake.nix`; `nix eval --raw .#container.imageTag`
+reports it on its own.
+
+### Running a specific image with compose
+
+```bash
+DT_IMAGE=ghcr.io/kartoza/decisiontheatre:0.4.0 docker compose up -d
+```
+
+`DT_IMAGE` defaults to `decision-theatre:latest`. Compose only builds when the
+named image is absent, so naming one you have already pulled or loaded uses it
+as-is.
+
+### What is still built the old way, and why
+
+`deployments/Dockerfile` is still present and compose still builds from it by
+default. It is **no longer built or tested in CI** — the flake image is the one
+that is. It stays only until a release has published an image to GHCR that
+compose can pull instead, because switching before then would leave a deployment
+with nothing to pull. Removing it is tracked, along with `Dockerfile.builder`,
+which the nightly `scripts/scheduled-redeploy.sh` uses to rebuild the datapack
+and installers on a host that has only Docker.
 
 ---
 

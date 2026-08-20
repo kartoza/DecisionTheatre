@@ -550,6 +550,33 @@
         };
 
         # =====================================================
+        # Supply-chain shell: nix develop .#supplychain
+        #
+        # syft and grype for the SBOM and vulnerability scan, and the python3
+        # that renders them into the report tables.
+        #
+        # These used to be fetched in CI with `curl … | sh -s -- -b /usr/local/bin`
+        # from anchore's install scripts. That is the one thing a supply-chain
+        # step must not do: it pipes a remote script into a shell to obtain the
+        # tools that are supposed to be telling us what we are shipping, at
+        # whatever version main happened to be that morning. Nothing pinned it,
+        # nothing verified it, and the answer could differ between two runs of
+        # the same commit.
+        #
+        # From nixpkgs they are pinned by flake.lock, so a scan is reproducible
+        # and a version change is a reviewable diff. Kept out of .#tooling
+        # deliberately: a contributor running the pre-commit checks should not
+        # have to realise a vulnerability scanner first.
+        # =====================================================
+        devShells.supplychain = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            syft
+            grype
+            python3
+          ];
+        };
+
+        # =====================================================
         # Dev shell: nix develop
         # All tools available, no internet needed after first eval
         # =====================================================

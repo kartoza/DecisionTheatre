@@ -1,120 +1,105 @@
 package geodata
 
 import (
-	"encoding/json"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 )
 
-// Low-zoom choropleth requests blocked on a bare channel receive with no context
-// and no timeout. The channel is closed by the grid-geometry build, whose workers
-// had no recover() — and a panic there did not merely lose a cell: the goroutine
-// died without sending, so wg.Wait never returned, the results channel was never
-// closed, and the tier's ready channel never closed either. Every subsequent
-// low-zoom request then blocked forever, accumulating goroutines until the process
-// died.
+// Low-zoom choropleth requests once blocked on a bare channel receive with no
+// context and no timeout. The channel is closed by the grid-geometry build,
+// whose workers had no recover() — and a panic there did not merely lose a cell:
+// the goroutine died without sending, so wg.Wait never returned, the results
+// channel was never closed, and the tier's ready channel never closed either.
+// Every subsequent low-zoom request then blocked forever, accumulating
+// goroutines until the process died.
+//
+// These tests were originally written against a per-tier sync.Once design on
+// this branch. Main replaced that with mutex-guarded state that also makes a
+// failed build retryable, which is the better answer, so the tests now assert
+// the guarantees rather than the mechanism — every one of them would still have
+// caught the original hang.
 
 // newReadyStore builds the readiness machinery without opening a geopackage.
-func newReadyStore() *GpkgStore {
+func newReadyStore() (*GpkgStore, map[float64]chan struct{}) {
 	ready := make(map[float64]chan struct{}, len(gridTiersDegrees))
-	closeReady := make(map[float64]*sync.Once, len(gridTiersDegrees))
 	for _, tier := range gridTiersDegrees {
 		ready[tier] = make(chan struct{})
-		closeReady[tier] = &sync.Once{}
 	}
-	return &GpkgStore{
-		gridGeometryReady: ready,
-		closeReady:        closeReady,
+	return &GpkgStore{gridGeometryReady: ready}, ready
+}
+
+func isClosed(t *testing.T, ch chan struct{}) bool {
+	t.Helper()
+	select {
+	case <-ch:
+		return true
+	case <-time.After(2 * time.Second):
+		return false
 	}
 }
 
-// The build's deferred close must release waiters even when it ends abnormally.
-func TestCloseAllGridReadyReleasesEveryTier(t *testing.T) {
-	s := newReadyStore()
+// A failed build must release every waiter. This is the guarantee that turns a
+// hang into an error, and it is the whole reason the failure path exists.
+func TestAFailedBuildReleasesEveryTier(t *testing.T) {
+	s, ready := newReadyStore()
 
-	s.closeAllGridReady()
+	s.failGridGeometryCache(ready, errors.New("the datapack could not be read"))
 
 	for _, tier := range gridTiersDegrees {
-		select {
-		case <-s.gridGeometryReady[tier]:
-		default:
-			t.Errorf("tier %.3f was left open; requests on it would block forever", tier)
+		if !isClosed(t, ready[tier]) {
+			t.Errorf("tier %.3f still has waiters blocked after a failed build", tier)
 		}
 	}
 }
 
-// The failure paths close every tier, including ones already closed on success.
-// Without the sync.Once that is a "close of closed channel" panic — a partial
-// failure turned into a crash.
-func TestClosingAReadyTierTwiceIsSafe(t *testing.T) {
-	s := newReadyStore()
+// A failure after some tiers have already completed must not panic.
+//
+// The success path closes each tier as it finishes; the failure path closes all
+// of them. Today every failure happens before the per-tier loop begins, so the
+// two cannot overlap — but that is a property of where the calls sit, not of the
+// code, and the cost of it changing is a panic in the build goroutine rather
+// than an error a caller can see.
+func TestAFailureAfterAPartialBuildDoesNotPanic(t *testing.T) {
+	s, ready := newReadyStore()
+
+	// The first tier completed before the failure, exactly as the success path
+	// would have left it.
+	close(ready[gridTiersDegrees[0]])
 
 	defer func() {
 		if r := recover(); r != nil {
-			t.Errorf("closing twice panicked: %v", r)
+			t.Fatalf("a partial build followed by a failure panicked: %v", r)
 		}
 	}()
+	s.failGridGeometryCache(ready, errors.New("failed part way through"))
 
-	s.closeGridReady(gridTiersDegrees[0])
-	s.closeGridReady(gridTiersDegrees[0])
-	s.closeAllGridReady()
-	s.closeAllGridReady()
-}
-
-// A panic anywhere in the build must still release every waiter, which is what the
-// deferred close is for. This models the build's own structure: panic, recover at
-// the top, and confirm nothing is left blocked.
-func TestAPanickingBuildStillReleasesWaiters(t *testing.T) {
-	s := newReadyStore()
-
-	// Someone waiting, as a request would be.
-	waited := make(chan struct{})
-	go func() {
-		<-s.gridGeometryReady[gridTiersDegrees[0]]
-		close(waited)
-	}()
-
-	func() {
-		defer s.closeAllGridReady()
-		defer func() { _ = recover() }()
-
-		panic("polyclip fell over")
-	}()
-
-	select {
-	case <-waited:
-	case <-time.After(2 * time.Second):
-		t.Fatal("a waiter was still blocked after the build panicked")
+	for _, tier := range gridTiersDegrees {
+		if !isClosed(t, ready[tier]) {
+			t.Errorf("tier %.3f still has waiters blocked", tier)
+		}
 	}
 }
 
-// A tier that built before a panic keeps serving. Marking every tier failed would
-// turn one bad tier into an outage across all of them.
-func TestAPartialFailureLeavesBuiltTiersUsable(t *testing.T) {
-	s := newReadyStore()
+// The error is recorded, so a request can say the build failed rather than
+// return an empty result that reads as "there is no data here".
+func TestAFailedBuildRecordsWhy(t *testing.T) {
+	s, ready := newReadyStore()
+	want := errors.New("no such column: geojson")
 
-	built := gridTiersDegrees[0]
-
-	// Mark one tier as built, the way the build does on success.
-	s.mu.Lock()
-	s.gridGeometryCache = map[float64]map[gridCellKey]json.RawMessage{
-		built: {},
-	}
-	s.mu.Unlock()
-
-	s.recordGridBuildErrForUnbuiltTiers(errors.New("boom"))
+	s.failGridGeometryCache(ready, want)
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	got := s.gridGeometryErr
+	building := s.gridGeometryBuilding
+	s.mu.RUnlock()
 
-	if err := s.gridBuildErr[built]; err != nil {
-		t.Errorf("tier %.3f built successfully but was marked failed: %v", built, err)
+	if !errors.Is(got, want) {
+		t.Errorf("gridGeometryErr = %v, want %v", got, want)
 	}
-	for _, tier := range gridTiersDegrees[1:] {
-		if s.gridBuildErr[tier] == nil {
-			t.Errorf("tier %.3f never built but was not marked failed", tier)
-		}
+	// Cleared so the next request can try again. A failed build that stays
+	// marked in-progress is the permanent breakage this replaced.
+	if building {
+		t.Error("still marked as building after a failure, so nothing would retry")
 	}
 }

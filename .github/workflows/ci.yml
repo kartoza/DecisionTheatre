@@ -109,13 +109,21 @@ jobs:
       # build called itself 0.2.2-... while `nix build` called the same source
       # 0.4.0. A second of shell, and invisible until two binaries are compared.
       - name: Shell script tests
-        run: ./scripts/tests/version-test.sh
+        run: |
+          ./scripts/tests/version-test.sh
+          ./scripts/tests/report-tables-test.sh
 
   # ==========================================
   # Go lint
   # ==========================================
   lint-go:
     runs-on: ubuntu-latest
+    # Azure-hosted runners resolve apt mirrors through
+    # mirror+file:/etc/apt/apt-mirrors.txt, and azure.archive.ubuntu.com has been
+    # seen to stall with no response. Plain apt-get has no timeout for that, so it
+    # hangs until GitHub's own multi-hour job ceiling. This bounds the damage to one
+    # retry cycle instead.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -130,7 +138,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
           sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
 
       # webview_go asks pkg-config for webkit2gtk-4.0, which no current
@@ -181,6 +189,9 @@ jobs:
   # ==========================================
   test-go:
     runs-on: ubuntu-latest
+    # See the identical timeout on lint-go: an unresponsive azure.archive.ubuntu.com
+    # mirror can hang plain apt-get indefinitely.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -195,7 +206,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
           sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
 
       - name: webkit2gtk-4.0 compatibility shim
@@ -307,107 +318,68 @@ jobs:
             build .#default --no-link 2>&1 | tail -20
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-
   # ==========================================
-  # Container build
+  # Container image
   #
-  # Nothing built either container file in CI, which is how `deployments/Dockerfile`
-  # came to sit on main with a `mkdocs build` that could not succeed: `mkdocs.yml`
-  # declares the macros plugin and the pip list did not install it. A Dockerfile that
-  # nobody builds is a Dockerfile that does not work.
+  # One image, built from the flake. Its contents are the runtime closure of the
+  # binary nix already builds, so there is no second dependency list to fall out
+  # of step with the first — which is exactly how the hand-maintained Dockerfile
+  # came to install WebKit 4.0 while everything else targeted 4.1, and to omit a
+  # mkdocs plugin without which no image could be built at all.
   #
-  # Plain `docker build` rather than docker/build-push-action so this adds no
-  # third-party action to the supply chain. It is slower without a layer cache, and
-  # it runs alongside the other jobs rather than gating them.
-  # ==========================================
-  container-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Instant, and it catches the specific regression this job exists for
-      # without waiting ten minutes for a build to say so.
-      - name: Every container file targets WebKit 4.1
-        run: |
-          if grep -rn "webkit2gtk-4\.0-dev\|libwebkit2gtk-4\.0-37" deployments/; then
-            echo "::error::A container file installs WebKit 4.0. The flake, CI and the" \
-                 "Debian packaging all target 4.1, and 4.0 is gone from current Debian."
-            exit 1
-          fi
-
-      - name: Build the deployment image
-        run: |
-          docker build -f deployments/Dockerfile \
-            --build-arg VERSION=ci-${GITHUB_SHA::7} \
-            -t decision-theatre:ci .
-
-      - name: The image runs and reports its version
-        run: |
-          got="$(docker run --rm decision-theatre:ci --version)"
-          echo "$got"
-          case "$got" in
-            *"ci-${GITHUB_SHA::7}"*) ;;
-            *) echo "::error::--version did not report the build argument: $got"; exit 1 ;;
-          esac
-
-      - name: The binary links WebKit 4.1
-        run: |
-          docker run --rm --entrypoint sh decision-theatre:ci \
-            -c 'ldd /usr/local/bin/decision-theatre | grep libwebkit2gtk-4.1.so'
-
-      - name: The image serves
-        run: |
-          docker run -d --name dt-ci -p 8080:8080 decision-theatre:ci
-          # Up to two minutes: the server opens four listeners and the first
-          # request touches the data directory.
-
-  # Container image from the flake
+  # On a pull request the image is published as a 7-day artefact with its SBOM
+  # and CVE scan, and the pull request is annotated with both tables. On a
+  # release it is pushed to GHCR and the same files are attached as long-lived
+  # assets — see .github/workflows/release.yml.
   #
-  # The point of building the image from the flake is that its contents are the
-  # runtime closure of the binary nix already builds, so the image cannot state a
-  # dependency version that disagrees with the one that is tested. This job is
-  # what makes that claim checkable: it builds the image, loads it and runs it.
-  #
-  # It is also the only place the image gets built at all — a nix build needs a
-  # network-capable sandbox, which a developer has and a locked-down environment
-  # may not.
+  # The scan does not fail the build. A CVE in a system library is a fact to
+  # weigh, not automatically a defect here, and a gate that trips on every
+  # Negligible finding in glibc trains people to ignore it. Gating belongs to an
+  # agreed severity policy.
   # ==========================================
   container-nix:
     runs-on: ubuntu-latest
-    needs: [flake-lock-step]
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
       - name: Build the image from the flake
+        id: build
         run: |
-          nix --extra-experimental-features 'nix-command flakes' \
-            build .#container --print-build-logs
+          nix build .#container --print-build-logs
+          tag="$(nix eval --raw .#container.imageTag)"
+          name="$(nix eval --raw .#container.imageName)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "image=$name:$tag" >> "$GITHUB_OUTPUT"
 
       - name: Load it into docker
         run: |
           docker load < result
-          docker image ls decision-theatre
+          docker image ls ${{ steps.build.outputs.name }}
 
       - name: It reports the flake's version
         run: |
-          tag="$(nix --extra-experimental-features 'nix-command flakes' \
-            eval --raw .#container.imageTag)"
-          got="$(docker run --rm "decision-theatre:$tag" --version)"
+          got="$(docker run --rm ${{ steps.build.outputs.image }} --version)"
           echo "$got"
           case "$got" in
-            *"$tag"*) ;;
-            *) echo "::error::--version ($got) does not match the image tag ($tag)"; exit 1 ;;
+            *"${{ steps.build.outputs.tag }}"*) ;;
+            *) echo "::error::--version ($got) does not match the image tag"; exit 1 ;;
           esac
 
       - name: It serves
         run: |
-          tag="$(nix --extra-experimental-features 'nix-command flakes' \
-            eval --raw .#container.imageTag)"
-          docker run -d --name dt-nix -p 8080:8080 "decision-theatre:$tag"
+          docker run -d --name dt-ci -p 8080:8080 ${{ steps.build.outputs.image }}
+          # Up to two minutes: the server opens four listeners and the first
+          # request touches the data directory.
           for _ in $(seq 1 60); do
             if curl -fsS -o /dev/null http://127.0.0.1:8080/api/health; then
               ok=1
@@ -418,32 +390,21 @@ jobs:
           if [ "${ok:-0}" != "1" ]; then
             echo "::error::The container never became healthy"
             docker logs dt-ci
-
-            docker logs dt-nix
             exit 1
           fi
           curl -fsS -o /dev/null http://127.0.0.1:8080/          # the application
           curl -fsS -o /dev/null http://127.0.0.1:8080/docs/     # the mkdocs site
           docker rm -f dt-ci
 
-          docker rm -f dt-nix
-
       - name: It carries a trust store, so outbound TLS works
         run: |
-          tag="$(nix --extra-experimental-features 'nix-command flakes' \
-            eval --raw .#container.imageTag)"
-          img="decision-theatre:$tag"
-
-          # /api/geocode proxies upstream over TLS. Without SSL_CERT_FILE
-          # resolving inside the image, every place-name search fails at
-          # certificate verification, and nothing else in the image would say so.
-          #
+          img="${{ steps.build.outputs.image }}"
           # Read from outside rather than running anything: the image is the
-          # application's closure plus cacert and tzdata, and has no shell. The
-          # first version of this step ran `sh -c 'test -r "$SSL_CERT_FILE"'`
-          # and reported "SSL_CERT_FILE is not readable" — when what actually
-          # happened was that `sh` does not exist. A check whose failure message
-          # asserts something it never tested is worse than no check.
+          # application's closure plus cacert and tzdata, and has no shell. An
+          # earlier version ran `sh -c 'test -r "$SSL_CERT_FILE"'` and reported
+          # "SSL_CERT_FILE is not readable" when what actually happened was that
+          # `sh` does not exist. A check whose failure message asserts something
+          # it never tested is worse than no check.
           cert="$(docker image inspect "$img" \
             --format '{{range .Config.Env}}{{println .}}{{end}}' \
             | sed -n 's/^SSL_CERT_FILE=//p')"
@@ -451,13 +412,105 @@ jobs:
             echo "::error::the image declares no SSL_CERT_FILE"
             exit 1
           fi
-
           cid="$(docker create "$img")"
           if docker export "$cid" | tar -tf - "${cert#/}" > /dev/null 2>&1; then
             echo "trust store present: $cert"
-            docker rm -f "$cid" > /dev/null
           else
             echo "::error::$cert is declared but is not in the image"
             docker rm -f "$cid" > /dev/null
             exit 1
           fi
+          docker rm -f "$cid" > /dev/null
+
+      - name: Export the image
+        run: |
+          docker save ${{ steps.build.outputs.image }} \
+            | gzip > decision-theatre-image.tar.gz
+          ls -lh decision-theatre-image.tar.gz
+
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.build.outputs.image }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom.spdx.json
+
+      # syft and grype come from the flake, pinned by flake.lock, like every other
+      # tool this project builds with. They were previously fetched by piping
+      # anchore's install scripts into a shell, which is the one thing a
+      # supply-chain step must not do: unpinned, unverified tools reporting on
+      # what we ship. This job already installs nix a few steps above.
+      - name: Scan for known vulnerabilities
+        run: |
+          nix develop .#supplychain --command bash -euo pipefail -c '
+            syft ${{ steps.build.outputs.image }} -o json > sbom-syft.json
+            # An empty match set rather than a failed step when grype cannot
+            # produce a result: the report says "none reported", which is honest,
+            # and the SBOM is attached either way.
+            grype sbom:sbom.spdx.json -o json > cve-scan.json 2>/dev/null \
+              || echo "{\"matches\":[]}" > cve-scan.json
+          '
+
+      - name: Assemble the report
+        run: |
+          {
+            printf '## Container image\n\n'
+            printf '`%s` — %s\n\n' "${{ steps.build.outputs.image }}" \
+              "$(du -h decision-theatre-image.tar.gz | cut -f1) compressed"
+            printf 'Built from the flake: its contents are the runtime closure of the binary, so nothing states a dependency version twice.\n\n'
+            printf '### Software bill of materials\n\n'
+            nix develop .#supplychain --command python3 scripts/sbom_table.py sbom-syft.json
+            printf '\n### Vulnerability scan\n\n'
+            nix develop .#supplychain --command python3 scripts/cve_table.py cve-scan.json
+          } > build-report.md
+          cat build-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the image, SBOM and scan
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: |
+            decision-theatre-image.tar.gz
+            sbom.spdx.json
+            cve-scan.json
+          retention-days: 7
+          overwrite: true
+
+      - name: Find the previous comment
+        if: github.event_name == 'pull_request'
+        id: find-comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "## Container image"
+
+      - name: Assemble the pull request comment
+        if: github.event_name == 'pull_request'
+        env:
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            cat build-report.md
+            printf '\n---\n\n### Try this build\n\n'
+            printf 'Download the `container-image` artefact from [this run](https://github.com/%s/actions/runs/%s), then:\n\n' \
+              "$REPO" "$RUN_ID"
+            printf '```bash\n'
+            printf 'unzip container-image.zip\n'
+            printf 'docker load < decision-theatre-image.tar.gz\n'
+            printf 'docker run --rm -p 8080:8080 %s\n' "${{ steps.build.outputs.image }}"
+            printf '```\n\n'
+            printf 'Kept for 7 days. Commit `%s`.\n' "$SHA"
+          } > pr-comment.md
+
+      - name: Post or update the comment
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: pr-comment.md

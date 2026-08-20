@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -36,64 +37,18 @@ type GpkgStore struct {
 	// tier's build finishes, so a request only waits on the specific tier it
 	// needs rather than the slowest tier in the set (see
 	// buildGridGeometryCache's build order and queryCatchmentsGridAggregated).
-	gridGeometryCache map[float64]map[gridCellKey]json.RawMessage
-	gridGeometryReady map[float64]chan struct{}
-	gridGeometryOnce  sync.Once
-
-	// closeReady makes closing a tier's channel idempotent. Without it the
-	// failure paths that close every channel would panic on "close of closed
-	// channel" for tiers that had already finished — turning a partial failure
-	// into a crash.
-	closeReady map[float64]*sync.Once
-
-	// gridBuildErr records why a tier has no geometry, so a request can say the
-	// build failed rather than silently returning an empty map. Guarded by mu.
-	gridBuildErr map[float64]error
-}
-
-// closeGridReady marks a tier ready. Safe to call repeatedly and from any path,
-// which is what lets the build close every tier on failure without knowing which
-// ones already succeeded.
-func (s *GpkgStore) closeGridReady(tier float64) {
-	if once, ok := s.closeReady[tier]; ok {
-		once.Do(func() { close(s.gridGeometryReady[tier]) })
-	}
-}
-
-// closeAllGridReady releases every waiter. Deferred by the build so that an early
-// return — or a panic — cannot leave requests blocked forever on a channel nobody
-// will ever close.
-func (s *GpkgStore) closeAllGridReady() {
-	for _, tier := range gridTiersDegrees {
-		s.closeGridReady(tier)
-	}
-}
-
-// recordGridBuildErrForUnbuiltTiers records err against every tier that has no
-// cache yet, leaving tiers that already completed alone.
-func (s *GpkgStore) recordGridBuildErrForUnbuiltTiers(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.gridBuildErr == nil {
-		s.gridBuildErr = make(map[float64]error, len(gridTiersDegrees))
-	}
-	for _, tier := range gridTiersDegrees {
-		if _, built := s.gridGeometryCache[tier]; built {
-			continue
-		}
-		s.gridBuildErr[tier] = err
-	}
-}
-
-// recordGridBuildErr notes that a tier could not be built.
-func (s *GpkgStore) recordGridBuildErr(tier float64, err error) {
-	s.mu.Lock()
-	if s.gridBuildErr == nil {
-		s.gridBuildErr = make(map[float64]error, len(gridTiersDegrees))
-	}
-	s.gridBuildErr[tier] = err
-	s.mu.Unlock()
+	//
+	// gridGeometryBuilding and gridGeometryErr (both guarded by mu) are what
+	// keep a failed build from becoming permanent. A sync.Once used to guard
+	// the build, so a single failed read left the aggregated choropleth broken
+	// for the remaining uptime of the process with nothing able to try again -
+	// and, because the row scan never checked rows.Err, a read that failed
+	// part-way published whatever had been dissolved so far and marked every
+	// tier ready, presenting a partial continent as a complete one.
+	gridGeometryCache    map[float64]map[gridCellKey]json.RawMessage
+	gridGeometryReady    map[float64]chan struct{}
+	gridGeometryBuilding bool
+	gridGeometryErr      error
 }
 
 // gridGeometryWaitTimeout bounds how long a request waits for a tier's geometry.
@@ -167,27 +122,26 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	db.SetMaxOpenConns(maxConns)
 	db.SetMaxIdleConns(maxConns)
 
+	// Opening the store is startup work, not request work. It runs once when
+	// the process boots, and again on a background goroutine when a datapack
+	// is installed - there is no HTTP request whose cancellation should
+	// abandon it, so context.Background() is the honest context here rather
+	// than context.TODO(). See IsCancellation for the package's policy on
+	// which work is request-scoped.
+	ctx := context.Background()
+
 	// Test connection
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("failed to connect to geopackage: %w", err)
 	}
 
-	closeReady := make(map[float64]*sync.Once, len(gridTiersDegrees))
-	gridGeometryReady := make(map[float64]chan struct{}, len(gridTiersDegrees))
-	for _, tier := range gridTiersDegrees {
-		gridGeometryReady[tier] = make(chan struct{})
-		closeReady[tier] = &sync.Once{}
-	}
-
 	store := &GpkgStore{
-		db:                db,
-		dataDir:           dataDir,
-		gridGeometryReady: gridGeometryReady,
-		closeReady:        closeReady,
+		db:      db,
+		dataDir: dataDir,
 	}
 
 	// Load column names from scenario_current
-	if err := store.loadColumns(); err != nil {
+	if err := store.loadColumns(ctx); err != nil {
 		log.Printf("Warning: could not load columns: %v", err)
 	}
 
@@ -200,8 +154,8 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 }
 
 // loadColumns reads the column names from the scenario tables
-func (s *GpkgStore) loadColumns() error {
-	rows, err := s.db.Query("PRAGMA table_info(scenario_current)")
+func (s *GpkgStore) loadColumns(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(scenario_current)")
 	if err != nil {
 		return err
 	}
@@ -222,6 +176,9 @@ func (s *GpkgStore) loadColumns() error {
 			continue
 		}
 		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -290,8 +247,8 @@ func dbValueToString(v interface{}) string {
 func parseNumericIDs(ids []string) ([]interface{}, bool) {
 	args := make([]interface{}, 0, len(ids))
 	for _, id := range ids {
-		parsed, err := strconv.ParseInt(normalizeCatchmentID(strings.TrimSpace(id)), 10, 64)
-		if err != nil {
+		parsed, ok := parseCatchmentID(id)
+		if !ok {
 			return nil, false
 		}
 		args = append(args, parsed)
@@ -299,12 +256,49 @@ func parseNumericIDs(ids []string) ([]interface{}, bool) {
 	return args, true
 }
 
-func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
+// parseCatchmentID reads a catchment id as the integer it is, whatever spelling
+// it arrived in.
+//
+// HYBAS_ID is a REAL column in the datapack, so the same id legitimately turns
+// up as "1121879850", "1121879850.0" and - once a float64 has been through a
+// generic string conversion - "1.12187985e+09". Only the first two used to
+// parse, and an id list containing any of the third form fell back to matching
+// on the text column for every id in it.
+//
+// That fallback is no longer merely slower in the ordinary way: the fast
+// query plans key on an integer column (see weightTableThreshold), so an id
+// spelled as a float would quietly cost a continent-sized request thirty
+// seconds instead of three. A value with a real fractional part is still not a
+// catchment id and is still rejected.
+func parseCatchmentID(id string) (int64, bool) {
+	trimmed := normalizeCatchmentID(strings.TrimSpace(id))
+	if trimmed == "" {
+		return 0, false
+	}
+	if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return parsed, true
+	}
+	asFloat, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil || math.Trunc(asFloat) != asFloat || math.IsInf(asFloat, 0) {
+		return 0, false
+	}
+	// Outside this range a float64 cannot represent every integer, so the
+	// value can no longer be trusted to be the id that was meant.
+	if asFloat > math.MaxInt64 || asFloat < math.MinInt64 || math.Abs(asFloat) > 1<<53 {
+		return 0, false
+	}
+	return int64(asFloat), true
+}
+
+// The querier is a parameter because the caller may already be holding a
+// pooled connection (see weightSet): reaching for a second one from inside
+// work that holds the first is how a bounded pool deadlocks under load.
+func (s *GpkgStore) resolveScenarioIDColumn(ctx context.Context, q querier, tableName string) (string, error) {
 	if cached, ok := s.idColCache.Load(tableName); ok {
 		return cached.(string), nil
 	}
 
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	rows, err := q.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return "", err
 	}
@@ -321,6 +315,11 @@ func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
 		}
 		columns[name] = struct{}{}
 	}
+	// Without this, a cancelled request would look identical to a table with
+	// no id column at all and be reported as a datapack problem.
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
 
 	// Prefer indexed columns first.  All scenario tables have catchment_id_int
 	// with an index; falling back to catchID causes a full-table scan.
@@ -336,7 +335,7 @@ func (s *GpkgStore) resolveScenarioIDColumn(tableName string) (string, error) {
 }
 
 // GetScenarioData returns data for a scenario and attribute as a map of catchment ID to value
-func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]float64, error) {
+func (s *GpkgStore) GetScenarioData(ctx context.Context, scenario, attribute string) (map[string]float64, error) {
 	tableName := resolveScenarioTable(scenario)
 
 	if !s.isValidColumn(attribute) {
@@ -346,7 +345,7 @@ func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]floa
 	query := fmt.Sprintf(`SELECT catchment_id, "%s" FROM %s WHERE "%s" IS NOT NULL`,
 		attribute, tableName, attribute)
 
-	rows, err := s.db.Query(query)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query scenario data: %w", err)
 	}
@@ -361,29 +360,32 @@ func (s *GpkgStore) GetScenarioData(scenario, attribute string) (map[string]floa
 		}
 		result[catchmentID] = value
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read scenario data: %w", err)
+	}
 
 	return result, nil
 }
 
 // GetScenarioAverages returns area-weighted means for one scenario across multiple attributes.
 // When bbox is provided, the aggregation is restricted to catchments intersecting that bbox.
-func (s *GpkgStore) GetScenarioAverages(scenario string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
-	return s.getAveragesForTable(resolveScenarioTable(scenario), attributes, bbox)
+func (s *GpkgStore) GetScenarioAverages(ctx context.Context, scenario string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+	return s.getAveragesForTable(ctx, resolveScenarioTable(scenario), attributes, bbox)
 }
 
 // GetScenarioBoundAverages returns area-weighted means of the lower/upper
 // uncertainty bound columns for one scenario across multiple attributes.
 // These power whisker/box-plot ranges outside "site" zone range, where the
 // per-catchment whisker computation (ComputeWhiskerBounds) doesn't apply.
-func (s *GpkgStore) GetScenarioBoundAverages(scenario, bound string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+func (s *GpkgStore) GetScenarioBoundAverages(ctx context.Context, scenario, bound string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
 	tableName, err := resolveScenarioBoundTable(scenario, bound)
 	if err != nil {
 		return nil, err
 	}
-	return s.getAveragesForTable(tableName, attributes, bbox)
+	return s.getAveragesForTable(ctx, tableName, attributes, bbox)
 }
 
-func (s *GpkgStore) getAveragesForTable(tableName string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
+func (s *GpkgStore) getAveragesForTable(ctx context.Context, tableName string, attributes []string, bbox *[4]float64) (map[string]float64, error) {
 	if len(attributes) == 0 {
 		return nil, fmt.Errorf("no attributes provided")
 	}
@@ -420,7 +422,7 @@ func (s *GpkgStore) getAveragesForTable(tableName string, attributes []string, b
 		args = append(args, maxx, minx, maxy, miny)
 	}
 
-	row := s.db.QueryRow(query, args...)
+	row := s.db.QueryRowContext(ctx, query, args...)
 	vals := make([]sql.NullFloat64, len(attributes))
 	scanArgs := make([]interface{}, len(attributes))
 	for i := range vals {
@@ -442,7 +444,7 @@ func (s *GpkgStore) getAveragesForTable(tableName string, attributes []string, b
 }
 
 // GetComparisonData returns comparison data for two scenarios for a given attribute
-func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string][2]float64, error) {
+func (s *GpkgStore) GetComparisonData(ctx context.Context, left, right, attribute string) (map[string][2]float64, error) {
 	if !s.isValidColumn(attribute) {
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
@@ -457,7 +459,7 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 		WHERE l."%s" IS NOT NULL AND r."%s" IS NOT NULL`,
 		attribute, attribute, leftTable, rightTable, attribute, attribute)
 
-	rows, err := s.db.Query(query)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query comparison data: %w", err)
 	}
@@ -471,6 +473,9 @@ func (s *GpkgStore) GetComparisonData(left, right, attribute string) (map[string
 			continue
 		}
 		result[catchmentID] = [2]float64{leftVal, rightVal}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read comparison data: %w", err)
 	}
 
 	return result, nil
@@ -545,7 +550,7 @@ func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute str
 	// catchments) that duplicated scan cost ~400ms on its own; merging them
 	// removes it entirely for the aggregated path, which is the one this
 	// budget check exists for in the first place.
-	catchmentRows, err := s.fetchCatchmentGridRows(tableName, attribute, minx, miny, maxx, maxy)
+	catchmentRows, err := s.fetchCatchmentGridRows(ctx, tableName, attribute, minx, miny, maxx, maxy)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +558,7 @@ func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute str
 
 	if matched <= maxDetailedFeatures {
 		path = "detailed"
-		return s.queryCatchmentsDetailed(tableName, attribute, minx, miny, maxx, maxy)
+		return s.queryCatchmentsDetailed(ctx, tableName, attribute, minx, miny, maxx, maxy)
 	}
 	path = "aggregated"
 	return s.queryCatchmentsGridAggregated(ctx, attribute, catchmentRows)
@@ -592,7 +597,7 @@ func truncateCoordinatePrecision(geojsonStr string) string {
 }
 
 // queryCatchmentsDetailed returns one feature per catchment with full-detail geometry.
-func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+func (s *GpkgStore) queryCatchmentsDetailed(ctx context.Context, tableName, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
 	// Use pre-computed geojson column - much faster than WKB conversion
 	// Only select the fields we need (no geometry blob)
 	// Use integer columns for faster index-based joins
@@ -614,7 +619,7 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 		LIMIT ?
 	`, attribute, tableName)
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny, maxDetailedFeatures)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny, maxDetailedFeatures)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -650,11 +655,35 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 			Properties: props,
 		})
 	}
+	// A cancelled query stops mid-scan, so without this the caller would get a
+	// partial feature collection reported as a complete one - a map with holes
+	// in it and no indication anything went wrong.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
 
 	return &FeatureCollection{
 		Type:     "FeatureCollection",
 		Features: features,
 	}, nil
+}
+
+// CatchmentValues is a bbox's attribute values with no geometry at all, held as
+// two parallel arrays rather than one object per catchment.
+//
+// This is the join payload for the vector-tile choropleth: geometry arrives from
+// the tile pipeline and is reused across every attribute, so the only thing a
+// viewport or attribute change has to move over the wire is the values. The
+// parallel-array shape matters at the sizes involved - a bbox at the tile
+// pipeline's minimum zoom can match tens of thousands of catchments, and one
+// GeoJSON Feature per catchment spends roughly ten times as many bytes on
+// repeated JSON scaffolding ("type", "geometry", "properties", the attribute
+// name) as it does on the id and value that are the actual content.
+type CatchmentValues struct {
+	// IDs and Values are index-aligned: Values[i] is the attribute value for
+	// the catchment whose HYBAS_ID is IDs[i].
+	IDs    []int64   `json:"ids"`
+	Values []float64 `json:"values"`
 }
 
 // QueryCatchmentValues returns every catchment's attribute value within a bounding
@@ -666,9 +695,40 @@ func (s *GpkgStore) queryCatchmentsDetailed(tableName, attribute string, minx, m
 // (with a null geometry) doesn't carry the rendering cost that motivated those
 // other paths.
 func (s *GpkgStore) QueryCatchmentValues(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*FeatureCollection, error) {
+	values, err := s.QueryCatchmentValueArrays(ctx, scenario, attribute, minx, miny, maxx, maxy)
+	if err != nil {
+		return nil, err
+	}
+
+	features := make([]GeoJSONFeature, 0, len(values.IDs))
+	for i, id := range values.IDs {
+		features = append(features, GeoJSONFeature{
+			Type:     "Feature",
+			ID:       id,
+			Geometry: json.RawMessage("null"),
+			Properties: map[string]interface{}{
+				"HYBAS_ID": id,
+				attribute:  values.Values[i],
+			},
+		})
+	}
+
+	return &FeatureCollection{
+		Type:     "FeatureCollection",
+		Features: features,
+	}, nil
+}
+
+// QueryCatchmentValueArrays is the geometry-free bbox query both value-shaped
+// callers share: QueryCatchmentValues wraps it back into GeoJSON features for
+// the statistics path, and the /catchment-values endpoint serves it directly to
+// the vector-tile choropleth. Keeping one query means the two can never drift
+// on which catchments they consider in view.
+func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
 	start := time.Now()
+	count := 0
 	defer func() {
-		log.Printf("[perf] QueryCatchmentValues scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, time.Since(start).Milliseconds())
+		log.Printf("[perf] QueryCatchmentValueArrays scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] values=%d duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, count, time.Since(start).Milliseconds())
 	}()
 
 	tableName := resolveScenarioTable(scenario)
@@ -687,43 +747,107 @@ func (s *GpkgStore) QueryCatchmentValues(ctx context.Context, scenario, attribut
 		  )
 	`, attribute, tableName, attribute)
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
 
-	features := []GeoJSONFeature{}
+	// Non-nil slices: these are marshalled straight to JSON, and a nil slice
+	// encodes as null, which the client would have to special-case on every
+	// empty viewport.
+	result := &CatchmentValues{IDs: []int64{}, Values: []float64{}}
 	for rows.Next() {
+		// HYBAS_ID is scanned through float64 because the column is text in
+		// some datapacks and integer in others; the existing detailed path
+		// does the same (see queryCatchmentsDetailed).
 		var id, value float64
 		if err := rows.Scan(&id, &value); err != nil {
 			log.Printf("Warning: failed to scan row: %v", err)
 			continue
 		}
-
-		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       int64(id),
-			Geometry: json.RawMessage("null"),
-			Properties: map[string]interface{}{
-				"HYBAS_ID": int64(id),
-				attribute:  value,
-			},
-		})
+		result.IDs = append(result.IDs, int64(id))
+		result.Values = append(result.Values, value)
 	}
+	// See queryCatchmentsDetailed: a truncated scan must not be reported as a
+	// complete viewport, or the statistics panel would quietly summarise a
+	// subset of the data.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	count = len(result.IDs)
 
-	return &FeatureCollection{
-		Type:     "FeatureCollection",
-		Features: features,
-	}, nil
+	return result, nil
 }
 
-// ensureGridGeometryCache kicks off buildGridGeometryCache exactly once. Safe
-// to call from every request; only the first call actually starts the build.
+// ensureGridGeometryCache starts the grid geometry build if it is not already
+// running or already done. Safe to call from every request; at most one build
+// runs at a time.
+//
+// A build that failed leaves gridGeometryBuilding false, so the next request
+// starts a fresh attempt with a fresh set of readiness channels. That is the
+// difference between a transient database error costing one choropleth and it
+// costing every choropleth until someone restarts the process.
 func (s *GpkgStore) ensureGridGeometryCache() {
-	s.gridGeometryOnce.Do(func() {
-		go s.buildGridGeometryCache()
-	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gridGeometryBuilding {
+		return
+	}
+	s.gridGeometryBuilding = true
+	s.gridGeometryErr = nil
+
+	// Each attempt gets its own channels, and the attempt that created them is
+	// the only thing that closes them. A retry therefore cannot close a
+	// channel twice, and a request already waiting on a previous attempt's
+	// channel is released by that attempt rather than left hanging.
+	ready := make(map[float64]chan struct{}, len(gridTiersDegrees))
+	for _, tier := range gridTiersDegrees {
+		ready[tier] = make(chan struct{})
+	}
+	s.gridGeometryReady = ready
+
+	// Deliberately context.Background(), not the context of whichever
+	// request happened to need the grid first. This cache is built once
+	// and then serves every aggregated choropleth for the life of the
+	// process, so it is shared work that merely happens to be triggered
+	// by one request. Tying it to that request's lifetime would let a
+	// single user panning away tear down a build the rest are waiting on.
+	//
+	// Requests still stop *waiting* on it the moment their own context is
+	// cancelled; only the build is decoupled. See
+	// queryCatchmentsGridAggregated.
+	go s.buildGridGeometryCache(context.Background(), ready)
+}
+
+// failGridGeometryCache abandons a grid build without publishing anything it
+// managed to compute, releases every request waiting on it, and leaves the
+// store ready to try again.
+//
+// Publishing a partial cache would be worse than publishing none: the
+// aggregated choropleth draws one feature per cell it finds geometry for and
+// silently omits the rest, so a half-built cache renders as a map with real
+// data missing and nothing anywhere saying so.
+func (s *GpkgStore) failGridGeometryCache(ready map[float64]chan struct{}, err error) {
+	log.Printf("Warning: failed to build grid geometry cache: %v", err)
+	s.mu.Lock()
+	s.gridGeometryErr = err
+	s.gridGeometryBuilding = false
+	s.mu.Unlock()
+	for _, tier := range gridTiersDegrees {
+		// Tolerating an already-closed tier, because this closes all of them
+		// while the success path closes each one as it completes. Today both
+		// failure calls happen before that loop starts, so a double close cannot
+		// happen — but "cannot happen" here is a property of call-site ordering,
+		// not of the code, and the cost of getting it wrong is a panic in the
+		// build goroutine rather than an error. Only the build goroutine closes
+		// these, so the check and the close cannot race.
+		select {
+		case <-ready[tier]:
+		default:
+			close(ready[tier])
+		}
+	}
 }
 
 // gridCellKeyFor returns the cell a catchment at (lat, long) falls into at
@@ -754,39 +878,17 @@ func gridCellKeyFor(lat, long, cellSizeDegrees float64) gridCellKey {
 // boundary coordinates, so those edges cancel out perfectly in the union;
 // the result is simplified once, as a whole, after dissolving (see the
 // simplifyPolygonsForComputation call below).
-func (s *GpkgStore) buildGridGeometryCache() {
+func (s *GpkgStore) buildGridGeometryCache(ctx context.Context, ready map[float64]chan struct{}) {
 	start := time.Now()
 
-	// Every waiter is released however this returns.
-	//
-	// Requests block on a tier's channel with no timeout, so a build that ends
-	// early — or panics, which polyclip is documented elsewhere in this file as
-	// prone to — left every later low-zoom request blocked forever, accumulating
-	// goroutines until the process died. Closing is idempotent, so tiers that
-	// already finished are unaffected.
-	defer s.closeAllGridReady()
-
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("Error: grid geometry cache build panicked: %v", r)
-			// Only the tiers that never finished. Tiers built before the panic
-			// have a complete cache and must keep serving from it — marking them
-			// failed would turn one bad tier into an outage across all of them.
-			s.recordGridBuildErrForUnbuiltTiers(fmt.Errorf("grid geometry build panicked: %v", r))
-		}
-	}()
-
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT lat, long, geojson
 		FROM catchments_lev12
 		WHERE lat IS NOT NULL AND long IS NOT NULL AND geojson IS NOT NULL
 	`)
 	if err != nil {
-		log.Printf("Warning: failed to build grid geometry cache: %v", err)
-		for _, tier := range gridTiersDegrees {
-			s.recordGridBuildErr(tier, err)
-		}
-		return // the deferred close releases every waiter
+		s.failGridGeometryCache(ready, err)
+		return
 	}
 	defer rows.Close()
 
@@ -836,15 +938,32 @@ func (s *GpkgStore) buildGridGeometryCache() {
 		}()
 	}
 
+	var scanErr error
 	for rows.Next() {
 		var r rawRow
 		if err := rows.Scan(&r.lat, &r.long, &r.geojsonStr); err != nil {
-			continue
+			scanErr = fmt.Errorf("failed to scan catchment geometry: %w", err)
+			break
 		}
 		rowsCh <- r
 	}
 	close(rowsCh)
 	parseWg.Wait()
+
+	// rows.Err is the check this build did not used to make, and it is the one
+	// that matters most here: the result of this scan is published as the
+	// authoritative geometry for every aggregated choropleth for the life of
+	// the process. A read that failed half way through would have been
+	// dissolved, cached and marked ready exactly as a complete one is, and
+	// every request afterwards would have drawn a continent with a hole in it
+	// and reported success.
+	if scanErr == nil {
+		scanErr = rows.Err()
+	}
+	if scanErr != nil {
+		s.failGridGeometryCache(ready, scanErr)
+		return
+	}
 
 	log.Printf("[perf] grid geometry cache scan+parse done in %dms", time.Since(start).Milliseconds())
 
@@ -953,7 +1072,7 @@ func (s *GpkgStore) buildGridGeometryCache() {
 		}
 		s.gridGeometryCache[tier] = tierCache
 		s.mu.Unlock()
-		s.closeGridReady(tier)
+		close(ready[tier])
 
 		log.Printf("[perf] grid geometry cache tier=%.3f built: %d cells (candidates=%d)", tier, len(tierCache), len(tierPolygons))
 	}
@@ -977,7 +1096,7 @@ type gridRow struct {
 // for a continent-scale match set. QueryCatchments uses the row count alone
 // to pick detailed vs. aggregated, and reuses the rows themselves if
 // aggregated is chosen, rather than re-querying (see QueryCatchments).
-func (s *GpkgStore) fetchCatchmentGridRows(tableName, attribute string, minx, miny, maxx, maxy float64) ([]gridRow, error) {
+func (s *GpkgStore) fetchCatchmentGridRows(ctx context.Context, tableName, attribute string, minx, miny, maxx, maxy float64) ([]gridRow, error) {
 	// Every catchment in the bbox is included here, even ones with a null
 	// value for attribute - a cell whose catchments simply lack data for this
 	// particular indicator should still render (falling back to the domain
@@ -995,7 +1114,7 @@ func (s *GpkgStore) fetchCatchmentGridRows(tableName, attribute string, minx, mi
 		  )
 	`, attribute, tableName)
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -1009,6 +1128,12 @@ func (s *GpkgStore) fetchCatchmentGridRows(tableName, attribute string, minx, mi
 			continue
 		}
 		catchmentRows = append(catchmentRows, r)
+	}
+	// The row count decides detailed vs. aggregated rendering in
+	// QueryCatchments, so a truncated scan would not just lose rows - it would
+	// pick the wrong render path and present the result as complete.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	return catchmentRows, nil
 }
@@ -1081,13 +1206,26 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute
 	// Only block on the tier this request actually needs, not the slowest
 	// tier in the set (see buildGridGeometryCache's per-tier readiness).
 	//
-	// Bounded three ways. This was a bare receive: if the build ended without
-	// closing the channel, every later request blocked here forever and the
-	// goroutines accumulated until the process died. The build now always closes,
-	// but a request should not depend on that being true — the client going away
-	// or a build that is simply too slow both have to end the wait.
+	// The wait is abandoned as soon as this request's context is cancelled -
+	// on a cold start that wait is the longest thing this handler does, and a
+	// user who has already panned away should not hold a connection and a
+	// goroutine until the whole cache lands. The build itself is untouched by
+	// giving up here: it runs on a background context precisely so it
+	// survives (see ensureGridGeometryCache).
+	//
+	// The timeout is the third case, from #103, and is deliberately kept even
+	// though the build now always closes the channel. This was once a bare
+	// receive: a build that ended without closing left every later request
+	// blocked here forever, with goroutines accumulating until the process
+	// died. A request should not depend on that invariant holding — it is one
+	// refactor away from being false again, and the failure mode is a hang
+	// rather than an error.
+	s.mu.RLock()
+	tierReady := s.gridGeometryReady[chosenTier]
+	s.mu.RUnlock()
+
 	select {
-	case <-s.gridGeometryReady[chosenTier]:
+	case <-tierReady:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-time.After(gridGeometryWaitTimeout):
@@ -1097,13 +1235,16 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute
 
 	s.mu.RLock()
 	tierCache := s.gridGeometryCache[chosenTier]
-	buildErr := s.gridBuildErr[chosenTier]
+	buildErr := s.gridGeometryErr
 	s.mu.RUnlock()
 
-	// A tier that failed to build has an empty cache. Saying so beats returning an
-	// empty map that looks like a study area with no catchments in it.
+	// The readiness channel is also closed when the build gives up, so being
+	// released by it is not on its own proof that there is any geometry to
+	// draw. Without this check a failed build would return a FeatureCollection
+	// with no features and no error - a blank map presented as an accurate
+	// one, which is the shape of bug this whole change is about.
 	if buildErr != nil {
-		return nil, fmt.Errorf("grid geometry for the %.3f° tier is unavailable: %w", chosenTier, buildErr)
+		return nil, fmt.Errorf("grid geometry cache unavailable: %w", buildErr)
 	}
 
 	features := make([]GeoJSONFeature, 0, len(cells))
@@ -1156,7 +1297,7 @@ func (s *GpkgStore) isValidColumn(attribute string) bool {
 }
 
 // GetDomainRange returns the min and max values for an attribute across all scenarios
-func (s *GpkgStore) GetDomainRange(attribute string) (*DomainRange, error) {
+func (s *GpkgStore) GetDomainRange(ctx context.Context, attribute string) (*DomainRange, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetDomainRange attribute=%s duration_ms=%d", attribute, time.Since(start).Milliseconds())
@@ -1171,14 +1312,14 @@ func (s *GpkgStore) GetDomainRange(attribute string) (*DomainRange, error) {
 
 	// Query domain_minima table
 	query := fmt.Sprintf(`SELECT "%s" FROM domain_minima LIMIT 1`, attribute)
-	err := s.db.QueryRow(query).Scan(&minVal)
+	err := s.db.QueryRowContext(ctx, query).Scan(&minVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get domain minimum for %s: %w", attribute, err)
 	}
 
 	// Query domain_maxima table
 	query = fmt.Sprintf(`SELECT "%s" FROM domain_maxima LIMIT 1`, attribute)
-	err = s.db.QueryRow(query).Scan(&maxVal)
+	err = s.db.QueryRowContext(ctx, query).Scan(&maxVal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get domain maximum for %s: %w", attribute, err)
 	}
@@ -1198,70 +1339,26 @@ func (s *GpkgStore) Close() {
 
 // DissolveCatchments returns a dissolved/unioned geometry from multiple catchments
 // Returns the geometry as GeoJSON (single outer boundary) and the total area in square kilometers
-func (s *GpkgStore) DissolveCatchments(catchmentIDs []string) (json.RawMessage, float64, error) {
+func (s *GpkgStore) DissolveCatchments(ctx context.Context, catchmentIDs []string) (json.RawMessage, float64, error) {
 	if len(catchmentIDs) == 0 {
 		return nil, 0, fmt.Errorf("no catchment IDs provided")
 	}
 
-	// Build placeholders for query
-	placeholders := make([]string, len(catchmentIDs))
 	args := make([]interface{}, len(catchmentIDs))
 	for i, id := range catchmentIDs {
-		placeholders[i] = "?"
 		args[i] = id
 	}
-
-	query := fmt.Sprintf(`
-		SELECT geojson
-		FROM catchments_lev12
-		WHERE HYBAS_ID IN (%s) AND geojson IS NOT NULL
-	`, strings.Join(placeholders, ","))
-
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to query catchments: %w", err)
-	}
-	defer rows.Close()
 
 	// Collect all polygons as polyclip.Polygon types
 	var polyPolygons []polyclip.Polygon
 
-	for rows.Next() {
-		var geojsonStr string
-		if err := rows.Scan(&geojsonStr); err != nil {
-			continue
-		}
-
-		// Parse as GeoJSON geometry
-		var geom map[string]interface{}
-		if err := json.Unmarshal([]byte(geojsonStr), &geom); err != nil {
-			log.Printf("Failed to unmarshal geometry: %v", err)
-			continue
-		}
-
-		geomType, _ := geom["type"].(string)
-		coords := geom["coordinates"]
-
-		// Convert to polyclip polygon format
-		switch geomType {
-		case "Polygon":
-			if c, ok := coords.([]interface{}); ok {
-				poly := geojsonToPolyclipPolygon(c)
-				if len(poly) > 0 {
-					polyPolygons = append(polyPolygons, poly)
-				}
-			}
-		case "MultiPolygon":
-			if c, ok := coords.([]interface{}); ok {
-				for _, p := range c {
-					if pc, ok := p.([]interface{}); ok {
-						poly := geojsonToPolyclipPolygon(pc)
-						if len(poly) > 0 {
-							polyPolygons = append(polyPolygons, poly)
-						}
-					}
-				}
-			}
+	// One statement per catchmentIDChunkSize ids: a single IN clause over a
+	// continent-sized selection cannot be prepared at all (see
+	// sqliteMaxVariables).
+	for _, chunk := range idChunks(len(args), catchmentIDChunkSize) {
+		chunkArgs := args[chunk[0]:chunk[1]]
+		if err := s.dissolveChunk(ctx, chunkArgs, &polyPolygons); err != nil {
+			return nil, 0, err
 		}
 	}
 
@@ -1281,6 +1378,74 @@ func (s *GpkgStore) DissolveCatchments(catchmentIDs []string) (json.RawMessage, 
 	}
 
 	return polyclipPolygonToGeoJSON(result)
+}
+
+// dissolveChunk appends the parsed geometry of one batch of catchment ids to
+// polygons. Split out of DissolveCatchments so the id list can be queried in
+// batches that SQLite will actually prepare.
+//
+// A row that fails to scan or to parse is an error, not something to skip: the
+// caller unions whatever comes back into a single site boundary, so a dropped
+// catchment does not announce itself - it just makes the site quietly smaller
+// than the user selected.
+func (s *GpkgStore) dissolveChunk(ctx context.Context, args []interface{}, polygons *[]polyclip.Polygon) error {
+	query := fmt.Sprintf(`
+		SELECT geojson
+		FROM catchments_lev12
+		WHERE HYBAS_ID IN (%s) AND geojson IS NOT NULL
+	`, placeholderList(len(args)))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query catchments: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var geojsonStr string
+		if err := rows.Scan(&geojsonStr); err != nil {
+			return fmt.Errorf("failed to read catchments: %w", err)
+		}
+
+		// Parse as GeoJSON geometry
+		var geom map[string]interface{}
+		if err := json.Unmarshal([]byte(geojsonStr), &geom); err != nil {
+			return fmt.Errorf("failed to unmarshal catchment geometry: %w", err)
+		}
+
+		geomType, _ := geom["type"].(string)
+		coords := geom["coordinates"]
+
+		// Convert to polyclip polygon format
+		switch geomType {
+		case "Polygon":
+			if c, ok := coords.([]interface{}); ok {
+				poly := geojsonToPolyclipPolygon(c)
+				if len(poly) > 0 {
+					*polygons = append(*polygons, poly)
+				}
+			}
+		case "MultiPolygon":
+			if c, ok := coords.([]interface{}); ok {
+				for _, p := range c {
+					if pc, ok := p.([]interface{}); ok {
+						poly := geojsonToPolyclipPolygon(pc)
+						if len(poly) > 0 {
+							*polygons = append(*polygons, poly)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Checked before the caller's emptiness test so that a cancelled scan is
+	// reported as a cancellation rather than as a set of catchments that
+	// turned out to have no geometry.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read catchments: %w", err)
+	}
+	return nil
 }
 
 // geojsonToPolyclipPolygon converts GeoJSON polygon coordinates to polyclip.Polygon
@@ -1566,9 +1731,14 @@ func ringContainedIn(inner, outer [][2]float64) bool {
 	return checked > 0
 }
 
-// GetCatchmentAttributes returns all attributes for a specific catchment across both scenarios
-// Returns a map: scenario -> attribute -> value
-func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[string]float64 {
+// GetCatchmentAttributes returns all attributes for a specific catchment across
+// both scenarios, as a map of scenario -> attribute -> value.
+//
+// A catchment the datapack has no row for comes back as an absent scenario and
+// no error; a query that failed comes back as an error. Those two used to be
+// the same empty map, which reached the identify popup as a catchment with no
+// data rather than as a request that did not work.
+func (s *GpkgStore) GetCatchmentAttributes(ctx context.Context, catchmentID string) (map[string]map[string]float64, error) {
 	result := make(map[string]map[string]float64)
 
 	// Query both scenario tables
@@ -1595,7 +1765,7 @@ func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[st
 		query := fmt.Sprintf(`SELECT %s FROM %s WHERE catchment_id = ?`,
 			strings.Join(quotedCols, ", "), tableName)
 
-		row := s.db.QueryRow(query, catchmentID)
+		row := s.db.QueryRowContext(ctx, query, catchmentID)
 
 		// Create a slice of interface{} for scanning
 		values := make([]sql.NullFloat64, len(columns))
@@ -1605,14 +1775,21 @@ func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[st
 		}
 
 		if err := row.Scan(scanArgs...); err != nil {
-			// Try with integer ID
+			// The first attempt failing is routine: datapacks differ over
+			// whether the id column is text or integer, so a "no such column"
+			// here is what selects the other spelling rather than a fault.
 			intID := catchmentID
-			// Remove leading zeros or non-numeric chars if needed
 			query = fmt.Sprintf(`SELECT %s FROM %s WHERE catchment_id_int = ?`,
 				strings.Join(quotedCols, ", "), tableName)
-			row = s.db.QueryRow(query, intID)
+			row = s.db.QueryRowContext(ctx, query, intID)
 			if err := row.Scan(scanArgs...); err != nil {
-				continue
+				// No row for this catchment is an answer: the scenario is
+				// simply absent from the result. Anything else is a failure
+				// and is reported as one.
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return nil, fmt.Errorf("failed to read %s for catchment %s: %w", tableName, catchmentID, err)
 			}
 		}
 
@@ -1628,7 +1805,7 @@ func (s *GpkgStore) GetCatchmentAttributes(catchmentID string) map[string]map[st
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // CatchmentIndicators represents indicator values for a single catchment
@@ -1641,9 +1818,191 @@ type CatchmentIndicators struct {
 	AOIFraction float64            `json:"aoiFraction,omitempty"`
 }
 
-// GetCatchmentIndicatorsByIDs returns indicator values for multiple catchments
-// Used for area-weighted aggregation in site calculations
-func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndicators, error) {
+// GetCatchmentAreasByIDs returns just the id, area and (default) AOI fraction
+// of each catchment, with no indicator values at all.
+//
+// This is the cheap half of GetCatchmentIndicatorsByIDs, split out because it
+// is all several callers ever needed: the weighted aggregates
+// (AggregateCatchmentIndicators, ComputeWhiskerBounds) read only the weights,
+// and the map view's slim catchment list reads only id, area and fraction. A
+// per-catchment row here is a few tens of bytes rather than the few kilobytes
+// an indicator-bearing one costs, which is the difference between a
+// continent-sized site being answerable and not.
+//
+// Small id lists are queried in catchmentIDChunkSize batches, since a single
+// IN clause over 147,837 ids cannot be prepared at all (see
+// sqliteMaxVariables). Large ones take the same materialised route as the
+// aggregates, for the same reason: measured against the real datapack, the
+// batched lookups take about 30s for a continent's worth of ids because each
+// one is a random row fetch into catchments_lev12, while scanning that table
+// once against a temp id set takes about 3s. See catchmentAreasByScan.
+func (s *GpkgStore) GetCatchmentAreasByIDs(ctx context.Context, ids []string) ([]CatchmentIndicators, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] GetCatchmentAreasByIDs ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
+	}()
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	if len(ids) > weightTableThreshold {
+		areas, err := s.catchmentAreasByScan(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		if areas != nil {
+			return areas, nil
+		}
+		// A nil result with no error means the scan route did not apply to
+		// this id set; fall through to the batched lookups, which always work.
+	}
+
+	textArgs := make([]interface{}, len(ids))
+	for i, id := range ids {
+		textArgs[i] = normalizeCatchmentID(strings.TrimSpace(id))
+	}
+	numericArgs, numericIDs := parseNumericIDs(ids)
+
+	areaColumn := "HYBAS_ID"
+	args := textArgs
+	if numericIDs {
+		areaColumn = "HYBAS_ID_int"
+		args = numericArgs
+	}
+
+	results := make([]CatchmentIndicators, 0, len(ids))
+	for _, chunk := range idChunks(len(ids), catchmentIDChunkSize) {
+		chunkArgs := args[chunk[0]:chunk[1]]
+		query := fmt.Sprintf(`
+			SELECT %s, SUB_AREA
+			FROM catchments_lev12
+			WHERE %s IN (%s)
+		`, areaColumn, areaColumn, placeholderList(len(chunkArgs)))
+
+		rows, err := s.db.QueryContext(ctx, query, chunkArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query catchment areas: %w", err)
+		}
+		for rows.Next() {
+			var catchmentIDRaw interface{}
+			var area sql.NullFloat64
+			if err := rows.Scan(&catchmentIDRaw, &area); err != nil {
+				rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
+				return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+			}
+			results = append(results, CatchmentIndicators{
+				ID:          normalizeCatchmentID(dbValueToString(catchmentIDRaw)),
+				AreaKm2:     area.Float64,
+				Reference:   map[string]float64{},
+				Current:     map[string]float64{},
+				AOIFraction: 1.0,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+		}
+		rows.Close()
+	}
+
+	return results, nil
+}
+
+// catchmentAreasByScan reads areas by scanning catchments_lev12 once against a
+// materialised set of the requested ids, rather than looking each id up
+// through the index.
+//
+// It is the same trade the aggregates make (see weightTableThreshold): an
+// index lookup per id is right while the id set is small and selective, and
+// badly wrong once it is a large fraction of the table, because each lookup is
+// a random fetch of a row that also carries a geometry blob.
+//
+// It returns (nil, nil) when the route does not apply - ids that are not all
+// integers cannot key the temp table - leaving the caller to use the batched
+// lookups instead.
+func (s *GpkgStore) catchmentAreasByScan(ctx context.Context, ids []string) ([]CatchmentIndicators, error) {
+	// The temp table is being used purely as a set here: newCatchmentWeights
+	// gives every id a weight of 1 when no areas are supplied, and the weight
+	// column is simply not read by the query below.
+	idOnly := make([]CatchmentIndicators, len(ids))
+	for i, id := range ids {
+		idOnly[i] = CatchmentIndicators{ID: id}
+	}
+	w := newCatchmentWeights(idOnly)
+
+	ws, err := s.newWeightSet(ctx, w, true)
+	if err != nil {
+		return nil, err
+	}
+	defer ws.close()
+	if !ws.materialised() {
+		return nil, nil
+	}
+
+	// CROSS JOIN fixes the loop order so catchments_lev12 is scanned once and
+	// the id set probed by rowid, rather than the other way round. See
+	// aggregateViaWeightTable.
+	query := fmt.Sprintf(`
+		SELECT c.HYBAS_ID_int, c.SUB_AREA
+		FROM catchments_lev12 c
+		CROSS JOIN %s w ON c.HYBAS_ID_int = w.cid
+	`, weightTableName)
+
+	rows, err := ws.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query catchment areas: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]CatchmentIndicators, 0, w.len())
+	for rows.Next() {
+		var catchmentIDRaw interface{}
+		var area sql.NullFloat64
+		if err := rows.Scan(&catchmentIDRaw, &area); err != nil {
+			return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+		}
+		results = append(results, CatchmentIndicators{
+			ID:          normalizeCatchmentID(dbValueToString(catchmentIDRaw)),
+			AreaKm2:     area.Float64,
+			Reference:   map[string]float64{},
+			Current:     map[string]float64{},
+			AOIFraction: 1.0,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+	}
+	return results, nil
+}
+
+// placeholderList returns "?,?,?" for n bind variables.
+func placeholderList(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// GetCatchmentIndicatorsByIDs returns every indicator value for every one of
+// the given catchments, one record each.
+//
+// It is bounded at MaxDetailCatchments and returns ErrTooManyCatchments above
+// that: this response carries the full indicator set per catchment, so it is
+// the one request in the API that can genuinely produce a multi-gigabyte body.
+// Callers that only need the totals want AggregateCatchmentIndicators, which
+// answers the same question in a fixed number of bytes; callers that only need
+// ids and areas want GetCatchmentAreasByIDs.
+//
+// Within that bound the id list is queried in catchmentIDChunkSize batches,
+// because a single IN clause stops being preparable at sqliteMaxVariables.
+//
+// Every failure below is returned. It used to be logged and turned into an
+// empty result, which reached the client as HTTP 200 and an empty array -
+// indistinguishable from a site whose catchments simply have no data, and so
+// rendered as a blank view rather than as the failure it was. See issues #63
+// and #140.
+func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ctx context.Context, ids []string) ([]CatchmentIndicators, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetCatchmentIndicatorsByIDs ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
@@ -1651,6 +2010,10 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if len(ids) > MaxDetailCatchments {
+		return nil, fmt.Errorf("%w: %d catchments requested, limit is %d - request the site summary instead, which aggregates them server-side",
+			ErrTooManyCatchments, len(ids), MaxDetailCatchments)
 	}
 
 	s.mu.RLock()
@@ -1661,15 +2024,12 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 		return nil, fmt.Errorf("no columns loaded")
 	}
 
-	placeholders := make([]string, len(ids))
 	textArgs := make([]interface{}, len(ids))
 	for i, id := range ids {
-		placeholders[i] = "?"
 		textArgs[i] = normalizeCatchmentID(strings.TrimSpace(id))
 	}
 	numericArgs, numericIDs := parseNumericIDs(ids)
 
-	results := make([]CatchmentIndicators, 0, len(ids))
 	quotedCols := make([]string, len(columns))
 	for i, col := range columns {
 		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
@@ -1686,64 +2046,73 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 	queryScenario := func(scenario string) {
 		scenarioStart := time.Now()
 		tableName := "scenario_" + scenario
-		idColumn, err := s.resolveScenarioIDColumn(tableName)
+		idColumn, err := s.resolveScenarioIDColumn(ctx, s.db, tableName)
 		if err != nil {
-			log.Printf("Failed to resolve ID column for %s: %v", tableName, err)
-			scenarioCh <- scenarioResult{scenario: scenario, data: nil}
+			scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to resolve ID column for %s: %w", tableName, err)}
 			return
 		}
 
-		queryArgs := textArgs
+		args := textArgs
 		if strings.HasSuffix(idColumn, "_int") && numericIDs {
-			queryArgs = numericArgs
+			args = numericArgs
 		}
 
-		query := fmt.Sprintf(`
+		data := make(map[string]map[string]float64, len(ids))
+		rowCount := 0
+
+		for _, chunk := range idChunks(len(ids), catchmentIDChunkSize) {
+			chunkArgs := args[chunk[0]:chunk[1]]
+			query := fmt.Sprintf(`
 			SELECT %s, %s
 			FROM %s
 			WHERE %s IN (%s)
-		`, idColumn, strings.Join(quotedCols, ", "), tableName, idColumn, strings.Join(placeholders, ","))
+		`, idColumn, strings.Join(quotedCols, ", "), tableName, idColumn, placeholderList(len(chunkArgs)))
 
-		rows, err := s.db.Query(query, queryArgs...)
-		if err != nil {
-			log.Printf("Failed to query %s: %v", tableName, err)
-			scenarioCh <- scenarioResult{scenario: scenario, data: nil}
-			return
-		}
-		defer rows.Close()
-
-		data := make(map[string]map[string]float64)
-		rowCount := 0
-
-		// Pre-allocate scan buffers once; rows.Scan writes through the pointers
-		// on every call so the same backing memory is reused for each row.
-		values := make([]sql.NullFloat64, len(columns))
-		var catchmentIDRaw interface{}
-		scanArgs := make([]interface{}, len(columns)+1)
-		scanArgs[0] = &catchmentIDRaw
-		for i := range values {
-			scanArgs[i+1] = &values[i]
-		}
-
-		for rows.Next() {
-			if err := rows.Scan(scanArgs...); err != nil {
-				continue
+			rows, err := s.db.QueryContext(ctx, query, chunkArgs...)
+			if err != nil {
+				// A cancelled request is not a failure, but it is still
+				// reported: what must never happen is either one arriving at
+				// the caller as a successful empty answer.
+				scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to query %s: %w", tableName, err)}
+				return
 			}
 
-			normalizedID := normalizeCatchmentID(dbValueToString(catchmentIDRaw))
-			attrs := make(map[string]float64, len(columns))
-			for i, col := range columns {
-				if values[i].Valid {
-					attrs[col] = values[i].Float64
+			// Pre-allocate scan buffers once; rows.Scan writes through the
+			// pointers on every call so the same backing memory is reused for
+			// each row.
+			values := make([]sql.NullFloat64, len(columns))
+			var catchmentIDRaw interface{}
+			scanArgs := make([]interface{}, len(columns)+1)
+			scanArgs[0] = &catchmentIDRaw
+			for i := range values {
+				scanArgs[i+1] = &values[i]
+			}
+
+			for rows.Next() {
+				if err := rows.Scan(scanArgs...); err != nil {
+					rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
+					scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to scan %s: %w", tableName, err)}
+					return
 				}
+
+				normalizedID := normalizeCatchmentID(dbValueToString(catchmentIDRaw))
+				attrs := make(map[string]float64, len(columns))
+				for i, col := range columns {
+					if values[i].Valid {
+						attrs[col] = values[i].Float64
+					}
+				}
+				data[normalizedID] = attrs
+				rowCount++
 			}
-			data[normalizedID] = attrs
-			rowCount++
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to scan %s: %w", tableName, err)}
+				return
+			}
+			rows.Close()
 		}
-		if err := rows.Err(); err != nil {
-			scenarioCh <- scenarioResult{scenario: scenario, err: fmt.Errorf("failed to scan %s: %w", tableName, err)}
-			return
-		}
+
 		log.Printf("[perf] GetCatchmentIndicatorsByIDs step=scenarioQuery scenario=%s id_column=%s rows=%d duration_ms=%d", scenario, idColumn, rowCount, time.Since(scenarioStart).Milliseconds())
 		scenarioCh <- scenarioResult{scenario: scenario, data: data}
 	}
@@ -1752,63 +2121,39 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 	go queryScenario("reference")
 
 	scenarioData := make(map[string]map[string]map[string]float64)
+	var scenarioErr error
 	for range [2]struct{}{} {
 		r := <-scenarioCh
 		if r.err != nil {
-			return nil, r.err
+			if scenarioErr == nil {
+				scenarioErr = r.err
+			}
+			continue
 		}
-		if r.data != nil {
-			scenarioData[r.scenario] = r.data
-		}
+		scenarioData[r.scenario] = r.data
+	}
+	if scenarioErr != nil {
+		return nil, scenarioErr
 	}
 
-	areaStart := time.Now()
-	areaColumn := "HYBAS_ID"
-	areaArgs := textArgs
-	if numericIDs {
-		areaColumn = "HYBAS_ID_int"
-		areaArgs = numericArgs
-	}
-	areaQuery := fmt.Sprintf(`
-		SELECT %s, SUB_AREA
-		FROM catchments_lev12
-		WHERE %s IN (%s)
-	`, areaColumn, areaColumn, strings.Join(placeholders, ","))
-
-	areaRows, err := s.db.Query(areaQuery, areaArgs...)
+	// The area query decides which catchments appear in the result at all, so
+	// its failure is the one most able to masquerade as "this site has no
+	// catchments". It is returned, never logged and skipped.
+	areas, err := s.GetCatchmentAreasByIDs(ctx, ids)
 	if err != nil {
-		log.Printf("Failed to query areas: %v", err)
-	} else {
-		defer areaRows.Close()
-		areaRowCount := 0
-		for areaRows.Next() {
-			var catchmentIDRaw interface{}
-			var area sql.NullFloat64
-			if err := areaRows.Scan(&catchmentIDRaw, &area); err != nil {
-				continue
-			}
+		return nil, err
+	}
 
-			normalizedID := normalizeCatchmentID(dbValueToString(catchmentIDRaw))
-			ci := CatchmentIndicators{
-				ID:          normalizedID,
-				AreaKm2:     area.Float64,
-				Reference:   scenarioData["reference"][normalizedID],
-				Current:     scenarioData["current"][normalizedID],
-				AOIFraction: 1.0,
-			}
-			if ci.Reference == nil {
-				ci.Reference = make(map[string]float64)
-			}
-			if ci.Current == nil {
-				ci.Current = make(map[string]float64)
-			}
-			results = append(results, ci)
-			areaRowCount++
+	results := make([]CatchmentIndicators, 0, len(areas))
+	for _, area := range areas {
+		ci := area
+		if ref, ok := scenarioData["reference"][ci.ID]; ok {
+			ci.Reference = ref
 		}
-		if err := areaRows.Err(); err != nil {
-			return nil, fmt.Errorf("failed to scan catchment areas: %w", err)
+		if cur, ok := scenarioData["current"][ci.ID]; ok {
+			ci.Current = cur
 		}
-		log.Printf("[perf] GetCatchmentIndicatorsByIDs step=areaQuery id_column=%s rows=%d duration_ms=%d", areaColumn, areaRowCount, time.Since(areaStart).Milliseconds())
+		results = append(results, ci)
 	}
 
 	return results, nil
@@ -1816,7 +2161,7 @@ func (s *GpkgStore) GetCatchmentIndicatorsByIDs(ids []string) ([]CatchmentIndica
 
 // ApplyAOIFractions computes overlap fractions between site geometry and catchments.
 // Fractions are written in-place to catchments as values in [0, 1].
-func (s *GpkgStore) ApplyAOIFractions(catchments []CatchmentIndicators, siteGeometry json.RawMessage) error {
+func (s *GpkgStore) ApplyAOIFractions(ctx context.Context, catchments []CatchmentIndicators, siteGeometry json.RawMessage) error {
 	if len(catchments) == 0 || len(siteGeometry) == 0 {
 		return nil
 	}
@@ -1833,7 +2178,7 @@ func (s *GpkgStore) ApplyAOIFractions(catchments []CatchmentIndicators, siteGeom
 		return nil
 	}
 
-	fractions, err := s.GetCatchmentAOIFractions(ids, siteGeometry)
+	fractions, err := s.GetCatchmentAOIFractions(ctx, ids, siteGeometry)
 	if err != nil {
 		return err
 	}
@@ -1849,7 +2194,7 @@ func (s *GpkgStore) ApplyAOIFractions(catchments []CatchmentIndicators, siteGeom
 }
 
 // GetCatchmentAOIFractions returns site-overlap fractions for catchments by ID.
-func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.RawMessage) (map[string]float64, error) {
+func (s *GpkgStore) GetCatchmentAOIFractions(ctx context.Context, ids []string, siteGeometry json.RawMessage) (map[string]float64, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetCatchmentAOIFractions ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
@@ -1861,9 +2206,17 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 	}
 
 	parseStart := time.Now()
+	// A site boundary that cannot be read is reported. Returning no fractions
+	// and no error leaves every catchment at its 1.0 default, so the caller
+	// weights the site as though it covered each of its catchments entirely -
+	// numbers that are quietly wrong and arrive looking exactly like right
+	// ones.
 	sitePolygons, err := geometryRawToPolygons(siteGeometry)
-	if err != nil || len(sitePolygons) == 0 {
-		return result, nil
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse site geometry: %w", err)
+	}
+	if len(sitePolygons) == 0 {
+		return nil, fmt.Errorf("site geometry contains no polygons")
 	}
 	// Simplify the site polygon for intersection computation so that high-vertex
 	// uploads (e.g. 6 000-vertex Malawi boundary) don't make polyclip extremely
@@ -1872,7 +2225,7 @@ func (s *GpkgStore) GetCatchmentAOIFractions(ids []string, siteGeometry json.Raw
 	log.Printf("[perf] GetCatchmentAOIFractions step=parseSiteGeometry polygons=%d duration_ms=%d", len(sitePolygons), time.Since(parseStart).Milliseconds())
 
 	fetchStart := time.Now()
-	features, err := s.GetCatchmentsByIDs(ids)
+	features, err := s.GetCatchmentsByIDs(ctx, ids)
 	if err != nil {
 		return result, err
 	}
@@ -2153,7 +2506,7 @@ func isFinitePositive(v float64) bool {
 }
 
 // GetCatchmentsByIDs returns catchment geometries for the given IDs
-func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
+func (s *GpkgStore) GetCatchmentsByIDs(ctx context.Context, ids []string) ([]GeoJSONFeature, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetCatchmentsByIDs ids=%d duration_ms=%d", len(ids), time.Since(start).Milliseconds())
@@ -2163,10 +2516,8 @@ func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
 		return nil, nil
 	}
 
-	placeholders := make([]string, len(ids))
 	textArgs := make([]interface{}, len(ids))
 	for i, id := range ids {
-		placeholders[i] = "?"
 		textArgs[i] = normalizeCatchmentID(strings.TrimSpace(id))
 	}
 	numericArgs, numericIDs := parseNumericIDs(ids)
@@ -2178,45 +2529,55 @@ func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
 	}
 
 	queryStart := time.Now()
-	query := fmt.Sprintf(`
+	var features []GeoJSONFeature
+	rowCount := 0
+
+	// Queried in catchmentIDChunkSize batches: a site's whole id list in one
+	// IN clause exceeds what SQLite will prepare (see sqliteMaxVariables).
+	for _, chunk := range idChunks(len(ids), catchmentIDChunkSize) {
+		chunkArgs := queryArgs[chunk[0]:chunk[1]]
+		query := fmt.Sprintf(`
 		SELECT %s, geojson
 		FROM catchments_lev12
 		WHERE %s IN (%s) AND geojson IS NOT NULL
-	`, idColumn, idColumn, strings.Join(placeholders, ","))
+	`, idColumn, idColumn, placeholderList(len(chunkArgs)))
 
-	rows, err := s.db.Query(query, queryArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query catchments: %w", err)
-	}
-	defer rows.Close()
-
-	var features []GeoJSONFeature
-	rowCount := 0
-	for rows.Next() {
-		var idRaw interface{}
-		var geojsonStr string
-		if err := rows.Scan(&idRaw, &geojsonStr); err != nil {
-			continue
-		}
-
-		normalizedID := normalizeCatchmentID(dbValueToString(idRaw))
-		numericID, err := strconv.ParseInt(normalizedID, 10, 64)
+		rows, err := s.db.QueryContext(ctx, query, chunkArgs...)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("failed to query catchments: %w", err)
 		}
 
-		features = append(features, GeoJSONFeature{
-			Type:     "Feature",
-			ID:       numericID,
-			Geometry: json.RawMessage(geojsonStr),
-			Properties: map[string]interface{}{
-				"HYBAS_ID": numericID,
-			},
-		})
-		rowCount++
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan catchments: %w", err)
+		for rows.Next() {
+			var idRaw interface{}
+			var geojsonStr string
+			if err := rows.Scan(&idRaw, &geojsonStr); err != nil {
+				rows.Close() //nolint:sqlclosecheck // every path closes; defer in a chunk loop would hold one open result set per chunk until the function returns
+				return nil, fmt.Errorf("failed to scan catchments: %w", err)
+			}
+
+			normalizedID := normalizeCatchmentID(dbValueToString(idRaw))
+			numericID, err := strconv.ParseInt(normalizedID, 10, 64)
+			if err != nil {
+				// Not a database failure: a datapack row whose id is not a
+				// number has no place in a feature keyed by HYBAS_ID.
+				continue
+			}
+
+			features = append(features, GeoJSONFeature{
+				Type:     "Feature",
+				ID:       numericID,
+				Geometry: json.RawMessage(geojsonStr),
+				Properties: map[string]interface{}{
+					"HYBAS_ID": numericID,
+				},
+			})
+			rowCount++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan catchments: %w", err)
+		}
+		rows.Close()
 	}
 	log.Printf("[perf] GetCatchmentsByIDs step=query id_column=%s rows=%d duration_ms=%d", idColumn, rowCount, time.Since(queryStart).Milliseconds())
 
@@ -2225,7 +2586,7 @@ func (s *GpkgStore) GetCatchmentsByIDs(ids []string) ([]GeoJSONFeature, error) {
 
 // GetCatchmentsByBBox returns catchment geometries intersecting the provided bounding box.
 // The limit is capped by the caller to avoid very large responses.
-func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit int) ([]GeoJSONFeature, error) {
+func (s *GpkgStore) GetCatchmentsByBBox(ctx context.Context, minx, miny, maxx, maxy float64, limit int) ([]GeoJSONFeature, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetCatchmentsByBBox limit=%d duration_ms=%d", limit, time.Since(start).Milliseconds())
@@ -2247,7 +2608,7 @@ func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit in
 		LIMIT ?
 	`
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny, limit)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query catchments by bbox: %w", err)
 	}
@@ -2270,12 +2631,15 @@ func (s *GpkgStore) GetCatchmentsByBBox(minx, miny, maxx, maxy float64, limit in
 			},
 		})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to query catchments by bbox: %w", err)
+	}
 
 	return features, nil
 }
 
 // GetCatchmentIDsByBBox returns catchment IDs intersecting the provided bounding box.
-func (s *GpkgStore) GetCatchmentIDsByBBox(minx, miny, maxx, maxy float64, limit int) ([]string, error) {
+func (s *GpkgStore) GetCatchmentIDsByBBox(ctx context.Context, minx, miny, maxx, maxy float64, limit int) ([]string, error) {
 	start := time.Now()
 	defer func() {
 		log.Printf("[perf] GetCatchmentIDsByBBox limit=%d duration_ms=%d", limit, time.Since(start).Milliseconds())
@@ -2294,7 +2658,7 @@ func (s *GpkgStore) GetCatchmentIDsByBBox(minx, miny, maxx, maxy float64, limit 
 		LIMIT ?
 	`
 
-	rows, err := s.db.Query(query, maxx, minx, maxy, miny, limit)
+	rows, err := s.db.QueryContext(ctx, query, maxx, minx, maxy, miny, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query catchment IDs by bbox: %w", err)
 	}
@@ -2308,12 +2672,15 @@ func (s *GpkgStore) GetCatchmentIDsByBBox(minx, miny, maxx, maxy float64, limit 
 		}
 		ids = append(ids, normalizeCatchmentID(id))
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to query catchment IDs by bbox: %w", err)
+	}
 
 	return ids, nil
 }
 
 // GetCatchmentsBounds returns the envelope of all catchment geometries.
-func (s *GpkgStore) GetCatchmentsBounds() ([4]float64, error) {
+func (s *GpkgStore) GetCatchmentsBounds(ctx context.Context) ([4]float64, error) {
 	var bounds [4]float64
 
 	const query = `
@@ -2321,7 +2688,7 @@ func (s *GpkgStore) GetCatchmentsBounds() ([4]float64, error) {
 		FROM rtree_catchments_lev12_geom
 	`
 
-	if err := s.db.QueryRow(query).Scan(&bounds[0], &bounds[1], &bounds[2], &bounds[3]); err != nil {
+	if err := s.db.QueryRowContext(ctx, query).Scan(&bounds[0], &bounds[1], &bounds[2], &bounds[3]); err != nil {
 		return bounds, fmt.Errorf("failed to query catchments bounds: %w", err)
 	}
 
@@ -2506,162 +2873,70 @@ func calculatePolygonArea(poly polyclip.Polygon) float64 {
 	return totalArea * kmPerDegree * kmPerDegree * -1 // Negative because counter-clockwise
 }
 
-// ComputeWhiskerBounds returns area-weighted whisker bounds for the given catchments
-// by querying the four whisker scenario tables directly from the GeoPackage.
-// This replaces the CSV-based WhiskerStore approach which required loading 200-400 MB
-// files into memory at startup.
-func (s *GpkgStore) ComputeWhiskerBounds(catchments []CatchmentIndicators) WhiskerBounds {
+// ComputeWhiskerBounds returns the area-weighted upper and lower whisker
+// bounds for the given catchments, reading the four whisker scenario tables
+// straight out of the GeoPackage. This replaces the CSV-based WhiskerStore
+// approach, which required loading 200-400 MB files into memory at startup.
+//
+// The aggregation is the same weighted mean the indicator summary uses and is
+// computed in SQL by the same helper (see aggregateWeightedTable), so a
+// whisker bound and the value it brackets are always computed the same way,
+// and neither is limited by how many catchments a site has.
+//
+// It returns an error rather than empty bounds when a query fails. Empty
+// bounds still mean something specific and legitimate - a datapack built
+// without the whisker tables has no whiskers to report, and says so by
+// returning them absent - but a failed read must not be able to pass itself
+// off as that. Handlers cache these bounds onto the site, so a swallowed
+// failure did not just blank one chart: it persisted the blank.
+func (s *GpkgStore) ComputeWhiskerBounds(ctx context.Context, catchments []CatchmentIndicators) (WhiskerBounds, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] ComputeWhiskerBounds catchments=%d duration_ms=%d", len(catchments), time.Since(start).Milliseconds())
+	}()
+
 	if len(catchments) == 0 {
-		return WhiskerBounds{}
+		return WhiskerBounds{}, nil
 	}
 
 	s.mu.RLock()
 	columns := s.columns
 	s.mu.RUnlock()
 	if len(columns) == 0 {
-		return WhiskerBounds{}
+		return WhiskerBounds{}, fmt.Errorf("no columns loaded")
 	}
 
-	// Build ID lookup and total weighted area.
-	type catchInfo struct {
-		weight float64 // (AreaKm2 * AOIFraction) / totalArea
-	}
-	totalArea := 0.0
-	for _, c := range catchments {
-		frac := c.AOIFraction
-		if frac <= 0 || frac > 1 {
-			frac = 1
-		}
-		totalArea += c.AreaKm2 * frac
-	}
-	if totalArea <= 0 {
-		return WhiskerBounds{}
-	}
-	weights := make(map[string]catchInfo, len(catchments))
-	for _, c := range catchments {
-		frac := c.AOIFraction
-		if frac <= 0 || frac > 1 {
-			frac = 1
-		}
-		weights[c.ID] = catchInfo{weight: (c.AreaKm2 * frac) / totalArea}
+	w := newCatchmentWeights(catchments)
+	if w.len() == 0 {
+		return WhiskerBounds{}, nil
 	}
 
-	ids := make([]string, 0, len(catchments))
-	for _, c := range catchments {
-		ids = append(ids, c.ID)
-	}
-	placeholders := make([]string, len(ids))
-	textArgs := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		textArgs[i] = id
-	}
-	numericArgs, numericIDs := parseNumericIDs(ids)
-
-	quotedCols := make([]string, len(columns))
-	for i, col := range columns {
-		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
-	}
-	phStr := strings.Join(placeholders, ",")
-	colStr := strings.Join(quotedCols, ", ")
-
-	queryTable := func(tableName string) map[string]float64 {
-		idColumn, err := s.resolveScenarioIDColumn(tableName)
-		if err != nil {
-			log.Printf("ComputeWhiskerBounds: failed to resolve ID column for %s: %v", tableName, err)
-			return nil
-		}
-		queryArgs := textArgs
-		if strings.HasSuffix(idColumn, "_int") && numericIDs {
-			queryArgs = numericArgs
-		}
-		query := fmt.Sprintf(`SELECT %s, %s FROM %s WHERE %s IN (%s)`,
-			idColumn, colStr, tableName, idColumn, phStr)
-
-		rows, err := s.db.Query(query, queryArgs...)
-		if err != nil {
-			log.Printf("ComputeWhiskerBounds: failed to query %s: %v", tableName, err)
-			return nil
-		}
-		defer rows.Close()
-
-		weightedSums := make(map[string]float64)
-		validWeights := make(map[string]float64)
-
-		// Pre-allocate scan buffers once outside the row loop.
-		vals := make([]sql.NullFloat64, len(columns))
-		var idRaw interface{}
-		scanArgs := make([]interface{}, len(columns)+1)
-		scanArgs[0] = &idRaw
-		for i := range vals {
-			scanArgs[i+1] = &vals[i]
-		}
-
-		for rows.Next() {
-			if err := rows.Scan(scanArgs...); err != nil {
-				continue
-			}
-			normalID := normalizeCatchmentID(dbValueToString(idRaw))
-			ci, ok := weights[normalID]
-			if !ok {
-				continue
-			}
-			for i, col := range columns {
-				if vals[i].Valid {
-					weightedSums[col] += vals[i].Float64 * ci.weight
-					validWeights[col] += ci.weight
-				}
-			}
-		}
-		if rows.Err() != nil {
-			return nil
-		}
-
-		result := make(map[string]float64, len(weightedSums))
-		for col, ws := range weightedSums {
-			if vw := validWeights[col]; vw > 0 {
-				result[col] = ws / vw
-			}
-		}
-		return result
-	}
-
-	// Run all four table queries concurrently — they are independent reads.
-	type namedResult struct {
-		name   string
-		values map[string]float64
-	}
-	ch := make(chan namedResult, 4)
-	for _, tbl := range []string{
+	results, err := s.aggregateTables(ctx, []string{
 		"scenario_reference_lower",
 		"scenario_reference_upper",
 		"scenario_current_lower",
 		"scenario_current_upper",
-	} {
-		tbl := tbl
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("ComputeWhiskerBounds: panic querying %s: %v", tbl, r)
-					ch <- namedResult{name: tbl, values: nil}
-				}
-			}()
-			ch <- namedResult{name: tbl, values: queryTable(tbl)}
-		}()
+	}, w)
+	if err != nil {
+		return WhiskerBounds{}, err
 	}
+
+	// A table the datapack does not have is left out of results, and the bound
+	// it would have filled stays absent - a datapack built without whisker
+	// tables has no whiskers to report, which is a fact about the data rather
+	// than a fault.
 	var bounds WhiskerBounds
-	for range [4]struct{}{} {
-		r := <-ch
-		switch r.name {
-		case "scenario_reference_lower":
-			bounds.ReferenceLower = r.values
-		case "scenario_reference_upper":
-			bounds.ReferenceUpper = r.values
-		case "scenario_current_lower":
-			bounds.CurrentLower = r.values
-		case "scenario_current_upper":
-			bounds.CurrentUpper = r.values
-		}
+	if t, ok := results["scenario_reference_lower"]; ok {
+		bounds.ReferenceLower = t.mean()
 	}
-	return bounds
+	if t, ok := results["scenario_reference_upper"]; ok {
+		bounds.ReferenceUpper = t.mean()
+	}
+	if t, ok := results["scenario_current_lower"]; ok {
+		bounds.CurrentLower = t.mean()
+	}
+	if t, ok := results["scenario_current_upper"]; ok {
+		bounds.CurrentUpper = t.mean()
+	}
+	return bounds, nil
 }

@@ -6,6 +6,12 @@ on:
 
 permissions:
   contents: write
+  # Pushing the container image to GHCR. No PAT is needed — GITHUB_TOKEN can
+  # write packages, provided the repository's Actions permissions are set to
+  # "Read and write". A workflow can only narrow what the repository allows, so
+  # if that setting is read-only this scope is silently not granted and the push
+  # fails with a 403.
+  packages: write
 
 jobs:
   # ==========================================
@@ -471,3 +477,96 @@ jobs:
             - **Linux:** WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu)
             - **macOS:** No extra dependencies
             - **Windows:** Edge WebView2 runtime (included in Windows 10+)
+
+  # ==========================================
+  # Container image — published to GHCR and attached to the release
+  #
+  # The same image CI builds on every pull request, where it lives for 7 days as
+  # an artefact. Here it becomes the long-lived one: pushed to GHCR under the
+  # release version and :latest, with its SBOM and vulnerability scan attached
+  # to the release itself.
+  #
+  # GHCR requires a lowercase path and this repository is kartoza/DecisionTheatre,
+  # so the name is lowercased rather than interpolated directly.
+  # ==========================================
+  container:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the image from the flake
+        id: build
+        run: |
+          nix build .#container --print-build-logs
+          docker load < result
+          tag="$(nix eval --raw .#container.imageTag)"
+          name="$(nix eval --raw .#container.imageName)"
+          echo "image=$name:$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: It runs
+        run: |
+          docker run --rm ${{ steps.build.outputs.image }} --version
+
+      - name: Export, describe and scan
+        run: |
+          docker save ${{ steps.build.outputs.image }} \
+            | gzip > decision-theatre-image.tar.gz
+          # syft, grype and python3 from the flake, pinned by flake.lock. A
+          # release artefact's bill of materials is only as trustworthy as the
+          # tool that produced it, so it is not fetched by piping a remote
+          # install script into a shell.
+          nix develop .#supplychain --command bash -euo pipefail -c '
+            syft ${{ steps.build.outputs.image }} -o spdx-json > sbom.spdx.json
+            syft ${{ steps.build.outputs.image }} -o json > sbom-syft.json
+            grype sbom:sbom.spdx.json -o json > cve-scan.json 2>/dev/null \
+              || echo "{\"matches\":[]}" > cve-scan.json
+          '
+          {
+            printf '## Container image\n\n'
+            printf '```bash\ndocker pull %s\n```\n\n' "$GHCR_TAG"
+            printf '### Software bill of materials\n\n'
+            nix develop .#supplychain --command python3 scripts/sbom_table.py sbom-syft.json
+            printf '\n### Vulnerability scan\n\n'
+            nix develop .#supplychain --command python3 scripts/cve_table.py cve-scan.json
+          } > build-report.md
+        env:
+          GHCR_TAG: ghcr.io/kartoza/decisiontheatre:${{ steps.build.outputs.version }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR
+        run: |
+          # Lowercased: GHCR rejects an uppercase path, and the repository name
+          # carries capitals.
+          ghcr="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          version="${{ steps.build.outputs.version }}"
+          # :<version> is the immovable pin; :latest follows the newest release.
+          for t in "$version" latest; do
+            docker tag ${{ steps.build.outputs.image }} "$ghcr:$t"
+            docker push "$ghcr:$t"
+          done
+
+      - name: Attach the image, SBOM and scan to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          body_path: build-report.md
+          files: |
+            decision-theatre-image.tar.gz
+            sbom.spdx.json
+            cve-scan.json

@@ -172,9 +172,15 @@ func (s *Server) buildRouter() *mux.Router {
 	router.PathPrefix("/data/images/").Handler(
 		http.StripPrefix("/data/images/", http.FileServer(dataDirFS{srv: s, sub: "images"})))
 
-	// Serve walkthrough demo site JSON files from data/walkthroughs directory
+	// Serve walkthrough demo site JSON files from data/walkthroughs directory.
+	//
+	// compressedStatic rather than http.FileServer: these documents are large,
+	// static for the life of a datapack, and were being gzipped again for every
+	// visitor — 60–100 ms per request on the whole-of-Africa tour. Constructing it
+	// here means rebuildRoutes hands a datapack install a fresh cache.
 	router.PathPrefix("/data/walkthroughs/").Handler(
-		http.StripPrefix("/data/walkthroughs/", http.FileServer(dataDirFS{srv: s, sub: "walkthroughs"})))
+		http.StripPrefix("/data/walkthroughs/",
+			newCompressedStatic(dataDirFS{srv: s, sub: "walkthroughs"})))
 
 	// Serve demo assets (e.g. the Munywana boundary shapefile used by the
 	// guided tour) from the data/demo directory.
