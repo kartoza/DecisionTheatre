@@ -292,6 +292,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Blank map panes, and fifteen seconds of spinner, on a server with no imagery
+  provider.** Maps were constructed against `/api/satellite-style.json` whenever
+  the runtime was a browser, without waiting to learn whether satellite was
+  configured. On a deployment with no key that endpoint returns **404 text/plain**,
+  MapLibre cannot load the style, and a map whose style never loads **never fires
+  its `load` event** — so the pane sat behind its spinner until the 15-second
+  safety net gave up, six panes at a time, on every load.
+
+  `satelliteConfirmed()` now answers the question a style URL actually depends on:
+  has the server *said yes*, rather than *not yet said no*. The optimism that is
+  right for whether to enable the control is wrong for whether a URL is safe to
+  fetch, and the two differ for exactly the window in which a map is built.
+
+  The recovery is symmetric now, too. The listener only handled satellite
+  *becoming* unavailable, so a map built before `/api/info` resolved stayed on the
+  built-in style for the rest of the session even once a key was confirmed. It
+  re-applies what the user asked for against what is currently possible, which
+  covers both directions in one call. Intent is kept separate from what is on the
+  map, so "we do not know yet" can no longer be mistaken for a choice; only a real
+  loss switches the toggle off and says so.
+
+
 - **A walkthrough's charts, dials and aggregate table emptied thirty seconds after
   opening it.** The per-catchment breakdown ships embedded in the walkthrough
   document and is primed into an in-memory cache on load. That cache expires after

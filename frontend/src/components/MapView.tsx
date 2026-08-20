@@ -13,6 +13,7 @@ import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
 import {
+  satelliteConfirmed,
   satelliteStyleUrl,
   subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
@@ -2152,6 +2153,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Google basemap toggle state. Defaults on for the browser runtime.
   const isGoogleBasemap = isGoogleBasemapProp ?? (getAppRuntime() === 'browser');
+  // What the user asked for, as against what is on the map. The two differ for
+  // the whole window between a map being built and /api/info resolving, and
+  // conflating them was how a startup guess became a permanent answer.
+  const wantsSatelliteRef = useRef(isGoogleBasemap);
+  wantsSatelliteRef.current = isGoogleBasemap;
   // Held in a ref because applyBasemapStyle is memoised without it; closing
   // over the prop directly would call a stale callback after a re-render.
   const onGoogleBasemapChangeRef = useRef(onGoogleBasemapChange);
@@ -2166,10 +2172,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const rightMap = rightMapRef.current;
     if (!leftMap) return;
 
-    isGoogleBasemapRef.current = nextVal;
-    onGoogleBasemapChangeRef.current?.(nextVal);
+    // Wanting satellite and being able to show it are different questions. If
+    // the server has not confirmed it, show the built-in style rather than hand
+    // MapLibre a URL that 404s — but say nothing upward: this is not the user
+    // changing their mind, and reporting it as one would turn "we do not know
+    // yet" into a decision that survives the answer arriving.
+    const showSatellite = nextVal && satelliteConfirmed();
+    isGoogleBasemapRef.current = showSatellite;
 
-    const newStyle: string = nextVal
+    const newStyle: string = showSatellite
       ? (window.location.origin + satelliteStyleUrl())
       : (window.location.origin + '/data/style.json');
 
@@ -2204,16 +2215,33 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // the map to fail tile-by-tile.
   useEffect(() => {
     return subscribeSatelliteUnavailable((unavailable) => {
-      if (!unavailable || !isGoogleBasemapRef.current) return;
-      applyBasemapStyle(false);
-      toast({
-        title: 'Satellite imagery unavailable',
-        description: "This month's quota has been used up, or no imagery "
-          + 'provider is configured. Switched to the default map.',
-        status: 'warning',
-        duration: 8000,
-        isClosable: true,
-      });
+      // Symmetric: re-apply what the user asked for against what is now
+      // possible. applyBasemapStyle refuses satellite it cannot show, so this
+      // one call both falls back when the quota runs out and switches over
+      // when a key finally arrives. The previous version handled only the
+      // first, which left a map built before /api/info stuck on the built-in
+      // style for the rest of the session.
+      const wanted = wantsSatelliteRef.current;
+      if (!wanted && !isGoogleBasemapRef.current) return;
+      applyBasemapStyle(wanted);
+
+      // Only a real loss is reported upward, and it is reported as a change of
+      // state the toggle should show — which is the "switch back to the default
+      // map" the user sees. Failing to *gain* satellite is not a decision.
+      if (unavailable && wanted) {
+        onGoogleBasemapChangeRef.current?.(false);
+      }
+
+      if (unavailable && wanted) {
+        toast({
+          title: 'Satellite imagery unavailable',
+          description: "This month's quota has been used up, or no imagery "
+            + 'provider is configured. Switched to the default map.',
+          status: 'warning',
+          duration: 8000,
+          isClosable: true,
+        });
+      }
     });
   }, [applyBasemapStyle, toast]);
 
@@ -3021,7 +3049,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // pane's fetch already hits this server's own in-memory cache (see
     // internal/server/satellite.go's styleCache) rather than the upstream
     // provider, so there is no repeated external request to save here.
-    const mapStyle = isGoogleBasemapRef.current
+    // Only if the server has confirmed satellite. A map built against a style
+    // that 404s never fires 'load', so its pane sits behind a spinner until the
+    // 15-second safety net below — and /api/info, which would have said so,
+    // usually resolves a moment later. The listener further up switches to
+    // satellite the moment confirmation arrives.
+    const mapStyle = isGoogleBasemapRef.current && satelliteConfirmed()
       ? window.location.origin + satelliteStyleUrl()
       : getStyleForMap(styleUrl);
 
@@ -3200,7 +3233,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         container: rightContainer,
         // Re-read the basemap choice rather than reusing the style captured at
         // init: the user may have toggled the satellite basemap since.
-        style: isGoogleBasemapRef.current
+        style: isGoogleBasemapRef.current && satelliteConfirmed()
           ? window.location.origin + satelliteStyleUrl()
           : getStyleForMap(styleUrl),
         center: [leftCenter.lng, leftCenter.lat],
