@@ -1,0 +1,62 @@
+/*
+ * Pane chrome that appears on mouse over.
+ *
+ * A six-pane grid drew its controls six times over. The toggles that acted on
+ * every pane have moved to one cluster in the header; what is left here are the
+ * controls that genuinely belong to a single pane — focus it, configure its
+ * factor, remove it, drag its compare swiper. Those cannot move anywhere, so
+ * they get out of the way instead, and come back when the pointer is over the
+ * pane they act on.
+ *
+ * Written as CSS rather than Chakra props because it has to cover both: the
+ * pane toolbar is a React component and the swiper handle is a DOM node built
+ * imperatively inside MapView. One rule covers both, so the timing cannot
+ * drift between them.
+ */
+
+/*
+ * Only where hovering exists. On a touch screen there is no hover to reveal
+ * with, so a control hidden this way would be a control that is simply gone —
+ * everything stays visible there.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .dt-pane-chrome {
+    opacity: 0;
+    /* Not clickable while invisible: an invisible hit target that swallows a
+       map click is worse than a visible button. */
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  /*
+   * focus-within matters as much as hover: these are real controls, and a
+   * keyboard user tabbing into one must be able to see where they are. Focus
+   * still reaches them while pointer-events is none — that property only
+   * affects the pointer.
+   */
+  .dt-pane:hover .dt-pane-chrome,
+  .dt-pane:focus-within .dt-pane-chrome {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /*
+   * The guided tour spotlights some of this chrome by id. A ring drawn around
+   * something invisible is worse than no ring, so a running tour overrides the
+   * hiding for as long as it is on screen.
+   */
+  body.dt-tour-active .dt-pane-chrome {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/*
+ * Someone who has asked for less motion still gets the reveal — it is the
+ * animation that is unwelcome, not the control appearing.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .dt-pane-chrome {
+    transition: none;
+  }
+}

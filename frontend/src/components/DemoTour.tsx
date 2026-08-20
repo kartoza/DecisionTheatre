@@ -14,6 +14,7 @@ import {
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
+import { usePaneChromeForced } from '../hooks/usePaneChromeForced';
 import { loadDemoSiteForTour } from '../hooks/useApi';
 import type { Site } from '../types';
 
@@ -246,6 +247,8 @@ export default function DemoTour({
   const current = steps[step];
   const isLast = step === steps.length - 1;
   const spotlightRect = useSpotlightRect(visible ? current.targetId : undefined);
+
+  usePaneChromeForced(visible && !isBlockedByModal);
 
   if (!visible || isBlockedByModal) return null;
 

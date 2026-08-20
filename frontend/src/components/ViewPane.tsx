@@ -569,6 +569,7 @@ function ViewPane({
 
   return (
     <Box
+      className="dt-pane"
       position="relative"
       w="100%"
       h="100%"
@@ -733,6 +734,7 @@ function ViewPane({
       {/* Per-pane toolbar */}
       <HStack
         id="tour-view-modes"
+        className="dt-pane-chrome"
         position="absolute"
         bottom={compact ? 2 : 3}
         right={compact ? 2 : 3}

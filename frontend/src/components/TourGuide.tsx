@@ -13,6 +13,7 @@ import {
 import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiHelpCircle, FiMap, FiMapPin, FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
+import { usePaneChromeForced } from '../hooks/usePaneChromeForced';
 import { createSite, listSites } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import type { Site } from '../types';
@@ -301,6 +302,7 @@ export default function TourGuide() {
   const current = STEPS[step];
   const isLast = step === STEPS.length - 1;
   const rect = useSpotlightRect(visible ? current.targetId : undefined);
+  usePaneChromeForced(visible);
 
   if (!visible) return null;
 

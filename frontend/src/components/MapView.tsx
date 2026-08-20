@@ -2854,6 +2854,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Slider handle
     const handle = document.createElement('div');
     handle.id = 'tour-map-swiper';
+    // Revealed on hover with the rest of the pane's controls — see
+    // styles/paneChrome.css. The divider line it sits on stays visible: that
+    // marks which side of the comparison is which, and is information rather
+    // than a control.
+    handle.className = 'dt-pane-chrome';
     handle.style.cssText = `
       position:absolute;
       top:50%;

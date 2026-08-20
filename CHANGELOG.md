@@ -165,6 +165,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a pane's MapLibre instance, and the guided tour's existing listener already
   handled the readiness and deferral cases.
 
+  What is left on a pane — focus it, configure its factor, remove it, drag its
+  compare swiper — **appears on mouse over** rather than sitting on top of the data
+  all the time. Those controls could not move to the header the way the global
+  toggles did: they act on one pane, so six panes legitimately need six of them.
+  They get out of the way instead. One stylesheet covers both halves of that
+  chrome, the React toolbar and the imperatively-built swiper handle, so their
+  timing cannot drift apart. The swiper's divider line stays visible: it marks
+  which side of the comparison is which, and is information rather than a control.
+
+  The hiding is scoped to `@media (hover: hover) and (pointer: fine)`, because on a
+  touch screen there is no hover to bring a control back with; it lifts on
+  `:focus-within` as well as `:hover`, so a keyboard user can see where they are;
+  and it lifts entirely while a guided tour is running, since two of these
+  elements are tour spotlight targets and a ring drawn around something invisible
+  is worse than no ring.
+
   Accessibility along the way: the view and range switches are `radiogroup`s with
   one tab stop, arrow-key traversal and `aria-checked`, where they had been
   independent `IconButton`s conveying selection through background colour alone;
