@@ -201,10 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the top-left corner with only its bottom-right corner rounded, the factor
   centred under the top edge with both bottom corners rounded, the scenario on the
   right into the top-right corner with only its bottom-left — so they read as part
-  of the pane frame rather than as objects on top of the map. They are also about
-  half the size: 13–14px type at 6–8px padding becomes 10px at 2px, taking the
-  scenario labels from roughly 28px tall to 16px and the factor label from 33px to
-  16px. The three were three copies of the same twelve declarations and now share
+  of the pane frame rather than as objects on top of the map. The two scenario
+  labels are also about half the size — 13px type at 6px padding becomes 10px at
+  2px, roughly 28px tall down to 16px. The factor label keeps its original type
+  and padding: it names what the pane is showing, where the scenario names either
+  side are supporting text. The three were three copies of the same twelve declarations and now share
   one base, with each supplying only its position and its exposed corners. The
   scenario colour accent on the left label moved to that label's right edge, so
   both accents face the map between them: with the label flush in the corner, an

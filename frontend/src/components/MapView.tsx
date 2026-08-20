@@ -3029,7 +3029,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       border-radius:0 0 10px 10px;
       z-index:15;
       background:rgba(0,0,0,0.85);
-      padding:2px 12px;
+      /* Keeps its original type and padding. The scenario labels either side
+         are supporting text and shrank; this one names what the pane is
+         showing, and is the only label worth reading from across a room. */
+      padding:8px 20px;
+      font-size:14px;
+      letter-spacing:0.5px;
       white-space:nowrap;
       max-width:60%;
       overflow:hidden;
