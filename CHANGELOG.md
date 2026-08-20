@@ -231,6 +231,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A walkthrough's charts, dials and aggregate table emptied thirty seconds after
+  opening it.** The per-catchment breakdown ships embedded in the walkthrough
+  document and is primed into an in-memory cache on load. That cache expires after
+  30 seconds, and the refetch cannot work: the server has never heard of a
+  walkthrough site, so `GET /api/sites/{id}/catchments` answers 404 — "failed to
+  read site file" — and the caller turns that into an empty array.
+
+  It only became reachable when the client stopped persisting the breakdown
+  alongside the site, which had made the copy permanent. The embedded copy is now
+  marked sticky: it is not a cached copy of something fetchable, it is the only
+  copy, so neither the TTL check nor the eviction sweep may discard it.
+
+
 - **A client that gave up did not stop the work it had started.** No database call
   took a `context.Context`, so when a user closed a tab, panned the map again, or
   a proxy timed out, the query ran to completion against SQLite — holding a
