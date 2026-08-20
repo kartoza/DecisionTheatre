@@ -131,6 +131,18 @@ jobs:
         with:
           go-version: '1.25'
 
+      # First, because it is the cheapest question this job asks and the one
+      # with the most annoying failure mode. It needs no system packages, no
+      # cgo and no linter binary — about a second against five minutes for the
+      # step below — so a formatting mistake is reported almost immediately
+      # instead of at the end of the slowest job.
+      #
+      # Same script as `dt fmt-check`, so what CI means by "formatted" and what
+      # a developer machine means by it cannot drift apart. `gofmt -s`, matching
+      # `dt fmt`.
+      - name: gofmt
+        run: ./scripts/gofmt-check.sh --github
+
       - name: Create stub dirs for embed
         run: |
           mkdir -p internal/server/static && touch internal/server/static/.gitkeep
@@ -153,6 +165,11 @@ jobs:
         # golangci-lint v2 needs action v7 or later; v6 with a v2 binary exits
         # with code 3 before linting anything. The version is pinned to the one
         # in the development shell so `dt lint` and CI agree.
+        #
+        # The rules come from .golangci.yml, which is committed and commented:
+        # what is enabled, why each linter is there, and what is deliberately
+        # not enabled yet. Nothing here should add arguments that change the
+        # rule set, or the committed file stops being the answer.
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.8.0
