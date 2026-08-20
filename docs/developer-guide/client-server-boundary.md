@@ -210,14 +210,18 @@ should be preserved: `buildFillColorExpression` produces a data-driven paint exp
 applied with `setPaintProperty`, so colouring happens GPU-side with no per-feature
 JavaScript. That approach ports directly onto a vector-tile source.
 
-**A values table shaped like GeoJSON.** `valuesOnly` responses emit
-`"geometry": null` for all 147,837 features, spending 114 bytes to carry one ID and one
-float. A columnar `{ids: [...], values: [...]}` carries identical information in roughly
-a fifth of the bytes. If a response has no geometry, it is not a `FeatureCollection`.
+**A values table shaped like GeoJSON.** *Fixed.* `valuesOnly` responses used to emit
+`"geometry": null` for every catchment, spending 114 bytes to carry one ID and one float,
+and the two scenarios of a comparison fetched one such response each, concurrently. They
+are now columnar — `{ids, values}`, or `{ids, series}` for several scenarios sharing one
+ID array — and both scenarios come from one request. If a response has no geometry, it is
+not a `FeatureCollection`. See *`valuesOnly=1`* in the API guide.
 
 ## Sizing reference
 
-Measured against `data/datapack.gpkg` and the tracked walkthrough files. Reproduce with:
+Measured against `data/datapack.gpkg` and the tracked walkthrough files. The `valuesOnly`
+rows are for `NPP_gm2` over the full domain, which 141,897 of the 147,837 catchments have
+a value for; gzip is the level 5 the server applies. Reproduce the counts with:
 
 ```bash
 sqlite3 -readonly data/datapack.gpkg "SELECT COUNT(*) FROM catchments_lev12;"
@@ -230,8 +234,9 @@ jq '.catchments|length' data/walkthroughs/*.json
 | Indicator keys per scenario, per catchment | 502 |
 | Dense per-catchment record | 27–56 KB |
 | Sparse override entry | ~40 bytes |
-| Full `valuesOnly` response, uncompressed | 16.1 MB |
-| `JSON.parse` of that response | ~133 ms (desktop V8, warm) |
+| Full `valuesOnly` response, GeoJSON shape, uncompressed | 14.7 MB per scenario, 29.4 MB for a comparison |
+| The same, columnar, both scenarios in one request | 3.1 MB uncompressed (2.9 MB → 1.0 MB gzipped) |
+| `JSON.parse` of a comparison's worth | 216.8 ms GeoJSON, 20.6 ms columnar (node 22 / V8, warm, median of 7) |
 | Typical localStorage quota | ~5 MB, counted in UTF-16 code units |
 
 ## Checklist for new work
@@ -241,6 +246,7 @@ Before adding a fetch, a store write or a geometry call, ask:
 - [ ] Does this compute something derivable from the datapack? → server
 - [ ] Does its input include more than one catchment? → server
 - [ ] Is the response a `FeatureCollection` with null geometry? → make it columnar
+- [ ] Do two panes fetch the same extent and attribute for different scenarios? → one request
 - [ ] Am I persisting something the server can regenerate? → don't
 - [ ] Is this geometry the user is editing right now? → client is correct
 - [ ] Does it scale with the size of the study area? → it does not belong in the browser

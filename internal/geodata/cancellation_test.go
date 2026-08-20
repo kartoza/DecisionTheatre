@@ -124,7 +124,7 @@ func TestEveryQueryHonoursCancellation(t *testing.T) {
 			return err
 		}},
 		{"QueryCatchmentValues", func(ctx context.Context, s *GpkgStore) error {
-			_, err := s.QueryCatchmentValues(ctx, "current", gpkgtest.Attribute, -5, -5, 5, 5)
+			_, err := s.QueryCatchmentValues(ctx, []string{"current"}, gpkgtest.Attribute, -5, -5, 5, 5)
 			return err
 		}},
 		{"QueryCatchmentValueArrays", func(ctx context.Context, s *GpkgStore) error {

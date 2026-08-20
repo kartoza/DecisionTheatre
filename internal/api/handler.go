@@ -736,6 +736,17 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		zoom = geodata.DetailZoomThreshold
 	}
 
+	// valuesOnly requests bypass the zoom-based render paths entirely: they are
+	// used for statistics that need true full-dataset accuracy (and, for site
+	// stats, real per-catchment HYBAS_ID to filter by) rather than a bounded,
+	// renderable feature count. Nothing below this point applies to them -
+	// there is no geometry to aggregate and no FeatureCollection to build - so
+	// they are answered by their own handler in catchment_values.go.
+	if q.Get("valuesOnly") == "1" {
+		h.respondCatchmentValues(w, r, attribute, minx, miny, maxx, maxy)
+		return
+	}
+
 	// For the future/target scenario with a known site, build a lookup of
 	// per-catchment ideal values so the choropleth shows user-edited targets.
 	idealOverrides := h.siteIdealOverrides(scenario, q.Get("siteId"), attribute)
@@ -747,17 +758,8 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		queryScenario = "reference"
 	}
 
-	// Query catchments. valuesOnly requests bypass the zoom-based render paths
-	// entirely: they're used for statistics that need true full-dataset
-	// accuracy (and, for site stats, real per-catchment HYBAS_ID to filter by)
-	// rather than a bounded, renderable feature count.
 	queryStart := time.Now()
-	var fc *geodata.FeatureCollection
-	if q.Get("valuesOnly") == "1" {
-		fc, err = h.gpkgStore.QueryCatchmentValues(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy)
-	} else {
-		fc, err = h.gpkgStore.QueryCatchments(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy, zoom)
-	}
+	fc, err := h.gpkgStore.QueryCatchments(r.Context(), queryScenario, attribute, minx, miny, maxx, maxy, zoom)
 	log.Printf("[perf] handleChoropleth step=queryCatchments scenario=%s attribute=%s features=%d duration_ms=%d", queryScenario, attribute, func() int {
 		if fc != nil {
 			return len(fc.Features)
@@ -780,7 +782,6 @@ func (h *Handler) handleChoropleth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get domain range for consistent color scaling across scenarios
 	domainMin, domainMax := h.domainRangeFor(r.Context(), scenario, attribute)
 
 	// Build response with domain range
@@ -876,10 +877,10 @@ func (h *Handler) domainRangeFor(ctx context.Context, scenario, attribute string
 	return domainRange.Min, domainRange.Max
 }
 
-// CatchmentValuesResponse is the join payload for the vector-tile choropleth:
+// TileValuesResponse is the join payload for the vector-tile choropleth:
 // the attribute values for a viewport, with no geometry, plus the same domain
 // range /choropleth returns so the colour scale is identical on both paths.
-type CatchmentValuesResponse struct {
+type TileValuesResponse struct {
 	Scenario  string    `json:"scenario"`
 	Attribute string    `json:"attribute"`
 	IDs       []int64   `json:"ids"`
@@ -957,7 +958,7 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 	// scenario+attribute+bbox are static for the life of the datapack, and the
 	// grid view issues the identical request from every pane.
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	respondJSON(w, http.StatusOK, CatchmentValuesResponse{
+	respondJSON(w, http.StatusOK, TileValuesResponse{
 		Scenario:  scenario,
 		Attribute: attribute,
 		IDs:       values.IDs,

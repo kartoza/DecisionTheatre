@@ -141,6 +141,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Full-dataset statistics are fetched as columns, once, instead of as feature
+  wrappers, twice.** `/api/choropleth?valuesOnly=1` returns every catchment's raw
+  value for statistics that must reflect the true dataset rather than a
+  render-sized sample. It returned a GeoJSON `FeatureCollection` to do it: one
+  `{"type":"Feature","id":…,"geometry":null,"properties":{…}}` wrapper per
+  catchment, 114 bytes to carry an integer and a float, with the literal string
+  `null` repeated once per catchment for a geometry no caller ever read. Both
+  scenarios of a comparison fetched one of these each, concurrently.
+
+  The response is now columnar — `{ids, values}`, discriminated by
+  `"type": "CatchmentValues"` — and a request may name several scenarios, which
+  come back as `{ids, series}` sharing one ID array. `MapView` asks for the left
+  and right scenario together: they always want the same extent and the same
+  attribute, so the second request was sending a second copy of the same ID
+  column. The frontend reads the arrays directly rather than rebuilding features
+  from them.
+
+  Measured on `data/datapack.gpkg` for `NPP_gm2` over the full domain, against
+  what the two concurrent requests used to cost between them: **29,380,768 →
+  3,129,840 bytes** uncompressed, **2,901,154 → 983,966 bytes** gzipped, and
+  `JSON.parse` **216.8 ms → 20.6 ms** (node 22 / V8, warm, median of seven). The
+  compressed saving is much the smaller of the three — deflate is very good at a
+  repeated wrapper — and the parse time, which is what blocks the main thread on
+  the older hardware this was reported from, does not benefit from compression at
+  all. Server-side, one query over the bounding box replaces two.
+
+  Statistics are unchanged: the same values are summed in the same order, and the
+  values are written with shortest round-trip formatting, so every number parses
+  back to a bit-identical float64. Tests build both encodings from the same rows
+  and compare the computed statistics with `Object.is`.
+
 - **The sites list no longer downloads five megabytes of demo content to show a
   list of titles.** `listSites` fetched and parsed all four walkthrough documents —
   **5,025,346 bytes**, one of them 4 MB — on the path to first render, for demos
