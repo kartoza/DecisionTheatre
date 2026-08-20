@@ -17,6 +17,24 @@ it can point at a server it did not build — including production.
 
 ## Quick start
 
+From the development shell, with a server running (`dt run`):
+
+```bash
+dt bench                  # measure it, save the result
+... make your change, restart the server ...
+dt bench                  # measure it again
+dt bench-report           # compare the two most recent runs and open the report
+```
+
+`dt bench-list` shows what has been measured; `dt bench-sweep` builds a range of
+revisions. `<leader>pm` and `<leader>pM` are bound to the first two in neovim.
+
+`dt bench` takes `DT_BENCH_LABEL` and `DT_BENCH_TARGET`; `dt bench-report` takes
+`DT_BENCH_BASELINE` and `DT_BENCH_CURRENT`, each accepting a label, a filename or
+a position such as `last-3`.
+
+The underlying command is `dtbench`, and everything below describes it directly.
+
 With a server running:
 
 ```bash
@@ -153,6 +171,13 @@ records which ones they were.
 | `--mark` | the Kartoza symbol | Brand mark for the cover |
 | `--repo` | `.` | Checkout to read merged pull requests from |
 | `--no-changes` | off | Omit the attribution section |
+| `--open` | off | Open the report when it is written |
+
+`--open` hands the PDF — or the HTML when there is no PDF — to `xdg-open`, or to
+`open` on macOS, and does not wait for the viewer to exit. It is off by default
+because this runs in CI, where launching a viewer is at best noise; `dt
+bench-report` passes it. A missing viewer is a note, not a failure: the report
+exists and its path is on stdout either way.
 
 ### What landed between the builds
 

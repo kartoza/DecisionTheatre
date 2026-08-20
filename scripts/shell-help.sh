@@ -59,6 +59,11 @@ COMMANDS=(
     "TEST|dt test-all|All three suites"
     "TEST|nix flake check|Every check, in a sandbox"
 
+    "MEASURE|dt bench|Measure the running server and save the result"
+    "MEASURE|dt bench-report|Compare the two most recent runs and open the report"
+    "MEASURE|dt bench-list|What has been measured so far"
+    "MEASURE|dt bench-sweep|Build each revision in a range and measure it"
+
     "DIAGNOSE|dt run --diag|Report what the desktop window resolved its layout to"
     "DIAGNOSE|dt doctor|Is this checkout healthy? Reports; changes nothing"
     "DIAGNOSE|dt protect-branch|Require the CI checks before anything reaches main"
@@ -128,6 +133,7 @@ declare -A GROUP_BLURB=(
     [DEVELOP]="hot reload"
     [BUILD]="make artefacts"
     [TEST]="prove it works"
+    [MEASURE]="is it faster?"
     [DIAGNOSE]="what is wrong?"
     [FLAKE]="stay importable"
     [DATA]="the data pack"
