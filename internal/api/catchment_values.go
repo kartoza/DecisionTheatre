@@ -92,7 +92,13 @@ func (h *Handler) respondCatchmentValues(w http.ResponseWriter, q url.Values, at
 	queryStart := time.Now()
 	values, err := h.gpkgStore.QueryCatchmentValues(scenarios, attribute, minx, miny, maxx, maxy)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		status := http.StatusInternalServerError
+		if strings.HasPrefix(err.Error(), "invalid attribute:") ||
+			strings.HasPrefix(err.Error(), "no scenario requested") ||
+			strings.HasPrefix(err.Error(), "too many scenarios requested:") {
+			status = http.StatusBadRequest
+		}
+		respondError(w, status, err.Error())
 		return
 	}
 	log.Printf("[perf] handleChoropleth step=queryCatchmentValues scenarios=%s attribute=%s catchments=%d duration_ms=%d",
