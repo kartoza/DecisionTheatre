@@ -494,6 +494,10 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// The embedded glyphs/tile URLs are absolute (see above), so a Vite dev
+	// setup — :5173 proxying everything else to :8080 — has the browser fetch
+	// them directly, cross-origin. Same reasoning as writeSatelliteJSON.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(styleBytes)
 }
 
@@ -548,6 +552,9 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// See the same header in handleStyleJSON: the tile URLs here are absolute
+	// and, in a Vite dev setup, fetched cross-origin.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_ = json.NewEncoder(w).Encode(tileJSON)
 }
 
@@ -560,6 +567,12 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 	fontstack := vars["fontstack"]
 	glyphRange := vars["range"]
 	cacheKey := fontstack + "/" + glyphRange
+
+	// The glyphs URL embedded in the style JSON is absolute (see
+	// handleStyleJSON), so in a Vite dev setup the browser fetches it
+	// cross-origin, straight past the proxy. Set unconditionally since every
+	// branch below writes a response.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	if v, ok := s.glyphCache.Load(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/x-protobuf")
