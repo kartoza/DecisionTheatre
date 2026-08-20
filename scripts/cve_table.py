@@ -13,6 +13,7 @@ Two things this deliberately does not do:
 Usage: cve_table.py <grype-json> [--limit N]
 Exit status is 0 unless the file cannot be read: see above.
 """
+import argparse
 import json
 import sys
 from collections import Counter
@@ -46,17 +47,24 @@ IMPACT = """> **What this image exposes.** It runs the Decision Theatre HTTP ser
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    limit = 40
-    for i, a in enumerate(sys.argv):
-        if a == "--limit" and i + 1 < len(sys.argv):
-            limit = int(sys.argv[i + 1])
+    # argparse rather than walking sys.argv by hand. The hand-rolled version
+    # filtered out anything beginning with "--" to find the positional argument,
+    # which removed the flag but not its value: `--limit 10 scan.json` left
+    # "10" as the first positional, and the script tried to open a file called
+    # 10. It also called int() on whatever followed --limit, so a typo produced a
+    # traceback instead of a usage message.
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("grype_json", help="grype scan results in JSON form")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=40,
+        help="maximum rows to show before summarising the remainder (default: 40)",
+    )
+    opts = parser.parse_args()
+    limit = opts.limit
 
-    if not args:
-        print("Usage: cve_table.py <grype-json> [--limit N]", file=sys.stderr)
-        return 2
-
-    with open(args[0]) as handle:
+    with open(opts.grype_json) as handle:
         data = json.load(handle)
 
     matches = data.get("matches", []) or []

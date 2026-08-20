@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Deployment documentation for the published container image** — how to pull it
+  from GHCR, how to run it with the data and resources directories mounted, and
+  what to do about permissions. Covers the two failures that produce a confusing
+  message rather than a useful one: GHCR's `denied` meaning both "you may not" and
+  "no such package", and the uppercase image path failing as `denied` rather than
+  `not found`. Records that a package is created private on first push and must be
+  made public once by hand, and that a 403 on the first release push is usually the
+  repository's Actions permissions rather than the package.
+
 - **Every pull request now publishes the container image, its SBOM and its
   vulnerability scan**, and annotates the pull request with both tables. The image
   is a `container-image` artefact kept for 7 days, so a change can be run before it
@@ -233,6 +242,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the site, which had made the copy permanent. The embedded copy is now
   marked sticky: it is not a cached copy of something fetchable, it is the only
   copy, so neither the TTL check nor the eviction sweep may discard it.
+
+
 - **A client that gave up did not stop the work it had started.** No database call
   took a `context.Context`, so when a user closed a tab, panned the map again, or
   a proxy timed out, the query ran to completion against SQLite — holding a
@@ -520,6 +531,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **Guided-tour documents were gzipped again for every visitor.** The compression
+  middleware pools gzip writers, not their output, so each static document under
+  `/data/walkthroughs/` was recompressed on every request. Measured on the real
+  datapack against the whole-of-Africa tour — 2,104,591 bytes — the same file
+  requested five times in a row cost 0.119, 0.111, 0.108, 0.096 and 0.085 s, with
+  no warm-up effect because there was nothing to warm. Requested uncompressed, the
+  same file served in 0.0022 s: roughly 2.5 ms of that is serving the file, and the
+  rest is gzip level 5 repeated for every visitor.
+
+  Compressing is the right trade — 2.01 MB down to 456 KB on the wire is worth far
+  more than 64 ms on any real connection. The waste was compressing the *same
+  bytes* over and over, for files that change only when the datapack does. They are
+  now compressed once and reused: the same five requests cost 0.084, 0.001, 0.002,
+  0.001 and 0.001 s, serving byte-identical content with unchanged `Content-Type`,
+  `Content-Encoding`, `Vary` and `Last-Modified`, and `If-Modified-Since` still
+  answering 304.
+
+  Cached bytes are keyed on the file's own size and modification time, and the
+  handler is rebuilt when a datapack is installed, so a swap cannot serve the
+  previous datapack's body. API responses are deliberately not cached: they vary
+  with query parameters and site state, and a cache keyed on path alone would serve
+  one user another's answer. Retention is capped at 32 MB, past which responses are
+  still compressed and served correctly and simply not retained.
 - **Saving one site cost as much as saving all of them.** The three bulk callers
   loaded every stored site, changed one, and wrote them all back, so `JSON.parse`
   and `JSON.stringify` ran across the whole store on the main thread for every
