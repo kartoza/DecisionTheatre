@@ -141,6 +141,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One set of map controls, in the header, instead of thirty-six buttons.** Three
+  bands of controls competed for the most space-starved screen in the application.
+  A full-width bar above the panes held the view-mode, range-mode, add-pane and
+  target controls; each pane carried a vertical stack of six circular buttons — 3D,
+  choropleth, identify, satellite, swiper and zoom-to-site; and the header had a
+  `Spacer` between the site title and the navigation holding nothing at all.
+
+  Every one of those per-pane buttons already acted on *all* panes: they were one
+  setting drawn six times, and clicking any copy moved all six. A six-pane grid drew
+  36 buttons for 6 settings. They are drawn once now, in the space the header was
+  wasting, and the bar is deleted rather than hidden — returning a full horizontal
+  band of vertical space to the widgets.
+
+  The controls that genuinely belong to one pane — focus, configure factor, remove,
+  calculation details — stay in that pane. Six panes legitimately need six focus
+  buttons, and that is not duplication.
+
+  State moved to `App`, which is where it always belonged given what it did.
+  `MapView` now reads these as props and applies them through effects; only the
+  basemap still reports back, because the satellite-quota revert happens down
+  there. Zoom-to-site is a `dt:zoom-to-site` window event — the header cannot reach
+  a pane's MapLibre instance, and the guided tour's existing listener already
+  handled the readiness and deferral cases.
+
+  Accessibility along the way: the view and range switches are `radiogroup`s with
+  one tab stop, arrow-key traversal and `aria-checked`, where they had been
+  independent `IconButton`s conveying selection through background colour alone;
+  the toggles carry `aria-pressed` and an underline as well as a fill. Below `xl`
+  the full set collapses to the view switch plus the toggles, and below `md` into an
+  overflow menu that carries every control — not `display: none`.
+
 - **The sites list no longer downloads five megabytes of demo content to show a
   list of titles.** `listSites` fetched and parsed all four walkthrough documents —
   **5,025,346 bytes**, one of them 4 MB — on the path to first render, for demos

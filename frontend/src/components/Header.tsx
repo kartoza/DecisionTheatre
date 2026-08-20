@@ -53,6 +53,16 @@ interface HeaderProps {
     hasTargets?: boolean;
     siteId?: string | null;
     isExtracting?: boolean;
+    is3DMode?: boolean;
+    onIs3DModeChange?: (enabled: boolean) => void;
+    isChoroplethEnabled?: boolean;
+    onChoroplethEnabledChange?: (enabled: boolean) => void;
+    isIdentifyMode?: boolean;
+    onIdentifyModeChange?: (enabled: boolean) => void;
+    isGoogleBasemap?: boolean;
+    onGoogleBasemapChange?: (enabled: boolean) => void;
+    isSwiperEnabled?: boolean;
+    onSwiperEnabledChange?: (enabled: boolean) => void;
   };
 }
 

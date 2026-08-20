@@ -29,11 +29,14 @@ interface ContentAreaProps {
   siteGeometry?: GeoJSON.Geometry | null;
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry) => void;
   isSwiperEnabled?: boolean;
-  onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
   colorScaleType: ColorScaleType;
   is3DMode?: boolean;
-  on3DModeChange?: (enabled: boolean) => void;
+  // Global map toggles: one control in the header, every pane reflects it.
+  isIdentifyMode?: boolean;
+  isChoroplethEnabled?: boolean;
+  isGoogleBasemap?: boolean;
+  onGoogleBasemapChange?: (enabled: boolean) => void;
   // Slider synchronization
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
@@ -107,11 +110,13 @@ function ContentArea({
   siteGeometry,
   onBoundaryUpdate,
   isSwiperEnabled,
-  onSwiperEnabledChange,
   colorScaleMode,
   colorScaleType,
   is3DMode,
-  on3DModeChange,
+  isIdentifyMode,
+  isChoroplethEnabled,
+  isGoogleBasemap,
+  onGoogleBasemapChange,
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
@@ -340,11 +345,13 @@ function ContentArea({
                   siteGeometry={siteGeometry}
                   onBoundaryUpdate={onBoundaryUpdate}
                   isSwiperEnabled={isSwiperEnabled}
-                  onSwiperEnabledChange={onSwiperEnabledChange}
                   colorScaleMode={colorScaleMode}
                   colorScaleType={colorScaleType}
                   is3DMode={is3DMode}
-                  on3DModeChange={on3DModeChange}
+                  isIdentifyMode={isIdentifyMode}
+                  isChoroplethEnabled={isChoroplethEnabled}
+                  isGoogleBasemap={isGoogleBasemap}
+                  onGoogleBasemapChange={onGoogleBasemapChange}
                   swiperPosition={swiperPosition}
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
@@ -393,11 +400,13 @@ function ContentArea({
             siteGeometry={siteGeometry}
             onBoundaryUpdate={onBoundaryUpdate}
             isSwiperEnabled={isSwiperEnabled}
-            onSwiperEnabledChange={onSwiperEnabledChange}
             colorScaleMode={colorScaleMode}
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
-            on3DModeChange={on3DModeChange}
+            isIdentifyMode={isIdentifyMode}
+            isChoroplethEnabled={isChoroplethEnabled}
+            isGoogleBasemap={isGoogleBasemap}
+            onGoogleBasemapChange={onGoogleBasemapChange}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}

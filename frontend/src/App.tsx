@@ -96,6 +96,12 @@ function App() {
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
+  // These three used to be state inside every MapView, toggled by a button
+  // stack repeated on each pane — six copies of one setting. They act on the
+  // whole grid, so they live here and the header owns the single control.
+  const [isIdentifyMode, setIsIdentifyMode] = useState(false);
+  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
@@ -1167,6 +1173,16 @@ function App() {
           hasTargets: hasEditableTargets,
           siteId: currentSiteId,
           isExtracting: isExtractingIndicators,
+          is3DMode,
+          onIs3DModeChange: setIs3DMode,
+          isChoroplethEnabled,
+          onChoroplethEnabledChange: setIsChoroplethEnabled,
+          isIdentifyMode,
+          onIdentifyModeChange: setIsIdentifyMode,
+          isGoogleBasemap,
+          onGoogleBasemapChange: setIsGoogleBasemap,
+          isSwiperEnabled,
+          onSwiperEnabledChange: setIsSwiperEnabled,
         }}
       />
 
@@ -1199,11 +1215,13 @@ function App() {
             siteGeometry={currentSite?.geometry}
             onBoundaryUpdate={handleBoundaryUpdate}
             isSwiperEnabled={isSwiperEnabled}
-            onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
-            on3DModeChange={setIs3DMode}
+            isIdentifyMode={isIdentifyMode}
+            isChoroplethEnabled={isChoroplethEnabled}
+            isGoogleBasemap={isGoogleBasemap}
+            onGoogleBasemapChange={setIsGoogleBasemap}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}

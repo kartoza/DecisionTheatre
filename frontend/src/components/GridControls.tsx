@@ -1,13 +1,14 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Button, HStack, Icon, IconButton, Menu, MenuButton, MenuDivider,
   MenuItem, MenuList, Spinner, Tooltip, useColorModeValue,
 } from '@chakra-ui/react';
 import {
-  FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiMoreHorizontal,
-  FiPlus, FiSquare, FiTable, FiTarget,
+  FiActivity, FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
+  FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
 } from 'react-icons/fi';
 import type { RangeMode, ViewMode } from '../types';
+import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/satelliteBasemap';
 
 /**
  * The controls that act on the whole grid, in one place.
@@ -47,7 +48,29 @@ const STRINGS = {
   editTargets: 'Edit target values',
   extracting: 'Extracting indicators…',
   more: 'More controls',
+  mapGroupLabel: 'Map display',
+  view3D: 'Show 3D extrusion',
+  view2D: 'Show flat map',
+  showChoropleth: 'Show choropleth',
+  hideChoropleth: 'Hide choropleth',
+  identifyOn: 'Identify catchment',
+  identifyOff: 'Stop identifying',
+  satelliteOn: 'Switch to satellite',
+  satelliteOff: 'Switch to default basemap',
+  satelliteUnavailable: 'Satellite imagery is unavailable',
+  swiperOn: 'Enable map swiper',
+  swiperOff: 'Disable map swiper',
+  zoomToSite: 'Zoom to site',
 } as const;
+
+/**
+ * Broadcast to every mounted map. The maps own their own MapLibre instance and
+ * cannot be reached from the header by prop, so the zoom is an event — the same
+ * one the guided tour already dispatches, handled by the same listener.
+ */
+function zoomToSite() {
+  window.dispatchEvent(new Event('dt:zoom-to-site'));
+}
 
 const VIEW_MODES: { id: ViewMode; label: string; icon: React.ReactElement }[] = [
   { id: 'map', label: STRINGS.map, icon: <FiMap /> },
@@ -62,6 +85,114 @@ const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactElement }[] 
   { id: 'site', label: STRINGS.rangeSite, icon: <FiTarget size={14} /> },
 ];
 
+/**
+ * An independent on/off control.
+ *
+ * Deliberately not a radio: these five are not a set of alternatives, they are
+ * five separate settings, so each is its own tab stop with `aria-pressed`. As
+ * with SegmentedGroup, the pressed state carries an underline as well as a
+ * background, because colour alone is not a distinction everyone can see.
+ */
+function ToggleButton({
+  label, icon, isOn, onToggle, isDisabled, disabledLabel,
+}: {
+  label: string;
+  icon: React.ReactElement;
+  isOn: boolean;
+  onToggle: () => void;
+  isDisabled?: boolean;
+  disabledLabel?: string;
+}) {
+  const onBg = useColorModeValue('brand.500', 'brand.400');
+  const offFg = useColorModeValue('gray.600', 'gray.300');
+  const underline = useColorModeValue('brand.700', 'brand.200');
+  return (
+    <Tooltip label={isDisabled ? disabledLabel ?? label : label} placement="bottom">
+      {/* Tooltip needs a focusable child, so the disabled case wraps in a Box. */}
+      <Box>
+        <IconButton
+          aria-label={label}
+          aria-pressed={isOn}
+          icon={icon}
+          isDisabled={isDisabled}
+          onClick={onToggle}
+          size="sm"
+          variant="ghost"
+          minW={8}
+          bg={isOn ? onBg : 'transparent'}
+          color={isOn ? 'white' : offFg}
+          borderBottom="2px solid"
+          borderColor={isOn ? underline : 'transparent'}
+          borderRadius="md"
+          _hover={{ bg: isDisabled ? 'transparent' : isOn ? onBg : 'blackAlpha.100' }}
+        />
+      </Box>
+    </Tooltip>
+  );
+}
+
+interface MapToggle {
+  key: string;
+  label: string;
+  icon: React.ReactElement;
+  isOn: boolean;
+  onToggle: () => void;
+  isDisabled?: boolean;
+  disabledLabel?: string;
+}
+
+/**
+ * The five toggles and zoom-to-site, as one unit.
+ *
+ * Shared by both layouts below rather than written twice: the whole point of
+ * this component is that a control exists once, and duplicating the markup to
+ * get two breakpoints would reintroduce the problem one level up.
+ */
+function MapToggleCluster({
+  toggles, siteId, dividerColor,
+}: {
+  toggles: MapToggle[];
+  siteId?: string | null;
+  dividerColor: string;
+}) {
+  if (toggles.length === 0) return null;
+  return (
+    <HStack
+      spacing={0.5}
+      pl={2}
+      borderLeft="1px solid"
+      borderColor={dividerColor}
+      aria-label={STRINGS.mapGroupLabel}
+      role="group"
+    >
+      {toggles.map((t) => (
+        <ToggleButton
+          key={t.key}
+          label={t.label}
+          icon={t.icon}
+          isOn={t.isOn}
+          onToggle={t.onToggle}
+          isDisabled={t.isDisabled}
+          disabledLabel={t.disabledLabel}
+        />
+      ))}
+      <Tooltip label={STRINGS.zoomToSite} placement="bottom">
+        <Box>
+          <IconButton
+            aria-label={STRINGS.zoomToSite}
+            icon={<FiTarget />}
+            onClick={zoomToSite}
+            isDisabled={!siteId}
+            size="sm"
+            variant="ghost"
+            minW={8}
+          />
+        </Box>
+      </Tooltip>
+    </HStack>
+  );
+}
+
 interface GridControlsProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
@@ -72,6 +203,18 @@ interface GridControlsProps {
   hasTargets?: boolean;
   siteId?: string | null;
   isExtracting?: boolean;
+  // The five map toggles. Each acted on every pane already, while being drawn
+  // once per pane; they are drawn once now.
+  is3DMode?: boolean;
+  onIs3DModeChange?: (enabled: boolean) => void;
+  isChoroplethEnabled?: boolean;
+  onChoroplethEnabledChange?: (enabled: boolean) => void;
+  isIdentifyMode?: boolean;
+  onIdentifyModeChange?: (enabled: boolean) => void;
+  isGoogleBasemap?: boolean;
+  onGoogleBasemapChange?: (enabled: boolean) => void;
+  isSwiperEnabled?: boolean;
+  onSwiperEnabledChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -201,14 +344,41 @@ function GridControls({
   hasTargets,
   siteId,
   isExtracting,
+  is3DMode = false,
+  onIs3DModeChange,
+  isChoroplethEnabled = true,
+  onChoroplethEnabledChange,
+  isIdentifyMode = false,
+  onIdentifyModeChange,
+  isGoogleBasemap = false,
+  onGoogleBasemapChange,
+  isSwiperEnabled = true,
+  onSwiperEnabledChange,
 }: GridControlsProps) {
   const dividerColor = useColorModeValue('gray.300', 'gray.600');
   const noSite = useCallback((id: RangeMode) => id === 'site' && !siteId, [siteId]);
 
+  // Satellite can become unavailable at runtime — quota spent, or no provider
+  // configured once /api/info resolves. The button says so rather than offering
+  // a switch that silently fails.
+  const [noSatellite, setNoSatellite] = useState(satelliteUnavailable);
+  useEffect(() => subscribeSatelliteUnavailable(setNoSatellite), []);
+
+  // Only meaningful over a map. In chart, dial or table view they would be
+  // controls for something not on screen.
+  const showMapToggles = viewMode === 'map';
+  const mapToggles: (MapToggle & { on?: (enabled: boolean) => void })[] = ([
+    { key: '3d', label: is3DMode ? STRINGS.view2D : STRINGS.view3D, icon: <FiBox />, isOn: is3DMode, onToggle: () => onIs3DModeChange?.(!is3DMode), on: onIs3DModeChange },
+    { key: 'choropleth', label: isChoroplethEnabled ? STRINGS.hideChoropleth : STRINGS.showChoropleth, icon: <FiMap />, isOn: isChoroplethEnabled, onToggle: () => onChoroplethEnabledChange?.(!isChoroplethEnabled), on: onChoroplethEnabledChange },
+    { key: 'identify', label: isIdentifyMode ? STRINGS.identifyOff : STRINGS.identifyOn, icon: <FiInfo />, isOn: isIdentifyMode, onToggle: () => onIdentifyModeChange?.(!isIdentifyMode), on: onIdentifyModeChange },
+    { key: 'satellite', label: isGoogleBasemap ? STRINGS.satelliteOff : STRINGS.satelliteOn, icon: <FiGlobe />, isOn: isGoogleBasemap, onToggle: () => onGoogleBasemapChange?.(!isGoogleBasemap), on: onGoogleBasemapChange, isDisabled: noSatellite && !isGoogleBasemap, disabledLabel: STRINGS.satelliteUnavailable },
+    { key: 'swiper', label: isSwiperEnabled ? STRINGS.swiperOff : STRINGS.swiperOn, icon: <FiColumns />, isOn: isSwiperEnabled, onToggle: () => onSwiperEnabledChange?.(!isSwiperEnabled), on: onSwiperEnabledChange },
+  ] as const).filter((t) => t.on && showMapToggles);
+
   return (
     <>
       {/* Wide enough to lay the controls out: the full set, inline. */}
-      <HStack spacing={2} display={{ base: 'none', lg: 'flex' }}>
+      <HStack spacing={2} display={{ base: 'none', xl: 'flex' }} data-testid="grid-controls-wide">
         <SegmentedGroup
           label={STRINGS.viewGroupLabel}
           options={VIEW_MODES}
@@ -228,6 +398,8 @@ function GridControls({
             />
           </HStack>
         )}
+
+        <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} />
 
         {onAddPane && (
           <Tooltip label={STRINGS.addPane} placement="bottom">
@@ -269,13 +441,21 @@ function GridControls({
         phone. Everything else moves into a menu rather than disappearing — the
         existing navigation group's display:none pattern is not acceptable here.
       */}
-      <HStack spacing={1} display={{ base: 'flex', lg: 'none' }}>
+      <HStack spacing={1} display={{ base: 'flex', xl: 'none' }} data-testid="grid-controls-narrow">
         <SegmentedGroup
           label={STRINGS.viewGroupLabel}
           options={VIEW_MODES}
           value={viewMode}
           onChange={onViewModeChange}
         />
+        {/*
+          The toggles are icons already, so they still fit beside the view
+          switch on a laptop; below md they would push the title off the row,
+          and the menu carries them from there down.
+        */}
+        <Box display={{ base: 'none', md: 'flex' }}>
+          <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} />
+        </Box>
         <Menu>
           <MenuButton
             as={IconButton}
@@ -296,6 +476,23 @@ function GridControls({
                 {`${mode.label} ${STRINGS.rangeSuffix}`}
               </MenuItem>
             ))}
+            {showMapToggles && mapToggles.length > 0 && <MenuDivider />}
+            {showMapToggles && mapToggles.map((t) => (
+              <MenuItem
+                key={t.key}
+                icon={t.icon}
+                isDisabled={t.isDisabled}
+                onClick={t.onToggle}
+                fontWeight={t.isOn ? 600 : 400}
+              >
+                {t.isDisabled ? t.disabledLabel ?? t.label : t.label}
+              </MenuItem>
+            ))}
+            {showMapToggles && (
+              <MenuItem icon={<FiTarget />} isDisabled={!siteId} onClick={zoomToSite}>
+                {STRINGS.zoomToSite}
+              </MenuItem>
+            )}
             {onAddPane && <MenuDivider />}
             {onAddPane && (
               <MenuItem icon={<FiPlus />} onClick={onAddPane}>{STRINGS.addPane}</MenuItem>
