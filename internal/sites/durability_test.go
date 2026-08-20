@@ -245,7 +245,9 @@ func TestAFailedWriteLeavesThePreviousFileIntact(t *testing.T) {
 	if err := os.Chmod(store.sitesDir, 0o555); err != nil {
 		t.Skipf("cannot make the directory read-only: %v", err)
 	}
-	defer os.Chmod(store.sitesDir, 0o755) //nolint:errcheck
+	// Restore the permissions so the test's t.TempDir cleanup can remove the
+	// directory; a failure here would only mask the assertion below.
+	defer os.Chmod(store.sitesDir, 0o755) //nolint:errcheck // best-effort cleanup, see above
 
 	if _, err := store.Update(site.ID, &Site{Title: "should not land"}); err == nil {
 		t.Skip("the write succeeded despite a read-only directory (running as root?)")

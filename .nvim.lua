@@ -42,7 +42,8 @@ local mappings = {
   { "t", "make test-all", "Test (Go + frontend)" },
   { "l", "make lint", "Lint" },
   { "f", "make fmt", "Format" },
-  { "k", "make check", "Check (fmt + lint + test)" },
+  { "g", "make fmt-check", "Is everything gofmt-clean? (what CI asks first)" },
+  { "k", "make check", "Check (fmt-check + lint + test)" },
   { "?", "make doctor", "Doctor: is this checkout healthy?" },
 
   -- Flake lock step — a stale hash breaks every importer of this flake

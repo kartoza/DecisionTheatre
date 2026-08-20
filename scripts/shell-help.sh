@@ -64,9 +64,10 @@ COMMANDS=(
     "DIAGNOSE|dt protect-branch|Require the CI checks before anything reaches main"
     "DIAGNOSE|dt doctor-deep|The same, plus recomputing the real nix hashes"
     "DIAGNOSE|dt check-data|Check ./data and summarise every file in it"
-    "DIAGNOSE|dt lint|golangci-lint over the Go sources"
-    "DIAGNOSE|dt fmt|gofmt the Go sources in place"
-    "DIAGNOSE|dt check|fmt, then lint, then test"
+    "DIAGNOSE|dt lint|golangci-lint over the Go sources, per .golangci.yml"
+    "DIAGNOSE|dt fmt|gofmt -s the Go sources in place"
+    "DIAGNOSE|dt fmt-check|Is everything formatted? What CI asks first; one second"
+    "DIAGNOSE|dt check|fmt-check, then lint, then test — CI's questions, in order"
     "DIAGNOSE|dt info|Versions of the binary and the toolchain"
 
     "FLAKE|dt check-flake|Is flake.nix in step with the manifests? Instant"
