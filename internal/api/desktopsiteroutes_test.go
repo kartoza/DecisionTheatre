@@ -101,6 +101,8 @@ var sharedRoutes = []string{
 	"POST /sites/{id}/catchments",
 	"GET /sites/{id}/whiskers",
 	"POST /sites/{id}/whiskers",
+	"GET /sites/{id}/summary",
+	"POST /sites/{id}/summary",
 	"POST /sites/dissolve-catchments",
 }
 
