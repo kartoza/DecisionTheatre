@@ -100,6 +100,19 @@ func (c *compressedStatic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A Range request must be answered against the real, uncompressed bytes.
+	// entry.body is already gzip-compressed, so slicing it here would hand
+	// http.ServeContent nothing to compute a meaningful Content-Range from: it
+	// would describe an offset into the compressed stream while Content-Encoding
+	// still claims gzip, a combination browsers reject under HTTP/2 with
+	// ERR_HTTP2_PROTOCOL_ERROR. This is the same framing bug isPartialContent
+	// (compress.go) fixes for the streaming compressor, reintroduced here because
+	// this cache pre-compresses before ServeContent ever sees the request.
+	if r.Header.Get("Range") != "" {
+		c.fallback.ServeHTTP(w, r)
+		return
+	}
+
 	name := path.Clean("/" + r.URL.Path)
 	f, err := c.fs.Open(name)
 	if err != nil {

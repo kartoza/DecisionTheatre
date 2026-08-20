@@ -141,6 +141,41 @@ func TestCompressedStaticAnswers304(t *testing.T) {
 	}
 }
 
+// A Range request must fall back to the uncompressed file rather than slicing
+// the cached gzip body: ServeContent would describe the slice with a
+// Content-Range naming offsets into the compressed stream while
+// Content-Encoding still says gzip, a combination Chrome rejects under HTTP/2
+// with ERR_HTTP2_PROTOCOL_ERROR. This is what surfaced in production for large
+// walkthrough documents when the browser resumed an interrupted download with
+// a Range request.
+func TestCompressedStaticRangeRequestIsNotCompressed(t *testing.T) {
+	dir := writeStatic(t, "tour.json", 200_000)
+	want, err := os.ReadFile(filepath.Join(dir, "tour.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newCompressedStatic(http.Dir(dir))
+
+	// Prime the cache, so the compressed entry exists and could be sliced if the
+	// bug were still present.
+	getStatic(t, h, "/tour.json", map[string]string{"Accept-Encoding": "gzip"})
+
+	rec := getStatic(t, h, "/tour.json", map[string]string{
+		"Accept-Encoding": "gzip",
+		"Range":           "bytes=0-99",
+	})
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", rec.Code)
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Errorf("Content-Encoding = %q on a 206, would corrupt the range framing", enc)
+	}
+	if got := rec.Body.Bytes(); !bytes.Equal(got, want[:100]) {
+		t.Errorf("range body = %d bytes, want the first 100 bytes of the uncompressed file", len(got))
+	}
+}
+
 // A client that did not offer gzip must not be handed a compressed body.
 func TestCompressedStaticHonoursAcceptEncoding(t *testing.T) {
 	dir := writeStatic(t, "tour.json", 200_000)
