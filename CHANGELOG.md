@@ -210,8 +210,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **And the scenario labels collapse to their colour accent at rest**, expanding
   again on hover or focus. The question they answer — which side of the swiper is
   which — only matters once someone is looking at that pane, and the answer
-  survives the collapse: each carries a 3px edge in its scenario's colour, and
-  that edge is what is left behind. A six-pane grid goes from eighteen pills to
+  survives the collapse: what is left is a 9px tick filled with that scenario's
+  own colour, text hidden, so the coding that made the label useful is the part
+  that stays. A six-pane grid goes from eighteen pills to
   six titles and twelve coloured ticks. The factor label is deliberately not in
   the set: a grid of six unlabelled maps is the thing worth avoiding, and it has
   no accent to be left with. The three were three copies of the same twelve declarations and now share

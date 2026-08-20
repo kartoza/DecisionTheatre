@@ -171,17 +171,42 @@ describe('the zoom cluster', () => {
   });
 });
 
+/**
+ * The stylesheet carries three `.dt-pane-label` rules, in this order: the
+ * unconditional appearance, the collapsed state inside the hover guard, and the
+ * reduced-motion override. Addressing them by position beats matching the first
+ * one and hoping — which is what these tests did until the collapsed rule
+ * stopped being the only one.
+ */
+const labelRules = [...CSS.matchAll(/\.dt-pane-label \{([^}]*)\}/g)].map((m) => m[1]);
+const [labelBase, labelCollapsed] = labelRules;
+
 describe('the scenario labels', () => {
-  it('collapses to the accent, and only where there is a pointer to hover', () => {
-    const guard = CSS.indexOf('@media (hover: hover) and (pointer: fine)');
-    const collapse = CSS.indexOf('.dt-pane-label {');
-    expect(collapse).toBeGreaterThan(guard);
-    // The accent is a border, so zeroing width and padding leaves it standing.
-    // Zeroing the border instead would leave nothing at all.
-    const rule = CSS.slice(collapse, CSS.indexOf('}', collapse));
-    expect(rule).toContain('max-width: 0');
-    expect(rule).toContain('padding-left: 0');
-    expect(rule).not.toContain('border');
+  it('gives the expanded appearance unconditionally', () => {
+    // The touch case: nothing ever hovers, so whatever is outside the guard is
+    // what a touch user gets, permanently.
+    expect(labelBase).toContain('background-color: rgba(0, 0, 0, 0.7)');
+    expect(labelBase).toContain('color: white');
+    expect(labelBase).not.toContain('max-width: 0');
+  });
+
+  it('collapses only where there is a pointer to hover', () => {
+    const guard = CSS.lastIndexOf('@media (hover: hover) and (pointer: fine)');
+    expect(CSS.indexOf(labelCollapsed)).toBeGreaterThan(guard);
+    expect(labelCollapsed).toContain('max-width: 0');
+  });
+
+  it('fills the collapsed tick with the accent, and gives it a body to fill', () => {
+    expect(labelCollapsed).toContain('background-color: var(--dt-accent');
+    // Zero padding would leave the 3px border alone — a hairline, too thin to
+    // read as a colour. The padding is what there is to fill.
+    expect(labelCollapsed).not.toContain('padding-left: 0');
+    // A fallback matters: the label exists before the scenario is known.
+    expect(labelCollapsed).toContain('var(--dt-accent, ');
+  });
+
+  it('hides the text rather than relying on the clip alone', () => {
+    expect(labelCollapsed).toContain('color: transparent');
   });
 
   it('clips rather than wraps on the way down', () => {
@@ -191,6 +216,22 @@ describe('the scenario labels', () => {
     const base = style.slice(0, style.indexOf('` + extra'));
     expect(base).toContain('white-space:nowrap');
     expect(base).toContain('overflow:hidden');
+  });
+
+  it('keeps fill and text colour out of the inline style', () => {
+    // An inline background would out-specify the collapsed rule and the tick
+    // would stay black.
+    const style = MAPVIEW.slice(MAPVIEW.indexOf('const labelStyle'));
+    const base = style.slice(0, style.indexOf('` + extra'));
+    expect(base).not.toContain('background');
+    expect(base).not.toContain('color:');
+  });
+
+  it('sets the accent in one place, so border and fill cannot disagree', () => {
+    expect(MAPVIEW).toContain("leftLabel.style.setProperty('--dt-accent', leftAccent)");
+    expect(MAPVIEW).toContain('borderRight = `3px solid ${leftAccent}`');
+    expect(MAPVIEW).toContain("rightLabel.style.setProperty('--dt-accent', rightAccent)");
+    expect(MAPVIEW).toContain('borderLeft = `3px solid ${rightAccent}`');
   });
 
   it('leaves the factor label alone', () => {

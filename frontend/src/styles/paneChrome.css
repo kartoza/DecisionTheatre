@@ -145,15 +145,24 @@
  *
  * At rest a pane should be its map. "Ecological Reference" and "Current State"
  * answer a question — which side of the swiper is which — that only matters once
- * someone is looking at that pane, and the answer survives the collapse anyway:
- * each label carries a 3px edge in its scenario's colour, and that edge is what
- * is left behind. Six panes go from eighteen pills to six titles and twelve
- * coloured ticks.
+ * someone is looking at that pane, and the answer survives the collapse: what is
+ * left is a small tick in the scenario's own colour, so the coding that made the
+ * label useful is the part that stays.
  *
  * The factor label is deliberately not in this set. It names what the pane is
  * showing, and a grid of six unlabelled maps is exactly the thing worth
  * avoiding. It also has no accent, so there would be nothing left of it.
  *
+ * Fill and text colour live here rather than inline on the element, because an
+ * inline background would out-specify the collapsed state and the tick would
+ * stay black.
+ */
+.dt-pane-label {
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+}
+
+/*
  * max-width is the animatable property here, because the labels have no fixed
  * width to travel between. The cost is that the reveal finishes slightly before
  * the transition does, on a label whose text is shorter than the bound.
@@ -161,9 +170,24 @@
 @media (hover: hover) and (pointer: fine) {
   .dt-pane-label {
     max-width: 0;
-    padding-left: 0;
-    padding-right: 0;
-    transition: max-width 220ms ease, padding 220ms ease;
+    /* Not zero: the padding is what gives the collapsed tick a body to fill.
+       With the border alone it would be a 3px hairline, too thin to read as a
+       colour at all. Three each side plus the border makes a 9px tab. */
+    padding-left: 3px;
+    padding-right: 3px;
+    /* The whole tick is the accent, so the border stops being a separate mark
+       and the label reads as one small block of the scenario's colour. The
+       fallback matters: --dt-accent is set by MapView once the scenario is
+       known, and the label exists before that. */
+    background-color: var(--dt-accent, rgba(0, 0, 0, 0.7));
+    /* Clipped by overflow already; transparent text also fades it out on the
+       way, rather than having it appear the instant there is room. */
+    color: transparent;
+    transition:
+      max-width 220ms ease,
+      padding 220ms ease,
+      background-color 220ms ease,
+      color 220ms ease;
   }
 
   .dt-pane:hover .dt-pane-label,
@@ -173,6 +197,8 @@
     max-width: 14em;
     padding-left: 8px;
     padding-right: 8px;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
   }
 }
 

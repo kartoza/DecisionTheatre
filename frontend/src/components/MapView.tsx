@@ -2990,8 +2990,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       position:absolute;
       top:0;
       z-index:5;
-      background:rgba(0,0,0,0.7);
-      color:white;
       padding:2px 8px;
       font-size:10px;
       white-space:nowrap;
@@ -3037,6 +3035,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       border-radius:0 0 10px 10px;
       z-index:15;
       background:rgba(0,0,0,0.85);
+      color:white;
       /* Keeps its original type and padding. The scenario labels either side
          are supporting text and shrank; this one names what the pane is
          showing, and is the only label worth reading from across a room. */
@@ -3704,7 +3703,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // frame — an accent there reads as part of the frame rather than as the
       // scenario's colour. Both labels point their accent at the map between
       // them, which is what the colour identifies.
-      leftLabel.style.borderRight = `3px solid ${leftInfo?.color || '#fff'}`;
+      const leftAccent = leftInfo?.color || '#fff';
+      // The custom property is what the collapsed state fills with — see
+      // styles/paneChrome.css. Set here because only this side knows the
+      // scenario's colour, and read there so the border and the fill cannot
+      // disagree.
+      leftLabel.style.setProperty('--dt-accent', leftAccent);
+      leftLabel.style.borderRight = `3px solid ${leftAccent}`;
       // Keep it hidden if the swiper is docked left (left map clipped to
       // zero width), unless the swiper is off, in which case dock state is
       // irrelevant and the left map fills the view.
@@ -3716,7 +3721,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
       // Already inward-facing: this one sits in the top-right corner, so its
       // left edge is the one over the map.
-      rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
+      const rightAccent = rightInfo?.color || '#fff';
+      rightLabel.style.setProperty('--dt-accent', rightAccent);
+      rightLabel.style.borderLeft = `3px solid ${rightAccent}`;
       rightLabel.style.display = isSwiperEnabled && sliderDockedRef.current !== 'right' ? 'block' : 'none';
     }
 
