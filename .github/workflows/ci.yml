@@ -25,21 +25,20 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
+      # scripts/sync-flake.sh, through the flake app — the same script the
+      # pre-commit hook runs, so a commit that passed the hook and a build that
+      # failed here cannot mean two different things.
+      #
+      # The guidance on failure used to be restated inline in this file, which
+      # made it a second copy of something the script already knew and was free
+      # to fall out of date with it. The script emits its own annotations now
+      # (see ui_annotate in scripts/lib-ui.sh), naming the hash, the manifest
+      # that moved, and the command that fixes it.
       - name: Fast check — flake.nix matches the recorded manifests
-        run: |
-          nix run .#check-flake -- --check || {
-            echo "::error::flake.nix is out of step with go.mod, go.sum or frontend/package-lock.json."
-            echo "::error::Run 'make sync-flake' and commit flake.nix with nix/manifest-lock.json."
-            exit 1
-          }
+        run: nix run .#check-flake -- --check
 
       - name: Deep verify — recompute the real hashes
-        run: |
-          nix run .#check-flake -- --verify || {
-            echo "::error::A hash recorded in flake.nix is wrong. Anyone importing this flake will fail to build."
-            echo "::error::Run 'make sync-flake' and commit the result."
-            exit 1
-          }
+        run: nix run .#check-flake -- --verify
 
   # ==========================================
   # Secrets & security scanning
@@ -51,22 +50,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
       - name: TruffleHog secrets scan
         uses: trufflesecurity/trufflehog@main
         with:
           extra_args: --only-verified
 
       # The gitleaks *action* requires a paid licence key for organisation
-      # repositories and fails without one. The CLI has no such restriction and
-      # is the same scanner, so run that instead — and it matches what
-      # .pre-commit-config.yaml runs locally.
+      # repositories and fails without one, so this has to be the CLI. It does
+      # not have to be a download: gitleaks is in devShells.tooling, and
+      # scripts/secrets-check.sh takes it from there.
+      #
+      # This step used to curl a pinned tarball into /tmp and untar it. Three
+      # things were wrong with that. A scanner whose job is supply-chain
+      # assurance was itself fetched over the network from outside the flake.
+      # The pin drifted — CI said 8.21.2, the flake says 8.30.0, and the
+      # pre-commit hook pinned its own third copy. And the CLI it called no
+      # longer exists: `detect` and `protect` were replaced by `git` and `dir`
+      # in the version the flake provides, so the two would have diverged into
+      # a hard failure the first time anyone reconciled them.
+      #
+      # Same script as the pre-commit hook, without --staged: the hook guards
+      # what is about to be committed, this reads all of history.
       - name: Gitleaks secrets scan
         run: |
-          version=8.21.2
-          curl -sSfL -o /tmp/gitleaks.tar.gz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
-          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
-          /tmp/gitleaks detect --source . --redact --verbose --no-banner
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop .#tooling --command ./scripts/secrets-check.sh
 
   # ==========================================
   # Check for large or unwanted files
@@ -112,6 +124,43 @@ jobs:
         run: |
           ./scripts/tests/version-test.sh
           ./scripts/tests/report-tables-test.sh
+
+  # ==========================================
+  # Shell and nix
+  #
+  # Neither of these ran in CI at all until now, though both were required of
+  # every contributor by the pre-commit hooks — so a check a contributor could
+  # not skip was one review never performed, and anyone committing with the
+  # hooks uninstalled bypassed it entirely.
+  #
+  # A great deal of this project is shell that nothing compiles or type-checks:
+  # the build, the packaging, the data pipeline, the release and the checks
+  # themselves. flake.nix is the definition of what everyone builds with.
+  #
+  # Both take seconds, and both run the same scripts as the hooks — including
+  # the same derived file list, which is what brings devbin/dt,
+  # packaging/appimage/AppRun and the scripts in resources/ inside the gate for
+  # the first time; the old hook regex only matched scripts/.
+  # ==========================================
+  tooling-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      # One `nix develop` for both, rather than one each: entering the tooling
+      # shell is the only slow part, and it is about half a second warm.
+      - name: shellcheck and nixpkgs-fmt
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' \
+            develop .#tooling --command bash -c '
+              set -e
+              ./scripts/shell-check.sh
+              ./scripts/nix-check.sh
+            '
 
   # ==========================================
   # Go lint
@@ -229,6 +278,11 @@ jobs:
       - name: webkit2gtk-4.0 compatibility shim
         run: ./scripts/webkit-compat.sh --github-env
 
+      # ./... includes internal/datacheck's TestSpecCovers* — the data-contract
+      # drift guard that the pre-commit hook runs on its own as
+      # scripts/drift-check.sh. There is deliberately no separate step for it:
+      # it would need this job's apt install and webkit shim all over again, so
+      # it would cost minutes to save seconds.
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
         env:
