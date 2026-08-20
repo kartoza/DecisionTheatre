@@ -2994,6 +2994,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       color:white;
       padding:2px 8px;
       font-size:10px;
+      white-space:nowrap;
+      overflow:hidden;
       font-weight:600;
       letter-spacing:0.3px;
       backdrop-filter:blur(8px);
@@ -3002,6 +3004,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // Scenario labels on each side
     const leftLabel = document.createElement('div');
     leftLabel.id = 'left-label';
+    // Collapses to its colour accent while the pane is at rest — see
+    // styles/paneChrome.css. The factor label deliberately does not: it names
+    // what the pane is showing, and a grid of six unlabelled maps is the thing
+    // worth avoiding.
+    leftLabel.className = 'dt-pane-label';
     leftLabel.style.cssText = labelStyle(`
       left:0;
       /* Only the corner facing the map is rounded: the other three are against
@@ -3013,6 +3020,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     const rightLabel = document.createElement('div');
     rightLabel.id = 'right-label';
+    rightLabel.className = 'dt-pane-label';
     rightLabel.style.cssText = labelStyle(`
       right:0;
       border-radius:0 0 0 10px;

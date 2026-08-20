@@ -205,7 +205,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labels are also about half the size — 13px type at 6px padding becomes 10px at
   2px, roughly 28px tall down to 16px. The factor label keeps its original type
   and padding: it names what the pane is showing, where the scenario names either
-  side are supporting text. The three were three copies of the same twelve declarations and now share
+  side are supporting text.
+
+  **And the scenario labels collapse to their colour accent at rest**, expanding
+  again on hover or focus. The question they answer — which side of the swiper is
+  which — only matters once someone is looking at that pane, and the answer
+  survives the collapse: each carries a 3px edge in its scenario's colour, and
+  that edge is what is left behind. A six-pane grid goes from eighteen pills to
+  six titles and twelve coloured ticks. The factor label is deliberately not in
+  the set: a grid of six unlabelled maps is the thing worth avoiding, and it has
+  no accent to be left with. The three were three copies of the same twelve declarations and now share
   one base, with each supplying only its position and its exposed corners. The
   scenario colour accent on the left label moved to that label's right edge, so
   both accents face the map between them: with the label flush in the corner, an

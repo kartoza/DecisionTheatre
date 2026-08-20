@@ -139,3 +139,45 @@
 .dt-no-nav .maplibregl-ctrl-bottom-left {
   display: none;
 }
+
+/*
+ * The scenario labels collapse to their colour accent.
+ *
+ * At rest a pane should be its map. "Ecological Reference" and "Current State"
+ * answer a question — which side of the swiper is which — that only matters once
+ * someone is looking at that pane, and the answer survives the collapse anyway:
+ * each label carries a 3px edge in its scenario's colour, and that edge is what
+ * is left behind. Six panes go from eighteen pills to six titles and twelve
+ * coloured ticks.
+ *
+ * The factor label is deliberately not in this set. It names what the pane is
+ * showing, and a grid of six unlabelled maps is exactly the thing worth
+ * avoiding. It also has no accent, so there would be nothing left of it.
+ *
+ * max-width is the animatable property here, because the labels have no fixed
+ * width to travel between. The cost is that the reveal finishes slightly before
+ * the transition does, on a label whose text is shorter than the bound.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .dt-pane-label {
+    max-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    transition: max-width 220ms ease, padding 220ms ease;
+  }
+
+  .dt-pane:hover .dt-pane-label,
+  .dt-pane:focus-within .dt-pane-label,
+  body.dt-tour-active .dt-pane-label {
+    /* Wide enough for the longest scenario name at this size, and no wider. */
+    max-width: 14em;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-pane-label {
+    transition: none;
+  }
+}

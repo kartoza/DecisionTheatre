@@ -171,6 +171,41 @@ describe('the zoom cluster', () => {
   });
 });
 
+describe('the scenario labels', () => {
+  it('collapses to the accent, and only where there is a pointer to hover', () => {
+    const guard = CSS.indexOf('@media (hover: hover) and (pointer: fine)');
+    const collapse = CSS.indexOf('.dt-pane-label {');
+    expect(collapse).toBeGreaterThan(guard);
+    // The accent is a border, so zeroing width and padding leaves it standing.
+    // Zeroing the border instead would leave nothing at all.
+    const rule = CSS.slice(collapse, CSS.indexOf('}', collapse));
+    expect(rule).toContain('max-width: 0');
+    expect(rule).toContain('padding-left: 0');
+    expect(rule).not.toContain('border');
+  });
+
+  it('clips rather than wraps on the way down', () => {
+    // Without nowrap the text reflows to one word per line as the box narrows,
+    // and the label grows tall while it is meant to be disappearing.
+    const style = MAPVIEW.slice(MAPVIEW.indexOf('const labelStyle'));
+    const base = style.slice(0, style.indexOf('` + extra'));
+    expect(base).toContain('white-space:nowrap');
+    expect(base).toContain('overflow:hidden');
+  });
+
+  it('leaves the factor label alone', () => {
+    // It names what the pane is showing, and has no accent to be left with.
+    const indicator = MAPVIEW.slice(MAPVIEW.indexOf("indicatorLabel.id = 'indicator-label'"));
+    expect(indicator.slice(0, indicator.indexOf('container.appendChild')))
+      .not.toContain('dt-pane-label');
+  });
+
+  it('is applied to both scenario labels', () => {
+    expect(MAPVIEW).toContain("leftLabel.className = 'dt-pane-label'");
+    expect(MAPVIEW).toContain("rightLabel.className = 'dt-pane-label'");
+  });
+});
+
 describe('usePaneChromeForced', () => {
   it('lifts the hiding while a tour is on screen, and puts it back after', () => {
     const { rerender, unmount } = renderHook(
