@@ -51,6 +51,14 @@ type GpkgStore struct {
 	gridGeometryErr      error
 }
 
+// gridGeometryWaitTimeout bounds how long a request waits for a tier's geometry.
+//
+// The full build takes about twelve seconds on the reference datapack, and a
+// request arriving during startup legitimately waits for it. This is generous
+// against that and short enough that a wait which is never going to end fails
+// rather than holding a goroutine and its connection indefinitely.
+const gridGeometryWaitTimeout = 60 * time.Second
+
 // gridCellKey identifies one cell of the low-zoom choropleth aggregation grid.
 type gridCellKey struct{ gx, gy int64 }
 
@@ -827,7 +835,18 @@ func (s *GpkgStore) failGridGeometryCache(ready map[float64]chan struct{}, err e
 	s.gridGeometryBuilding = false
 	s.mu.Unlock()
 	for _, tier := range gridTiersDegrees {
-		close(ready[tier])
+		// Tolerating an already-closed tier, because this closes all of them
+		// while the success path closes each one as it completes. Today both
+		// failure calls happen before that loop starts, so a double close cannot
+		// happen — but "cannot happen" here is a property of call-site ordering,
+		// not of the code, and the cost of getting it wrong is a panic in the
+		// build goroutine rather than an error. Only the build goroutine closes
+		// these, so the check and the close cannot race.
+		select {
+		case <-ready[tier]:
+		default:
+			close(ready[tier])
+		}
 	}
 }
 
@@ -984,32 +1003,52 @@ func (s *GpkgStore) buildGridGeometryCache(ctx context.Context, ready map[float6
 						continue
 					}
 
-					dissolved := j.polys[0]
-					for i := 1; i < len(j.polys); i++ {
-						dissolved = dissolved.Construct(polyclip.UNION, j.polys[i])
-					}
+					// One cell's failure must not take the worker with it.
+					//
+					// These workers had no recover(), unlike the two other
+					// polyclip call sites in this file — and a panic here did not
+					// merely lose a cell: the goroutine died without sending, so
+					// wg.Wait never returned, the results channel was never
+					// closed, and the tier's ready channel never closed either.
+					// Every subsequent low-zoom request then blocked forever.
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("Warning: dissolving grid cell (%d,%d) panicked: %v",
+									j.key.gx, j.key.gy, r)
+							}
+						}()
 
-					// Simplify once, after dissolving, rather than simplifying
-					// each catchment independently beforehand (see the comment
-					// on buildGridGeometryCache) - this is what keeps a
-					// full-continent response from ballooning to hundreds of
-					// MB. Tolerance scales with the tier's cell size (see
-					// renderSimplifyTolerance) rather than reusing the fixed
-					// computation tolerance. Safe against
-					// polyclipPolygonToGeoJSON's ring-nesting check misfiring
-					// on a shifted vertex now that it samples several points
-					// per ring (see ringContainedIn) rather than trusting a
-					// single one.
-					simplifiedDissolved := simplifyPolygons([]polyclip.Polygon{dissolved}, renderSimplifyTolerance(tier))
-					if len(simplifiedDissolved) == 0 {
-						continue
-					}
+						dissolved := j.polys[0]
+						for i := 1; i < len(j.polys); i++ {
+							dissolved = dissolved.Construct(polyclip.UNION, j.polys[i])
+						}
 
-					geometryJSON, _, err := polyclipPolygonToGeoJSON(simplifiedDissolved[0])
-					if err != nil {
-						continue
-					}
-					results <- cellResult{key: j.key, geometryJSON: geometryJSON}
+						// Simplify once, after dissolving, rather than simplifying
+						// each catchment independently beforehand (see the comment
+						// on buildGridGeometryCache) - this is what keeps a
+						// full-continent response from ballooning to hundreds of
+						// MB. Tolerance scales with the tier's cell size (see
+						// renderSimplifyTolerance) rather than reusing the fixed
+						// computation tolerance. Safe against
+						// polyclipPolygonToGeoJSON's ring-nesting check misfiring
+						// on a shifted vertex now that it samples several points
+						// per ring (see ringContainedIn) rather than trusting a
+						// single one.
+						simplifiedDissolved := simplifyPolygons([]polyclip.Polygon{dissolved}, renderSimplifyTolerance(tier))
+						if len(simplifiedDissolved) == 0 {
+							// return, not continue: this is now a closure, and
+							// `continue` here would have skipped the rest of the
+							// job loop rather than this one cell.
+							return
+						}
+
+						geometryJSON, _, err := polyclipPolygonToGeoJSON(simplifiedDissolved[0])
+						if err != nil {
+							return
+						}
+						results <- cellResult{key: j.key, geometryJSON: geometryJSON}
+					}()
 				}
 			}()
 		}
@@ -1173,6 +1212,14 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute
 	// goroutine until the whole cache lands. The build itself is untouched by
 	// giving up here: it runs on a background context precisely so it
 	// survives (see ensureGridGeometryCache).
+	//
+	// The timeout is the third case, from #103, and is deliberately kept even
+	// though the build now always closes the channel. This was once a bare
+	// receive: a build that ended without closing left every later request
+	// blocked here forever, with goroutines accumulating until the process
+	// died. A request should not depend on that invariant holding — it is one
+	// refactor away from being false again, and the failure mode is a hang
+	// rather than an error.
 	s.mu.RLock()
 	tierReady := s.gridGeometryReady[chosenTier]
 	s.mu.RUnlock()
@@ -1181,6 +1228,9 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute
 	case <-tierReady:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-time.After(gridGeometryWaitTimeout):
+		return nil, fmt.Errorf("timed out after %s waiting for the %.3f° grid geometry cache",
+			gridGeometryWaitTimeout, chosenTier)
 	}
 
 	s.mu.RLock()
@@ -1551,7 +1601,62 @@ func polyclipPolygonToGeoJSON(poly polyclip.Polygon) (json.RawMessage, float64, 
 		return nil, 0, fmt.Errorf("failed to marshal result: %w", err)
 	}
 
-	return resultJSON, 0, nil
+	// The area used to be a hardcoded zero here, and DissolveCatchments handed it
+	// straight to the API, so every dissolve response since this function was
+	// written reported "area": 0.
+	//
+	// The nesting computed above already says which rings are outers and which are
+	// holes — even depth and odd depth — so the total is the outers less the holes.
+	areaKm2 := 0.0
+	for i := range rings {
+		ringArea := sphericalRingAreaKm2(rings[i].coords)
+		if depths[i]%2 == 0 {
+			areaKm2 += ringArea
+		} else {
+			areaKm2 -= ringArea
+		}
+	}
+
+	return resultJSON, areaKm2, nil
+}
+
+// earthRadiusKm is the WGS84 authalic radius — the radius of the sphere with the
+// same surface area as the ellipsoid, which is the right one to use when the
+// quantity being computed is an area.
+const earthRadiusKm = 6371.0072
+
+// sphericalRingAreaKm2 returns the area enclosed by a ring of lon/lat degrees, in
+// square kilometres, always positive.
+//
+// The application already had two area helpers and neither was usable here.
+// signedRingArea is a planar shoelace over degrees, so its unit is degrees² —
+// meaningful for comparing rings and for winding direction, meaningless as an
+// area. calculatePolygonArea converts degrees² to km² by multiplying by 111²,
+// which assumes a degree of longitude is 111 km everywhere; across this dataset's
+// range, −35° to +37°, that overstates east-west distance by up to 20%. It is
+// retained where it is used, because the AOI-overlap code divides one of its
+// results by another and a consistent bias cancels; here the number is shown to a
+// user as the area of their site, so it has to be right.
+//
+// This is the standard spherical-excess formula, the same one turf.area uses:
+// integrate over the ring's edges on a sphere of the authalic radius. It ignores
+// the ellipsoid's flattening, which costs well under a percent.
+func sphericalRingAreaKm2(ring [][2]float64) float64 {
+	if len(ring) < 4 {
+		return 0
+	}
+
+	total := 0.0
+	for i := 0; i < len(ring)-1; i++ {
+		lon1 := ring[i][0] * math.Pi / 180
+		lat1 := ring[i][1] * math.Pi / 180
+		lon2 := ring[i+1][0] * math.Pi / 180
+		lat2 := ring[i+1][1] * math.Pi / 180
+
+		total += (lon2 - lon1) * (2 + math.Sin(lat1) + math.Sin(lat2))
+	}
+
+	return math.Abs(total * earthRadiusKm * earthRadiusKm / 2)
 }
 
 func signedRingArea(ring [][2]float64) float64 {

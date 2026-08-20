@@ -785,6 +785,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the complete new ones. Against the old code a reader polling during rewrites
   caught it directly: `read a partial site file (0 bytes)`.
 
+- **The dissolved-catchment area was always zero.** `polyclipPolygonToGeoJSON`
+  returned a hardcoded `0`, `DissolveCatchments` passed it through unchanged, and
+  the API handed it to the frontend — so the `area` field in every dissolve
+  response has been 0 since the function was written.
+
+  It is computed with a spherical-excess formula over the WGS84 authalic radius,
+  in km², subtracting holes. Neither existing helper was usable: `signedRingArea`
+  is a planar shoelace whose unit is degrees², and `calculatePolygonArea` converts
+  degrees² to km² by assuming a degree of longitude is 111 km everywhere, which
+  overstates east-west distance by up to 20% across this dataset's latitude range.
+  That one is left where it is, because the AOI-overlap code divides one of its
+  results by another and a consistent bias cancels.
+
+- **A panicking grid-geometry worker hung every later low-zoom request.** The
+  dissolve workers had no `recover()`, unlike the two other polyclip call sites in
+  the same file, and a panic there did not merely lose a cell: the goroutine died
+  without sending, so `wg.Wait` never returned, the results channel was never
+  closed, and the tier's ready channel never closed either. Requests block on that
+  channel with no timeout, so every subsequent low-zoom request blocked forever,
+  accumulating goroutines until the process died.
+
+  The workers now recover per cell; the build closes every tier's channel from a
+  `defer`, so an early return or a panic cannot leave anyone waiting; closing is
+  idempotent, so the failure path cannot panic on a channel that already closed;
+  and a tier that failed is recorded and reported rather than serving an empty map
+  that looks like a study area with no catchments in it. A partial failure leaves
+  tiers that already built still serving.
+
+  The wait itself is now bounded three ways — the ready channel, the request's
+  context, and a 60-second timeout — so a client that goes away, or a build that is
+  simply never going to finish, ends the wait instead of holding a goroutine.
+
+- **An unrouted `/api` path answered 200 with the SPA's HTML.** A client asking for
+  an endpoint that does not exist — or one gated to the desktop build — got a page
+  it could not parse and no indication anything was wrong. Unmatched `/api` paths
+  now return a JSON 404.
+
 ### Security
 
 - **The server bound every network interface while claiming it bound only localhost.**
