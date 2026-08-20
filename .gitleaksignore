@@ -17,13 +17,17 @@
 # would not make it secret. It is restricted to the deployment's own domains at
 # MapTiler, which is the control that actually protects it.
 #
-# Still tracked, deliberately, in internal/server/server.go and the two
-# style.json files. If that restriction is ever lifted, this exemption stops
-# being valid and the key must move to runtime configuration instead.
+# Was tracked, deliberately, in internal/server/server.go and the two
+# style.json files. internal/config/config.go:98 (commit d7cd03d) is the same
+# key, briefly named as a constant while adding the satellite basemap proxy —
+# that restriction being lifted is exactly why it moved to runtime
+# configuration (DT_MAPTILER_API_KEY) in the very next commit, per the note
+# above; this entry just lets the scan pass on the commit in between.
 e5f0ac7a86649bbe302bc7823f2a33fdc793bc3e:data/mbtiles/style.json:generic-api-key:14
 aa38bd4aa669babea620de9d9b65f1737741eea0:data/mbtiles/style.json:generic-api-key:14
 cd698f36e0c876fd1af77ab4efe835e490fdf0aa:resources/mbtiles/uow_tiles.json:generic-api-key:14
 062ff0a5d8650051c8e706c39374d31e3fe54b61:internal/server/server.go:generic-api-key:402
+d7cd03dc8354e299cb946fd63ae85b3686cc2080:internal/config/config.go:generic-api-key:98
 
 # Same key, given a named constant (MapTilerAPIKey) in config.go so the
 # satellite style URL and the glyph proxy can't drift onto different keys.

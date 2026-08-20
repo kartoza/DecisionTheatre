@@ -35,6 +35,7 @@ type Handler struct {
 	gpkgStore          *geodata.GpkgStore
 	siteStore          *sites.Store
 	cfg                config.Config
+	satelliteUsage     *config.SatelliteUsage
 	metaCache          *MetadataCache
 	lookupsMu          sync.RWMutex
 	lookups            *LookupTables
@@ -56,13 +57,15 @@ func NewHandler(
 	gpkgStore *geodata.GpkgStore,
 	siteStore *sites.Store,
 	cfg config.Config,
+	satelliteUsage *config.SatelliteUsage,
 ) *Handler {
 	h := &Handler{
-		tileStore: tileStore,
-		gpkgStore: gpkgStore,
-		siteStore: siteStore,
-		cfg:       cfg,
-		metaCache: loadMetadataCache(cfg.DataDir),
+		tileStore:      tileStore,
+		gpkgStore:      gpkgStore,
+		siteStore:      siteStore,
+		cfg:            cfg,
+		satelliteUsage: satelliteUsage,
+		metaCache:      loadMetadataCache(cfg.DataDir),
 	}
 
 	// metadata.csv is exported from R, whose make.names() rewrites spaces and
@@ -367,17 +370,30 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleInfo returns server information
 func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
-	// The satellite basemap is supplied here rather than baked into the bundle:
-	// import.meta.env is inlined by Vite at build time, so a VITE_ variable would
-	// need a rebuild to change. See config.Config.SatelliteTileURL.
-	satelliteURL, satelliteAttribution := h.cfg.Satellite()
+	// satellite_style_url points at this server's own proxy (see
+	// internal/server/satellite.go), not the configured upstream: the browser
+	// never talks to the provider directly, so every tile the style references
+	// can be counted and quota-limited, and the key never reaches client
+	// JavaScript. The attribution still names the real imagery source.
+	//
+	// Supplied here rather than baked into the bundle: import.meta.env is
+	// inlined by Vite at build time, so a VITE_ variable would need a rebuild to
+	// change. See config.Config.Satellite.
+	_, satelliteAttribution := h.cfg.Satellite()
+
+	quotaExceeded := false
+	if h.satelliteUsage != nil {
+		_, quotaExceeded = h.satelliteUsage.Snapshot(h.cfg.SatelliteQuota())
+	}
 
 	info := map[string]interface{}{
-		"version":               h.cfg.Version,
-		"tiles_loaded":          h.tileStore != nil,
-		"geo_loaded":            h.gpkgStore != nil,
-		"satellite_tile_url":    satelliteURL,
-		"satellite_attribution": satelliteAttribution,
+		"version":                  h.cfg.Version,
+		"tiles_loaded":             h.tileStore != nil,
+		"geo_loaded":               h.gpkgStore != nil,
+		"satellite_style_url":      "/api/satellite-style.json",
+		"satellite_attribution":    satelliteAttribution,
+		"satellite_available":      h.cfg.SatelliteAvailable(),
+		"satellite_quota_exceeded": quotaExceeded,
 	}
 	respondJSON(w, http.StatusOK, info)
 }

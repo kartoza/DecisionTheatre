@@ -145,6 +145,25 @@ machine-specific choices apply to `make run`, `make serve` and `nix run` alike, 
 any of them growing its own copy of the logic. Explicit environment variables and
 command-line flags still override it.
 
+```bash
+cp .dt-env.example .dt-env
+```
+
+`.dt-env` is where the **MapTiler API key** belongs — it powers the satellite basemap
+and the font-glyph proxy (`internal/config.MapTilerAPIKey`). Without it those features
+fail upstream and the app falls back to the built-in basemap / unlabelled glyphs rather
+than erroring, but you'll want your own key for a working satellite view:
+
+```bash
+# .dt-env
+DT_MAPTILER_API_KEY=your-key-here
+```
+
+Get a free key at [maptiler.com](https://www.maptiler.com/). This is deliberately an
+environment variable rather than a `--flag`: a flag's value is visible to anyone who can
+run `ps` on the machine, which a key should not be — and unlike a flag, it is never
+compiled into the binary either, so it cannot end up committed to source control.
+
 ### Where the data comes from
 
 With no `--data-dir` and no `DT_DATA_DIR`, the application resolves its data directory in

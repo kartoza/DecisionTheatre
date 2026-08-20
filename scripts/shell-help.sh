@@ -72,7 +72,12 @@ COMMANDS=(
     "DIAGNOSE|dt lint|golangci-lint over the Go sources, per .golangci.yml"
     "DIAGNOSE|dt fmt|gofmt -s the Go sources in place"
     "DIAGNOSE|dt fmt-check|Is everything formatted? What CI asks first; one second"
-    "DIAGNOSE|dt check|fmt-check, then lint, then test — CI's questions, in order"
+    "DIAGNOSE|dt vet|go vet — the pre-commit stand-in for the full linter"
+    "DIAGNOSE|dt check-shell|shellcheck over every shell script in the repository"
+    "DIAGNOSE|dt check-nix|Is flake.nix nixpkgs-fmt formatted?"
+    "DIAGNOSE|dt check-secrets|gitleaks over the whole history"
+    "DIAGNOSE|dt check-drift|Has the data contract drifted from the code?"
+    "DIAGNOSE|dt check|fmt-check, lint, shell, nix, secrets, test — CI's questions"
     "DIAGNOSE|dt info|Versions of the binary and the toolchain"
 
     "FLAKE|dt check-flake|Is flake.nix in step with the manifests? Instant"

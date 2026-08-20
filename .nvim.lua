@@ -45,6 +45,11 @@ local mappings = {
   { "M", "make bench-report", "Compare and open the report" },
   { "f", "make fmt", "Format" },
   { "g", "make fmt-check", "Is everything gofmt-clean? (what CI asks first)" },
+  { "V", "make vet", "go vet (the hook's stand-in for the full linter)" },
+  { "C", "make check-shell", "shellcheck every shell script" },
+  { "N", "make check-nix", "Is flake.nix nixpkgs-fmt formatted?" },
+  { "G", "make check-secrets", "gitleaks over the whole history" },
+  { "D", "make check-drift", "Has the data contract drifted?" },
   { "k", "make check", "Check (fmt-check + lint + test)" },
   { "?", "make doctor", "Doctor: is this checkout healthy?" },
 

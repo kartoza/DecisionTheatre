@@ -257,7 +257,7 @@ func openIntegrationStores(t *testing.T) *geodata.GpkgStore {
 // registerDesktopSiteRoutes.
 func buildRouter(gpkg *geodata.GpkgStore, siteStore *sites.Store, dataDir string) *mux.Router {
 	cfg := config.Config{Port: 0, DataDir: dataDir, Version: "test", DesktopMode: true}
-	h := NewHandler(nil, gpkg, siteStore, cfg)
+	h := NewHandler(nil, gpkg, siteStore, cfg, nil)
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 	return r

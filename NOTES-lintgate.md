@@ -278,3 +278,219 @@ and `--fix` repairs it.
 
 No Go module dependency was added. No linter version was pinned that the flake cannot
 supply — `golangci-lint` 2.8.0 comes from `flake.nix` and is what CI already pins.
+
+---
+
+# Part two — one implementation per check (#153 follow-up)
+
+Second pass on the same branch, after `main` was merged in. The brief: every QA check
+gets a single point of truth, invoked from the pre-commit hooks, from CI, and from the
+`dt` menu and neovim — `scripts/gofmt-check.sh` being the shape to copy.
+
+## The inventory
+
+This is the table the claim rests on. Every row that does real work has exactly one
+implementation, and every column that says "—" says why.
+
+| Check | Single implementation | pre-commit | CI job | `dt` / `make` | neovim |
+|---|---|---|---|---|---|
+| gofmt | `scripts/gofmt-check.sh` | `go-fmt` (`--fix`) | `lint-go` › gofmt | `dt fmt-check`, `dt fmt` | `<leader>pg`, `<leader>pf` |
+| go vet | `scripts/vet-check.sh` | `go-vet` | *none — subsumed, see below* | `dt vet` | `<leader>pV` |
+| golangci-lint | `.golangci.yml` | *none — five minutes is too slow for a commit* | `lint-go` › golangci-lint | `dt lint` | `<leader>pl` |
+| data-contract drift | `scripts/drift-check.sh` | `go-test-datacheck` | `test-go` (inside `go test ./...`) | `dt check-drift` | `<leader>pD` |
+| shellcheck | `scripts/shell-check.sh` | `shell-check` | `tooling-checks` | `dt check-shell` | `<leader>pC` |
+| nixpkgs-fmt | `scripts/nix-check.sh` | `nix-fmt` (`--fix`) | `tooling-checks` | `dt check-nix` | `<leader>pN` |
+| gitleaks | `scripts/secrets-check.sh` | `secrets` (`--staged`) | `secrets-scan` (full history) | `dt check-secrets` | `<leader>pG` |
+| flake lock step | `scripts/sync-flake.sh` | `flake-lock-step` (`--check`) | `flake-lock-step` (`--check`, then `--verify`) | `dt check-flake`, `dt verify-flake` | `<leader>pF` |
+| flake files staged together | `scripts/hooks/check-flake-staged.sh` | `flake-lock-staged-together` | *none — it reads the index; there is no index in CI* | — | — |
+| Go tests | `go test ./...` | *none — minutes* | `test-go` | `dt test` | `<leader>pt` |
+| shell script tests | `scripts/tests/*.sh` | *none* | `file-checks` | `dt test-scripts` | — |
+| frontend lint, typecheck, tests | `frontend/package.json` | *none* | `lint-frontend`, `test-frontend` | `dt test-frontend` | — |
+| TruffleHog | `trufflesecurity/trufflehog` action | *none* | `secrets-scan` | — | — |
+| Trivy | `aquasecurity/trivy-action` | *none* | `security` | — | — |
+| large / unwanted files | inline in `ci.yml`; `check-added-large-files` | `check-added-large-files` | `file-checks` | — | — |
+| REUSE / SPDX | *not gated — #91, #47* | — | — | — | — |
+
+## What changed
+
+**A script per check**, all following `gofmt-check.sh`'s contract: no arguments means
+run the check and exit non-zero on failure; `--fix` where repair is meaningful;
+`--github` to force annotations; `--help` explaining what it checks and why.
+
+New: `scripts/vet-check.sh`, `scripts/shell-check.sh`, `scripts/nix-check.sh`,
+`scripts/secrets-check.sh`, `scripts/drift-check.sh`, and `scripts/lib-check.sh` holding
+the three things they all need.
+
+`lib-check.sh` is what makes the tools work identically in all four places:
+
+- **`check_require TOOL... -- "$0" "$@"`** — if a tool is not on PATH, the script
+  re-executes itself inside `nix develop .#tooling`. Half a second with a warm store,
+  nothing at all inside `nix develop`. This is why the hooks no longer download
+  anything and CI no longer curls anything: the flake is the single place that says
+  which version of each tool this project checks with.
+- **`check_annotate`** — GitHub annotations, automatic when `GITHUB_ACTIONS=true` so a
+  new workflow step cannot forget the flag.
+- **`check_files`** — tracked files plus anything new that is not gitignored, so a file
+  is checked before it is committed rather than after it is pushed.
+
+`ui_annotate` was added to `scripts/lib-ui.sh` on the same principle, so every script
+that already reports through `ui_err`/`ui_warn` — `sync-flake.sh`, `doctor.sh` — gets
+CI annotations in its own words rather than a workflow restating them.
+
+## The three duplicates, closed
+
+**The flake lock step.** The hook ran `scripts/sync-flake.sh --check`; `ci.yml` wrapped
+`nix run .#check-flake` in `|| { echo "::error::…"; exit 1; }` twice, with its own
+wording for what to run. Both were always the same script — what was duplicated was the
+*advice*, which is the part most likely to go stale. The script emits its own
+annotations now and the workflow steps are one line each.
+
+**gitleaks.** This was worse than a duplicate. CI curled a pinned 8.21.2 tarball into
+`/tmp`; the pre-commit hook pinned its own 8.21.2 through the hook repository; and the
+flake provides **8.30.0**. The reasoning in the old comment was right as far as it went
+— the gitleaks *action* does need a paid licence for organisation repositories, so the
+CLI is the only option — but the answer was the flake, not curl. A scanner whose whole
+job is supply-chain assurance was the one binary being fetched from outside it.
+
+It was also already broken in waiting: **`detect` and `protect` do not exist in 8.30.0**
+(`git` and `dir` replaced them), so the moment anyone reconciled the versions the CI
+step would have failed outright. Both callers now go through
+`scripts/secrets-check.sh`, on the flake's version. Full history: 288 commits, 32 MB,
+2.7 seconds, no leaks.
+
+**gofmt.** The hook ran raw `gofmt -s -l -w` and CI ran the script. They agreed only
+because I had just fixed the `-s` mismatch by hand. The hook calls
+`scripts/gofmt-check.sh --fix` now, so they agree by construction.
+
+Removing the flake-sourced tools also removed **three third-party pre-commit
+repositories** — `shellcheck-precommit`, `nixpkgs-fmt`, `gitleaks` — each of which
+downloaded and pinned its own copy of a binary the flake already provides. One remains,
+`pre-commit/pre-commit-hooks`, for the generic file hygiene; it downloads no tools.
+
+## The four checks CI did not run
+
+**`go vet` — subsumed, and now documented as such.** Established, not assumed. All 35
+analysers `go tool vet help` registers are accepted by golangci-lint's govet, and
+against two files written to trip twelve of them — printf, copylocks, lostcancel,
+unusedresult, unreachable, bools, slog, waitgroup, timeformat, testinggoroutine,
+appends, stdmethods — `golangci-lint run` under the committed config reported **all
+twelve**, same wording, each tagged with the analyser that found it. So CI gets no
+`go vet` step: `lint-go` would spend a minute reproving it. The comparison is written
+into the header of `scripts/vet-check.sh` and referenced from the hook definition, so
+the next person to notice the gap finds the answer instead of filling it. `vet` is also
+deliberately absent from `make check` for the same reason — `lint` is already there.
+
+**Data-contract drift — already covered, contrary to the grep.** `test-go` runs
+`go test -race ./...`, which necessarily includes `internal/datacheck`'s
+`TestSpecCovers*`. A separate step would need the same apt install and the same webkit
+shim, costing minutes to save seconds. Scripted anyway so the hook and `dt check-drift`
+name one command, and `ci.yml` now says so at the step that covers it.
+
+**shellcheck — a real gap, now `tooling-checks`.** And wider than it was: the file list
+is derived from git (`.sh`/`.bash`, or a shell shebang) instead of the hook's
+`^scripts/` regex, which brings `devbin/dt`, `packaging/appimage/AppRun`,
+`packaging/macos/create-dmg.sh` and both scripts in `resources/` inside the gate for the
+first time. 43 files, clean at `--severity=warning`. The old `shell-syntax` hook
+(`bash -n`) is gone: shellcheck parses before it analyses, so it was a strict subset.
+
+**nixpkgs-fmt — a real gap, same job.** One `nix develop` for both, since entering the
+shell is the only slow part.
+
+Both were checks a contributor was *required* to pass and review never performed —
+and anyone committing with the hooks uninstalled skipped them entirely.
+
+## Also found
+
+- **`scripts/hooks/check-flake-staged.sh` was mode 100644.** pre-commit refuses to run
+  a non-executable entry, so the `flake-lock-staged-together` hook — the one that stops
+  `flake.nix` being committed without `nix/manifest-lock.json` — **had never run once**.
+  Fixed with `git update-index --chmod=+x`; it passes. This is exactly the failure this
+  pass exists to prevent: a check that is registered, looks present in review, and does
+  nothing.
+- **`pre-commit run --all-files` is not clean on this repository.** The generic hygiene
+  hooks (`end-of-file-fixer`, `trailing-whitespace`, `mixed-line-ending`) rewrite about
+  twenty files across `frontend/`, `data/`, `docs/`, `internal/webview_go/` and two
+  build scripts. They have evidently never been run over the whole tree, only over
+  staged files. I reverted every one of those rewrites rather than carry unrelated churn
+  — and `internal/webview_go/` is vendored, so it should probably be excluded from those
+  three hooks rather than reformatted. Not my ticket; worth one.
+- **The remaining duplicate is the large/unwanted-file scan**: `ci.yml`'s inline `find`
+  over the whole tree versus pre-commit's `check-added-large-files --maxkb=5120` over
+  what is being added. I did not unify them, because they answer different questions and
+  choosing which one is wanted is a decision rather than a merge. `file-checks` is green
+  now — the tracked `frontend/.env` that used to fail it is gone from `main`.
+- **TruffleHog has no local equivalent** and is not in the flake. Leaving it as a
+  GitHub action is defensible — it is a second opinion alongside gitleaks, and running
+  both on every commit would be slow — but it is the one scanner a contributor cannot
+  reproduce.
+
+## REUSE / SPDX — not gated, on purpose
+
+Recorded in the `.pre-commit-config.yaml` header as well as here, so an audit of the
+check list against the project standards finds the reason rather than the gap. `reuse`
+is in `devShells.tooling` already; what is missing is the decision, not the tool.
+**#91** (confirm the licence with Wits) and **#47** (no LICENSE file, no SPDX headers,
+though GPL-3.0 is asserted in three manifests) have to settle first — with **#90** and
+**#108** downstream of them. A `reuse lint` gate added today could only fail the whole
+tree or be silenced on its first run.
+
+## `dt check` now means "would CI pass?"
+
+It ran `fmt-check lint test`, which was narrower than CI by four checks. It now runs
+`fmt-check lint check-shell check-nix check-secrets test`, and the Makefile records what
+is left out and why: `vet` (subsumed by `lint`), `check-drift` (inside `test`),
+`check-flake` (the hook runs it on commit), the frontend suites (`dt test-all`), and
+`nix build` / Trivy / the container jobs, which nothing local reproduces in under a
+minute. Claiming those would make the target mean less, not more.
+
+## Sequencing
+
+Same discipline as the first pass; the honest answer is slightly different this time.
+
+**Would merging turn a green branch red?** For the Go gates, no — `golangci-lint`,
+`gofmt`, `go vet`, `go build` and `go test` are all clean on this branch, which now
+includes `main`. Two new CI jobs' worth of checks are new to review, and I ran both
+against the whole tree before wiring them: shellcheck is clean over all 43 shell files
+and nixpkgs-fmt is clean over `flake.nix`. A branch that adds a shell script with an
+unquoted expansion, or edits `flake.nix` without formatting, will now fail where it
+would previously have merged — which is the point, and it is a first-run cost of
+roughly zero because the tree is already clean.
+
+**Three things to sequence deliberately:**
+
+1. **`tooling-checks` is a new required check.** `scripts/protect-branch.sh` derives the
+   required list from the workflows, and I confirmed it picks the job up. Run
+   `dt protect-branch` after merging, or the job will run without being required.
+2. **Everyone needs to reinstall hooks.** `.pre-commit-config.yaml` changed shape —
+   three repositories removed, hook ids `shell-syntax` → `shell-check`, plus `nix-fmt`
+   and `secrets`. `dt hooks` re-installs. Until then a contributor's old hooks keep
+   working against the old tools; nothing breaks, but the version drift this pass
+   removed comes back for them.
+3. **The gitleaks version moves 8.21.2 → 8.30.0** for everyone at once, hook and CI
+   together. I ran the full-history scan on 8.30.0 before wiring it: no leaks, no new
+   findings. If one ever appears from a rule added between those versions, it will
+   appear in `secrets-scan` and in every contributor's next commit simultaneously.
+
+## Verification (part two)
+
+| Command | Result |
+|---|---|
+| `./scripts/gofmt-check.sh` | 83 Go files, all formatted |
+| `./scripts/shell-check.sh` | 43 shell scripts, no warnings |
+| `./scripts/nix-check.sh` | 1 nix file, formatted |
+| `./scripts/vet-check.sh` | `go vet ./...` clean |
+| `./scripts/drift-check.sh` | contract matches the code |
+| `./scripts/secrets-check.sh` | 288 commits, no leaks (2.7s) |
+| `./scripts/secrets-check.sh --staged` | no leaks (32ms) |
+| `go build ./...`, `go vet ./...`, `go test ./...` | all clean |
+| `golangci-lint run ./...` | **0 issues** |
+| `pre-commit run <hook> --all-files`, all eight project hooks | all pass |
+| `make check` | passes |
+| `dt vet`, `dt check-shell`, `dt check-nix`, `dt check-secrets`, `dt check-drift` | all dispatch and pass |
+| `yaml.safe_load` on `ci.yml` and `.pre-commit-config.yaml` | parse clean |
+| branch-protection derivation | lists `tooling-checks` |
+
+Each script was also exercised through its failure path: `gofmt-check.sh` against a
+misformatted file (annotation, exit 1, `--fix` repairs), `shell-check.sh` against two
+real findings it caught in the new scripts themselves, and `secrets-check.sh` in both
+scopes.
