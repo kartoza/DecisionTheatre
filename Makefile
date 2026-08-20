@@ -34,8 +34,10 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
+.PHONY: bench bench-report bench-list bench-sweep
 .PHONY: container
-.PHONY: fmt lint check deps
+.PHONY: fmt fmt-check lint vet check deps
+.PHONY: check-shell check-nix check-secrets check-drift
 .PHONY: doctor doctor-deep sync-flake check-flake verify-flake hooks vendor-fonts
 .PHONY: protect-branch
 .PHONY: docs docs-serve
@@ -105,8 +107,15 @@ serve:
 dev: run
 
 # Go backend with air hot-reload on :8080 (port configured in .air.toml)
+#
+# air execs the binary directly rather than through scripts/run-app.sh, so
+# .dt-env is never sourced on this path — unlike `make run`/`make serve`. It
+# is sourced here instead, so DT_MAPTILER_API_KEY (and anything else in
+# .dt-env) still reaches the process air launches. `set -a` while sourcing is
+# required, not cosmetic: a plain `. ./.dt-env` only sets shell variables,
+# which a child process like air does not inherit — only exported ones do.
 dev-backend:
-	air
+	@set -a; [ -f .dt-env ] && . ./.dt-env; set +a; exec air
 
 # Vite dev server with HMR (proxies /api, /tiles, /data, /docs to :8080)
 dev-frontend:
@@ -119,6 +128,7 @@ dev-all:
 	@echo "Open http://localhost:5173 for live development"
 	@echo ""
 	@trap 'kill 0' EXIT; \
+	set -a; [ -f .dt-env ] && . ./.dt-env; set +a; \
 	air & \
 	sleep 2 && cd $(FRONTEND_DIR) && npx vite
 
@@ -137,19 +147,109 @@ test-frontend:
 ## rather than the declared one.
 test-scripts:
 	@./scripts/tests/version-test.sh
+	@./scripts/tests/report-tables-test.sh
 
 test-all: test test-frontend test-scripts
+
+# ============================
+# Benchmarking
+# ============================
+
+## bench: Measure the running server and save the result.
+##
+## Needs a server: start one with `dt run` first. The result is JSON under
+## benchmarks/results/, kept, because a comparison against last month is only
+## possible if last month's file is still there.
+##
+## DT_BENCH_TARGET overrides the address, DT_BENCH_LABEL the label:
+##   make bench DT_BENCH_LABEL=before
+bench:
+	@$(GO) run ./cmd/dtbench run \
+		--target $(or $(DT_BENCH_TARGET),http://127.0.0.1:8080) \
+		$(if $(DT_BENCH_LABEL),--label $(DT_BENCH_LABEL),)
+
+## bench-report: Compare the two most recent runs and open the report.
+##
+## With no arguments it takes the two most recent runs and names which ones it
+## chose. DT_BENCH_BASELINE and DT_BENCH_CURRENT accept a label, a filename, or
+## a position such as last-3.
+bench-report:
+	@$(GO) run ./cmd/dtbench report --pdf --open \
+		$(if $(DT_BENCH_BASELINE),--baseline $(DT_BENCH_BASELINE),) \
+		$(if $(DT_BENCH_CURRENT),--current $(DT_BENCH_CURRENT),)
+
+## bench-list: Show the stored benchmark results.
+bench-list:
+	@$(GO) run ./cmd/dtbench list
+
+## bench-sweep: Build each revision in a range, measure it, save the results.
+##
+## Slow — every revision is a full build — so it lists what it would do and
+## stops unless DT_BENCH_FROM is set:
+##   make bench-sweep DT_BENCH_FROM=v0.4.0
+bench-sweep:
+	@$(GO) run ./cmd/dtbench sweep \
+		$(if $(DT_BENCH_FROM),--from $(DT_BENCH_FROM),--dry-run) \
+		$(if $(DT_BENCH_TO),--to $(DT_BENCH_TO),)
 
 # ============================
 # Code quality
 # ============================
 
+## fmt: Format every Go file in place, with gofmt -s.
+##
+## Delegates to the same script the gate uses, so "formatted" means one thing:
+## the same file list, the same exclusions, the same flags.
 fmt:
-	$(GOFMT) -s -w .
-	$(GO) fmt ./...
+	@./scripts/gofmt-check.sh --fix
 
+## fmt-check: Is everything formatted? Reports; changes nothing.
+##
+## This is exactly what the lint-go job runs first in CI, and it needs neither
+## cgo nor a linter binary, so it answers in about a second. Run it before you
+## push and formatting never reaches review.
+fmt-check:
+	@./scripts/gofmt-check.sh
+
+## lint: golangci-lint over the Go sources, using .golangci.yml.
+##
+## The configuration is committed and the version is pinned in
+## .github/workflows/ci.yml to the one the development shell provides, so this
+## and CI apply the same rules. Run `dt lint -- --fix` to apply what can be
+## applied automatically.
 lint:
-	$(GOLINT) run --timeout 5m
+	$(GOLINT) run --timeout 5m $(ARGS)
+
+## vet: go vet over the module.
+##
+## Deliberately NOT part of `check`, and deliberately absent from CI: `lint`
+## subsumes it, and scripts/vet-check.sh records the comparison that
+## establishes that rather than asserting it. It exists because the pre-commit
+## hook needs something faster than a five-minute linter, and because a hook
+## and a task should not be two spellings of the same command.
+vet:
+	@./scripts/vet-check.sh $(ARGS)
+
+## check-shell: shellcheck over every shell script in the repository.
+##
+## The file list is derived from git — anything with a .sh extension or a shell
+## shebang — so scripts outside scripts/ are covered too.
+check-shell:
+	@./scripts/shell-check.sh $(ARGS)
+
+## check-nix: is flake.nix nixpkgs-fmt formatted? ARGS="--fix" to reformat.
+check-nix:
+	@./scripts/nix-check.sh $(ARGS)
+
+## check-secrets: gitleaks over the full history. ARGS="--staged" for what the
+## pre-commit hook scans.
+check-secrets:
+	@./scripts/secrets-check.sh $(ARGS)
+
+## check-drift: has the data contract in internal/datacheck/spec.go drifted
+## away from the code that reads it?
+check-drift:
+	@./scripts/drift-check.sh $(ARGS)
 
 ## check-data: Check the data directory and print a summary of its contents
 ##
@@ -169,7 +269,23 @@ walkthrough-manifest:
 ## deployment gates and documentation keep working.
 validate-data: check-data
 
-check: fmt lint test
+## check: The gates CI applies that can be answered locally in under a minute.
+##
+## fmt-check rather than fmt: this answers "would CI pass?", and a target that
+## silently rewrites your files cannot answer that question. `dt fmt` is the
+## one that changes things.
+##
+## What is here and what is not, deliberately:
+##
+##   vet          omitted — lint subsumes it. See scripts/vet-check.sh.
+##   check-drift  omitted — `test` runs the same contract tests via ./...
+##   check-flake  omitted — it is fast, but `hooks` already runs it on commit;
+##                run `dt check-flake` after touching go.mod or package-lock.
+##   frontend     omitted — `dt test-all` adds the npm suites.
+##   nix build, trivy, the container jobs: CI only. Nothing local reproduces
+##                them in under a minute, and pretending otherwise would make
+##                this target mean less, not more.
+check: fmt-check lint check-shell check-nix check-secrets test
 
 # ============================
 # Health and flake lock step

@@ -3,19 +3,135 @@
 # The version is pinned in .github/workflows/ci.yml and provided by the
 # development shell, so `dt lint` and CI run the same linter over the same rules.
 #
-# The exclusions below are deliberate and narrow. Each one covers a call whose
-# error genuinely cannot be acted on — not "this was noisy". Anything whose
-# error changes behaviour if dropped stays enforced: json decoding, Sscanf,
-# MkdirAll and friends are all checked.
+# HOW THIS LIST WAS CHOSEN
+#
+# Every enabled linter is a promise: from here on, nobody merges code that
+# trips it. A list that has to be silenced with `//nolint` to get a build
+# through is worse than no list at all, because it teaches people that the
+# annotation is the way past the gate. So each entry below names the class of
+# defect it catches *in this codebase*, and the whole set runs clean on the
+# tree as it stands — there is no backlog hiding behind an exclusion.
+#
+# The linters that are worth having but cannot be switched on yet are recorded
+# at the bottom of this file, with the exact debt that blocks each one. That
+# list is the plan, not a wish.
 version: "2"
 
 linters:
   # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
-  #
-  # Deliberately not adding more here. Turning on further linters is worth
-  # doing, but it is its own change with its own backlog — bundling it into a
-  # build fix would mean neither gets reviewed properly.
   default: standard
+
+  enable:
+    # --- The failure modes this project keeps hitting -----------------------
+
+    # An error checked, logged, and then `return nil` anyway — the caller is
+    # told the operation succeeded. This is the shape behind the "silent
+    # storage failure" and "empty success on DB error" defects: nothing
+    # crashes, the user just gets an empty map and no explanation.
+    - nilerr
+
+    # The same failure one step removed: a non-nil error value that is returned
+    # through a variable which is nil at that point, so `if err != nil` at the
+    # call site never fires.
+    - nilnesserr
+
+    # `return nil, nil`. The caller gets no value and no reason, and has to
+    # guess whether that meant "absent" or "broken". Every lookup here either
+    # has something to return or has a reason it does not.
+    - nilnil
+
+    # Rows and prepared statements that are never closed. This application
+    # holds SQLite handles open for GeoPackage and MBTiles reads on every tile
+    # and every indicator request; a leaked *sql.Rows pins a connection for the
+    # life of the process.
+    - sqlclosecheck
+
+    # HTTP response bodies that are never closed — the geocode proxy and the
+    # datapack downloader both make outbound requests, and a body left open
+    # leaks the connection rather than returning it to the pool.
+    - bodyclose
+
+    # --- Things that are silently wrong, with no runtime symptom ------------
+
+    # A malformed compiler directive is a comment: it does nothing and says
+    # nothing. The server embeds the built frontend and the docs site with
+    # //go:embed, so a mistyped directive here does not fail the build, it
+    # ships an application that serves nothing.
+    - gocheckcompilerdirectives
+
+    # Struct types that reach json.Marshal without tags, so the wire format
+    # follows Go's exported casing instead of the contract the frontend reads.
+    # The API's response shapes are consumed by TypeScript that will not be
+    # rebuilt when a field is renamed.
+    - musttag
+
+    # HTTP header keys written in a casing the net/http canonical form will
+    # never match, so the lookup silently returns "" forever.
+    - canonicalheader
+
+    # A type with both value and pointer receivers: whichever half is not in
+    # the method set is skipped by encoding/json and by interface satisfaction,
+    # without a compile error.
+    - recvcheck
+
+    # A context re-wrapped on each pass of a loop, so the chain of cancel
+    # functions and values grows without bound for as long as the loop runs.
+    - fatcontext
+
+    # Duration arithmetic that multiplies two Durations, giving a value 10^9
+    # times too large. Tile expiry and refetch backoff are both computed this
+    # way and neither has a test that would notice.
+    - durationcheck
+
+    # A package-level variable of *another* package reassigned at runtime —
+    # http.DefaultClient and friends. It works until a second package does the
+    # same thing, and then it depends on initialisation order.
+    - reassign
+
+    # --- Enum handling ------------------------------------------------------
+
+    # A switch over datacheck.Role or datacheck.Severity that lists no default
+    # and misses a case: adding a new severity then silently renders nothing
+    # for it. Configured below so that a deliberate default still counts as
+    # exhaustive — the point is to catch the switch that forgot to decide, not
+    # to outlaw catch-alls.
+    - exhaustive
+
+    # --- Suppression discipline ---------------------------------------------
+
+    # //nolint with no reason attached, or a bare //nolint that disables every
+    # linter at once. If the gate can be opened, opening it has to be argued
+    # in the diff.
+    - nolintlint
+
+    # --- Test hygiene -------------------------------------------------------
+
+    # os.MkdirTemp, os.Setenv and context.Background inside a test, where
+    # t.TempDir, t.Setenv and t.Context exist. The first leaves directories
+    # behind on failure; the second leaks environment into every test that runs
+    # after it in the same binary, which is exactly the kind of order-dependent
+    # flake that costs a day to find.
+    - usetesting
+
+    # --- Wording ------------------------------------------------------------
+
+    # Misspellings, including in the strings the user reads. Restricted to
+    # unambiguous errors: see the note on locale in the settings below.
+    - misspell
+
+    # Error values and types not named Err*/*Error, so the thing a caller is
+    # meant to pass to errors.Is cannot be found by looking.
+    - errname
+
+    # Bidirectional Unicode control characters, which can make a diff read
+    # differently from what the compiler sees. Cheap, and the only defence
+    # against it is automated.
+    - bidichk
+
+    # `replace` and `exclude` directives, or a toolchain pin, appearing in
+    # go.mod. Any of them changes what builds without changing what the flake
+    # records, and the first symptom is that nobody else can build the flake.
+    - gomoddirectives
 
   settings:
     staticcheck:
@@ -35,6 +151,46 @@ linters:
         # provided", which is the condition as a person states it; the expanded
         # form is harder to check by eye. Style opinion, declined deliberately.
         - -QF1001
+
+    exhaustive:
+      # A switch that ends in `default` has decided what to do about the cases
+      # it did not name. The defect worth catching is the switch with no
+      # default that quietly falls through to the zero value when a new enum
+      # member is added — which is what this setting leaves enforced.
+      default-signifies-exhaustive: true
+
+    misspell:
+      # Deliberately no `locale:` setting.
+      #
+      # Setting locale: UK reports 26 findings here, and acting on them would
+      # be a bug: `Center` is the TileJSON and MBTiles metadata field name,
+      # `color` is a JSON key the frontend reads, and `Sanitize` is a function
+      # name. The wire format is not a place to have an opinion about English.
+      # Only unambiguous misspellings are reported.
+      ignore-rules:
+        - kartoza
+
+    nolintlint:
+      # A suppression has to name the linter it is for. A bare //nolint
+      # disables every check on that line, including ones written years after
+      # the comment, and nothing in review shows that it did.
+      require-specific: true
+
+      # The other two settings this linter offers are both worth having and
+      # both blocked on internal/server/, so they are off for now:
+      #
+      #   require-explanation: true  5 findings — bind_test.go:97,106,111,
+      #                              geocode.go:224, server.go:370, all bare
+      #                              //nolint:errcheck with no reason given.
+      #   allow-unused: false        3 findings — geocode.go:224,
+      #                              bind_test.go:97 and, before this commit,
+      #                              fsutil/atomic.go:84: directives for an
+      #                              errcheck rule that exclude-functions
+      #                              already covers, so they suppress nothing.
+      #
+      # Both become a one-word change once those five lines are dealt with.
+      require-explanation: false
+      allow-unused: true
 
     errcheck:
       # Reported by name so the list is auditable, rather than switching the
@@ -74,6 +230,94 @@ linters:
         linters:
           - errcheck
 
+      # Walk and range callbacks in test fixtures return nil to mean "skip this
+      # entry", which nilerr cannot tell apart from swallowing a failure. In
+      # production code it can and does, so the check stays on there — which is
+      # where a swallowed error actually reaches a user.
+      - path: _test\.go
+        linters:
+          - nilerr
+
+# ---------------------------------------------------------------------------
+# The next ratchet
+#
+# Each of these was measured against the whole tree and is worth enabling. Each
+# is held back only by findings in packages that are being rewritten on other
+# branches right now; fixing them here would collide with that work. Counts are
+# from the commit that added this block, taken with the issue caps off — the
+# defaults truncate at three of the same message and would have understated
+# every one of them.
+#
+#   errchkjson      4  api/handler.go x3, server/server.go
+#                      json.Encoder.Encode of a float64 whose error is dropped.
+#                      A NaN or +Inf indicator makes Encode fail after the 200
+#                      and the header are already on the wire, so the client
+#                      receives a truncated body and no error. The most
+#                      valuable single entry in this list.
+#   rowserrcheck    1  geodata/gpkg_store.go:785
+#                      rows.Err() unchecked: a query that dies partway through
+#                      is reported as a short but successful result set.
+#   errorlint       1  server/datapack.go
+#                      == against a sentinel error that arrives wrapped.
+#   nilerr          2  api/desktopsiteroutes_test.go
+#                      Already enabled; these two are covered by the _test.go
+#                      exclusion above, which is the thing to revisit.
+#   errcheck        6  server x2, api, geodata, sites, tiles
+#     check-type-assertions: true — an unchecked x.(T) is a panic, not an error.
+#   nolintlint    2+5  server/geocode.go:224, server/bind_test.go:97,106,111,
+#                      server/server.go:370. See the settings block above.
+#   unparam         4  tiles x2, api, geodata
+#                      Parameters and results left behind by refactors.
+#   contextcheck    4  api x2, geodata, server
+#   makezero        1  geodata/gpkg_store.go
+#   wastedassign    1  api/handler.go
+#   gocritic        8  api x4, sites x3, geodata
+#   noctx          24  datacheck x7, gpkgtest x6, server x5, tiles x4, main.go x2
+#                      Queries and dials with no context, so nothing can be
+#                      cancelled. A design change rather than a lint fix: it
+#                      belongs with the work on database context cancellation,
+#                      behind it rather than ahead of it.
+#   gosec          99  server x37, datacheck x17, geodata x15, api x11, sites x9,
+#                      tiles x5, fsutil x3, config x2
+#                      Mostly G301/G304/G306 file-permission and variable-path
+#                      findings that need a policy decision before they are
+#                      useful. Two do not: G305 (zip traversal) and G110
+#                      (decompression bomb), both in server/datapack.go, on the
+#                      path that extracts an archive the user supplied. Those
+#                      two are worth reading today, whatever happens to the
+#                      linter.
+#
+# Considered and declined, so nobody has to measure them again:
+#
+#   govet shadow  18 findings, every one an `err` shadowed in an inner scope,
+#                 and not one of them a bug. The ratio does not justify it.
+#   errcheck check-blank
+#                 `_ = f()` is how this codebase writes "I considered this and
+#                 chose to ignore it". Banning it only moves the same decision
+#                 into a //nolint comment, where it is harder to read.
+#   goconst 11, perfsprint 23, intrange 28, copyloopvar 4, usestdlibvars 14,
+#   predeclared 4, dupword 1
+#                 Style and micro-optimisation. They produce diffs, not fixes,
+#                 and 85 mechanical changes across eight packages would collide
+#                 with everything currently in flight for no defect caught.
+# ---------------------------------------------------------------------------
+
+# Report everything.
+#
+# golangci-lint defaults to max-same-issues: 3 and max-issues-per-linter: 50,
+# which silently truncates the output: the run that produced the "next ratchet"
+# counts below showed three stale //nolint directives when there are six. A gate
+# that hides half of what it found teaches people to fix what is shown and push
+# again, and the counts in this file would be wrong the day they were written.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
+    # gofmt with -s. This is reported by `golangci-lint run` as well as fixed
+    # by `golangci-lint fmt`, so the linter is a formatting gate in its own
+    # right — but CI also runs `gofmt -s -l` directly in a step that needs
+    # neither cgo nor five minutes, so a formatting mistake is reported in
+    # seconds rather than at the end of the slowest job. See `dt fmt-check`.
     - gofmt

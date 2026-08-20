@@ -40,20 +40,40 @@ type Config struct {
 	ResourcesDir string
 	Version      string
 
-	// SatelliteTileURL is the raster basemap the client uses for satellite
-	// imagery, an {x}/{y}/{z} template passed to maplibre.
+	// SatelliteStyleURL is the upstream MapLibre style document — satellite
+	// imagery plus roads and place labels, not a single raster tile type. The
+	// server fetches and rewrites it, not the browser: see
+	// internal/server/satellite.go for why every tile it references needs to be
+	// counted on our side, and why a keyed provider means the key can never
+	// reach client JavaScript in the first place.
 	//
-	// Configurable so that changing provider does not require a rebuild. The
-	// default is Google's undocumented mt0.google.com endpoint, which needs no
-	// key — which is exactly why using it falls outside the Google Maps terms of
-	// service. Replacing it is a live decision (issue #65); this field is what
-	// makes that decision a deployment change rather than a code change.
-	SatelliteTileURL string
+	// Configurable so that changing provider does not require a rebuild. Issue
+	// #65 replaced the original default, Google's undocumented mt0.google.com
+	// raster endpoint, with Esri World Imagery, then this field replaced that in
+	// turn with MapTiler's Hybrid style, which is what adds roads and labels.
+	SatelliteStyleURL string
 
 	// SatelliteAttribution is displayed on the map for the above. For most
 	// providers this is a licence condition rather than a courtesy, so it travels
 	// with the URL instead of being hardcoded in the client.
 	SatelliteAttribution string
+
+	// SatelliteQuotaLimit caps how many tiles SatelliteTileURL is fetched for in
+	// a calendar month before the server stops fetching and the client falls
+	// back to the built-in basemap. Zero means DefaultSatelliteQuotaLimit; the
+	// zero value is deliberately "the safe default" rather than "unlimited",
+	// since an unconfigured deployment should not be able to exceed a provider's
+	// free-tier terms by accident.
+	SatelliteQuotaLimit int
+
+	// SatelliteUsageDir overrides where the persisted monthly tile count (see
+	// SatelliteUsage) is read from and written to. Empty means SettingsDir().
+	//
+	// A field for the same reason DataDir and ResourcesDir are: so a test can
+	// point it at a temporary directory instead of the real per-user config
+	// location, which server.New would otherwise read from and write to on
+	// every test that builds a Server.
+	SatelliteUsageDir string
 
 	// DesktopMode is true only when the process owns a desktop session and has
 	// opened the embedded WebView window.
@@ -71,28 +91,94 @@ type Config struct {
 	DesktopMode bool
 }
 
-// DefaultSatelliteTileURL is used when nothing is configured. See
-// SatelliteTileURL for why this particular endpoint is a known problem.
-const DefaultSatelliteTileURL = "https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+// MapTilerAPIKeyEnvVar is the environment variable that supplies the
+// MapTiler key this deployment authenticates with, for both the satellite
+// style below and the font-glyph proxy in server.go (handleGlyphProxy). One
+// definition so the two features cannot drift onto different keys.
+//
+// Read from the environment rather than compiled in: a key baked into the
+// source is a key committed to git history forever, recoverable from any
+// clone regardless of what a later commit changes it to — which is exactly
+// what happened to the key this replaced. See scripts/run-app.sh and
+// .dt-env.example for how a developer machine supplies it.
+const MapTilerAPIKeyEnvVar = "DT_MAPTILER_API_KEY"
 
-// DefaultSatelliteAttribution matches DefaultSatelliteTileURL.
-const DefaultSatelliteAttribution = "© Google Maps"
+// MapTilerAPIKey returns the configured key, or "" if MapTilerAPIKeyEnvVar is
+// unset. An empty key is not specially handled here: the satellite style and
+// font-glyph requests simply fail upstream, and both already degrade
+// gracefully (satellite.go falls back to the built-in basemap; the glyph
+// proxy renders without labels) rather than needing a second failure mode.
+func MapTilerAPIKey() string {
+	return os.Getenv(MapTilerAPIKeyEnvVar)
+}
 
-// Satellite returns the configured basemap template and its attribution, applying
+// DefaultSatelliteStyleURL is used when nothing is configured.
+//
+// MapTiler's Hybrid style: satellite imagery with OSM-derived roads and place
+// labels already composited in, as a single style rather than a raster tile
+// type on its own.
+func DefaultSatelliteStyleURL() string {
+	return "https://api.maptiler.com/maps/hybrid/style.json?key=" + MapTilerAPIKey()
+}
+
+// DefaultSatelliteAttribution matches DefaultSatelliteStyleURL — MapTiler's
+// documented required attribution. A Free-plan account additionally requires
+// displaying MapTiler's logo; confirm the account's plan before relying on
+// text attribution alone to satisfy their terms.
+const DefaultSatelliteAttribution = `<a href="https://www.maptiler.com/copyright/" target="_blank">© MapTiler</a> ` +
+	`<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>`
+
+// DefaultSatelliteQuotaLimit is set below MapTiler's documented free-tier
+// ceiling (100,000 requests/month, enforced by MapTiler itself — unlike
+// Esri's honour-system terms, exceeding it does not merely breach a licence,
+// it stops working). The margin leaves room for two things this quota does
+// not count: font-glyph traffic sharing the same key (see MapTilerAPIKey),
+// and the Hybrid style needing roughly twice the tile fetches per viewed area
+// that a raster-only basemap did, since it now has both a raster and a
+// vector source.
+const DefaultSatelliteQuotaLimit = 80_000
+
+// Satellite returns the configured style URL and its attribution, applying
 // the defaults.
-func (c Config) Satellite() (tileURL, attribution string) {
-	tileURL = c.SatelliteTileURL
-	if tileURL == "" {
-		tileURL = DefaultSatelliteTileURL
+func (c Config) Satellite() (styleURL, attribution string) {
+	defaultStyleURL := DefaultSatelliteStyleURL()
+	styleURL = c.SatelliteStyleURL
+	usingDefault := styleURL == ""
+	if usingDefault {
+		styleURL = defaultStyleURL
 	}
 	attribution = c.SatelliteAttribution
-	if attribution == "" && tileURL == DefaultSatelliteTileURL {
-		// Only default the attribution alongside the default URL: crediting
-		// Google for somebody else's imagery would be worse than crediting
-		// nobody.
+	if attribution == "" && usingDefault {
+		// Only default the attribution alongside the default URL: crediting the
+		// default provider for somebody else's imagery would be worse than
+		// crediting nobody.
 		attribution = DefaultSatelliteAttribution
 	}
-	return tileURL, attribution
+	return styleURL, attribution
+}
+
+// SatelliteAvailable reports whether a satellite basemap can actually be
+// served: either an operator configured their own style URL (assumed usable
+// on its own terms), or the default MapTiler style has a key to authenticate
+// with. False means the client should not offer satellite mode at all rather
+// than trying it and failing — see satelliteTileProxy in internal/server,
+// which refuses the style request outright when this is false, and
+// handleInfo, which reports it so the frontend never asks in the first place.
+func (c Config) SatelliteAvailable() bool {
+	if c.SatelliteStyleURL != "" {
+		return true
+	}
+	return MapTilerAPIKey() != ""
+}
+
+// SatelliteQuota returns the configured monthly tile cap, applying the
+// default. Named apart from the SatelliteQuotaLimit field it reads because Go
+// does not allow a method and a field to share a name.
+func (c Config) SatelliteQuota() int {
+	if c.SatelliteQuotaLimit == 0 {
+		return DefaultSatelliteQuotaLimit
+	}
+	return c.SatelliteQuotaLimit
 }
 
 // ListenAddress returns the host:port to bind, applying the safe default.

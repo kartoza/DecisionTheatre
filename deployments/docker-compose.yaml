@@ -11,6 +11,13 @@ services:
     # image that is already loaded uses it as-is.
     image: ${DT_IMAGE:-decision-theatre:latest}
     restart: unless-stopped
+    # Not a --flag: a flag value is visible to anyone who can run `docker top`
+    # or `ps` against the container, which a key should not be. Read directly
+    # from the environment by internal/config.MapTilerAPIKey. Empty is a valid
+    # value — the satellite basemap and font-glyph proxy just fail upstream
+    # and the app falls back to the built-in basemap / unlabelled glyphs.
+    environment:
+      - DT_MAPTILER_API_KEY=${DT_MAPTILER_API_KEY:-}
     command:
       - --headless
       # Required and deliberate — see the note on CMD in Dockerfile. The

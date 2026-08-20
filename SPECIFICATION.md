@@ -273,9 +273,16 @@ Each pane supports three visualization modes, cycled via toolbar button:
   `colors`, `details`, `variabletypes`, `inputs`, `targetinputs`, `targetranges`,
   `canmap`, `cangraph`, `axislabels`, `xaxislabels`, `units`, `charttypes`,
   `groupingvariables`, `groupingvalues`, `dial0middle`
+<<<<<<< HEAD
 - `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw
   value as a columnar `{ids, values}` / `{ids, series}` response, for one or more scenarios
   in a single request)
+=======
+- `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
+- `GET /api/catchment-values` - catchment ids and values for a viewport, no geometry; the
+  join payload for the vector-tile choropleth, which sources geometry from
+  `catchments_lev12` in the tile pipeline and applies values as MapLibre feature state
+>>>>>>> origin/main
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
@@ -445,6 +452,17 @@ Violet → Indigo → Blue → Cyan → Green → Yellow → Orange → Red
 ## Performance Considerations
 
 - GeoJSON caching with 300ms debounce
+- One shared, cancellable request per distinct question (`frontend/src/lib/sharedRequest.ts`):
+  every pane asking the same thing at the same moment produces one request, and a
+  request the user's next interaction has made pointless is aborted rather than
+  merely ignored. Applies to `/api/choropleth`, `/api/catchment-values` and
+  `/api/aggregate`. Requests carrying site ideal overrides are deliberately
+  excluded — the URL is not the whole of the question for those.
+- Choropleth responses are applied in request order: a run superseded by a later
+  one never paints, so an out-of-order completion cannot leave the map showing a
+  viewport, scenario or attribute the user has left
+- Aggregate fetches are scoped to the range mode, so panning does not re-request
+  full-domain values that cannot have changed
 - Viewport-limited choropleth queries (max 2000 features)
 - Pre-computed geojson column in GeoPackage
 - R-tree spatial index for fast bbox queries

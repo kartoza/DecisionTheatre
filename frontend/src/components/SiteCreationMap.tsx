@@ -25,7 +25,11 @@ import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { getAppRuntime } from '../types/runtime';
 import places from '../data/places.json';
-import { satelliteAttribution, satelliteTileUrl } from '../lib/satelliteBasemap';
+import {
+  satelliteStyleUrl,
+  satelliteUnavailable,
+  subscribeSatelliteUnavailable,
+} from '../lib/satelliteBasemap';
 
 const MAX_SEARCH_RESULTS = 8;
 const SEARCH_FLY_ZOOM = 10;
@@ -70,9 +74,98 @@ interface SiteCreationMapProps {
   onCancel: () => void;
 }
 
-const GOOGLE_SATELLITE_SOURCE_ID = 'google-satellite';
-const GOOGLE_SATELLITE_LAYER_ID = 'google-satellite-tiles';
+// The satellite basemap here is merged into the existing map's style rather
+// than replacing it wholesale (unlike MapView.tsx, which can just swap the
+// whole style) — this map's own site-drawing layers need to stay on top. Every
+// source and layer from the fetched Hybrid style is added under a prefixed id
+// to avoid colliding with the base style's own ids, which is a real risk:
+// Hybrid's vector layer is OpenMapTiles-schema, the same schema the base style
+// itself is built from, so ids like "water" or "building" are likely shared.
+const SATELLITE_ID_PREFIX = 'satellite-';
 
+// Only raster (the imagery itself), line (roads) and symbol (place labels) —
+// not fill/background: a translucent land-cover fill would just muddy the
+// imagery, which is the same reasoning already applied a few lines below to
+// the base style's own layers.
+function isHybridLayerWorthShowing(layer: maplibregl.LayerSpecification): boolean {
+  return layer.type === 'raster' || layer.type === 'line' || layer.type === 'symbol';
+}
+
+// Fetched once per session and reused by every toggle and every map instance,
+// mirroring MapView.tsx's warmStyleCache for the vector basemap.
+let _cachedSatelliteStyle: maplibregl.StyleSpecification | null = null;
+let _satelliteStylePromise: Promise<maplibregl.StyleSpecification> | null = null;
+function loadSatelliteStyle(): Promise<maplibregl.StyleSpecification> {
+  if (_cachedSatelliteStyle) return Promise.resolve(_cachedSatelliteStyle);
+  if (!_satelliteStylePromise) {
+    _satelliteStylePromise = fetch(satelliteStyleUrl())
+      .then((r) => {
+        if (!r.ok) throw new Error(`satellite style: ${r.status} ${r.statusText}`);
+        return r.json() as Promise<maplibregl.StyleSpecification>;
+      })
+      .then((style) => {
+        _cachedSatelliteStyle = style;
+        return style;
+      })
+      .catch((err) => {
+        // Reset so the next toggle can retry, e.g. after the backend starts up.
+        _satelliteStylePromise = null;
+        throw err;
+      });
+  }
+  return _satelliteStylePromise;
+}
+
+/** What addHybridBasemapLayers added, so removeHybridBasemapLayers can undo exactly that. */
+interface HybridBasemapIds {
+  sourceIds: string[];
+  layerIds: string[];
+}
+
+// Adds every source, and every road/label/imagery layer, from the fetched
+// Hybrid style — inserted at the same point the old single raster layer used
+// to go. Async because the style is fetched (once; see loadSatelliteStyle),
+// unlike the source/layer objects this replaces, which were built in memory.
+async function addHybridBasemapLayers(
+  map: maplibregl.Map,
+  beforeLayerId: string | undefined,
+): Promise<HybridBasemapIds> {
+  const style = await loadSatelliteStyle();
+
+  const sourceIds: string[] = [];
+  for (const [id, source] of Object.entries(style.sources ?? {})) {
+    const prefixedId = SATELLITE_ID_PREFIX + id;
+    if (!map.getSource(prefixedId)) {
+      map.addSource(prefixedId, source);
+    }
+    sourceIds.push(prefixedId);
+  }
+
+  const layerIds: string[] = [];
+  for (const layer of style.layers ?? []) {
+    if (!isHybridLayerWorthShowing(layer)) continue;
+    const prefixedId = SATELLITE_ID_PREFIX + layer.id;
+    if (map.getLayer(prefixedId)) continue;
+    const prefixedLayer = {
+      ...layer,
+      id: prefixedId,
+      ...('source' in layer && layer.source ? { source: SATELLITE_ID_PREFIX + layer.source } : {}),
+    } as maplibregl.LayerSpecification;
+    map.addLayer(prefixedLayer, beforeLayerId);
+    layerIds.push(prefixedId);
+  }
+
+  return { sourceIds, layerIds };
+}
+
+function removeHybridBasemapLayers(map: maplibregl.Map, ids: HybridBasemapIds): void {
+  for (const layerId of ids.layerIds) {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+  }
+  for (const sourceId of ids.sourceIds) {
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  }
+}
 
 // Bright, chunky line styles for site boundaries
 const SITE_LINE_PAINT = {
@@ -126,6 +219,7 @@ function SiteCreationMap({
   const [isGoogleBasemap, setIsGoogleBasemap] = useState(false);
   const isGoogleBasemapRef = useRef(false);
   const hiddenLayersRef = useRef<string[]>([]);
+  const hybridBasemapIdsRef = useRef<HybridBasemapIds>({ sourceIds: [], layerIds: [] });
   const [drawnPoints, setDrawnPoints] = useState<[number, number][]>([]);
   const [selectedCatchments, setSelectedCatchments] = useState<Map<string, GeoJSON.Feature>>(new Map());
   const [isAnimating, setIsAnimating] = useState(false);
@@ -375,24 +469,10 @@ function SiteCreationMap({
         }, beforeLayer); // Insert below the outlines if layer exists
       }
 
-      // Default to Google satellite in browser runtime — inject it beneath all vector layers
+      // Default to satellite in browser runtime — inject it beneath all vector layers
       if (getAppRuntime() === 'browser') {
         const firstLayerId = map.getStyle()?.layers?.[0]?.id;
-        if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
-          map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
-            type: 'raster',
-            tiles: [satelliteTileUrl()],
-            tileSize: 256,
-            attribution: satelliteAttribution(),
-            maxzoom: 21,
-          });
-        }
-        if (!map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) {
-          map.addLayer(
-            { id: GOOGLE_SATELLITE_LAYER_ID, type: 'raster', source: GOOGLE_SATELLITE_SOURCE_ID },
-            firstLayerId,
-          );
-        }
+
         // Hide fill/background layers so satellite shows through at all zoom levels.
         // Skip catchments-selectable-fill: it's already invisible (opacity 0) and
         // exists purely so click handlers can query it — hiding it would make
@@ -409,6 +489,18 @@ function SiteCreationMap({
         hiddenLayersRef.current = hidden;
         isGoogleBasemapRef.current = true;
         setIsGoogleBasemap(true);
+
+        // The layers themselves arrive a moment later than the state above —
+        // the style has to be fetched first (once; cached for the rest of the
+        // session). The map shows the (now-hidden) vector basemap's bare fills
+        // for that moment rather than nothing, which is the same "unchanged
+        // until it lands" failure mode the flag-only default already accepted.
+        addHybridBasemapLayers(map, firstLayerId)
+          .then((ids) => {
+            if (mapRef.current !== map) return; // unmounted or replaced meanwhile
+            hybridBasemapIdsRef.current = ids;
+          })
+          .catch((err) => console.error('Failed to load satellite basemap:', err));
       }
 
       // If we have initial geometry, display it
@@ -981,34 +1073,24 @@ function SiteCreationMap({
     });
   }, [drawnPoints.length, updateDrawingPreview]);
 
-  const toggleGoogleBasemap = useCallback(() => {
+  // Shared by the toggle button and the quota-exceeded auto-revert below, so
+  // the two cannot drift into applying the switch differently.
+  const applyGoogleBasemap = useCallback((next: boolean) => {
     const map = mapRef.current;
     if (!map) return;
 
-    const next = !isGoogleBasemapRef.current;
     isGoogleBasemapRef.current = next;
     setIsGoogleBasemap(next);
 
     if (next) {
-      if (!map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) {
-        map.addSource(GOOGLE_SATELLITE_SOURCE_ID, {
-          type: 'raster',
-          tiles: [satelliteTileUrl()],
-          tileSize: 256,
-          attribution: satelliteAttribution(),
-          maxzoom: 21,
-        });
-      }
-      if (!map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) {
-        const firstLayerId = map.getStyle()?.layers?.[0]?.id;
-        map.addLayer(
-          { id: GOOGLE_SATELLITE_LAYER_ID, type: 'raster', source: GOOGLE_SATELLITE_SOURCE_ID },
-          firstLayerId,
-        );
-      }
+      const firstLayerId = map.getStyle()?.layers?.[0]?.id;
+
       // Skip catchments-selectable-fill (needed for click detection despite being
       // invisible) and the site boundary's own fill, which must stay visible.
-      const skipHiding = new Set([GOOGLE_SATELLITE_LAYER_ID, 'catchments-selectable-fill', 'site-fill']);
+      // The layers addHybridBasemapLayers is about to add are never fill or
+      // background type (see isHybridLayerWorthShowing), so there is nothing
+      // of theirs for this pass to need to skip.
+      const skipHiding = new Set(['catchments-selectable-fill', 'site-fill']);
       const hidden: string[] = [];
       for (const layer of map.getStyle()?.layers ?? []) {
         if (skipHiding.has(layer.id)) continue;
@@ -1019,9 +1101,17 @@ function SiteCreationMap({
       }
       hiddenLayersRef.current = hidden;
       moveSiteGeometryToTop(map);
+
+      addHybridBasemapLayers(map, firstLayerId)
+        .then((ids) => {
+          if (mapRef.current !== map || !isGoogleBasemapRef.current) return; // unmounted or toggled off meanwhile
+          hybridBasemapIdsRef.current = ids;
+          moveSiteGeometryToTop(map);
+        })
+        .catch((err) => console.error('Failed to load satellite basemap:', err));
     } else {
-      if (map.getLayer(GOOGLE_SATELLITE_LAYER_ID)) map.removeLayer(GOOGLE_SATELLITE_LAYER_ID);
-      if (map.getSource(GOOGLE_SATELLITE_SOURCE_ID)) map.removeSource(GOOGLE_SATELLITE_SOURCE_ID);
+      removeHybridBasemapLayers(map, hybridBasemapIdsRef.current);
+      hybridBasemapIdsRef.current = { sourceIds: [], layerIds: [] };
       for (const layerId of hiddenLayersRef.current) {
         if (map.getLayer(layerId)) {
           map.setLayoutProperty(layerId, 'visibility', 'visible');
@@ -1030,6 +1120,43 @@ function SiteCreationMap({
       hiddenLayersRef.current = [];
     }
   }, []);
+
+  const toggleGoogleBasemap = useCallback(() => {
+    const next = !isGoogleBasemapRef.current;
+
+    if (next && satelliteUnavailable()) {
+      toast({
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Showing the default map instead.',
+        status: 'warning',
+        duration: 8000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    applyGoogleBasemap(next);
+  }, [applyGoogleBasemap, toast]);
+
+  // If satellite becomes unavailable (quota spent, or — at startup, before
+  // /api/info has resolved — no provider turns out to be configured) while it
+  // is actively showing, revert to the built-in basemap rather than leaving
+  // the map to fail tile-by-tile.
+  useEffect(() => {
+    return subscribeSatelliteUnavailable((unavailable) => {
+      if (!unavailable || !isGoogleBasemapRef.current) return;
+      applyGoogleBasemap(false);
+      toast({
+        title: 'Satellite imagery unavailable',
+        description: "This month's quota has been used up, or no imagery "
+          + 'provider is configured. Switched to the default map.',
+        status: 'warning',
+        duration: 8000,
+        isClosable: true,
+      });
+    });
+  }, [applyGoogleBasemap, toast]);
 
   const getInstructions = () => {
     switch (mode) {
@@ -1150,11 +1277,11 @@ function SiteCreationMap({
             left={4}
           >
             <Tooltip
-              label={isGoogleBasemap ? 'Switch to default basemap' : 'Switch to Google satellite'}
+              label={isGoogleBasemap ? 'Switch to default basemap' : 'Switch to satellite'}
               placement="right"
             >
               <IconButton
-                aria-label="Toggle Google satellite basemap"
+                aria-label="Toggle satellite basemap"
                 icon={<FiGlobe />}
                 size="sm"
                 onClick={toggleGoogleBasemap}

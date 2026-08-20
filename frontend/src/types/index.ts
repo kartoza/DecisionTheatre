@@ -14,11 +14,19 @@ export interface ServerInfo {
   version: string;
   tiles_loaded: boolean;
   geo_loaded: boolean;
-  /** Satellite raster tile template, supplied at runtime so changing provider
-   *  needs no rebuild. See lib/satelliteBasemap.ts. */
-  satellite_tile_url?: string;
+  /** Satellite basemap style document. Always this server's own proxy — see
+   *  lib/satelliteBasemap.ts for why the browser does not fetch tiles (or the
+   *  style itself) from the provider directly. */
+  satellite_style_url?: string;
   /** Attribution for the above — a licence condition for most providers. */
   satellite_attribution?: string;
+  /** False when no satellite provider is configured at all (no key, no
+   *  operator-set style URL) — see config.Config.SatelliteAvailable. The
+   *  client should not offer the satellite basemap while this is false. */
+  satellite_available?: boolean;
+  /** True once this deployment's monthly satellite tile quota is spent. The
+   *  client should not offer the satellite basemap while this is true. */
+  satellite_quota_exceeded?: boolean;
 }
 
 export interface TilesetMetadata {
@@ -324,10 +332,22 @@ export interface SiteIndicators {
   catchmentCount: number;   // Number of catchments used
   totalAreaKm2: number;     // Total area in km²
   warnings?: string[];
-  // catchmentIds deliberately does not live here. It is on Site, and it was on
-  // both: for the Africa walkthrough that was the same 147,837-element array
-  // written twice — 3.84 MB of a 4.0 MB document. Nothing read this copy; the
-  // three places that mentioned it only carried it along. Read `site.catchmentIds`.
+
+  /**
+   * The id list does not live here. It is on `Site`, and it used to be on both:
+   * for the Africa walkthrough that was the same 147,837-element array written
+   * twice — 3.84 MB of a 4.0 MB document. Nothing ever read this copy; the three
+   * places that mentioned it only carried it along. Read `site.catchmentIds`.
+   *
+   * Declared as `never` rather than simply left out. Omitting it stopped the
+   * duplicate being *written* by a fresh object literal, but a structural type
+   * with a property missing is still satisfied by an object that has it, so
+   * `{ ...serverIndicators }` or a cast put it back with nothing to complain.
+   * `never` makes the property unassignable, so the duplicate is unrepresentable
+   * rather than merely undocumented — the only value it accepts is `undefined`,
+   * which `JSON.stringify` does not emit.
+   */
+  catchmentIds?: never;
 }
 
 // Site represents a saved site with its boundary and map state

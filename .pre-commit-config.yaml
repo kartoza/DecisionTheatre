@@ -1,11 +1,34 @@
 # Pre-commit configuration.
 #
-# Install with `make hooks`. The tools come from `nix develop .#tooling`, so
-# what runs here matches what CI runs.
+# Install with `make hooks`.
 #
-# The local hooks below are the ones specific to this project; the rest are
-# standard hygiene. Anything that needs the network or more than a second or
-# two belongs in CI, not here.
+# ONE IMPLEMENTATION PER CHECK
+#
+# Every entry below that does real work calls a script in scripts/. Those same
+# scripts are what .github/workflows/ci.yml runs, what `dt <check>` runs and
+# what the <leader>p bindings run, so a hook cannot quietly diverge from the
+# gate it is supposed to anticipate. The inventory — check, script, and the
+# four places each is invoked from — is the table in NOTES-lintgate.md.
+#
+# The scripts fetch their own tools from `nix develop .#tooling` when they are
+# not already on PATH, which is why there are no third-party hook repositories
+# here for shellcheck, nixpkgs-fmt or gitleaks any more. Each of those
+# downloaded and pinned its own copy of a binary the flake already provides, at
+# a version the flake did not agree with. A secret scanner is the last thing
+# that should arrive over the network from somewhere the flake does not name.
+#
+# Anything needing the network, or more than a second or two, belongs in CI
+# rather than here — with one deliberate exception, noted at the secrets hook.
+#
+# NOT GATED, ON PURPOSE: REUSE / SPDX
+#
+# The project standards call for SPDX headers and a `reuse lint` gate, and
+# `reuse` is already in devShells.tooling. It is deliberately not wired up: the
+# licence itself is unsettled (#91, confirm the licence with Wits; #47, no
+# LICENSE file and no SPDX headers though GPL-3.0 is asserted in three
+# manifests). A gate added before #91 lands could only fail the whole tree or
+# be silenced immediately. This note exists so the next person auditing the
+# check list finds the reason rather than concluding it was forgotten.
 
 default_install_hook_types: [pre-commit]
 fail_fast: false
@@ -24,6 +47,10 @@ repos:
       - id: flake-lock-step
         name: flake.nix is in step with go.mod, go.sum and package-lock.json
         entry: scripts/sync-flake.sh --check
+        # CI runs this same script — `nix run .#check-flake -- --check`, and
+        # again with --verify, which additionally recomputes the real hashes.
+        # The workflow used to restate the failure guidance inline; the script
+        # emits its own annotations now, so there is one wording to maintain.
         language: system
         pass_filenames: false
         files: '^(flake\.nix|go\.mod|go\.sum|frontend/package-lock\.json|nix/manifest-lock\.json)$'
@@ -38,58 +65,75 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # The same script the lint-go job runs, in its --fix mode: the hook
+      # repairs, the gate reports, and neither can develop an opinion about
+      # -s or about which files are vendored that the other does not share.
+      # It ran raw `gofmt -s -l -w` until this was unified, which is how it
+      # came to bless commits the gate would then refuse.
       - id: go-fmt
         name: gofmt
-        entry: gofmt -l -w
-        language: system
-        types: [go]
-        exclude: '^internal/webview_go/'
-
-      - id: go-vet
-        name: go vet
-        entry: go vet ./internal/... .
+        entry: scripts/gofmt-check.sh --fix
         language: system
         pass_filenames: false
         types: [go]
 
+      # go vet is the fast stand-in for golangci-lint, which at five minutes
+      # cannot run on every commit. CI does NOT run go vet, and should not:
+      # golangci-lint's govet linter runs the same analyser passes, and
+      # scripts/vet-check.sh records the comparison that establishes it rather
+      # than asserting it. Read that before adding a `go vet` step anywhere.
+      - id: go-vet
+        name: go vet
+        entry: scripts/vet-check.sh
+        language: system
+        pass_filenames: false
+        types: [go]
+
+      # In CI this is covered by test-go's `go test ./...`, which necessarily
+      # includes it; a separate step would need the same apt install and webkit
+      # shim, so it would cost minutes to save seconds. The script exists so
+      # the hook and `dt check-drift` name one command rather than two people
+      # remembering the same -run pattern.
       - id: go-test-datacheck
         name: data contract has not drifted from the code
-        entry: go test ./internal/datacheck/ -run TestSpec
+        entry: scripts/drift-check.sh
         language: system
         pass_filenames: false
         files: '^(internal/(geodata|api|server|tiles|sites|datacheck)/.*\.go)$'
 
-      - id: shell-syntax
-        name: shell scripts parse
-        entry: bash -n
+      # Replaces both the old `bash -n` hook and the shellcheck-precommit
+      # repository. shellcheck parses before it analyses, so the syntax check
+      # was a subset; and the file list is now derived from git rather than a
+      # path regex, which is what brings devbin/dt, packaging/appimage/AppRun
+      # and the two scripts in resources/ inside the gate for the first time.
+      - id: shell-check
+        name: shellcheck
+        entry: scripts/shell-check.sh
         language: system
-        files: '^scripts/.*\.sh$|^scripts/(dt|hooks/.*)$'
+        pass_filenames: false
+        files: '\.(sh|bash)$|^(scripts/(dt|hooks/.*)|devbin/dt|packaging/appimage/AppRun)$'
 
-  # ---------------------------------------------------------------------------
-  # Shell
-  # ---------------------------------------------------------------------------
-  - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.10.0
-    hooks:
-      - id: shellcheck
-        args: [--severity=warning, --external-sources]
+      # nixpkgs-fmt from the flake rather than the nix-community hook
+      # repository, which pinned its own 1.3.0 alongside the flake's.
+      - id: nix-fmt
+        name: nixpkgs-fmt
+        entry: scripts/nix-check.sh --fix
+        language: system
+        pass_filenames: false
+        files: '\.nix$'
 
-  # ---------------------------------------------------------------------------
-  # Nix
-  # ---------------------------------------------------------------------------
-  - repo: https://github.com/nix-community/nixpkgs-fmt
-    rev: v1.3.0
-    hooks:
-      - id: nixpkgs-fmt
-
-  # ---------------------------------------------------------------------------
-  # Secrets. The repository ships a data directory and deployment configs, so
-  # this is not theoretical.
-  # ---------------------------------------------------------------------------
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
-    hooks:
-      - id: gitleaks
+      # The one asymmetry in the check set, and it is deliberate. This scans
+      # what is staged, in about thirty milliseconds. CI runs the same script
+      # with no argument, over all 288 commits, in about three seconds —
+      # because a secret that was committed and then removed is still a secret,
+      # and because scanning history on every commit would train people to
+      # reach for --no-verify.
+      - id: secrets
+        name: gitleaks (staged)
+        entry: scripts/secrets-check.sh --staged
+        language: system
+        pass_filenames: false
+        always_run: true
 
   # ---------------------------------------------------------------------------
   # General hygiene

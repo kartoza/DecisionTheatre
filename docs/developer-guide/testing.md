@@ -147,7 +147,7 @@ Tests run on every push and pull request to `main` via `.github/workflows/ci.yml
 |---|---|
 | `secrets-scan` | TruffleHog (verified only) and Gitleaks |
 | `file-checks` | Large-file and unwanted-file scan |
-| `lint-go` | `golangci-lint` with default settings |
+| `lint-go` | `gofmt -s -l` via `scripts/gofmt-check.sh`, then `golangci-lint` against the committed `.golangci.yml` |
 | `lint-frontend` | `npx tsc --noEmit` only |
 | `test-go` | `go test -race -coverprofile=coverage.out ./...` |
 | `test-frontend` | `npm test` |

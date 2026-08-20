@@ -189,6 +189,12 @@ flake can build it.
 For everyday work, prefer `dt run`: it is incremental, whereas `nix run` re-runs the
 full reproducible build.
 
+Per-machine settings — including the MapTiler API key the satellite basemap and
+font-glyph proxy need — go in a gitignored `.dt-env` file (copy `.dt-env.example`),
+which every entry point above reads identically. See `README.dev.md` in the project
+root ("Run the Application") for the full list of knobs — it lives outside this
+site's own `docs/` tree, so it isn't linkable from here.
+
 ## `nix run` commands
 
 | Command | What it does |
@@ -286,7 +292,7 @@ terminal.
 |---|---|
 | `secrets-scan` | TruffleHog (verified only) and Gitleaks |
 | `file-checks` | Large-file and unwanted-file scan |
-| `lint-go` | `golangci-lint` |
+| `lint-go` | `scripts/gofmt-check.sh`, then `golangci-lint` against `.golangci.yml` |
 | `lint-frontend` | `npx tsc --noEmit` only |
 | `test-go` | `go test -race -coverprofile=coverage.out ./...` |
 | `test-frontend` | `npm test` |
@@ -303,7 +309,7 @@ parallel packaging jobs, then a published GitHub Release.
 To reproduce CI locally:
 
 ```bash
-dt check          # fmt, lint, test
+dt check          # fmt-check, lint, test — the same questions CI asks, in order
 nix build && ./result/bin/decision-theatre --version
 trivy fs --severity CRITICAL,HIGH .
 ```

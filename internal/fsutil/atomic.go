@@ -50,7 +50,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// Flush before the rename. Without this the rename can be durable while the
 	// contents are not, which is the failure this function exists to prevent.
 	if err := tmp.Sync(); err != nil {
-		tmp.Close() //nolint:errcheck
+		tmp.Close() //nolint:errcheck // the flush error is the one worth reporting
 		return fmt.Errorf("flushing %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -81,6 +81,6 @@ func syncDir(dir string) {
 	if err != nil {
 		return
 	}
-	defer d.Close() //nolint:errcheck
+	defer d.Close()
 	_ = d.Sync()
 }

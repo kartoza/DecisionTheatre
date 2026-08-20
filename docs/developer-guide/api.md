@@ -141,9 +141,16 @@ if the ID is not found.
 
 ### `GET /api/choropleth`
 
+<<<<<<< HEAD
 The main map data endpoint. Returns a GeoJSON `FeatureCollection` of catchment polygons
 with the requested attribute in each feature's properties — unless `valuesOnly=1`, which
 returns the columnar shape described below.
+=======
+Returns a GeoJSON `FeatureCollection` of catchment polygons with the requested attribute
+in each feature's properties. Used below the zoom range covered by the catchment vector
+tiles, where the server returns grid-aggregated cells rather than catchments; above it the
+map uses `/api/catchment-values` against the tiled geometry instead.
+>>>>>>> origin/main
 
 | Query parameter | Description |
 |---|---|
@@ -201,6 +208,36 @@ all aligned to the single `ids` array:
 Asking for both scenarios of a comparison in one request is the intended use: they always
 want the same extent and attribute, and the response is dominated by the `ids` column,
 which one request sends once where two sent it twice.
+
+### `GET /api/catchment-values`
+
+The values half of the vector-tile choropleth: every catchment's value for one attribute
+within a viewport, with **no geometry at all**. Geometry comes from the tile pipeline and
+is reused across attributes, so this is the only thing a pan or an indicator change has to
+move over the wire. The response is two index-aligned arrays rather than one object per
+catchment, which at these sizes is roughly an order of magnitude smaller than the
+equivalent `FeatureCollection` scaffolding.
+
+| Query parameter | Description |
+|---|---|
+| `scenario` | `reference`, `current` or `future` |
+| `attribute` | Attribute column name |
+| `minx`, `miny`, `maxx`, `maxy` | Viewport bounding box |
+| `siteId` | Optional; applies site-specific ideal overrides (`future` only) |
+
+```json
+{
+  "scenario": "current",
+  "attribute": "rainfall_mm",
+  "ids": [1120000010, 1120000011],
+  "values": [812.4, 903.1],
+  "domain_min": 0,
+  "domain_max": 2400
+}
+```
+
+The `domain_min`/`domain_max` are resolved exactly as `/api/choropleth` resolves them, so
+the colour scale does not shift when the map crosses between the two transports.
 
 ### `GET /api/aggregate`
 

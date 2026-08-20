@@ -9,6 +9,15 @@ export default defineConfig({
       '/tiles': 'http://localhost:8080',
       '/data': 'http://localhost:8080',
       '/docs': 'http://localhost:8080',
+      // The satellite style's "glyphs" field is a relative path
+      // (/fonts/{fontstack}/{range}.pbf), which MapLibre resolves against the
+      // style's own URL — i.e. against this dev server's origin, not the
+      // backend's. Without this entry Vite's SPA fallback served index.html
+      // for every glyph request (200 OK, text/html), which MapLibre can't
+      // parse as a glyph range, silently breaking every symbol-layer label
+      // (place names, road names, city labels — 7 of the Hybrid style's 17
+      // layers) while the map otherwise looked like it had loaded fine.
+      '/fonts': 'http://localhost:8080',
     },
   },
   build: {
