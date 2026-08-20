@@ -195,6 +195,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elements are tour spotlight targets and a ring drawn around something invisible
   is worse than no ring.
 
+  **The pane labels hang from the top edge instead of floating over the data.**
+  The two scenario names and the factor between them sat inset 12px from the top
+  corners as rounded pills, six panes' worth. They are pulled flush now — left into
+  the top-left corner with only its bottom-right corner rounded, the factor
+  centred under the top edge with both bottom corners rounded, the scenario on the
+  right into the top-right corner with only its bottom-left — so they read as part
+  of the pane frame rather than as objects on top of the map. They are also about
+  half the size: 13–14px type at 6–8px padding becomes 10px at 2px, taking the
+  scenario labels from roughly 28px tall to 16px and the factor label from 33px to
+  16px. The three were three copies of the same twelve declarations and now share
+  one base, with each supplying only its position and its exposed corners.
+
   Accessibility along the way: the view and range switches are `radiogroup`s with
   one tab stop, arrow-key traversal and `aria-checked`, where they had been
   independent `IconButton`s conveying selection through background colour alone;

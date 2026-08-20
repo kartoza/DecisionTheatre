@@ -2976,65 +2976,65 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     leftClipContainerRef.current = leftClipContainer;
     compareContainerRef.current = rightClipContainer;
 
-    // Scenario labels on each side
-    const leftLabel = document.createElement('div');
-    leftLabel.id = 'left-label';
-    leftLabel.style.cssText = `
+    /**
+     * The three pane labels — the two scenario names and the factor between
+     * them — differ only in where they sit and which corners that leaves
+     * exposed. They were three copies of the same twelve declarations.
+     *
+     * All three hang from the top edge rather than floating inset from it: at
+     * six panes the inset pills read as clutter over the data, and pulling them
+     * flush turns them into part of the pane frame. Anything after the base
+     * wins, so a caller can override padding or background.
+     */
+    const labelStyle = (extra: string) => `
       position:absolute;
-      top:12px;
-      left:12px;
+      top:0;
       z-index:5;
       background:rgba(0,0,0,0.7);
       color:white;
-      padding:6px 14px;
-      border-radius:20px;
-      font-size:13px;
+      padding:2px 8px;
+      font-size:10px;
       font-weight:600;
-      letter-spacing:0.5px;
+      letter-spacing:0.3px;
       backdrop-filter:blur(8px);
-    `;
+    ` + extra;
+
+    // Scenario labels on each side
+    const leftLabel = document.createElement('div');
+    leftLabel.id = 'left-label';
+    leftLabel.style.cssText = labelStyle(`
+      left:0;
+      /* Only the corner facing the map is rounded: the other three are against
+         the pane's own edges, and rounding those left a floating pill with a
+         sliver of map showing through behind it. */
+      border-radius:0 0 10px 0;
+    `);
     container.appendChild(leftLabel);
 
     const rightLabel = document.createElement('div');
     rightLabel.id = 'right-label';
-    rightLabel.style.cssText = `
-      position:absolute;
-      top:12px;
-      right:12px;
-      z-index:5;
-      background:rgba(0,0,0,0.7);
-      color:white;
-      padding:6px 14px;
-      border-radius:20px;
-      font-size:13px;
-      font-weight:600;
-      letter-spacing:0.5px;
-      backdrop-filter:blur(8px);
-    `;
+    rightLabel.style.cssText = labelStyle(`
+      right:0;
+      border-radius:0 0 0 10px;
+    `);
     container.appendChild(rightLabel);
 
     // Indicator label (centered over split line)
     const indicatorLabel = document.createElement('div');
     indicatorLabel.id = 'indicator-label';
-    indicatorLabel.style.cssText = `
-      position:absolute;
-      top:12px;
+    indicatorLabel.style.cssText = labelStyle(`
       left:50%;
       transform:translateX(-50%);
+      /* Hangs off the top edge, so both bottom corners are the ones exposed. */
+      border-radius:0 0 10px 10px;
       z-index:15;
       background:rgba(0,0,0,0.85);
-      color:white;
-      padding:8px 20px;
-      border-radius:20px;
-      font-size:14px;
-      font-weight:600;
-      letter-spacing:0.5px;
-      backdrop-filter:blur(8px);
+      padding:2px 12px;
       white-space:nowrap;
       max-width:60%;
       overflow:hidden;
       text-overflow:ellipsis;
-    `;
+    `);
     container.appendChild(indicatorLabel);
 
     // Load style from server (mbtiles base layers)
