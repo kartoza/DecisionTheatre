@@ -168,6 +168,24 @@ func TestEveryQueryHonoursCancellation(t *testing.T) {
 				json.RawMessage(`{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}`))
 			return err
 		}},
+		{"GetCatchmentAreasByIDs", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.GetCatchmentAreasByIDs(ctx, []string{"1000000001"})
+			return err
+		}},
+		// The two aggregates could only join this list once they had an error
+		// to report a cancellation through; ComputeWhiskerBounds returned bare
+		// bounds and answered an abandoned request with the same empty result
+		// it gave a failed one.
+		{"AggregateCatchmentIndicators", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.AggregateCatchmentIndicators(ctx,
+				[]CatchmentIndicators{{ID: "1000000001", AreaKm2: 1, AOIFraction: 1}})
+			return err
+		}},
+		{"ComputeWhiskerBounds", func(ctx context.Context, s *GpkgStore) error {
+			_, err := s.ComputeWhiskerBounds(ctx,
+				[]CatchmentIndicators{{ID: "1000000001", AreaKm2: 1, AOIFraction: 1}})
+			return err
+		}},
 	}
 
 	for _, tc := range calls {
@@ -195,18 +213,17 @@ func TestEveryQueryHonoursCancellation(t *testing.T) {
 // The grid geometry cache is shared: it is built once and then serves every
 // aggregated choropleth for the life of the process. A request that gives up
 // waiting for it must take only itself out of the picture - if it tore the
-// build down, one impatient user would leave the aggregated path broken for
-// everyone, permanently, because the sync.Once never fires again.
+// build down, one impatient user would leave every other waiting request with
+// no geometry and no build still running to supply it.
 func TestGivingUpOnTheGridCacheDoesNotCancelTheBuild(t *testing.T) {
 	// A store whose tiers are all still building: the ready channels are open.
 	ready := make(map[float64]chan struct{}, len(gridTiersDegrees))
 	for _, tier := range gridTiersDegrees {
 		ready[tier] = make(chan struct{})
 	}
-	// The build is already marked as started so the wait below does not kick
+	// The build is already marked as in flight so the wait below does not kick
 	// one off against a nil database.
-	store := &GpkgStore{gridGeometryReady: ready}
-	store.gridGeometryOnce.Do(func() {})
+	store := &GpkgStore{gridGeometryReady: ready, gridGeometryBuilding: true}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
