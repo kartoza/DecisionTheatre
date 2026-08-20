@@ -35,7 +35,7 @@ func realDatapackRouter(t *testing.T, dir string) *mux.Router {
 	}
 	t.Cleanup(store.Close)
 
-	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test"})
+	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test"}, nil)
 	r := mux.NewRouter()
 	handler.RegisterRoutes(r)
 	return r
