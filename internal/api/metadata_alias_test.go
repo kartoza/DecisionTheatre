@@ -25,6 +25,7 @@ func fixtureCache() *MetadataCache {
 		GroupingVariables: map[string]string{},
 		GroupingValues:    map[string]string{},
 		Dial0Middle:       map[string]bool{},
+		IgnoreXGrouping:   map[string]bool{},
 		MaxValCurrent:     map[string]float64{},
 		MaxValReference:   map[string]float64{},
 	}
