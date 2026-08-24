@@ -55,7 +55,12 @@ export const theme = extendTheme({
   components: {
     Button: {
       baseStyle: {
-        borderRadius: 'full',
+        // The corner every button in the application inherits. This was 'full',
+        // which made pills of the controls that sit in dense rows — the header
+        // icon bar, the range switch, the aggregate table's toggle — so each of
+        // those had begun overriding it separately. Setting it here means a
+        // button is consistent by default rather than by remembering.
+        borderRadius: 'md',
         fontWeight: 'semibold',
         fontSize: 'sm',
         transition: 'all 0.2s',

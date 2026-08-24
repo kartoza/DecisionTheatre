@@ -3,6 +3,7 @@ import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spin
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
+import { colors } from '../styles/colors';
 
 interface AggregateTableProps {
   visible: boolean;
@@ -188,7 +189,8 @@ function AggregateTable({
                   </VStack>
                   <HStack spacing={3}>
                     <Badge
-                      colorScheme={scenario === 'reference' ? 'orange' : scenario === 'future' ? 'green' : 'cyan'}
+                      bg={scenario === 'reference' ? colors.orange : scenario === 'future' ? colors.brightGreen : colors.blue}
+                      color={colors.dark}
                       fontSize="md"
                       px={4}
                       py={2}

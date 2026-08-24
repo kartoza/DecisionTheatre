@@ -14,6 +14,7 @@ import {
   Tooltip,
   Button,
   ButtonGroup,
+  Spacer,
   Modal,
   ModalOverlay,
   ModalContent,
@@ -343,7 +344,6 @@ function ScenarioSelector({
   side,
   zoneStats,
   hideLabel,
-  zoneStatsLabel,
 }: {
   label: string;
   value: Scenario;
@@ -351,21 +351,11 @@ function ScenarioSelector({
   side: 'left' | 'right';
   zoneStats?: ZoneStats | null;
   hideLabel?: boolean;
-  zoneStatsLabel?: string;
 }) {
   const selectedInfo = SCENARIOS.find((s) => s.id === value);
-  const borderColor = useColorModeValue('gray.200', 'gray.600');
 
   return (
-    <Box
-      p={4}
-      borderRadius="lg"
-      border="1px"
-      borderColor={borderColor}
-      bg={useColorModeValue('white', 'gray.750')}
-      _hover={{ borderColor: selectedInfo?.color || 'brand.400' }}
-      transition="border-color 0.2s"
-    >
+    <Box>
       {!hideLabel && (
         <HStack mb={2}>
           <Badge
@@ -407,10 +397,7 @@ function ScenarioSelector({
 
       {/* Zone statistics for visible catchments */}
       {zoneStats && (
-        <Box mt={3} pt={3} borderTop="1px" borderColor={borderColor}>
-          <Text fontSize="xs" color="gray.500" mb={2}>
-            {zoneStatsLabel ?? 'Visible Zone Statistics'} ({zoneStats.count} catchments)
-          </Text>
+        <Box mt={3}>
           <HStack justify="space-between">
             <VStack spacing={0} align="start">
               <Text fontSize="10px" color="gray.500">Min</Text>
@@ -480,7 +467,6 @@ function ControlPanel({
   const { ignoreXGrouping } = useAttributeIgnoreXGrouping();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
-  const cardBg = useColorModeValue('white', 'gray.750');
 
   const [factorDerivedMode, setFactorDerivedMode] = useState(false);
   const [factorDerivedValue, setFactorDerivedValue] = useState('');
@@ -724,11 +710,6 @@ function ControlPanel({
     ? attributeColors[comparison.attribute]
     : undefined;
   const effectiveRangeMode: RangeMode = isSiteAggregationActive ? 'site' : rangeMode;
-  const zoneStatsLabel = effectiveRangeMode === 'domain'
-    ? 'Full Zone Statistics'
-    : effectiveRangeMode === 'extent'
-      ? 'Extent Zone Statistics'
-      : 'Site Zone Statistics';
   const leftZoneStatsRaw = effectiveRangeMode === 'domain'
     ? mapStatistics?.fullStats?.left ?? null
     : effectiveRangeMode === 'site'
@@ -763,6 +744,7 @@ function ControlPanel({
 
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
   const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
+  const zoneCatchmentCount = leftZoneStats?.count ?? rightZoneStats?.count ?? null;
 
   // The color scale is stretched to whichever zone is selected (Full/Extent/Site):
   // 'Full' uses the attribute's global domain across every catchment, while
@@ -773,9 +755,6 @@ function ControlPanel({
   const combinedDomainRange: { min: number; max: number } | null = mapStatistics?.domainRange
     ? { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max }
     : null;
-  const colorScaleRangeLabel = effectiveRangeMode === 'domain'
-    ? 'Full'
-    : effectiveRangeMode === 'extent' ? 'Extent' : 'Site';
   const [panelWidth, setPanelWidth] = useState(440);
   const [isResizing, setIsResizing] = useState(false);
   const resizeOriginX = useRef(0);
@@ -818,11 +797,21 @@ function ControlPanel({
     setIsResizing(true);
   };
 
+  // The pane number identifies the card the factor belongs to, so it sits on
+  // that card rather than on the panel heading. Defined once: the chart view
+  // and the map/dial/table view each draw their own factor card, and this is
+  // the same badge in both.
+  const paneBadge = paneIndex !== null ? (
+    <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
+      Pane {paneIndex + 1}
+    </Badge>
+  ) : null;
+
   const panelContent = (
     <VStack spacing={6} p={6} align="stretch">
           {/* Create Site button - shown prominently at top in explore mode */}
           {isExploreMode && onNavigateToCreateSite && (
-            <Box>
+            <Box pt={2}>
               <Button
                 size="lg"
                 width="100%"
@@ -846,19 +835,9 @@ function ControlPanel({
 
           {/* Title */}
           <Box>
-            <HStack mb={1}>
-              <Heading size="sm">
-                Indicator
-              </Heading>
-              {paneIndex !== null && (
-                <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
-                  Pane {paneIndex + 1}
-                </Badge>
-              )}
-            </HStack>
-            <Text fontSize="sm" color="gray.500">
-              Choose a factor to display in this view.
-            </Text>
+            <Heading size="sm" mb={1}>
+              Indicator
+            </Heading>
           </Box>
 
           <Divider />
@@ -866,12 +845,20 @@ function ControlPanel({
           {!asModal && viewMode !== 'dial' && onRangeModeChange && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
-                <Text fontSize="xs" fontWeight="600" color="gray.500">
-                  ZONE RANGE
-                </Text>
+                <Heading size="sm">
+                  Zone Range
+                </Heading>
+                {/* The count belongs to the zone, not to either scenario — both
+                    always reported the same number. */}
+                {zoneCatchmentCount !== null && (
+                  <Text fontSize="xs" color="gray.500">
+                    ({zoneCatchmentCount} catchments)
+                  </Text>
+                )}
               </HStack>
-              <ButtonGroup size="xs" isAttached variant="outline">
+              <ButtonGroup size="xs" isAttached variant="outline" width="100%">
                 <Button
+                  flex="1"
                   leftIcon={<FiGlobe size={12} />}
                   onClick={() => onRangeModeChange('domain')}
                   variant={rangeMode === 'domain' ? 'solid' : 'outline'}
@@ -882,6 +869,7 @@ function ControlPanel({
                   Full
                 </Button>
                 <Button
+                  flex="1"
                   leftIcon={<FiSquare size={12} />}
                   onClick={() => onRangeModeChange('extent')}
                   variant={rangeMode === 'extent' ? 'solid' : 'outline'}
@@ -892,6 +880,7 @@ function ControlPanel({
                   Extent
                 </Button>
                 <Button
+                  flex="1"
                   leftIcon={<FiTarget size={12} />}
                   onClick={() => onRangeModeChange('site')}
                   variant={rangeMode === 'site' ? 'solid' : 'outline'}
@@ -908,13 +897,7 @@ function ControlPanel({
 
           {/* Parent Group selector — chart view only */}
           {viewMode === 'chart' && (
-            <Box
-              p={4}
-              borderRadius="lg"
-              border="1px"
-              borderColor={borderColor}
-              bg={cardBg}
-            >
+            <Box>
               <HStack mb={2}>
                 <Badge bg={colors.pastelLightBlue} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   INDIVIDUAL FACTOR
@@ -924,6 +907,8 @@ function ControlPanel({
                     <FiInfo size={14} color="gray" />
                   </Box>
                 </Tooltip>
+                <Spacer />
+                {paneBadge}
               </HStack>
 
               <SearchableSelect
@@ -1116,18 +1101,7 @@ function ControlPanel({
           )}
 
           {viewMode !== 'chart' && (
-            <Box
-              id="demo-attribute-selector"
-              p={4}
-              borderRadius="lg"
-              border="1px"
-              borderColor={borderColor}
-              // cardBg, not a hook call: this sits inside a `viewMode !== 'chart'`
-              // conditional, so calling useColorModeValue here changed the number of
-              // hooks between renders — React's "rendered fewer hooks than expected".
-              // The component already computes this exact value at the top.
-              bg={cardBg}
-            >
+            <Box id="demo-attribute-selector">
               <HStack mb={2}>
                 <Badge bg={colors.brightGreen} color={colors.dark} variant="subtle" fontSize="xs" borderRadius="full">
                   FACTOR
@@ -1137,6 +1111,8 @@ function ControlPanel({
                     <FiInfo size={14} color="gray" />
                   </Box>
                 </Tooltip>
+                <Spacer />
+                {paneBadge}
               </HStack>
 
               <SearchableSelect
@@ -1161,8 +1137,6 @@ function ControlPanel({
             </Box>
           )}
 
-          {viewMode !== 'dial' && <Divider />}
-
           {viewMode !== 'dial' && !hideScenarioSelectors && (
             <>
               {/* Scenario 1 (Left) */}
@@ -1173,7 +1147,6 @@ function ControlPanel({
                 side="left"
                 zoneStats={leftZoneStats}
                 hideLabel={isSiteAggregationActive}
-                zoneStatsLabel={zoneStatsLabel}
               />
 
               {/* Scenario 2 (Right) */}
@@ -1184,38 +1157,14 @@ function ControlPanel({
                   onChange={onRightChange}
                   side="right"
                   zoneStats={rightZoneStats}
-                  zoneStatsLabel={zoneStatsLabel}
                 />
               )}
             </>
           )}
 
-          <Divider />
-
           {/* Legend */}
           {comparison.attribute && viewMode !== 'dial' && !hideColorScale && (
             <Box>
-              <HStack justify="space-between" align="center" mb={2}>
-                <Text fontSize="xs" fontWeight="600" color="gray.500">
-                  COLOR SCALE ({colorScaleRangeLabel})
-                </Text>
-                <ButtonGroup size="xs" isAttached variant="outline"> 
-                  {/* <Button
-                    onClick={() => onColorScaleModeChange('rainbow')}
-                    variant={colorScaleMode === 'rainbow' ? 'solid' : 'outline'}
-                    bg={colorScaleMode === 'rainbow' ? colors.pastelDarkGreen : undefined}
-                  >
-                    Rainbow
-                  </Button> */}
-                  {/* <Button
-                    onClick={() => onColorScaleModeChange('metadata')}
-                    variant={colorScaleMode === 'metadata' ? 'solid' : 'outline'}
-                    bg={colorScaleMode === 'metadata' ? colors.pastelDarkGreen : undefined}
-                  >
-                    Single
-                  </Button> */}
-                </ButtonGroup>
-              </HStack>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
                   SCALE TYPE
