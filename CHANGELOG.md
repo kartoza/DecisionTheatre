@@ -23,10 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a `container-image` artefact kept for 7 days, so a change can be run before it
   merges without building anything locally.
 
+  It is tagged `decision-theatre:<flake version>-<commit>` rather than with the
+  flake version alone. Every build previously came out as `decision-theatre:4.0.0`
+  regardless of which commit produced it, so images from two pull requests were
+  indistinguishable and loading one replaced the other. The pull request comment
+  now carries the `gh run download` command that fetches it, says plainly that
+  pull request builds are not pushed to a registry, and points at GHCR for the
+  released images.
+
 - **Every release publishes the image to GHCR** as
-  `ghcr.io/kartoza/decisiontheatre:<version>` and `:latest`, with the image
-  tarball, SPDX SBOM and Grype scan attached as release assets and the same tables
-  appended to the release notes.
+  `ghcr.io/kartoza/decisiontheatre:<version>`, and stable releases additionally
+  move `:latest` to it, with the image tarball, SPDX SBOM and Grype scan attached
+  as release assets and the same tables appended to the release notes. A
+  pre-release tag — anything with a hyphen after the version, `v2.4.0-rc1` —
+  publishes only its version tag and leaves `:latest` where it is, so an unpinned
+  `docker pull` never lands on a release candidate. The release itself is marked as
+  a pre-release on GitHub to match.
 
   The scan does not fail the build. A CVE in a system library is a fact to weigh,
   not automatically a defect here, and a gate that trips on every Negligible
@@ -339,6 +351,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covers both directions in one call. Intent is kept separate from what is on the
   map, so "we do not know yet" can no longer be mistaken for a choice; only a real
   loss switches the toggle off and says so.
+
+- **No release since v0.2.0 has carried a single platform artefact, and the cause
+  was a hand-written `pip install` list.** Each of the five platform builds built
+  the documentation itself from `pip install mkdocs mkdocs-material
+  mkdocs-minify-plugin pygments pymdown-extensions`, which omits
+  mkdocs-macros-plugin — and `mkdocs.yml` declares the `macros` plugin. So
+  `mkdocs build` aborted with `Config value 'plugins': The "macros" plugin is not
+  installed` on the first runner to reach it, `fail-fast` cancelled the other
+  four, and the `release` job — which needs all five — never ran. v2.3.0 carries
+  three assets: the container image, its SBOM and its scan, published by the one
+  job that did not depend on any of this.
+
+  The documentation is now built once by a `docs` job running `nix build .#docs`,
+  the derivation `docs.yml` and the container image already used, and each
+  platform build downloads and embeds it. `flake.nix` had the correct set in
+  `mkdocsEnv` all along. This is the same failure the hand-maintained Dockerfile
+  had — a second dependency list drifting from the first — in the last place
+  still keeping one. No runner in the release workflow installs Python now.
+
+  The build matrix also no longer fails fast, so a broken platform no longer
+  hides the state of the other four.
+
+- **The release workflow now refuses to publish an incomplete release.** It checks
+  that every artefact `docs/developer-guide/releasing.md` promises is present —
+  five archives, two `.deb`, two `.rpm`, two `.AppImage`, one `.flatpak`, one
+  `.snap`, two `.dmg`, one `.msi` — and fails with the name of whatever is missing.
+  The checksum step previously ended in `2>/dev/null ... || true`, so a packaging
+  job that produced nothing surfaced only as a release quietly short a platform,
+  and nothing else looked.
+
+- **The AppImages were not being built.** `appimagetool` is itself a type-2
+  AppImage and mounts itself with libfuse2, which the `ubuntu-24.04` runner images
+  no longer carry, so it died on `dlopen(): libfuse.so.2` before doing any work.
+  It now runs with `APPIMAGE_EXTRACT_AND_RUN=1`, which needs neither root nor an
+  extra package.
+
+- **The arm64 AppImage was built with the x86_64 `appimagetool`**, passing
+  `ARCH=aarch64` to a tool that embeds a runtime of its own architecture. It is now
+  built on an `ubuntu-24.04-arm` runner with the aarch64 tool.
+
+- **The AppImage icon was a zero-byte file.** `Icon=decision-theatre` in the
+  desktop entry pointed at an empty placeholder, so the AppImage carried no icon at
+  all. It now uses the brand favicon already in the repository.
+
+- **The snap was versioned `git`.** `version: git` is a core20-era keyword that
+  `core24` does not interpret, so the literal three characters were taken as the
+  version. The release tag is now substituted in at build time.
+
+- **The container job could silently erase its own section from the release
+  notes.** It appends to a release body that the `release` job sets outright, and
+  the two ran concurrently — whichever finished last won. It now runs after it.
 
 
 - **A walkthrough's charts, dials and aggregate table emptied thirty seconds after

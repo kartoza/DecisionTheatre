@@ -11,13 +11,23 @@ git push origin v0.2.0
 
 This triggers the GitHub Actions release workflow.
 
+A tag carrying a **pre-release identifier** — anything with a hyphen after the
+version, such as `v2.4.0-rc1` or `v2.4.0-beta.2` — is treated differently in two
+places: the GitHub release is marked as a pre-release, and the container image
+does not take the `:latest` tag. See [Phase 4](#phase-4-publish-the-container-image).
+
 ## What the Release Workflow Does
 
-The `.github/workflows/release.yml` workflow has two phases:
+The `.github/workflows/release.yml` workflow has four phases:
 
 ### Phase 1: Build Binaries
 
-Builds platform-specific binaries using a matrix strategy:
+The documentation is built first, once, by the `docs` job: `nix build .#docs` —
+the same derivation `docs.yml` and the container image use. Every platform build
+downloads that site and embeds it rather than building its own, so the plugin
+list lives in `flake.nix` and nowhere else.
+
+Then platform-specific binaries, using a matrix strategy:
 
 | Runner | Target | Archive |
 |--------|--------|---------|
@@ -29,14 +39,17 @@ Builds platform-specific binaries using a matrix strategy:
 
 For each platform:
 
-1. Sets up Go 1.24, Node.js 22, and Python 3.12
+1. Sets up Go 1.24 and Node.js 22
 2. Builds the frontend (`npm ci && npm run build`)
-3. Builds documentation (`mkdocs build`)
+3. Downloads the documentation the `docs` job built
 4. Copies built assets into `internal/server/static/` and `internal/server/docs_site/`
 5. Installs platform-specific CGO dependencies
 6. Builds the Go binary with `-ldflags "-s -w -X main.version=<tag>"`
 7. Packages into `.tar.gz` (Unix) or `.zip` (Windows)
 8. Generates SHA256 checksums
+
+The matrix does not fail fast. Every platform is required for the release, so
+cancelling the other four the moment one fails only hides how much is broken.
 
 ### Phase 2: Package Installers
 
@@ -59,6 +72,49 @@ All artifacts are collected and published as a GitHub Release with:
 - Installer packages (`.deb`, `.rpm`, `.AppImage`, `.flatpak`, `.snap`, `.dmg`, `.msi`)
 - Merged SHA256 checksums file
 - Auto-generated release notes with installation instructions
+
+Before it publishes anything, the job checks that **every artefact listed above is
+actually present** and fails the release if one is missing, naming it. A packaging
+job that produced nothing used to surface only as a release quietly missing a
+platform. The expected set is the list in Phase 1 and Phase 2 — five archives, two
+`.deb`, two `.rpm`, two `.AppImage`, one `.flatpak`, one `.snap`, two `.dmg` and
+one `.msi` — so adding a packaging job means adding it to that check too.
+
+### Phase 4: Publish the Container Image
+
+The `container` job builds the deployment image from the flake, verifies that it
+runs and serves, and pushes it to GHCR:
+
+| Tag | Published for | Moves? |
+|-----|---------------|--------|
+| `ghcr.io/kartoza/decisiontheatre:<version>` | every `v*` tag | Never — an immovable pin |
+| `ghcr.io/kartoza/decisiontheatre:latest` | stable releases only | Repointed at each new stable release |
+
+```bash
+docker pull ghcr.io/kartoza/decisiontheatre:2.4.0   # this exact release
+docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest stable release
+```
+
+Pre-release tags publish their version tag and stop there. Whatever `:latest`
+points at is what an unpinned `docker pull` deploys, so a release candidate must
+never land there.
+
+The job also attaches the image tarball, its SBOM (`sbom.spdx.json`) and its
+vulnerability scan (`cve-scan.json`) to the release, and appends a section to the
+release notes naming both tags. It runs *after* Phase 3 rather than alongside it,
+because it appends to the release body that Phase 3 sets outright — run
+concurrently, whichever finishes last wins, and roughly half the time the
+container section is the one that gets overwritten.
+
+See [Server Deployment](server-deployment.md) for running the image.
+
+!!! note "Pull request builds are not published to the registry"
+    CI builds the same image on every pull request, but keeps it as a run artefact
+    for 7 days rather than pushing it — there is nothing to `docker pull`. It is
+    tagged `decision-theatre:<flake version>-<commit>`, so builds from different
+    pull requests are distinguishable and do not overwrite each other when loaded.
+    The CI comment on the pull request carries the `gh run download` command that
+    fetches it.
 
 ## Building Packages Locally
 
