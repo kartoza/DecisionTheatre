@@ -40,6 +40,14 @@ let quotaExceeded = false;
 // the first response keeps trying, rather than never offering satellite at
 // all while a perfectly good key is loading.
 let available = true;
+// Distinct from `available`: has the server actually said yes, rather than not
+// yet having said no. Optimism is right for whether to offer the control — a
+// key that is still loading should not disable it — and wrong for whether to
+// hand MapLibre a style URL. A map constructed against a style that 404s never
+// fires its 'load' event, and a pane whose map never loads sits behind a
+// spinner until the 15-second safety net gives up. The built-in style is local
+// and always there, so starting on it costs a style swap and nothing else.
+let confirmed = false;
 
 type UnavailableListener = (unavailable: boolean) => void;
 const unavailableListeners = new Set<UnavailableListener>();
@@ -71,6 +79,9 @@ export function applyServerSatelliteConfig(info: ServerInfo | null | undefined):
   const wasUnavailable = unavailable();
 
   quotaExceeded = info?.satellite_quota_exceeded ?? false;
+  // Only an explicit true. A missing field means an older server that cannot
+  // tell us, which is exactly the case not to gamble on.
+  confirmed = info?.satellite_available === true;
   // Missing field (an older server, or a response that raced applyServer-
   // SatelliteConfig before /api/info finished) defaults to available: the
   // same "assume it works" the module-level default above already commits to.
@@ -79,6 +90,18 @@ export function applyServerSatelliteConfig(info: ServerInfo | null | undefined):
   if (unavailable() !== wasUnavailable) {
     for (const listener of unavailableListeners) listener(unavailable());
   }
+}
+
+/**
+ * Whether satellite imagery is safe to hand to MapLibre right now.
+ *
+ * Use this to choose a style URL. Use satelliteUnavailable() to decide whether
+ * to offer the control: the two differ for the whole window between the map
+ * being constructed and /api/info resolving, and that window is precisely when
+ * a wrong guess strands a pane behind a spinner.
+ */
+export function satelliteConfirmed(): boolean {
+  return confirmed && !quotaExceeded;
 }
 
 /** The (local, proxied) style URL to pass to maplibre. */
@@ -127,6 +150,7 @@ export function subscribeSatelliteUnavailable(listener: UnavailableListener): ()
 /** Exported for tests. */
 export function resetSatelliteConfig(): void {
   styleUrl = DEFAULT_SATELLITE_STYLE_URL;
+  confirmed = false;
   attribution = DEFAULT_SATELLITE_ATTRIBUTION;
   quotaExceeded = false;
   available = true;

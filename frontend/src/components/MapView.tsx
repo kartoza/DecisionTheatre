@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text, useToast } from '@chakra-ui/react';
-import { FiSliders, FiMap, FiInfo, FiBox, FiTarget, FiPlus, FiMinus, FiColumns, FiTrash2, FiGlobe } from 'react-icons/fi';
+import { FiSliders, FiMap, FiPlus, FiMinus, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -13,8 +13,8 @@ import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
 import { sharedRequest, isAbortError, type SharedCache } from '../lib/sharedRequest';
 import {
+  satelliteConfirmed,
   satelliteStyleUrl,
-  satelliteUnavailable,
   subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
 import {
@@ -51,7 +51,6 @@ interface MapViewProps {
   siteGeometry?: GeoJSON.Geometry | null;
   onBoundaryUpdate?: (geometry: GeoJSON.Geometry, thumbnail?: string | null) => void;
   isSwiperEnabled?: boolean;
-  onSwiperEnabledChange?: (enabled: boolean) => void;
   colorScaleMode: ColorScaleMode;
   colorScaleType: ColorScaleType;
   /** Which zone's min/max the color scale (and legend) is stretched to. Defaults to 'domain'. */
@@ -60,7 +59,26 @@ interface MapViewProps {
   swiperPosition?: number;
   onSwiperPositionChange?: (position: number) => void;
   is3DMode?: boolean;
-  on3DModeChange?: (enabled: boolean) => void;
+  // These five were pane-local state driven by a per-pane button stack. Every
+  // one of them acted on all panes, so App owns them now and each pane reflects
+  // the same value. Only the basemap reports back: the satellite-quota revert
+  // below is the one change that originates here.
+  isIdentifyMode?: boolean;
+  isChoroplethEnabled?: boolean;
+  isGoogleBasemap?: boolean;
+  onGoogleBasemapChange?: (enabled: boolean) => void;
+  /**
+   * Whether this map shows the zoom / compass cluster. Every map in a grid is
+   * synced through useMapSync, so one cluster drives all of them and the rest
+   * would be the same control drawn again — see lib/navigationPane.ts.
+   *
+   * Hidden with a class rather than by skipping addControl: which pane owns the
+   * cluster changes while the application runs — a pane is removed, the columns
+   * toggle between two and three, a pane switches to chart view — and the maps
+   * are built once. Adding and removing controls on each of those would be a
+   * lifecycle problem in exchange for nothing.
+   */
+  showNavigation?: boolean;
   /** Increment to force a choropleth refresh (e.g. after indicator save). */
   refreshKey?: number;
   /** Called once when both map instances have finished loading. */
@@ -859,7 +877,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, onSwiperEnabledChange, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, on3DModeChange, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -885,17 +903,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const mapsReady = useRef<{ left: boolean; right: boolean }>({ left: false, right: true });
   const resizeFrameRef = useRef<number | null>(null);
 
-  // Compare swiper state (split-screen on/off)
-  const [internalSwiperEnabled, setInternalSwiperEnabled] = useState(true);
-  const isSwiperEnabled = isSwiperEnabledProp ?? internalSwiperEnabled;
+  // Compare swiper state (split-screen on/off). Read-only here; the default
+  // covers the tests, which render MapView without the prop.
+  const isSwiperEnabled = isSwiperEnabledProp ?? true;
   const isSwiperEnabledRef = useRef(isSwiperEnabled);
   isSwiperEnabledRef.current = isSwiperEnabled;
 
-  // Identify mode state
-  const [isIdentifyMode, setIsIdentifyMode] = useState(false);
-
-  // Choropleth layer visibility state
-  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  // Identify and choropleth visibility. Owned by App: they act on every pane,
+  // so they cannot be pane state.
+  const isIdentifyMode = isIdentifyModeProp ?? false;
+  const isChoroplethEnabled = isChoroplethEnabledProp ?? true;
   const isChoroplethEnabledRef = useRef(isChoroplethEnabled);
   isChoroplethEnabledRef.current = isChoroplethEnabled;
 
@@ -910,9 +927,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   // for its existing choropleth/boundary guards; onReady only needs one.
   const onReadyFiredRef = useRef(false);
 
-  // 3D mode state
-  const [internal3DMode, setInternal3DMode] = useState(false);
-  const is3DMode = is3DModeProp ?? internal3DMode;
+  // 3D mode state. Read-only here, applied by the effect below.
+  const is3DMode = is3DModeProp ?? false;
   const is3DModeRef = useRef(is3DMode);
 
   // Store latest comparison in a ref so async callbacks see current values
@@ -2135,17 +2151,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }, FETCH_DEBOUNCE_MS);
   }, []);
 
-  // Toggle identify mode
-  const toggleIdentifyMode = useCallback(() => {
-    setIsIdentifyMode(prev => !prev);
-  }, []);
-
-  const toggleChoropleth = useCallback(() => {
-    setIsChoroplethEnabled((prev) => !prev);
-  }, []);
-
   // Google basemap toggle state. Defaults on for the browser runtime.
-  const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
+  const isGoogleBasemap = isGoogleBasemapProp ?? (getAppRuntime() === 'browser');
+  // What the user asked for, as against what is on the map. The two differ for
+  // the whole window between a map being built and /api/info resolving, and
+  // conflating them was how a startup guess became a permanent answer.
+  const wantsSatelliteRef = useRef(isGoogleBasemap);
+  wantsSatelliteRef.current = isGoogleBasemap;
+  // Held in a ref because applyBasemapStyle is memoised without it; closing
+  // over the prop directly would call a stale callback after a re-render.
+  const onGoogleBasemapChangeRef = useRef(onGoogleBasemapChange);
+  onGoogleBasemapChangeRef.current = onGoogleBasemapChange;
   const isGoogleBasemapRef = useRef(getAppRuntime() === 'browser');
   const toast = useToast();
 
@@ -2156,10 +2172,15 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const rightMap = rightMapRef.current;
     if (!leftMap) return;
 
-    isGoogleBasemapRef.current = nextVal;
-    setIsGoogleBasemap(nextVal);
+    // Wanting satellite and being able to show it are different questions. If
+    // the server has not confirmed it, show the built-in style rather than hand
+    // MapLibre a URL that 404s — but say nothing upward: this is not the user
+    // changing their mind, and reporting it as one would turn "we do not know
+    // yet" into a decision that survives the answer arriving.
+    const showSatellite = nextVal && satelliteConfirmed();
+    isGoogleBasemapRef.current = showSatellite;
 
-    const newStyle: string = nextVal
+    const newStyle: string = showSatellite
       ? (window.location.origin + satelliteStyleUrl())
       : (window.location.origin + '/data/style.json');
 
@@ -2188,51 +2209,41 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     }, 400);
   }, [reapplyBoundaryLayers]);
 
-  const toggleGoogleBasemap = useCallback(() => {
-    const nextVal = !isGoogleBasemapRef.current;
-
-    if (nextVal && satelliteUnavailable()) {
-      toast({
-        title: 'Satellite imagery unavailable',
-        description: "This month's quota has been used up, or no imagery "
-          + 'provider is configured. Showing the default map instead.',
-        status: 'warning',
-        duration: 8000,
-        isClosable: true,
-      });
-      return;
-    }
-
-    applyBasemapStyle(nextVal);
-  }, [applyBasemapStyle, toast]);
-
   // If satellite becomes unavailable (quota spent, or — at startup, before
   // /api/info has resolved — no provider turns out to be configured) while it
   // is actively showing, revert to the built-in basemap rather than leaving
   // the map to fail tile-by-tile.
   useEffect(() => {
     return subscribeSatelliteUnavailable((unavailable) => {
-      if (!unavailable || !isGoogleBasemapRef.current) return;
-      applyBasemapStyle(false);
-      toast({
-        title: 'Satellite imagery unavailable',
-        description: "This month's quota has been used up, or no imagery "
-          + 'provider is configured. Switched to the default map.',
-        status: 'warning',
-        duration: 8000,
-        isClosable: true,
-      });
+      // Symmetric: re-apply what the user asked for against what is now
+      // possible. applyBasemapStyle refuses satellite it cannot show, so this
+      // one call both falls back when the quota runs out and switches over
+      // when a key finally arrives. The previous version handled only the
+      // first, which left a map built before /api/info stuck on the built-in
+      // style for the rest of the session.
+      const wanted = wantsSatelliteRef.current;
+      if (!wanted && !isGoogleBasemapRef.current) return;
+      applyBasemapStyle(wanted);
+
+      // Only a real loss is reported upward, and it is reported as a change of
+      // state the toggle should show — which is the "switch back to the default
+      // map" the user sees. Failing to *gain* satellite is not a decision.
+      if (unavailable && wanted) {
+        onGoogleBasemapChangeRef.current?.(false);
+      }
+
+      if (unavailable && wanted) {
+        toast({
+          title: 'Satellite imagery unavailable',
+          description: "This month's quota has been used up, or no imagery "
+            + 'provider is configured. Switched to the default map.',
+          status: 'warning',
+          duration: 8000,
+          isClosable: true,
+        });
+      }
     });
   }, [applyBasemapStyle, toast]);
-
-  // Toggle split-screen swiper on/off
-  const toggleSwiper = useCallback(() => {
-    const next = !isSwiperEnabled;
-    if (isSwiperEnabledProp === undefined) {
-      setInternalSwiperEnabled(next);
-    }
-    onSwiperEnabledChange?.(next);
-  }, [isSwiperEnabled, isSwiperEnabledProp, onSwiperEnabledChange]);
 
   const deriveBoundsFromGeometry = useCallback((geometry: GeoJSON.Geometry | null): BoundingBox | null => {
     if (!geometry) return null;
@@ -2321,19 +2332,34 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     applyColors();
   }, [applyColors]);
 
-  const toggle3DMode = useCallback(() => {
-    const nextMode = !is3DModeRef.current;
-    if (is3DModeProp === undefined) {
-      setInternal3DMode(nextMode);
-    }
-    on3DModeChange?.(nextMode);
-    apply3DMode(nextMode);
-  }, [apply3DMode, is3DModeProp, on3DModeChange]);
-
   useEffect(() => {
     if (is3DModeRef.current === is3DMode) return;
     apply3DMode(is3DMode);
   }, [apply3DMode, is3DMode]);
+
+  // The same shape for the basemap. The control that used to call
+  // applyBasemapStyle directly is in the header now, so the style follows the
+  // prop rather than a click. The ref guard stops the quota-exceeded
+  // auto-revert below from being undone by its own state change.
+  useEffect(() => {
+    if (isGoogleBasemapRef.current === isGoogleBasemap) return;
+    applyBasemapStyle(isGoogleBasemap);
+  }, [applyBasemapStyle, isGoogleBasemap]);
+
+  // Choropleth visibility is read through a ref inside applyColors, so a change
+  // has to re-run it; nothing else would notice.
+  // Choropleth visibility is read through a ref inside applyColors, so a change
+  // has to re-run it; nothing else would notice. Only a *change*, though: the
+  // initial paint is already driven by the maps-ready effect, and a second run
+  // at mount would abort that one and start again.
+  const appliedChoroplethRef = useRef(isChoroplethEnabled);
+  useEffect(() => {
+    if (appliedChoroplethRef.current === isChoroplethEnabled) return;
+    appliedChoroplethRef.current = isChoroplethEnabled;
+    // Through the ref, as elsewhere in this file: applyColors is rebuilt on
+    // every render, so depending on it directly would re-run this constantly.
+    applyColorsRef.current();
+  }, [isChoroplethEnabled]);
 
   // Update cursor when identify mode changes
   useEffect(() => {
@@ -2857,24 +2883,30 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     // Create the slider with touch-action to prevent browser gestures
     const slider = document.createElement('div');
+    // Width, fill, shadow and their transition come from the .dt-swiper-line
+    // rule: inline styles would out-specify it, and the resting width depends on
+    // whether the pane is hovered, which JS here has no business knowing.
+    slider.className = 'dt-swiper-line';
+    slider.dataset.docked = '';
     slider.style.cssText = `
       position:absolute;
       top:0;
       left:0%;
-      width:12px;
       height:100%;
-      background:white;
       z-index:10;
       cursor:ew-resize;
-      box-shadow:0 0 8px rgba(0,0,0,0.4);
       transform:translateX(-50%);
       touch-action:none;
-      transition:background 0.2s ease, box-shadow 0.2s ease, width 0.2s ease;
     `;
 
     // Slider handle
     const handle = document.createElement('div');
     handle.id = 'tour-map-swiper';
+    // Revealed on hover with the rest of the pane's controls — see
+    // styles/paneChrome.css. The divider line it sits on stays visible: that
+    // marks which side of the comparison is which, and is information rather
+    // than a control.
+    handle.className = 'dt-pane-chrome';
     handle.style.cssText = `
       position:absolute;
       top:50%;
@@ -2906,6 +2938,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     function updateSliderVisuals(docked: 'left' | 'right' | null) {
       if (docked === sliderDockedRef.current) return;
       sliderDockedRef.current = docked;
+      // Width, fill and shadow are the stylesheet's — see styles/paneChrome.css,
+      // which also thins the line while the pane is not hovered.
+      slider.dataset.docked = docked ?? '';
 
       // When docked to an edge, the map on that side is clipped to zero
       // width, so its scenario label would sit over the other side's map
@@ -2915,27 +2950,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (docked === 'left') {
         // Docked left - half circle on right side
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '0 50% 50% 0';
         handle.style.left = '100%';
         handle.style.transform = 'translate(0, -50%)';
         handle.innerHTML = ARROW_RIGHT;
       } else if (docked === 'right') {
         // Docked right - half circle on left side
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '50% 0 0 50%';
         handle.style.left = '0';
         handle.style.transform = 'translate(-100%, -50%)';
         handle.innerHTML = ARROW_LEFT;
       } else {
         // Undocked - normal state
-        slider.style.background = 'white';
-        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
-        slider.style.width = '12px';
         handle.style.borderRadius = '50%';
         handle.style.left = '50%';
         handle.style.transform = 'translate(-50%, -50%)';
@@ -2950,65 +2976,77 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     leftClipContainerRef.current = leftClipContainer;
     compareContainerRef.current = rightClipContainer;
 
+    /**
+     * The three pane labels — the two scenario names and the factor between
+     * them — differ only in where they sit and which corners that leaves
+     * exposed. They were three copies of the same twelve declarations.
+     *
+     * All three hang from the top edge rather than floating inset from it: at
+     * six panes the inset pills read as clutter over the data, and pulling them
+     * flush turns them into part of the pane frame. Anything after the base
+     * wins, so a caller can override padding or background.
+     */
+    const labelStyle = (extra: string) => `
+      position:absolute;
+      top:0;
+      z-index:5;
+      padding:2px 8px;
+      font-size:10px;
+      white-space:nowrap;
+      overflow:hidden;
+      font-weight:600;
+      letter-spacing:0.3px;
+      backdrop-filter:blur(8px);
+    ` + extra;
+
     // Scenario labels on each side
     const leftLabel = document.createElement('div');
     leftLabel.id = 'left-label';
-    leftLabel.style.cssText = `
-      position:absolute;
-      top:12px;
-      left:12px;
-      z-index:5;
-      background:rgba(0,0,0,0.7);
-      color:white;
-      padding:6px 14px;
-      border-radius:20px;
-      font-size:13px;
-      font-weight:600;
-      letter-spacing:0.5px;
-      backdrop-filter:blur(8px);
-    `;
+    // Collapses to its colour accent while the pane is at rest — see
+    // styles/paneChrome.css. The factor label deliberately does not: it names
+    // what the pane is showing, and a grid of six unlabelled maps is the thing
+    // worth avoiding.
+    leftLabel.className = 'dt-pane-label';
+    leftLabel.style.cssText = labelStyle(`
+      left:0;
+      /* Only the corner facing the map is rounded: the other three are against
+         the pane's own edges, and rounding those left a floating pill with a
+         sliver of map showing through behind it. */
+      border-radius:0 0 10px 0;
+    `);
     container.appendChild(leftLabel);
 
     const rightLabel = document.createElement('div');
     rightLabel.id = 'right-label';
-    rightLabel.style.cssText = `
-      position:absolute;
-      top:12px;
-      right:12px;
-      z-index:5;
-      background:rgba(0,0,0,0.7);
-      color:white;
-      padding:6px 14px;
-      border-radius:20px;
-      font-size:13px;
-      font-weight:600;
-      letter-spacing:0.5px;
-      backdrop-filter:blur(8px);
-    `;
+    rightLabel.className = 'dt-pane-label';
+    rightLabel.style.cssText = labelStyle(`
+      right:0;
+      border-radius:0 0 0 10px;
+    `);
     container.appendChild(rightLabel);
 
     // Indicator label (centered over split line)
     const indicatorLabel = document.createElement('div');
     indicatorLabel.id = 'indicator-label';
-    indicatorLabel.style.cssText = `
-      position:absolute;
-      top:12px;
+    indicatorLabel.style.cssText = labelStyle(`
       left:50%;
       transform:translateX(-50%);
+      /* Hangs off the top edge, so both bottom corners are the ones exposed. */
+      border-radius:0 0 10px 10px;
       z-index:15;
       background:rgba(0,0,0,0.85);
       color:white;
+      /* Keeps its original type and padding. The scenario labels either side
+         are supporting text and shrank; this one names what the pane is
+         showing, and is the only label worth reading from across a room. */
       padding:8px 20px;
-      border-radius:20px;
       font-size:14px;
-      font-weight:600;
       letter-spacing:0.5px;
-      backdrop-filter:blur(8px);
       white-space:nowrap;
       max-width:60%;
       overflow:hidden;
       text-overflow:ellipsis;
-    `;
+    `);
     container.appendChild(indicatorLabel);
 
     // Load style from server (mbtiles base layers)
@@ -3023,7 +3061,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     // pane's fetch already hits this server's own in-memory cache (see
     // internal/server/satellite.go's styleCache) rather than the upstream
     // provider, so there is no repeated external request to save here.
-    const mapStyle = isGoogleBasemapRef.current
+    // Only if the server has confirmed satellite. A map built against a style
+    // that 404s never fires 'load', so its pane sits behind a spinner until the
+    // 15-second safety net below — and /api/info, which would have said so,
+    // usually resolves a moment later. The listener further up switches to
+    // satellite the moment confirmation arrives.
+    const mapStyle = isGoogleBasemapRef.current && satelliteConfirmed()
       ? window.location.origin + satelliteStyleUrl()
       : getStyleForMap(styleUrl);
 
@@ -3202,7 +3245,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         container: rightContainer,
         // Re-read the basemap choice rather than reusing the style captured at
         // init: the user may have toggled the satellite basemap since.
-        style: isGoogleBasemapRef.current
+        style: isGoogleBasemapRef.current && satelliteConfirmed()
           ? window.location.origin + satelliteStyleUrl()
           : getStyleForMap(styleUrl),
         center: [leftCenter.lng, leftCenter.lat],
@@ -3582,6 +3625,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
     if (newDockedState !== sliderDockedRef.current) {
       sliderDockedRef.current = newDockedState;
+      slider.dataset.docked = newDockedState ?? '';
 
       // Same rationale as updateSliderVisuals: the docked-away side's map
       // is clipped to zero width, so its scenario label would otherwise
@@ -3590,25 +3634,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       if (rightLabelEl) rightLabelEl.style.display = newDockedState === 'right' ? 'none' : 'block';
 
       if (newDockedState === 'left') {
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '0 50% 50% 0';
         handle.style.left = '100%';
         handle.style.transform = 'translate(0, -50%)';
         handle.innerHTML = ARROW_RIGHT;
       } else if (newDockedState === 'right') {
-        slider.style.background = 'transparent';
-        slider.style.boxShadow = 'none';
-        slider.style.width = '6px';
         handle.style.borderRadius = '50% 0 0 50%';
         handle.style.left = '0';
         handle.style.transform = 'translate(-100%, -50%)';
         handle.innerHTML = ARROW_LEFT;
       } else {
-        slider.style.background = 'white';
-        slider.style.boxShadow = '0 0 8px rgba(0,0,0,0.4)';
-        slider.style.width = '12px';
         handle.style.borderRadius = '50%';
         handle.style.left = '50%';
         handle.style.transform = 'translate(-50%, -50%)';
@@ -3663,7 +3698,18 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (leftLabel) {
       const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
       leftLabel.textContent = leftInfo?.label || comparison.leftScenario;
-      leftLabel.style.borderLeft = `3px solid ${leftInfo?.color || '#fff'}`;
+      // On the inward edge, the same as the right label's. Now that the label
+      // is flush in the top-left corner, its left edge is against the pane
+      // frame — an accent there reads as part of the frame rather than as the
+      // scenario's colour. Both labels point their accent at the map between
+      // them, which is what the colour identifies.
+      const leftAccent = leftInfo?.color || '#fff';
+      // The custom property is what the collapsed state fills with — see
+      // styles/paneChrome.css. Set here because only this side knows the
+      // scenario's colour, and read there so the border and the fill cannot
+      // disagree.
+      leftLabel.style.setProperty('--dt-accent', leftAccent);
+      leftLabel.style.borderRight = `3px solid ${leftAccent}`;
       // Keep it hidden if the swiper is docked left (left map clipped to
       // zero width), unless the swiper is off, in which case dock state is
       // irrelevant and the left map fills the view.
@@ -3673,7 +3719,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     if (rightLabel) {
       const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
-      rightLabel.style.borderLeft = `3px solid ${rightInfo?.color || '#fff'}`;
+      // Already inward-facing: this one sits in the top-right corner, so its
+      // left edge is the one over the map.
+      const rightAccent = rightInfo?.color || '#fff';
+      rightLabel.style.setProperty('--dt-accent', rightAccent);
+      rightLabel.style.borderLeft = `3px solid ${rightAccent}`;
       rightLabel.style.display = isSwiperEnabled && sliderDockedRef.current !== 'right' ? 'block' : 'none';
     }
 
@@ -4040,7 +4090,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     };
     window.addEventListener('dt:tour-zoom-to-site', handler);
-    return () => window.removeEventListener('dt:tour-zoom-to-site', handler);
+    window.addEventListener('dt:zoom-to-site', handler);
+    return () => {
+      window.removeEventListener('dt:tour-zoom-to-site', handler);
+      window.removeEventListener('dt:zoom-to-site', handler);
+    };
   }, []);
 
   // Deferred tour zoom: executes once both maps are ready and siteBounds is
@@ -4758,11 +4812,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
   // Check if panel is unconfigured (no indicator selected)
   const isUnconfigured = !comparison.attribute;
-  const canZoomToSite = Boolean(siteBounds || siteGeometry || siteId);
 
   return (
     <Box
       ref={mapContainerRef}
+      className={showNavigation ? undefined : 'dt-no-nav'}
       position="absolute"
       top={0}
       left={0}
@@ -4881,128 +4935,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         </Flex>
       )}
 
-      {/* Tool buttons - only show when configured */}
-      {!isUnconfigured && (
-        <VStack
-          position="absolute"
-          bottom="120px"
-          left="10px"
-          zIndex={10}
-          spacing={1}
-        >
-          {/* 3D toggle button */}
-          <Tooltip label={is3DMode ? "Switch to 2D" : "Switch to 3D"} placement="right">
-            <IconButton
-              aria-label="Toggle 3D view"
-              icon={<FiBox />}
-              size="sm"
-              colorScheme={is3DMode ? "blue" : "gray"}
-              variant="solid"
-              bg={is3DMode ? colors.blue : "white"}
-              color={is3DMode ? "white" : "gray.700"}
-              onClick={toggle3DMode}
-              boxShadow="md"
-              _hover={{
-                bg: is3DMode ? "blue.600" : "gray.100"
-              }}
-            />
-          </Tooltip>
-
-          <Tooltip label={isChoroplethEnabled ? "Hide choropleth" : "Show choropleth"} placement="right">
-            <IconButton
-              aria-label="Toggle choropleth layer"
-              icon={<FiMap />}
-              size="sm"
-              colorScheme={isChoroplethEnabled ? "blue" : "gray"}
-              variant="solid"
-              bg={isChoroplethEnabled ? colors.blue : "white"}
-              color={isChoroplethEnabled ? "white" : "gray.700"}
-              onClick={toggleChoropleth}
-              boxShadow="md"
-              _hover={{
-                bg: isChoroplethEnabled ? "blue.600" : "gray.100"
-              }}
-            />
-          </Tooltip>
-
-          {/* Identify button */}
-          {!isQuad && (
-            <Tooltip label={isIdentifyMode ? "Disable Identify" : "Identify Catchment"} placement="right">
-              <IconButton
-                aria-label="Toggle identify mode"
-                icon={<FiInfo />}
-                size="sm"
-                colorScheme={isIdentifyMode ? "blue" : "gray"}
-                variant="solid"
-                bg={isIdentifyMode ? colors.blue: "white"}
-                color={isIdentifyMode ? "white" : "gray.700"}
-                onClick={toggleIdentifyMode}
-                boxShadow="md"
-                _hover={{
-                  bg: isIdentifyMode ? "blue.600" : "gray.100"
-                }}
-              />
-            </Tooltip>
-          )}
-
-          {/* Google basemap toggle */}
-          <Tooltip label={isGoogleBasemap ? "Switch to default basemap" : "Switch to satellite"} placement="right">
-            <IconButton
-              aria-label="Toggle satellite basemap"
-              icon={<FiGlobe />}
-              size="sm"
-              colorScheme={isGoogleBasemap ? "blue" : "gray"}
-              variant="solid"
-              bg={isGoogleBasemap ? colors.blue : "white"}
-              color={isGoogleBasemap ? "white" : "gray.700"}
-              onClick={toggleGoogleBasemap}
-              boxShadow="md"
-              _hover={{
-                bg: isGoogleBasemap ? "blue.600" : "gray.100"
-              }}
-            />
-          </Tooltip>
-
-          {/* Swiper toggle button */}
-          <Tooltip label={isSwiperEnabled ? "Disable map swiper" : "Enable map swiper"} placement="right">
-            <IconButton
-              aria-label="Toggle map swiper"
-              icon={<FiColumns />}
-              size="sm"
-              colorScheme={isSwiperEnabled ? "blue" : "gray"}
-              variant="solid"
-              bg={isSwiperEnabled ? colors.blue: "white"}
-              color={isSwiperEnabled ? "white" : "gray.700"}
-              onClick={toggleSwiper}
-              boxShadow="md"
-              _hover={{
-                bg: isSwiperEnabled ? "blue.600" : "gray.100"
-              }}
-            />
-          </Tooltip>
-
-          {/* Zoom to Site button - only show when site bounds are available */}
-          {canZoomToSite && (
-            <Tooltip label="Zoom to Site" placement="right">
-              <IconButton
-                aria-label="Zoom to site"
-                icon={<FiTarget />}
-                size="sm"
-                variant="solid"
-                bg="white"
-                color="gray.700"
-                onClick={() => {
-                  void zoomToSite();
-                }}
-                boxShadow="md"
-                _hover={{
-                  bg: "gray.100"
-                }}
-              />
-            </Tooltip>
-          )}
-        </VStack>
-      )}
+      {/*
+        The five map toggles — 3D, choropleth, identify, satellite, swiper — used
+        to be stacked down the left edge of every pane. They act on all panes, so
+        six panes drew thirty buttons for five decisions. They are in the header
+        now, once. See GridControls.
+      */}
 
       {/* Boundary Edit Mode Overlay */}
       {isBoundaryEditMode && siteGeometry && isPolygonalGeometry(siteGeometry) && (

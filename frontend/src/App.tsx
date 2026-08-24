@@ -1,5 +1,5 @@
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
@@ -15,7 +15,8 @@ import IndicatorEditorPage from './components/IndicatorEditorPage';
 import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs } from './hooks/useApi';
+import { editableTargetKeys } from './lib/editableTargets';
+import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -95,6 +96,12 @@ function App() {
   const [isSwiperEnabled, setIsSwiperEnabled] = useState(true);
   const [mapRefreshSeq, setMapRefreshSeq] = useState(0);
   const [is3DMode, setIs3DMode] = useState(false);
+  // These three used to be state inside every MapView, toggled by a button
+  // stack repeated on each pane — six copies of one setting. They act on the
+  // whole grid, so they live here and the header owns the single control.
+  const [isIdentifyMode, setIsIdentifyMode] = useState(false);
+  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
   const [rangeMode, setRangeMode] = useState<RangeMode>(loadRangeMode);
@@ -795,6 +802,19 @@ function App() {
     return () => window.removeEventListener('dt:demo-pane-state', handler);
   }, [handlePaneStateChange]);
 
+  const { targetInputs } = useAttributeTargetInputs();
+  const hasEditableTargets = useMemo(
+    () => editableTargetKeys(currentSite?.indicators, targetInputs, variableTypes, attributeDetails).length > 0,
+    [currentSite?.indicators, targetInputs, variableTypes, attributeDetails],
+  );
+
+  // The grid-wide controls act on every pane, so they take no pane index. The
+  // old signature took one and ignored it in quad layout, which read as a
+  // per-pane control and was not.
+  const handleGridViewModeChange = useCallback((mode: ViewMode) => {
+    setViewModes((prev) => prev.map(() => mode));
+  }, []);
+
   const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
     setViewModes((prev) => {
       if (layoutMode === 'quad') {
@@ -1143,6 +1163,27 @@ function App() {
         isBoundaryEditMode={isBoundaryEditMode}
         onToggleTargetModal={handleToggleTargetModal}
         isTargetModalOpen={isTargetModalOpen}
+        gridControls={{
+          viewMode: viewModes[focusedPane] ?? viewModes[0] ?? 'map',
+          onViewModeChange: handleGridViewModeChange,
+          rangeMode,
+          onRangeModeChange: setRangeMode,
+          onAddPane: handleAddPane,
+          onOpenTargets: handleToggleTargetModal,
+          hasTargets: hasEditableTargets,
+          siteId: currentSiteId,
+          isExtracting: isExtractingIndicators,
+          is3DMode,
+          onIs3DModeChange: setIs3DMode,
+          isChoroplethEnabled,
+          onChoroplethEnabledChange: setIsChoroplethEnabled,
+          isIdentifyMode,
+          onIdentifyModeChange: setIsIdentifyMode,
+          isGoogleBasemap,
+          onGoogleBasemapChange: setIsGoogleBasemap,
+          isSwiperEnabled,
+          onSwiperEnabledChange: setIsSwiperEnabled,
+        }}
       />
 
       <Flex flex={1} overflow="hidden" position="relative">
@@ -1162,7 +1203,6 @@ function App() {
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
             onOpenControlPanel={handleOpenGridControlPanel}
-            onAddPane={handleAddPane}
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
@@ -1175,11 +1215,13 @@ function App() {
             siteGeometry={currentSite?.geometry}
             onBoundaryUpdate={handleBoundaryUpdate}
             isSwiperEnabled={isSwiperEnabled}
-            onSwiperEnabledChange={setIsSwiperEnabled}
             colorScaleMode={colorScaleMode}
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
-            on3DModeChange={setIs3DMode}
+            isIdentifyMode={isIdentifyMode}
+            isChoroplethEnabled={isChoroplethEnabled}
+            isGoogleBasemap={isGoogleBasemap}
+            onGoogleBasemapChange={setIsGoogleBasemap}
             swiperPosition={swiperPosition}
             onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}
@@ -1191,9 +1233,7 @@ function App() {
             chartGraphModes={chartGraphModes}
             mapExtent={mapExtent}
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
-            isExtractingIndicators={isExtractingIndicators}
             isTargetModalOpen={isTargetModalOpen}
-            onOpenTargetModal={onOpenTargetModal}
             onCloseTargetModal={onCloseTargetModal}
             refreshKey={mapRefreshSeq}
             quadColumns={quadColumns}

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   DEFAULT_SATELLITE_STYLE_URL,
   DEFAULT_SATELLITE_ATTRIBUTION,
   applyServerSatelliteConfig,
   resetSatelliteConfig,
   satelliteAttribution,
+  satelliteConfirmed,
   satelliteStyleUrl,
   satelliteUnavailable,
   subscribeSatelliteUnavailable,
@@ -164,5 +165,58 @@ describe('satellite availability and quota tracking', () => {
     unsubscribe();
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: true }));
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * Choosing a style URL is a different question from offering the control.
+ *
+ * A map constructed against a style that 404s never fires MapLibre's 'load'
+ * event, so its pane sits behind a spinner until the 15-second safety net gives
+ * up. That is what a deployment with no imagery provider looked like: six blank
+ * panes, then fifteen seconds, on every load. The optimism that is right for
+ * "should the button be enabled" is wrong for "is this URL safe to fetch".
+ */
+describe('satelliteConfirmed', () => {
+  beforeEach(() => resetSatelliteConfig());
+  afterEach(() => resetSatelliteConfig());
+
+  it('is false before the server has said anything', () => {
+    // satelliteUnavailable() is optimistically false at the same moment: the
+    // control stays enabled while a perfectly good key is still loading.
+    expect(satelliteConfirmed()).toBe(false);
+    expect(satelliteUnavailable()).toBe(false);
+  });
+
+  it('is true only once the server says available', () => {
+    applyServerSatelliteConfig({ satellite_available: true } as never);
+    expect(satelliteConfirmed()).toBe(true);
+  });
+
+  it('is false for a server too old to have the field', () => {
+    // The same response that leaves satelliteUnavailable() optimistic: an
+    // unanswered question is exactly the one not to gamble a style URL on.
+    applyServerSatelliteConfig({} as never);
+    expect(satelliteUnavailable()).toBe(false);
+    expect(satelliteConfirmed()).toBe(false);
+  });
+
+  it('goes false again when the quota is spent', () => {
+    applyServerSatelliteConfig({ satellite_available: true } as never);
+    applyServerSatelliteConfig({
+      satellite_available: true,
+      satellite_quota_exceeded: true,
+    } as never);
+    expect(satelliteConfirmed()).toBe(false);
+    expect(satelliteUnavailable()).toBe(true);
+  });
+
+  it('and true again when a new month resets it', () => {
+    applyServerSatelliteConfig({
+      satellite_available: true,
+      satellite_quota_exceeded: true,
+    } as never);
+    applyServerSatelliteConfig({ satellite_available: true } as never);
+    expect(satelliteConfirmed()).toBe(true);
   });
 });
