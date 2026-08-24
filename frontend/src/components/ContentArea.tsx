@@ -2,7 +2,6 @@ import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPane
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
-import { editableTargetKeys as editableTargetKeysFor } from '../lib/editableTargets';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
