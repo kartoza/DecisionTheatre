@@ -107,6 +107,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
 	r.HandleFunc("/metadata/colors", h.handleMetadataColors).Methods("GET")
 	r.HandleFunc("/metadata/details", h.handleMetadataDetails).Methods("GET")
+	r.HandleFunc("/metadata/order", h.handleMetadataOrder).Methods("GET")
 	r.HandleFunc("/metadata/variabletypes", h.handleMetadataVariableTypes).Methods("GET")
 	r.HandleFunc("/metadata/inputs", h.handleMetadataInputs).Methods("GET")
 	r.HandleFunc("/metadata/targetinputs", h.handleMetadataTargetInputs).Methods("GET")
@@ -120,6 +121,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/groupingvariables", h.handleMetadataGroupingVariables).Methods("GET")
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/metadata/dial0middle", h.handleMetadataDial0Middle).Methods("GET")
+	r.HandleFunc("/metadata/ignorexgrouping", h.handleMetadataIgnoreXGrouping).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
 	r.HandleFunc("/precalculate/full", h.handlePrecalculateFull).Methods("GET")
@@ -219,6 +221,13 @@ func (h *Handler) handleMetadataDetails(w http.ResponseWriter, r *http.Request) 
 	respondJSON(w, http.StatusOK, h.metaCache.Details)
 }
 
+// handleMetadataOrder returns a map of attribute column names to their row
+// position in metadata.csv, so callers can sort attributes the way the
+// spreadsheet lists them instead of alphabetically.
+func (h *Handler) handleMetadataOrder(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.metaCache.Order)
+}
+
 // handleMetadataVariableTypes returns a map of attribute column names to variable types.
 func (h *Handler) handleMetadataVariableTypes(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.metaCache.VariableTypes)
@@ -261,6 +270,12 @@ func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request)
 // zero with positive values to the right and negative values to the left.
 func (h *Handler) handleMetadataDial0Middle(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.metaCache.Dial0Middle)
+}
+
+// handleMetadataIgnoreXGrouping returns a map of attribute column names to
+// ignore_x_grouping flags.
+func (h *Handler) handleMetadataIgnoreXGrouping(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.metaCache.IgnoreXGrouping)
 }
 
 // handleMetadataAxisLabels returns a map of attribute column names to axis labels.

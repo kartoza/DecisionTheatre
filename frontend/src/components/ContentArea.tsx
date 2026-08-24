@@ -5,7 +5,7 @@ import { navigationPaneIndex } from '../lib/navigationPane';
 import { editableTargetKeys as editableTargetKeysFor } from '../lib/editableTargets';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
-import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
+import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -142,16 +142,50 @@ function ContentArea({
   const { units: attributeUnits } = useAttributeUnits();
   const { targetRanges } = useAttributeTargetRanges();
   const { variableTypes } = useAttributeVariableTypes();
+  const { order: attributeOrder } = useAttributeOrder();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
 
-  const editableTargetKeys = useMemo(
-    () => editableTargetKeysFor(siteIndicators, targetInputs, variableTypes, attributeDetails),
-    [attributeDetails, siteIndicators, targetInputs, variableTypes],
-  );
+  const editableTargetKeys = useMemo(() => {
+    const availableKeys = new Set<string>();
+    Object.keys(siteIndicators?.ideal ?? {}).forEach((k) => availableKeys.add(k));
+    Object.keys(siteIndicators?.reference ?? {}).forEach((k) => availableKeys.add(k));
+    Object.keys(siteIndicators?.current ?? {}).forEach((k) => availableKeys.add(k));
+
+    const keys = Object.entries(targetInputs)
+      .filter(([, allowed]) => allowed)
+      .map(([key]) => key)
+      .filter((key) => availableKeys.has(key))
+      .filter((key) => {
+        const refVal = siteIndicators?.reference?.[key];
+        const curVal = siteIndicators?.current?.[key];
+        return (typeof refVal === 'number' && Number.isFinite(refVal)) ||
+               (typeof curVal === 'number' && Number.isFinite(curVal));
+      })
+      .filter((key) => {
+        if (variableTypes[key] !== 'Herbivores') return true;
+        const refVal = siteIndicators?.reference?.[key];
+        const curVal = siteIndicators?.current?.[key];
+        const refNum = typeof refVal === 'number' && Number.isFinite(refVal) ? refVal : 0;
+        const curNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : 0;
+        return refNum > 0 || curNum > 0;
+      });
+    return keys
+      .filter((key, idx, arr) => arr.indexOf(key) === idx)
+      .sort((a, b) => {
+        const aOrder = attributeOrder[a];
+        const bOrder = attributeOrder[b];
+        if (aOrder != null && bOrder != null) return aOrder - bOrder;
+        if (aOrder != null) return -1;
+        if (bOrder != null) return 1;
+        const aLabel = attributeDetails[a] ?? a;
+        const bLabel = attributeDetails[b] ?? b;
+        return aLabel.localeCompare(bLabel);
+      });
+  }, [attributeDetails, attributeOrder, siteIndicators, targetInputs, variableTypes]);
 
   const targetGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -162,9 +196,16 @@ function ContentArea({
       groups.set(groupName, keysInGroup);
     });
     return Array.from(groups.entries())
-      .map(([groupName, keys]) => ({ groupName, keys }))
+      .map(([groupName, keys]) => ({
+        groupName,
+        // Herbivores lists alphabetically by label; every other group keeps
+        // the metadata.csv row order already applied in editableTargetKeys.
+        keys: groupName === 'Herbivores'
+          ? [...keys].sort((a, b) => (attributeDetails[a] ?? a).localeCompare(attributeDetails[b] ?? b))
+          : keys,
+      }))
       .sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [editableTargetKeys, variableTypes]);
+  }, [attributeDetails, editableTargetKeys, variableTypes]);
 
   const targetHasBeenUpdated = useMemo(() => {
     if (!siteIndicators?.ideal || !siteIndicators?.current) return false;
