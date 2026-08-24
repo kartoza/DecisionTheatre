@@ -153,6 +153,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One set of map controls, in the header, instead of thirty-six buttons.** Three
+  bands of controls competed for the most space-starved screen in the application.
+  A full-width bar above the panes held the view-mode, range-mode, add-pane and
+  target controls; each pane carried a vertical stack of six circular buttons — 3D,
+  choropleth, identify, satellite, swiper and zoom-to-site; and the header had a
+  `Spacer` between the site title and the navigation holding nothing at all.
+
+  Every one of those per-pane buttons already acted on *all* panes: they were one
+  setting drawn six times, and clicking any copy moved all six. A six-pane grid drew
+  36 buttons for 6 settings. They are drawn once now, in the space the header was
+  wasting, and the bar is deleted rather than hidden — returning a full horizontal
+  band of vertical space to the widgets.
+
+  The controls that genuinely belong to one pane — focus, configure factor, remove,
+  calculation details — stay in that pane. Six panes legitimately need six focus
+  buttons, and that is not duplication.
+
+  State moved to `App`, which is where it always belonged given what it did.
+  `MapView` now reads these as props and applies them through effects; only the
+  basemap still reports back, because the satellite-quota revert happens down
+  there. Zoom-to-site is a `dt:zoom-to-site` window event — the header cannot reach
+  a pane's MapLibre instance, and the guided tour's existing listener already
+  handled the readiness and deferral cases.
+
+  What is left on a pane — focus it, configure its factor, remove it, drag its
+  compare swiper — **appears on mouse over** rather than sitting on top of the data
+  all the time. Those controls could not move to the header the way the global
+  toggles did: they act on one pane, so six panes legitimately need six of them.
+  They get out of the way instead. One stylesheet covers both halves of that
+  chrome, the React toolbar and the imperatively-built swiper handle, so their
+  timing cannot drift apart. The swiper's divider line stays visible: it marks
+  which side of the comparison is which, and is information rather than a control.
+  It does thin from 12px to 3px at rest, though, and widens with everything else
+  on hover — most of that width exists to be grabbed, which only matters once the
+  pointer is on the pane. Its width, fill and shadow used to be set inline from
+  JavaScript in six places across two duplicated blocks; they are one CSS rule
+  now, and `MapView` sets a `data-docked` attribute and nothing else.
+
+  **One zoom cluster for the grid, not six.** Every map drew its own zoom in /
+  zoom out / compass control at the bottom left. They were not six controls: every
+  map registers with `useMapSync`, and moving any one moves all the others, so all
+  six did the same thing to the same six maps. It now appears on the bottom-left
+  map only — resolved against what is actually showing a map, so a grid whose
+  bottom-left widget is a chart still has a zoom control, one row up or one column
+  across. The choice is recomputed rather than fixed, because panes are removable,
+  the columns toggle between two and three, and a pane can switch view at any time.
+
+  The hiding is scoped to `@media (hover: hover) and (pointer: fine)`, because on a
+  touch screen there is no hover to bring a control back with; it lifts on
+  `:focus-within` as well as `:hover`, so a keyboard user can see where they are;
+  and it lifts entirely while a guided tour is running, since two of these
+  elements are tour spotlight targets and a ring drawn around something invisible
+  is worse than no ring.
+
+  **The pane labels hang from the top edge instead of floating over the data.**
+  The two scenario names and the factor between them sat inset 12px from the top
+  corners as rounded pills, six panes' worth. They are pulled flush now — left into
+  the top-left corner with only its bottom-right corner rounded, the factor
+  centred under the top edge with both bottom corners rounded, the scenario on the
+  right into the top-right corner with only its bottom-left — so they read as part
+  of the pane frame rather than as objects on top of the map. The two scenario
+  labels are also about half the size — 13px type at 6px padding becomes 10px at
+  2px, roughly 28px tall down to 16px. The factor label keeps its original type
+  and padding: it names what the pane is showing, where the scenario names either
+  side are supporting text.
+
+  **And the scenario labels collapse to their colour accent at rest**, expanding
+  again on hover or focus. The question they answer — which side of the swiper is
+  which — only matters once someone is looking at that pane, and the answer
+  survives the collapse: what is left is a 9px tick filled with that scenario's
+  own colour, text hidden, so the coding that made the label useful is the part
+  that stays. A six-pane grid goes from eighteen pills to
+  six titles and twelve coloured ticks. The factor label is deliberately not in
+  the set: a grid of six unlabelled maps is the thing worth avoiding, and it has
+  no accent to be left with. The three were three copies of the same twelve declarations and now share
+  one base, with each supplying only its position and its exposed corners. The
+  scenario colour accent on the left label moved to that label's right edge, so
+  both accents face the map between them: with the label flush in the corner, an
+  accent on its outer edge reads as part of the pane frame rather than as the
+  scenario's colour.
+
+  Accessibility along the way: the view and range switches are `radiogroup`s with
+  one tab stop, arrow-key traversal and `aria-checked`, where they had been
+  independent `IconButton`s conveying selection through background colour alone;
+  the toggles carry `aria-pressed` and an underline as well as a fill. Below `xl`
+  the full set collapses to the view switch plus the toggles, and below `md` into an
+  overflow menu that carries every control — not `display: none`.
+
 - **The sites list no longer downloads five megabytes of demo content to show a
   list of titles.** `listSites` fetched and parsed all four walkthrough documents —
   **5,025,346 bytes**, one of them 4 MB — on the path to first render, for demos
@@ -242,6 +330,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both families are OFL-1.1.
 
 ### Fixed
+
+- **Blank map panes, and fifteen seconds of spinner, on a server with no imagery
+  provider.** Maps were constructed against `/api/satellite-style.json` whenever
+  the runtime was a browser, without waiting to learn whether satellite was
+  configured. On a deployment with no key that endpoint returns **404 text/plain**,
+  MapLibre cannot load the style, and a map whose style never loads **never fires
+  its `load` event** — so the pane sat behind its spinner until the 15-second
+  safety net gave up, six panes at a time, on every load.
+
+  `satelliteConfirmed()` now answers the question a style URL actually depends on:
+  has the server *said yes*, rather than *not yet said no*. The optimism that is
+  right for whether to enable the control is wrong for whether a URL is safe to
+  fetch, and the two differ for exactly the window in which a map is built.
+
+  The recovery is symmetric now, too. The listener only handled satellite
+  *becoming* unavailable, so a map built before `/api/info` resolved stayed on the
+  built-in style for the rest of the session even once a key was confirmed. It
+  re-applies what the user asked for against what is currently possible, which
+  covers both directions in one call. Intent is kept separate from what is on the
+  map, so "we do not know yet" can no longer be mistaken for a choice; only a real
+  loss switches the toggle off and says so.
 
 - **No release since v0.2.0 has carried a single platform artefact, and the cause
   was a hand-written `pip install` list.** Each of the five platform builds built

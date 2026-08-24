@@ -15,6 +15,7 @@ import { theme } from './styles/theme';
 // Vite fingerprints and bundles them, and so no build or launch reaches out to
 // a font CDN — the desktop application is offline by design.
 import './assets/fonts/fonts.css';
+import './styles/paneChrome.css';
 
 // Global error reporting, development only.
 //

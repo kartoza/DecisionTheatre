@@ -187,6 +187,7 @@ var MetadataEndpoints = []string{
 	"colors", "details", "variabletypes", "inputs", "targetinputs",
 	"targetranges", "canmap", "cangraph", "axislabels", "xaxislabels",
 	"units", "charttypes", "groupingvariables", "groupingvalues", "dial0middle",
+	"ignorexgrouping",
 }
 
 // Coverage is what fraction of the server's routes this suite looked at.

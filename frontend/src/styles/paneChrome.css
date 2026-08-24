@@ -1,0 +1,209 @@
+/*
+ * Pane chrome that appears on mouse over.
+ *
+ * A six-pane grid drew its controls six times over. The toggles that acted on
+ * every pane have moved to one cluster in the header; what is left here are the
+ * controls that genuinely belong to a single pane — focus it, configure its
+ * factor, remove it, drag its compare swiper. Those cannot move anywhere, so
+ * they get out of the way instead, and come back when the pointer is over the
+ * pane they act on.
+ *
+ * Written as CSS rather than Chakra props because it has to cover both: the
+ * pane toolbar is a React component and the swiper handle is a DOM node built
+ * imperatively inside MapView. One rule covers both, so the timing cannot
+ * drift between them.
+ */
+
+/*
+ * Only where hovering exists. On a touch screen there is no hover to reveal
+ * with, so a control hidden this way would be a control that is simply gone —
+ * everything stays visible there.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .dt-pane-chrome {
+    opacity: 0;
+    /* Not clickable while invisible: an invisible hit target that swallows a
+       map click is worse than a visible button. */
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  /*
+   * focus-within matters as much as hover: these are real controls, and a
+   * keyboard user tabbing into one must be able to see where they are. Focus
+   * still reaches them while pointer-events is none — that property only
+   * affects the pointer.
+   */
+  .dt-pane:hover .dt-pane-chrome,
+  .dt-pane:focus-within .dt-pane-chrome {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /*
+   * The guided tour spotlights some of this chrome by id. A ring drawn around
+   * something invisible is worse than no ring, so a running tour overrides the
+   * hiding for as long as it is on screen.
+   */
+  body.dt-tour-active .dt-pane-chrome {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/*
+ * Someone who has asked for less motion still gets the reveal — it is the
+ * animation that is unwelcome, not the control appearing.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .dt-pane-chrome {
+    transition: none;
+  }
+}
+
+/*
+ * The compare swiper's divider line.
+ *
+ * The line is information, not a control: it says which side of the map belongs
+ * to which scenario, so unlike the handle it stays visible. But at 12px across
+ * six panes it was one of the loudest things on the screen, and most of that
+ * width exists to be grabbed — which only matters once the pointer is on the
+ * pane. So it rests thin and thickens with the rest of the chrome.
+ *
+ * These four properties used to be set inline from JavaScript, in six places
+ * across two duplicated blocks. They are one rule now; MapView sets
+ * data-docked and nothing else.
+ */
+.dt-swiper-line {
+  width: 12px;
+  background: white;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+  transition: width 200ms ease, background 200ms ease, box-shadow 200ms ease;
+}
+
+/*
+ * Docked to an edge: the line itself disappears and the handle becomes a
+ * half-circle tab against the frame, which is the only way back.
+ */
+.dt-swiper-line[data-docked='left'],
+.dt-swiper-line[data-docked='right'] {
+  width: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dt-swiper-line {
+    width: 3px;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+  }
+
+  .dt-pane:hover .dt-swiper-line,
+  .dt-pane:focus-within .dt-swiper-line,
+  body.dt-tour-active .dt-swiper-line {
+    width: 12px;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Docked stays docked, hovered or not: there is no line to widen. */
+  .dt-pane:hover .dt-swiper-line[data-docked='left'],
+  .dt-pane:hover .dt-swiper-line[data-docked='right'],
+  .dt-pane:focus-within .dt-swiper-line[data-docked='left'],
+  .dt-pane:focus-within .dt-swiper-line[data-docked='right'],
+  body.dt-tour-active .dt-swiper-line[data-docked='left'],
+  body.dt-tour-active .dt-swiper-line[data-docked='right'] {
+    width: 6px;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-swiper-line {
+    transition: none;
+  }
+}
+
+/*
+ * One zoom cluster for a grid of maps.
+ *
+ * Every map registers with useMapSync and moving any one moves all the others,
+ * so six zoom clusters were six ways to do the same thing to the same six maps.
+ * lib/navigationPane.ts picks which pane keeps its own; the rest carry this
+ * class. The control stays in the DOM because which pane owns it changes while
+ * the application runs, and hiding is reactive where addControl is not.
+ *
+ * .maplibregl-ctrl-bottom-left is MapLibre's own positioning class, part of the
+ * stylesheet the library ships for placing controls in a corner.
+ */
+.dt-no-nav .maplibregl-ctrl-bottom-left {
+  display: none;
+}
+
+/*
+ * The scenario labels collapse to their colour accent.
+ *
+ * At rest a pane should be its map. "Ecological Reference" and "Current State"
+ * answer a question — which side of the swiper is which — that only matters once
+ * someone is looking at that pane, and the answer survives the collapse: what is
+ * left is a small tick in the scenario's own colour, so the coding that made the
+ * label useful is the part that stays.
+ *
+ * The factor label is deliberately not in this set. It names what the pane is
+ * showing, and a grid of six unlabelled maps is exactly the thing worth
+ * avoiding. It also has no accent, so there would be nothing left of it.
+ *
+ * Fill and text colour live here rather than inline on the element, because an
+ * inline background would out-specify the collapsed state and the tick would
+ * stay black.
+ */
+.dt-pane-label {
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+}
+
+/*
+ * max-width is the animatable property here, because the labels have no fixed
+ * width to travel between. The cost is that the reveal finishes slightly before
+ * the transition does, on a label whose text is shorter than the bound.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .dt-pane-label {
+    max-width: 0;
+    /* Not zero: the padding is what gives the collapsed tick a body to fill.
+       With the border alone it would be a 3px hairline, too thin to read as a
+       colour at all. Three each side plus the border makes a 9px tab. */
+    padding-left: 3px;
+    padding-right: 3px;
+    /* The whole tick is the accent, so the border stops being a separate mark
+       and the label reads as one small block of the scenario's colour. The
+       fallback matters: --dt-accent is set by MapView once the scenario is
+       known, and the label exists before that. */
+    background-color: var(--dt-accent, rgba(0, 0, 0, 0.7));
+    /* Clipped by overflow already; transparent text also fades it out on the
+       way, rather than having it appear the instant there is room. */
+    color: transparent;
+    transition:
+      max-width 220ms ease,
+      padding 220ms ease,
+      background-color 220ms ease,
+      color 220ms ease;
+  }
+
+  .dt-pane:hover .dt-pane-label,
+  .dt-pane:focus-within .dt-pane-label,
+  body.dt-tour-active .dt-pane-label {
+    /* Wide enough for the longest scenario name at this size, and no wider. */
+    max-width: 14em;
+    padding-left: 8px;
+    padding-right: 8px;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-pane-label {
+    transition: none;
+  }
+}
