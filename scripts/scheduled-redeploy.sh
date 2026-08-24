@@ -13,9 +13,9 @@
 #
 # What it does:
 #   1. Pulls the latest commit on the current branch.
-#   2. Rebuilds the docker compose images (to pick up any pulled code
-#      changes), including the builder image used by steps 7-8. Runs every
-#      time, regardless of whether the Drive data has changed.
+#   2. Pulls the latest app image from GHCR and rebuilds the builder image
+#      (used by steps 7-8) from the pulled code. Runs every time, regardless
+#      of whether the Drive data has changed.
 #   3. Checks the configured Google Drive folder for changes.
 #      - If nothing has changed: brings the stack up (picking up any
 #        image rebuilt in step 2, a no-op otherwise) and stops here —
@@ -42,6 +42,13 @@ DEPLOYMENTS_DIR="$PROJECT_ROOT/deployments"
 # Google Drive folder that holds the source CSV files for the datapack.
 DRIVE_FOLDER="https://drive.google.com/drive/folders/1yVrQ_jQUooAD8wi9oCEA-Go52mrsH36f"
 
+# App image pulled from GHCR rather than built locally. Exported so every
+# `docker compose` invocation below picks it up: compose only builds the
+# image named by DT_IMAGE when it is absent locally, so pulling it here is
+# enough to make `docker compose up -d` use it as-is.
+# https://github.com/kartoza/DecisionTheatre/pkgs/container/decisiontheatre
+export DT_IMAGE="${DT_IMAGE:-ghcr.io/kartoza/decisiontheatre:latest}"
+
 # Runs a command inside the builder service (docker-compose.yaml, "build"
 # profile), which carries the toolchain make pack-data and
 # build-cross-docker.sh need. Removed after it exits; nothing built inside it
@@ -56,9 +63,12 @@ echo "==> Pulling latest changes..."
 cd "$PROJECT_ROOT"
 git pull
 
-echo "==> Rebuilding docker compose images..."
+echo "==> Pulling latest app image ($DT_IMAGE)..."
+docker pull "$DT_IMAGE"
+
+echo "==> Rebuilding builder image..."
 cd "$DEPLOYMENTS_DIR"
-docker compose --profile build build
+docker compose --profile build build builder
 
 echo "==> Checking Google Drive folder for updates..."
 cd "$PROJECT_ROOT"
@@ -66,8 +76,8 @@ if ./scripts/check-drive-updates.sh "$DRIVE_FOLDER"; then
     echo "==> No data changes found — skipping data refresh and rebuild."
 
     # up -d is idempotent: it only (re)creates containers whose image or
-    # config actually changed, so this safely picks up a code-only rebuild
-    # from step 2 above without needing to fetch new data.
+    # config actually changed, so this safely picks up the image pulled in
+    # step 2 above without needing to fetch new data.
     echo "==> Starting deployments stack..."
     cd "$DEPLOYMENTS_DIR"
     docker compose up -d
