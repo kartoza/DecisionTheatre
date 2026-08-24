@@ -92,11 +92,16 @@ There are three ways to get it, in order of how most people should.
 
 ```bash
 docker pull ghcr.io/kartoza/decisiontheatre:0.4.0   # an immovable version pin
-docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest release
+docker pull ghcr.io/kartoza/decisiontheatre:latest  # the newest stable release
 ```
 
-Every release publishes both tags, along with the image tarball, its SBOM and its
-vulnerability scan as release assets.
+Every release publishes its version tag, along with the image tarball, its SBOM and
+its vulnerability scan as release assets. `:latest` follows the newest **stable**
+release: a pre-release tag such as `v2.4.0-rc1` publishes `:2.4.0-rc1` and leaves
+`:latest` where it is, so an unpinned pull never lands on a release candidate.
+
+Prefer the version pin for anything you are running in earnest — `:latest` moves
+under you on the next release, and `docker compose up -d` will pick that up.
 
 !!! note "The image path is lowercase"
     GHCR rejects an uppercase path, and this repository is `kartoza/DecisionTheatre`.

@@ -431,10 +431,21 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "image=$name:$tag" >> "$GITHUB_OUTPUT"
+          # The flake tags every build with the version in flake.nix, so each
+          # one is `decision-theatre:4.0.0` no matter which commit it came from.
+          # Two pull requests then produce images a reviewer cannot tell apart,
+          # and loading one silently replaces the other. Stamp the commit into a
+          # second tag so each build is its own identifiable thing. The
+          # version-tagged name is kept for the --version check below, which is
+          # about the version and nothing else.
+          echo "sha_image=$name:$tag-${SHA:0:12}" >> "$GITHUB_OUTPUT"
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Load it into docker
         run: |
           docker load < result
+          docker tag ${{ steps.build.outputs.image }} ${{ steps.build.outputs.sha_image }}
           docker image ls ${{ steps.build.outputs.name }}
 
       - name: It reports the flake's version
@@ -495,7 +506,10 @@ jobs:
 
       - name: Export the image
         run: |
-          docker save ${{ steps.build.outputs.image }} \
+          # Saved under the commit-stamped tag: that is the name it will carry
+          # once a reviewer loads it, and it is the one that identifies which
+          # build they are looking at.
+          docker save ${{ steps.build.outputs.sha_image }} \
             | gzip > decision-theatre-image.tar.gz
           ls -lh decision-theatre-image.tar.gz
 
@@ -527,7 +541,7 @@ jobs:
         run: |
           {
             printf '## Container image\n\n'
-            printf '`%s` — %s\n\n' "${{ steps.build.outputs.image }}" \
+            printf '`%s` — %s\n\n' "${{ steps.build.outputs.sha_image }}" \
               "$(du -h decision-theatre-image.tar.gz | cut -f1) compressed"
             printf 'Built from the flake: its contents are the runtime closure of the binary, so nothing states a dependency version twice.\n\n'
             printf '### Software bill of materials\n\n'
@@ -563,18 +577,22 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          IMAGE: ${{ steps.build.outputs.sha_image }}
         run: |
           {
             cat build-report.md
             printf '\n---\n\n### Try this build\n\n'
-            printf 'Download the `container-image` artefact from [this run](https://github.com/%s/actions/runs/%s), then:\n\n' \
-              "$REPO" "$RUN_ID"
+            printf 'This image lives in the run artefacts, not in a registry — there is nothing to `docker pull` — because pull requests do not publish to GHCR; only tagged releases do. Fetch it with the `gh` CLI:\n\n'
             printf '```bash\n'
-            printf 'unzip container-image.zip\n'
+            printf 'gh run download %s --repo %s --name container-image\n' "$RUN_ID" "$REPO"
             printf 'docker load < decision-theatre-image.tar.gz\n'
-            printf 'docker run --rm -p 8080:8080 %s\n' "${{ steps.build.outputs.image }}"
+            printf 'docker run --rm -p 8080:8080 %s\n' "$IMAGE"
             printf '```\n\n'
-            printf 'Kept for 7 days. Commit `%s`.\n' "$SHA"
+            printf 'Or download `container-image` from [this run](https://github.com/%s/actions/runs/%s) in the browser and unzip it first.\n\n' \
+              "$REPO" "$RUN_ID"
+            printf 'It loads as `%s` — the flake version stamped with the commit, so builds from different pull requests do not overwrite each other on your machine. Kept for 7 days; commit `%s`.\n\n' \
+              "$IMAGE" "$SHA"
+            printf 'Released images *are* in the registry: `ghcr.io/kartoza/decisiontheatre:<version>` for every release, plus `:latest` following the newest stable one.\n'
           } > pr-comment.md
 
       - name: Post or update the comment
