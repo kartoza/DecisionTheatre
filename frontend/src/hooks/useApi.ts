@@ -221,6 +221,22 @@ export function useAttributeDetails() {
   return { details, loading };
 }
 
+export function useAttributeOrder() {
+  const [order, setOrder] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, number>>(`${API_BASE}/metadata/order`)
+      .then((data) => {
+        setOrder(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { order, loading };
+}
+
 export function useAttributeVariableTypes() {
   const [variableTypes, setVariableTypes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -384,6 +400,22 @@ export function useAttributeDial0Middle() {
   }, []);
 
   return { dial0Middle, loading };
+}
+
+export function useAttributeIgnoreXGrouping() {
+  const [ignoreXGrouping, setIgnoreXGrouping] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/ignorexgrouping`)
+      .then((data) => {
+        setIgnoreXGrouping(data || {});
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return { ignoreXGrouping, loading };
 }
 
 export function useAttributeChartTypes() {

@@ -23,7 +23,7 @@ import {
 import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
@@ -477,6 +477,7 @@ function ControlPanel({
   const { groupingVariables } = useAttributeGroupingVariables();
   const { variableTypes } = useAttributeVariableTypes();
   const { axisLabels } = useAttributeAxisLabels();
+  const { ignoreXGrouping } = useAttributeIgnoreXGrouping();
   const bgColor = useColorModeValue('gray.50', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.750');
@@ -496,6 +497,34 @@ function ControlPanel({
     window.addEventListener('dt:demo-chart-individual-factor', handler);
     return () => window.removeEventListener('dt:demo-chart-individual-factor', handler);
   }, []);
+
+  // Arriving at the chart view from map/dial with an attribute already
+  // selected should behave as if that attribute had just been picked from the
+  // INDIVIDUAL FACTOR select, so the GROUPING VARIABLE list is filtered by its
+  // axis label without requiring the user to re-pick the factor. This only
+  // fires on the actual map/dial -> chart transition (tracked via a ref), not
+  // on every re-render while already in chart view — otherwise clearing the
+  // INDIVIDUAL FACTOR select would immediately re-derive it from the
+  // still-set comparison.attribute and undo the clear.
+  const previousViewModeRef = useRef<ViewMode | undefined>(undefined);
+  useEffect(() => {
+    const previousViewMode = previousViewModeRef.current;
+    previousViewModeRef.current = viewMode;
+    if (viewMode !== 'chart' || previousViewMode === 'chart') return;
+
+    const attribute = comparison.attribute;
+    if (!attribute) return;
+
+    const vt = resolveVariableTypeForColumn(attribute, variableTypes);
+    if (!vt || vt === 'catchID') return;
+
+    setFactorDerivedMode(true);
+    setFactorDerivedValue(attribute);
+    if (chartGroup !== vt) {
+      onChartGroupChange?.(vt);
+      onChartAxisLabelFilterChange?.(null);
+    }
+  }, [viewMode, comparison.attribute, variableTypes, chartGroup, onChartGroupChange, onChartAxisLabelFilterChange]);
 
   const uniqueVariableTypes = useMemo(
     () => [...new Set(Object.values(variableTypes))].filter((t) => t && t !== 'catchID').sort(),
@@ -526,22 +555,44 @@ function ControlPanel({
       axisLabelsByGroup.get(group)!.add(axisLabel);
     }
 
-    const options: { value: string; label: string }[] = [];
+    const options: { value: string; label: string; axisLabel: string }[] = [];
     for (const [group, labelSet] of axisLabelsByGroup) {
       if (labelSet.size <= 1) {
-        options.push({ value: group, label: group.replace(/_/g, ' ') });
+        const [axisLabel] = labelSet;
+        options.push({ value: group, label: group.replace(/_/g, ' '), axisLabel });
         continue;
       }
       for (const axisLabel of labelSet) {
         options.push({
           value: encodeGroupingOption(group, axisLabel),
           label: `${group.replace(/_/g, ' ')} (${axisLabel})`,
+          axisLabel,
         });
       }
     }
 
-    return options.sort((a, b) => a.label.localeCompare(b.label));
-  }, [chartGroup, columns, canGraph, variableTypes, groupingVariables, axisLabels]);
+    const sortedOptions = options.sort((a, b) => a.label.localeCompare(b.label));
+
+    // Some variable types mix several unrelated axes by design (e.g. cover
+    // fraction alongside biomass), flagged in metadata.csv via
+    // ignore_x_grouping — those keep the plain alphabetical order instead of
+    // being narrowed down to the individual factor's axis label.
+    if (sourceColumns.some((col) => ignoreXGrouping[col])) return sortedOptions;
+
+    // Once an individual factor has been picked, only offer sibling grouping
+    // variables that share its axis label — combining different axes on one
+    // chart is meaningless (see the axisLabelsByGroup split above).
+    const selectedFactorColumn = factorDerivedMode && factorDerivedValue && !factorDerivedValue.startsWith('__group__|')
+      ? factorDerivedValue
+      : null;
+    const selectedFactorAxisLabel = selectedFactorColumn
+      ? resolveAxisLabelForColumn(selectedFactorColumn, axisLabels)
+      : '';
+    if (!selectedFactorAxisLabel) return sortedOptions;
+
+    const matchingOptions = sortedOptions.filter((option) => option.axisLabel === selectedFactorAxisLabel);
+    return matchingOptions.length > 0 ? matchingOptions : sortedOptions;
+  }, [chartGroup, columns, canGraph, variableTypes, groupingVariables, axisLabels, ignoreXGrouping, factorDerivedMode, factorDerivedValue]);
 
   const lineBoxplotToggleAvailable = useMemo(() => {
     if (viewMode !== 'chart' || !chartGroup || !chartAxisLabelFilter) return false;

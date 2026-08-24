@@ -28,8 +28,14 @@ type MetadataCache struct {
 	GroupingVariables map[string]string
 	GroupingValues    map[string]string
 	Dial0Middle       map[string]bool
+	IgnoreXGrouping   map[string]bool
 	MaxValCurrent     map[string]float64
 	MaxValReference   map[string]float64
+
+	// Order maps a column name to its row position in metadata.csv, so
+	// callers can sort attributes the way the spreadsheet lists them
+	// instead of alphabetically.
+	Order map[string]int
 }
 
 // loadMetadataCache opens metadata.csv once and builds all lookup maps.
@@ -51,8 +57,10 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 		GroupingVariables: make(map[string]string),
 		GroupingValues:    make(map[string]string),
 		Dial0Middle:       make(map[string]bool),
+		IgnoreXGrouping:   make(map[string]bool),
 		MaxValCurrent:     make(map[string]float64),
 		MaxValReference:   make(map[string]float64),
+		Order:             make(map[string]int),
 	}
 
 	path := filepath.Join(dataDir, "metadata.csv")
@@ -155,6 +163,7 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 	iGroupingValues := col("GroupingValues")
 
 	iDial0Middle := col("dial_0_middle")
+	iIgnoreXGrouping := col("ignore_x_grouping")
 
 	iMaxValCurrent := col("maxval_curr")
 	iMaxValReference := col("maxval_ref")
@@ -195,6 +204,12 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 		rowCount++
 
 		norm := normalizeMetadataColumn(column)
+
+		// Order: row position in metadata.csv, zero-based.
+		mc.Order[column] = rowCount - 1
+		if norm != "" {
+			mc.Order[norm] = rowCount - 1
+		}
 
 		// Colors
 		if iColor >= 0 {
@@ -355,6 +370,19 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 			}
 		}
 
+		// IgnoreXGrouping: whether the grouping-variable filter should skip
+		// narrowing options down to the selected factor's axis label for this
+		// column's variable type.
+		if iIgnoreXGrouping >= 0 {
+			if v := get(rec, iIgnoreXGrouping); v != "" {
+				b := parseBool(v)
+				mc.IgnoreXGrouping[column] = b
+				if norm != "" {
+					mc.IgnoreXGrouping[norm] = b
+				}
+			}
+		}
+
 		// MaxValCurrent / MaxValReference: curated per-scenario ceilings for
 		// choropleth color scaling, used instead of scanning every catchment.
 		if iMaxValCurrent >= 0 {
@@ -478,10 +506,16 @@ func (mc *MetadataCache) AddColumnAliases(columns []string) int {
 				added = true
 			}
 		}
+		if v, ok := mc.Order[metaName]; ok {
+			if _, exists := mc.Order[realName]; !exists {
+				mc.Order[realName] = v
+				added = true
+			}
+		}
 
 		// The boolean sets carry meaning by presence, so only a true entry is
 		// worth aliasing.
-		for _, set := range []map[string]bool{mc.Inputs, mc.TargetInputs, mc.CanMap, mc.CanGraph, mc.Dial0Middle} {
+		for _, set := range []map[string]bool{mc.Inputs, mc.TargetInputs, mc.CanMap, mc.CanGraph, mc.Dial0Middle, mc.IgnoreXGrouping} {
 			if v, ok := set[metaName]; ok && v {
 				if _, exists := set[realName]; !exists {
 					set[realName] = v

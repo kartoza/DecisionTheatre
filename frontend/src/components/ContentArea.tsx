@@ -4,7 +4,7 @@ import { FiActivity, FiBarChart2, FiEdit2, FiGlobe, FiMap, FiPlus, FiSquare, FiT
 import ViewPane from './ViewPane';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
-import { useAttributeDetails, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
+import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -157,6 +157,7 @@ function ContentArea({
   const { units: attributeUnits } = useAttributeUnits();
   const { targetRanges } = useAttributeTargetRanges();
   const { variableTypes } = useAttributeVariableTypes();
+  const { order: attributeOrder } = useAttributeOrder();
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
@@ -191,11 +192,16 @@ function ContentArea({
     return keys
       .filter((key, idx, arr) => arr.indexOf(key) === idx)
       .sort((a, b) => {
+        const aOrder = attributeOrder[a];
+        const bOrder = attributeOrder[b];
+        if (aOrder != null && bOrder != null) return aOrder - bOrder;
+        if (aOrder != null) return -1;
+        if (bOrder != null) return 1;
         const aLabel = attributeDetails[a] ?? a;
         const bLabel = attributeDetails[b] ?? b;
         return aLabel.localeCompare(bLabel);
       });
-  }, [attributeDetails, siteIndicators, targetInputs, variableTypes]);
+  }, [attributeDetails, attributeOrder, siteIndicators, targetInputs, variableTypes]);
 
   const targetGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -206,9 +212,16 @@ function ContentArea({
       groups.set(groupName, keysInGroup);
     });
     return Array.from(groups.entries())
-      .map(([groupName, keys]) => ({ groupName, keys }))
+      .map(([groupName, keys]) => ({
+        groupName,
+        // Herbivores lists alphabetically by label; every other group keeps
+        // the metadata.csv row order already applied in editableTargetKeys.
+        keys: groupName === 'Herbivores'
+          ? [...keys].sort((a, b) => (attributeDetails[a] ?? a).localeCompare(attributeDetails[b] ?? b))
+          : keys,
+      }))
       .sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [editableTargetKeys, variableTypes]);
+  }, [attributeDetails, editableTargetKeys, variableTypes]);
 
   const targetHasBeenUpdated = useMemo(() => {
     if (!siteIndicators?.ideal || !siteIndicators?.current) return false;
