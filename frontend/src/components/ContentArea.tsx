@@ -1,4 +1,4 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
@@ -6,7 +6,7 @@ import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -145,6 +145,13 @@ function ContentArea({
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+  // Disabling every slider mid-drag-release moves focus off the thumb the
+  // user just let go of; the modal's focus trap then jumps focus to another
+  // element inside it, which drags the scroll position along with it. We
+  // capture the modal body's scroll position right before disabling and
+  // restore it once the disable/re-enable render has committed.
+  const modalBodyRef = useRef<HTMLDivElement>(null);
+  const savedTargetScrollTopRef = useRef(0);
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
 
@@ -215,13 +222,9 @@ function ContentArea({
     });
   }, [siteIndicators]);
 
-  // Populate draft values whenever the modal opens, regardless of which entry
-  // point triggered it (header "Targets" button vs internal button). If the
-  // user has already set a custom target for a key (ideal differs from
-  // current, its starting value), keep that value; otherwise default to the
-  // current state.
-  useEffect(() => {
-    if (!isTargetModalOpen) return;
+  // If the user has already set a custom target for a key (ideal differs
+  // from current), keep that value; otherwise default to the current state.
+  const computeTargetDrafts = () => {
     const nextDrafts: Record<string, string> = {};
     for (const key of editableTargetKeys) {
       const idealVal = siteIndicators?.ideal?.[key];
@@ -243,14 +246,39 @@ function ContentArea({
         nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback) ? String(fallback) : '0';
       }
     }
+    return nextDrafts;
+  };
+
+  // Populate draft values whenever the modal opens, regardless of which entry
+  // point triggered it (header "Targets" button vs internal button). While
+  // the modal stays open, also resync drafts whenever `siteIndicators`
+  // itself changes — a recalculation can cascade into other factors (e.g.
+  // dropping grass cover fraction shifts the tree cover target), and those
+  // sliders need to pick up the new value without the user closing and
+  // reopening the modal.
+  const targetModalWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (!isTargetModalOpen) {
+      targetModalWasOpenRef.current = false;
+      return;
+    }
+
+    const nextDrafts = computeTargetDrafts();
     setTargetDraftValues(nextDrafts);
-    setTargetDefaultValues(
-      Object.fromEntries(
-        Object.entries(nextDrafts).map(([key, value]) => [key, Number(value)])
-      )
-    );
+
+    if (!targetModalWasOpenRef.current) {
+      // Only snapshot the "opened at" values on the initial open — this
+      // snapshot is what later edits are diffed against to detect which
+      // sliders the user actually touched.
+      setTargetDefaultValues(
+        Object.fromEntries(
+          Object.entries(nextDrafts).map(([key, value]) => [key, Number(value)])
+        )
+      );
+    }
+    targetModalWasOpenRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTargetModalOpen]);
+  }, [isTargetModalOpen, siteIndicators]);
 
 
   // Broadcast open/close so the guided tour can hide itself while the modal
@@ -266,16 +294,19 @@ function ContentArea({
     prevModalOpenRef.current = isOpen;
   }, [isTargetModalOpen]);
 
-  const saveTargetValues = async () => {
-    if (!siteIndicators || !onSiteIndicatorsChange) {
-      onCloseTargetModal?.();
-      return;
-    }
+  // Runs on every slider's release handler. `draftValues` is passed in
+  // rather than read from `targetDraftValues` state so a just-released
+  // slider's final value is guaranteed to be included, even though the
+  // setState call that recorded it may not have flushed to state yet by the
+  // time this runs.
+  const recalculateTargets = async (draftValues: Record<string, string>) => {
+    if (!siteIndicators || !onSiteIndicatorsChange) return;
 
     const nextIdeal = { ...(siteIndicators.ideal ?? {}) };
+    let hasChanges = false;
 
     for (const key of editableTargetKeys) {
-      const raw = (targetDraftValues[key] ?? '').trim();
+      const raw = (draftValues[key] ?? '').trim();
       if (raw === '') continue;
       const parsed = Number(raw);
       if (!Number.isFinite(parsed)) {
@@ -298,22 +329,38 @@ function ContentArea({
       const openedAt = targetDefaultValues[key];
       if (typeof openedAt === 'number' && parsed === openedAt) continue;
       nextIdeal[key] = parsed;
+      hasChanges = true;
     }
 
+    if (!hasChanges) return;
+
+    savedTargetScrollTopRef.current = modalBodyRef.current?.scrollTop ?? 0;
+    // Move focus onto the modal body itself — a stable element that never
+    // gets disabled — rather than letting it fall out of the modal
+    // entirely. react-focus-lock only intervenes (and drags the scroll
+    // position with it) once it sees focus escape the modal; keeping focus
+    // inside means the disabled slider/button below never triggers that.
+    modalBodyRef.current?.focus({ preventScroll: true });
     setIsSavingTargets(true);
     try {
       await onSiteIndicatorsChange({
         ...siteIndicators,
         ideal: nextIdeal,
       });
-      onCloseTargetModal?.();
-      toast({ title: 'Target values updated', status: 'success', duration: 2000 });
     } catch {
       toast({ title: 'Failed to update target values', status: 'error', duration: 2500 });
     } finally {
       setIsSavingTargets(false);
     }
   };
+
+  // Runs after every isSavingTargets flip (sliders getting disabled, then
+  // re-enabled) and pins the scroll position back to where it was
+  // immediately beforehand — see the comment by savedTargetScrollTopRef.
+  useLayoutEffect(() => {
+    const el = modalBodyRef.current;
+    if (el) el.scrollTop = savedTargetScrollTopRef.current;
+  }, [isSavingTargets]);
 
   const visibleIndices = isQuad
     ? paneStates.map((_, index) => index)
@@ -491,7 +538,24 @@ function ContentArea({
         <ModalContent bg="gray.800" color="white">
           <ModalHeader>Edit Target Values</ModalHeader>
           <ModalCloseButton isDisabled={isSavingTargets} />
-          <ModalBody>
+          <ModalBody ref={modalBodyRef} tabIndex={-1} position="relative">
+            {isSavingTargets && (
+              <Box
+                position="absolute"
+                top={0} left={0} right={0} bottom={0}
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                bg="rgba(26, 32, 44, 0.6)"
+                zIndex={10}
+                backdropFilter="blur(2px)"
+              >
+                <VStack spacing={2}>
+                  <Spinner size="xl" color="cyan.400" thickness="3px" speed="0.7s" />
+                  <Box fontSize="sm" color="gray.200">Recalculating…</Box>
+                </VStack>
+              </Box>
+            )}
             <Accordion allowMultiple>
               {targetGroups.map((group) => (
                 <AccordionItem key={group.groupName} border="none" mb={3}>
@@ -540,9 +604,15 @@ function ContentArea({
                               max={safeMax}
                               step={step}
                               colorScheme="cyan"
+                              isDisabled={isSavingTargets}
                               onChange={(val) =>
                                 setTargetDraftValues((prev) => ({ ...prev, [key]: String(val) }))
                               }
+                              onChangeEnd={(val) => {
+                                const nextDraft = { ...targetDraftValues, [key]: String(val) };
+                                setTargetDraftValues(nextDraft);
+                                void recalculateTargets(nextDraft);
+                              }}
                             >
                               <SliderTrack bg="whiteAlpha.200">
                                 <SliderFilledTrack />
@@ -563,15 +633,7 @@ function ContentArea({
             </Accordion>
           </ModalBody>
           <ModalFooter>
-            <Button variant="ghost" mr={3} onClick={onCloseTargetModal} isDisabled={isSavingTargets}>Cancel</Button>
-            <Button
-              colorScheme="cyan"
-              onClick={saveTargetValues}
-              isLoading={isSavingTargets}
-              loadingText="Recalculating"
-            >
-              Save
-            </Button>
+            <Button colorScheme="cyan" onClick={onCloseTargetModal} isDisabled={isSavingTargets}>Close</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
