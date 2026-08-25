@@ -77,6 +77,7 @@ export function applyServerSatelliteConfig(info: ServerInfo | null | undefined):
   }
 
   const wasUnavailable = unavailable();
+  const wasConfirmed = confirmed;
 
   quotaExceeded = info?.satellite_quota_exceeded ?? false;
   // Only an explicit true. A missing field means an older server that cannot
@@ -87,7 +88,14 @@ export function applyServerSatelliteConfig(info: ServerInfo | null | undefined):
   // same "assume it works" the module-level default above already commits to.
   available = info?.satellite_available ?? true;
 
-  if (unavailable() !== wasUnavailable) {
+  // `confirmed` flipping true-without-`unavailable()` changing is exactly the
+  // case that matters most: a map built before this response landed (the
+  // first grid pane, which mounts before the rest — see ViewPane.tsx's
+  // stagger) chose the built-in style because satelliteConfirmed() was still
+  // false, and `available` was already optimistically true so unavailable()
+  // never moves. Without this, that pane is stuck on the built-in basemap
+  // until something else changes isGoogleBasemap.
+  if (unavailable() !== wasUnavailable || confirmed !== wasConfirmed) {
     for (const listener of unavailableListeners) listener(unavailable());
   }
 }

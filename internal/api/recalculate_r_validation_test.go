@@ -191,14 +191,14 @@ func baseCascadeIdeal() map[string]float64 {
 		"NPP_gm2": 300, "flamNPP_gm2": 200,
 		"deltaSOC_Mgha_trees": 1, "deltaSOC_Mgha_grazers": 0.5, "deltaSOC_Mgha": 1.5,
 		"SOC_Mgha_0_30":   50,
-		"herbs_tot_kgkm2": 1000, "herbs_tot_DMI_kgkm2": 500, "herbs_tot_CH4_kgkm2": 5,
-		"herbs_totGRAZING_kgkm2": 700, "herbs_totGRAZING_DMI_kgkm2": 350, "herbs_totGRAZING_CH4_kgkm2": 3,
-		"fracGrazing": 0.7, "grazing_intensity": 0.1,
+		"herbs_tot_kgkm2": 1000, "herbs_tot_DMI_gm2": 500, "herbs_tot_CH4_kgkm2": 5,
+		"herbs_totGRAZING_kgkm2": 700, "herbs_totGRAZING_DMI_gm2": 350, "herbs_totGRAZING_CH4_kgkm2": 3,
+		"fracGrazing": 0.7, "grazing_intensity": 0.1, "NPP_gm2.1": -50,
 		"propEarly": 0.45, "MAR": 800,
 		"herbs_sp_counts_Impala": 100, "herbs_sp_kgkm2_Impala": 4000,
-		"herbs_sp_DMI_kgkm2_Impala": 200, "herbs_sp_CH4_kgkm2_Impala": 2,
+		"herbs_sp_DMI_gm2_Impala": 200, "herbs_sp_CH4_kgkm2_Impala": 2,
 		"herbs_sp_counts_Zebra": 20, "herbs_sp_kgkm2_Zebra": 5000,
-		"herbs_sp_DMI_kgkm2_Zebra": 150, "herbs_sp_CH4_kgkm2_Zebra": 1,
+		"herbs_sp_DMI_gm2_Zebra": 150, "herbs_sp_CH4_kgkm2_Zebra": 1,
 	}
 }
 

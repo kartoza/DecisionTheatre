@@ -1125,19 +1125,15 @@ function SiteCreationMap({
     const next = !isGoogleBasemapRef.current;
 
     if (next && satelliteUnavailable()) {
-      toast({
-        title: 'Satellite imagery unavailable',
-        description: "This month's quota has been used up, or no imagery "
-          + 'provider is configured. Showing the default map instead.',
-        status: 'warning',
-        duration: 8000,
-        isClosable: true,
-      });
+      console.log(
+        "Satellite imagery unavailable: this month's quota has been used up, "
+          + 'or no imagery provider is configured. Showing the default map instead.',
+      );
       return;
     }
 
     applyGoogleBasemap(next);
-  }, [applyGoogleBasemap, toast]);
+  }, [applyGoogleBasemap]);
 
   // If satellite becomes unavailable (quota spent, or — at startup, before
   // /api/info has resolved — no provider turns out to be configured) while it
@@ -1147,16 +1143,12 @@ function SiteCreationMap({
     return subscribeSatelliteUnavailable((unavailable) => {
       if (!unavailable || !isGoogleBasemapRef.current) return;
       applyGoogleBasemap(false);
-      toast({
-        title: 'Satellite imagery unavailable',
-        description: "This month's quota has been used up, or no imagery "
-          + 'provider is configured. Switched to the default map.',
-        status: 'warning',
-        duration: 8000,
-        isClosable: true,
-      });
+      console.log(
+        "Satellite imagery unavailable: this month's quota has been used up, "
+          + 'or no imagery provider is configured. Switched to the default map.',
+      );
     });
-  }, [applyGoogleBasemap, toast]);
+  }, [applyGoogleBasemap]);
 
   const getInstructions = () => {
     switch (mode) {
