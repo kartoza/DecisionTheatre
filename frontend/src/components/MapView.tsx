@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text, useToast } from '@chakra-ui/react';
+import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiPlus, FiMinus, FiTrash2 } from 'react-icons/fi';
 import maplibregl from 'maplibre-gl';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
@@ -2163,7 +2163,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   const onGoogleBasemapChangeRef = useRef(onGoogleBasemapChange);
   onGoogleBasemapChangeRef.current = onGoogleBasemapChange;
   const isGoogleBasemapRef = useRef(getAppRuntime() === 'browser');
-  const toast = useToast();
 
   // Shared by the toggle button and the quota-exceeded auto-revert below, so
   // the two cannot drift into applying the switch differently.
@@ -2233,17 +2232,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
 
       if (unavailable && wanted) {
-        toast({
-          title: 'Satellite imagery unavailable',
-          description: "This month's quota has been used up, or no imagery "
-            + 'provider is configured. Switched to the default map.',
-          status: 'warning',
-          duration: 8000,
-          isClosable: true,
-        });
+        console.log(
+          "Satellite imagery unavailable: this month's quota has been used up, "
+            + 'or no imagery provider is configured. Switched to the default map.',
+        );
       }
     });
-  }, [applyBasemapStyle, toast]);
+  }, [applyBasemapStyle]);
 
   const deriveBoundsFromGeometry = useCallback((geometry: GeoJSON.Geometry | null): BoundingBox | null => {
     if (!geometry) return null;

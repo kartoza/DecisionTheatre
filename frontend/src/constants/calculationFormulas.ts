@@ -43,8 +43,8 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
     explanation:
       "Weighted sum of litter biomass (g/m²). " +
       "Litter midpoints for the 10 classes are " +
-      "0.06, 0.18, 0.36, 0.70, 0.98, 1.44, 1.98, 2.60, 3.30, 4.32 g/m². " +
-      "Derived from leaf mass fraction (LMF = 4%) of AGB, adjusted for evergreen fraction per class.",
+      "6.0, 18.0, 36.0, 70.0, 98.0, 144.0, 198.0, 260.0, 330.0, 432.0 g/m². " +
+      "Derived from leaf mass fraction (LMF = 4%) of AGB, adjusted for evergreen fraction per class, ×100 to convert Mg/ha to g/m².",
   },
   meanTC: {
     workflow: "Tree Cover (§1)",
@@ -66,10 +66,20 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
   },
   flamNPP_gm2: {
     workflow: "Tree Cover (§1)",
-    formula: "flamNPP = Σᵢ₌₀⁵ ( prop_class[i] × site_NPP_by_treecover[i] )",
+    formula: "flamNPP = Σᵢ₌₀⁵ ( prop_class[i] × site_NPP_by_treecover[i] )\n  [fallback: flamNPP × (new_lowTC / old_lowTC)]",
     explanation:
       "Flammable NPP — the same weighted-NPP sum but restricted to the six low-TC " +
-      "classes (biomass < 50 Mg/ha) which are the areas capable of carrying fire.",
+      "classes (biomass < 50 Mg/ha) which are the areas capable of carrying fire. " +
+      "Otherwise scales proportionally with the change in low-tree-cover fraction, same as NPP_gm2. " +
+      "Feeds directly into fuelload_gm2 for the fire cascade.",
+  },
+  "NPP_gm2.1": {
+    workflow: "Tree Cover (§1 step 3) / Herbivores → Grazing Intensity",
+    formula: "NPP_gm2.1 = max( 0,  NPP_gm2 − herbs_totGRAZING_DMI_gm2 )",
+    explanation:
+      "Grass standing biomass (g/m²) — grass NPP net of what grazers consume, floored at zero " +
+      "(grazers can't remove more grass than was produced). " +
+      "Recomputed together with grazing_intensity whenever NPP or grazing DMI changes.",
   },
   deltaSOC_Mgha_trees: {
     workflow: "SOC — Tree Cover Branch (§3 Branch 1)",
@@ -93,12 +103,13 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
       "(DMI, CH4, grazing fractions, functional groups, diet groups) is " +
       "scaled proportionally by the ratio new_total / old_total.",
   },
-  herbs_tot_DMI_kgkm2: {
+  herbs_tot_DMI_gm2: {
     workflow: "Herbivores (§4)",
-    formula: "herbs_tot_DMI = Σ( herbs_sp_DMI_kgkm2_[species] )\n  [direct edit: scaled by new_total / old_total]",
+    formula: "herbs_tot_DMI = Σ( herbs_sp_DMI_gm2_[species] )\n  [direct edit: scaled by new_total / old_total]",
     explanation:
-      "Total herbivore dry matter intake (kg/km²/yr) summed over all species. " +
-      "Per-species DMI = counts × DMI_per_individual (kg/head/yr) from the species trait table.",
+      "Total herbivore dry matter intake (g/m²/yr) summed over all species. " +
+      "Per-species DMI = counts × DMI_per_individual (kg/head/yr) from the species trait table, " +
+      "÷1000 to convert from kg/km²/yr to g/m²/yr.",
   },
   herbs_tot_CH4_kgkm2: {
     workflow: "Herbivores (§4)",
@@ -115,12 +126,13 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
       "Total biomass of grazing herbivores (kg/km²) — only the grass-consuming fraction " +
       "of each species' biomass, weighted by that species' Prop_Grass trait value.",
   },
-  herbs_totGRAZING_DMI_kgkm2: {
+  herbs_totGRAZING_DMI_gm2: {
     workflow: "Herbivores (§4)",
-    formula: "herbs_totGRAZING_DMI = Σ( herbs_sp_DMI_kgkm2_[sp] × Prop_Grass[sp] )",
+    formula: "herbs_totGRAZING_DMI = Σ( herbs_sp_DMI_gm2_[sp] × Prop_Grass[sp] )",
     explanation:
-      "Dry matter intake (kg/km²/yr) attributable to grazing — only the grass portion of each " +
-      "species' DMI, weighted by Prop_Grass. Used for fuel-load reduction and grazing intensity.",
+      "Dry matter intake (g/m²/yr) attributable to grazing — only the grass portion of each " +
+      "species' DMI, weighted by Prop_Grass. Used for fuel-load reduction and grazing intensity, " +
+      "both directly in g/m² with no further unit conversion.",
   },
   herbs_totGRAZING_CH4_kgkm2: {
     workflow: "Herbivores (§4)",
@@ -138,11 +150,11 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
   },
   grazing_intensity: {
     workflow: "Herbivores → Grazing Intensity",
-    formula: "GI = min( 1,  herbs_totGRAZING_DMI_kgkm2 / (NPP_gm2 × 1000) )",
+    formula: "GI = min( 1,  herbs_totGRAZING_DMI_gm2 / NPP_gm2 )",
     explanation:
       "Dimensionless grazing intensity (0 – 1). " +
-      "Divides total grazing dry-matter intake (kg/km²) by grass production " +
-      "(NPP converted from g/m² to kg/km² by ×1000). " +
+      "Divides total grazing dry-matter intake by grass production — both already " +
+      "expressed in g/m², so no unit conversion is needed. " +
       "A value of 1 means grazers consume all available grass.",
   },
 
@@ -171,11 +183,13 @@ export const COLUMN_FORMULAS: Record<string, ColumnFormula> = {
   // ── Fire cascade ─────────────────────────────────────────────────────────
   fuelload_gm2: {
     workflow: "Fire Cascade (§2)",
-    formula: "fuelload = max( 0,  NPP_gm2 + LitterBiomass_gm2 − herbs_totGRAZING_DMI_kgkm2 / 1000 )",
+    formula: "fuelload = max( 0,  flamNPP_gm2 + LitterBiomass_gm2 − herbs_totGRAZING_DMI_gm2 )",
     explanation:
       "Available fire fuel (g/m²). " +
-      "Grass produced (NPP) plus standing litter, minus the grass consumed by grazers " +
-      "(DMI converted from kg/km² to g/m² by ÷1000). " +
+      "Uses flammable-zone NPP (flamNPP_gm2, the low-tree-cover classes only), not total NPP — " +
+      "fire only carries through the open part of the landscape. " +
+      "Plus standing litter, minus the grass consumed by grazers " +
+      "— all three terms are already in g/m², so no unit conversion is needed. " +
       "Herbivores reduce fuel load and thereby suppress fire.",
   },
   Intensity_early_kW_m: {
@@ -326,15 +340,16 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
       name: "Tree Cover §1.3 — Mean Tree Cover edited directly",
       trigger: "You set meanTC directly.",
       steps: [
-        "Compute shift = (old_meanTC − new_meanTC) / 10",
-        "First 5 low-TC classes (0–40 Mg/ha) each increase by shift",
-        "Last 5 classes (40–100 Mg/ha) each decrease by shift (clamped ≥ 0)",
+        "Recompute the actual current meanTC from today's class proportions (the stored value may not exactly match the weighted-midpoint sum)",
+        "Solve shift = (actual_old_meanTC − new_meanTC) / (Σ decreasing-class midpoints − Σ increasing-class midpoints), so the new weighted mean hits the target exactly",
+        "5 low-TC classes (0–40 Mg/ha midpoints) each increase by shift",
+        "5 high-TC classes (40–100 Mg/ha midpoints) each decrease by shift — not clamped, so a target outside the reachable range can push a class negative",
         "Recalculate lowTC_prop and highTC_prop from updated class sums",
-        "Run shared prop-derived metrics (AGBwd, LitterBiomass, NPP, flamNPP, deltaSOC_trees)",
-        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Run shared prop-derived metrics (AGBwd, LitterBiomass, meanTC, NPP, flamNPP, deltaSOC_trees)",
+        "Recompute NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
         "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
-      outputs: ["lowTC_prop", "highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
+      outputs: ["lowTC_prop", "highTC_prop", "meanTC", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
     });
   }
 
@@ -348,7 +363,7 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Recalculate lowTC_prop = sum of the 6 low-TC classes (0–50 Mg/ha)",
         "Recalculate highTC_prop = sum of the 4 high-TC classes (50–100 Mg/ha)",
         "Run shared prop-derived metrics (AGBwd, LitterBiomass, meanTC, NPP, flamNPP, deltaSOC_trees)",
-        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recompute NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
         "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
       outputs: ["lowTC_prop", "highTC_prop", "meanTC", "AGBwd_Mgha", "LitterBiomass_gm2", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
@@ -366,14 +381,17 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Redistribute the 6 low-TC biomass classes equally: each = lowTC_prop / 6",
         "Redistribute the 4 high-TC biomass classes equally: each = highTC_prop / 4",
         "Run shared prop-derived metrics (AGBwd, LitterBiomass, meanTC, NPP, flamNPP, deltaSOC_trees)",
-        "Recompute grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recompute NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
         "deltaSOC_Mgha = deltaSOC_Mgha_trees + deltaSOC_Mgha_grazers",
       ],
-      outputs: ["highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "meanTC", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
+      outputs: ["lowTC_prop", "highTC_prop", "AGBwd_Mgha", "LitterBiomass_gm2", "meanTC", "NPP_gm2", "flamNPP_gm2", "deltaSOC_Mgha_trees", "grazing_intensity", "deltaSOC_Mgha"],
     });
   }
 
-  // §2 — Herbivores total edited directly
+  // §2/§4a/§4b — herbivore edits are mutually exclusive in the backend: a
+  // single PATCH only runs one of these three workflows, in this priority
+  // order (herbs_tot_kgkm2 wins over species counts, which wins over species
+  // biomass), even if multiple herbs_* fields were changed in the same edit.
   if (herbsTotChanged) {
     steps.push({
       name: "Herbivores §2 — Total biomass edited directly",
@@ -382,63 +400,57 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
         "Compute scale = new_total / old_total",
         "Scale all herbs_* sub-fields proportionally (DMI, CH4, grazing fractions, per-species, functional groups, diet groups)",
         "fracGrazing = herbs_totGRAZING_kgkm2 / herbs_tot_kgkm2",
-        "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recalculate NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
       ],
       outputs: [
-        "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
-        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
-        "fracGrazing", "grazing_intensity",
-        "herbs_sp_kgkm2_*", "herbs_sp_counts_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
-        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
-        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+        "herbs_tot_DMI_gm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_gm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "NPP_gm2.1", "grazing_intensity",
+        "herbs_sp_kgkm2_*", "herbs_sp_counts_*", "herbs_sp_DMI_gm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_gm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_gm2_*", "herbs_diet_CH4_kgkm2_*",
       ],
     });
-  }
-
-  // §4a — species counts edited
-  if (speciesCountsChanged) {
+  } else if (speciesCountsChanged) {
     steps.push({
       name: "Herbivores §4a — Species counts edited",
       trigger: "You edited one or more species headcount columns (herbs_sp_counts_*).",
       steps: [
         "For each changed species: biomass = count × body_mass (kg/individual)",
-        "For each changed species: DMI = count × DMI_per_individual (kg/km²/yr)",
+        "For each changed species: DMI = count × DMI_per_individual (kg/km²/yr), ÷1000 to g/m²/yr",
         "For each changed species: CH4 = count × CH4_per_individual (kg/km²/yr)",
         "Recompute total biomass, DMI, CH4 as sums over all species",
         "Recompute grazing totals (×Prop_Grass) and diet/functional-group aggregates",
         "fracGrazing = herbs_totGRAZING_kgkm2 / herbs_tot_kgkm2",
-        "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recalculate NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
       ],
       outputs: [
-        "herbs_sp_kgkm2_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
-        "herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
-        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
-        "fracGrazing", "grazing_intensity",
-        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
-        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+        "herbs_sp_kgkm2_*", "herbs_sp_DMI_gm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_tot_kgkm2", "herbs_tot_DMI_gm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_gm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "NPP_gm2.1", "grazing_intensity",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_gm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_gm2_*", "herbs_diet_CH4_kgkm2_*",
       ],
     });
-  }
-
-  // §4b — species biomass edited
-  if (speciesBiomassChanged) {
+  } else if (speciesBiomassChanged) {
     steps.push({
       name: "Herbivores §4b — Species biomass edited",
       trigger: "You edited one or more species biomass columns (herbs_sp_kgkm2_*).",
       steps: [
         "For each species: count = biomass / body_mass",
-        "For each species: DMI = count × DMI_per_individual",
+        "For each species: DMI = count × DMI_per_individual (kg/km²/yr), ÷1000 to g/m²/yr",
         "For each species: CH4 = count × CH4_per_individual",
         "Recompute total biomass, DMI, CH4 and all aggregates",
-        "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recalculate NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
       ],
       outputs: [
-        "herbs_sp_counts_*", "herbs_sp_DMI_kgkm2_*", "herbs_sp_CH4_kgkm2_*",
-        "herbs_tot_kgkm2", "herbs_tot_DMI_kgkm2", "herbs_tot_CH4_kgkm2",
-        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_kgkm2", "herbs_totGRAZING_CH4_kgkm2",
-        "fracGrazing", "grazing_intensity",
-        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_kgkm2_*", "herbs_fg_CH4_kgkm2_*",
-        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_kgkm2_*", "herbs_diet_CH4_kgkm2_*",
+        "herbs_sp_counts_*", "herbs_sp_DMI_gm2_*", "herbs_sp_CH4_kgkm2_*",
+        "herbs_tot_kgkm2", "herbs_tot_DMI_gm2", "herbs_tot_CH4_kgkm2",
+        "herbs_totGRAZING_kgkm2", "herbs_totGRAZING_DMI_gm2", "herbs_totGRAZING_CH4_kgkm2",
+        "fracGrazing", "NPP_gm2.1", "grazing_intensity",
+        "herbs_fg_kgkm2_*", "herbs_fg_counts_*", "herbs_fg_DMI_gm2_*", "herbs_fg_CH4_kgkm2_*",
+        "herbs_diet_kgkm2_*", "herbs_diet_counts_*", "herbs_diet_DMI_gm2_*", "herbs_diet_CH4_kgkm2_*",
       ],
     });
   }
@@ -449,7 +461,7 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
       name: "SOC Grazing §3 Branch 2 — Grazer carbon effect",
       trigger: "Triggered automatically because tree cover, NPP, or grazing DMI changed.",
       steps: [
-        "Compute target grazing intensity: GI = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Compute target grazing intensity: GI = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
         "Compute baseline GI at old values (before the edit)",
         "% SOC change = −5.916 + 0.587 × (GI×100) − 0.00936 × (GI×100)²  [Ren et al. 2023]",
         "deltaSOC_grazers = SOC_0_30 × (% SOC change at target GI / 100) − SOC_0_30 × (% SOC change at baseline GI / 100)",
@@ -465,9 +477,9 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
       name: "Grass NPP — edited directly",
       trigger: "You set NPP_gm2 (net primary productivity) directly.",
       steps: [
-        "Recalculate grazing_intensity = min(1, herbs_totGRAZING_DMI / (NPP × 1000))",
+        "Recalculate NPP_gm2.1 = max(0, NPP_gm2 − herbs_totGRAZING_DMI_gm2) and grazing_intensity = min(1, herbs_totGRAZING_DMI_gm2 / NPP_gm2)",
       ],
-      outputs: ["grazing_intensity"],
+      outputs: ["NPP_gm2.1", "grazing_intensity"],
     });
   }
 
@@ -477,7 +489,7 @@ export function getTriggeredWorkflows(changedKeys: string[]): WorkflowStep[] {
       name: "Fire Cascade §2 — Fire regime recalculation",
       trigger: "Triggered automatically because NPP, litter, grazing DMI, tree cover, or propEarly changed.",
       steps: [
-        "Fuel load = max(0, NPP_gm2 + LitterBiomass_gm2 − herbs_totGRAZING_DMI_kgkm2 / 1000)",
+        "Fuel load = max(0, flamNPP_gm2 + LitterBiomass_gm2 − herbs_totGRAZING_DMI_gm2)",
         "Intensity_early = exp(6.65747 + 0.0011896 × fuelload) − exp(6.65747)",
         "Intensity_late  = min(17 000, exp(6.65747 + 0.003535 × fuelload) − exp(6.65747))",
         "  [In high-rainfall areas MAR > 1500 mm: Intensity_late = Intensity_early]",

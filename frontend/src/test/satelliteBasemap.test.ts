@@ -166,6 +166,28 @@ describe('satellite availability and quota tracking', () => {
     applyServerSatelliteConfig(info({ satellite_quota_exceeded: true }));
     expect(listener).toHaveBeenCalledTimes(2);
   });
+
+  it('notifies when confirmation arrives even though the optimistic default already reads as available', () => {
+    // Regression test: grid view mounts its first pane before /api/info has a
+    // chance to resolve, so that pane's map is built against the built-in
+    // style (satelliteConfirmed() is false). It relies on this listener firing
+    // once the real answer lands to switch over — see MapView.tsx's comment
+    // "The listener further up switches to satellite the moment confirmation
+    // arrives." Before this fix, going from unconfirmed to confirmed with
+    // quota/availability otherwise unchanged (the common case: a working key,
+    // first response of the session) left `unavailable()` at `false` the whole
+    // time, so the listener never fired and that pane stayed on the built-in
+    // basemap for the rest of the session.
+    const listener = vi.fn();
+    subscribeSatelliteUnavailable(listener);
+
+    expect(satelliteConfirmed()).toBe(false);
+    applyServerSatelliteConfig(info({ satellite_available: true, satellite_quota_exceeded: false }));
+
+    expect(satelliteConfirmed()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenLastCalledWith(false);
+  });
 });
 
 /**

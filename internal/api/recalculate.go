@@ -18,6 +18,17 @@ const (
 	colNPP                 = "NPP_gm2"
 	colHerbsSpCountsPrefix = "herbs_sp_counts_"
 	colHerbsSpKgkm2Prefix  = "herbs_sp_kgkm2_"
+
+	// colGrassBiomass is NPP_gm2.1 (§1 step 3, Aug2026 workflow): grass NPP
+	// net of what grazers consume.
+	colGrassBiomass = "NPP_gm2.1"
+
+	// colHerbsSpDMIGm2Prefix and colHerbsTotGrazingDMI hold dry matter intake
+	// in g/m² (metadata.csv Units=gm-2). Aug2026 workflow renamed these from
+	// the earlier "_kgkm2" naming; NPP_gm2 (g/m²) can now be compared/combined
+	// with them directly, with no ×1000 / ÷1000 conversion at the point of use.
+	colHerbsSpDMIGm2Prefix = "herbs_sp_DMI_gm2_"
+	colHerbsTotGrazingDMI  = "herbs_totGRAZING_DMI_gm2"
 )
 
 // lowTCBiomassClasses are the proportion columns for open/grassy areas
@@ -200,12 +211,9 @@ func recomputePropDerivedMetrics(ideal map[string]float64, oldLowTC, oldHighTC f
 	}
 	ideal["deltaSOC_Mgha"] = ideal["deltaSOC_Mgha_trees"] + ideal["deltaSOC_Mgha_grazers"]
 
-	// Recompute grazing intensity — NPP may have changed, DMI is unchanged.
-	// R scripts (0_5, fefa_ppp_v3 §4.8) always derive GI = DMI / (NPP × 1000)
-	// after any tree-cover or NPP update.
-	if npp := ideal["NPP_gm2"]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
-	}
+	// Recompute grass biomass and grazing intensity — NPP may have changed,
+	// DMI is unchanged (§1 step 3, §3 Branch 2).
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // ── Tree-cover workflows ──────────────────────────────────────────────────────
@@ -324,13 +332,31 @@ func workflowMeanTC(ideal, oldIdeal map[string]float64, lookup *LookupData) {
 // ── SOC helper ────────────────────────────────────────────────────────────────
 
 // grazingIntensity returns the dimensionless grazing intensity (clamped 0–1).
-// herbs_totGRAZING_DMI_kgkm2 (kg/km²) and NPP_gm2 (g/m²) use different units;
-// multiplying NPP by 1000 converts g/m² → kg/km² (§3 Branch 2).
-func grazingIntensity(dmiKgKm2, nppGm2 float64) float64 {
+// herbs_totGRAZING_DMI_gm2 and NPP_gm2 are both expressed in g/m², so no unit
+// conversion is needed (§3 Branch 2).
+func grazingIntensity(dmiGm2, nppGm2 float64) float64 {
 	if nppGm2 <= 0 {
 		return 0
 	}
-	return math.Min(1, dmiKgKm2/(nppGm2*1000))
+	return math.Min(1, dmiGm2/nppGm2)
+}
+
+// updateGrassBiomassAndGrazingIntensity recomputes NPP_gm2.1 (Grass Biomass,
+// §1 step 3) and grazing_intensity (§3 Branch 2) from the current NPP_gm2 and
+// herbs_totGRAZING_DMI_gm2 in ideal. Both share the same recalculation
+// triggers — NPP or grazing DMI changing — so they are always refreshed
+// together.
+func updateGrassBiomassAndGrazingIntensity(ideal map[string]float64) {
+	npp := ideal[colNPP]
+	grazingDMI := ideal[colHerbsTotGrazingDMI]
+
+	// 0_5_CalculateCurr_Ref_NPP_SOC.R clamps GrassBiomass at 0 (can't go
+	// negative — grazers can't remove more grass than was produced).
+	ideal[colGrassBiomass] = math.Max(0, npp-grazingDMI)
+
+	if npp > 0 {
+		ideal["grazing_intensity"] = grazingIntensity(grazingDMI, npp)
+	}
 }
 
 // workflowSOCGrazing recomputes deltaSOC_Mgha_grazers (§3 Branch 2) using
@@ -357,8 +383,8 @@ func workflowSOCGrazing(ideal, oldIdeal map[string]float64) {
 		return socPolyA + socPolyB*gi100 + socPolyC*gi100*gi100
 	}
 
-	giTarget := grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], ideal["NPP_gm2"])
-	giBaseline := grazingIntensity(oldIdeal["herbs_totGRAZING_DMI_kgkm2"], oldIdeal["NPP_gm2"])
+	giTarget := grazingIntensity(ideal[colHerbsTotGrazingDMI], ideal["NPP_gm2"])
+	giBaseline := grazingIntensity(oldIdeal[colHerbsTotGrazingDMI], oldIdeal["NPP_gm2"])
 
 	diffSOCTarget := soc0_30 * percSOCChange(giTarget) / 100
 	diffSOCBaseline := soc0_30 * percSOCChange(giBaseline) / 100
@@ -395,7 +421,7 @@ func recomputeHerbTotals(ideal map[string]float64, traits map[string]HerbTrait) 
 			continue
 		}
 		spCounts := ideal[colHerbsSpCountsPrefix+commonName]
-		spDMI := ideal["herbs_sp_DMI_kgkm2_"+commonName]
+		spDMI := ideal[colHerbsSpDMIGm2Prefix+commonName]
 		spCH4 := ideal["herbs_sp_CH4_kgkm2_"+commonName]
 
 		totKg += spKg
@@ -419,10 +445,10 @@ func recomputeHerbTotals(ideal map[string]float64, traits map[string]HerbTrait) 
 	}
 
 	ideal[colHerbsTot] = totKg
-	ideal["herbs_tot_DMI_kgkm2"] = totDMI
+	ideal["herbs_tot_DMI_gm2"] = totDMI
 	ideal["herbs_tot_CH4_kgkm2"] = totCH4
 	ideal["herbs_totGRAZING_kgkm2"] = totGrazingKg
-	ideal["herbs_totGRAZING_DMI_kgkm2"] = totGrazingDMI
+	ideal[colHerbsTotGrazingDMI] = totGrazingDMI
 	ideal["herbs_totGRAZING_CH4_kgkm2"] = totGrazingCH4
 	if totKg > 0 {
 		ideal["fracGrazing"] = totGrazingKg / totKg
@@ -435,7 +461,7 @@ func recomputeHerbTotals(ideal map[string]float64, traits map[string]HerbTrait) 
 		ideal["herbs_fg_counts_"+fg] = v
 	}
 	for fg, v := range fgDMI {
-		ideal["herbs_fg_DMI_kgkm2_"+fg] = v
+		ideal["herbs_fg_DMI_gm2_"+fg] = v
 	}
 	for fg, v := range fgCH4 {
 		ideal["herbs_fg_CH4_kgkm2_"+fg] = v
@@ -447,15 +473,13 @@ func recomputeHerbTotals(ideal map[string]float64, traits map[string]HerbTrait) 
 		ideal["herbs_diet_counts_"+diet] = v
 	}
 	for diet, v := range dietDMI {
-		ideal["herbs_diet_DMI_kgkm2_"+diet] = v
+		ideal["herbs_diet_DMI_gm2_"+diet] = v
 	}
 	for diet, v := range dietCH4 {
 		ideal["herbs_diet_CH4_kgkm2_"+diet] = v
 	}
 
-	if npp := ideal["NPP_gm2"]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(totGrazingDMI, npp)
-	}
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // workflow2Herbivores handles a direct edit of herbs_tot_kgkm2.
@@ -477,16 +501,12 @@ func workflow2Herbivores(ideal, oldIdeal map[string]float64, lookup *LookupData)
 	if newTotal > 0 {
 		ideal["fracGrazing"] = ideal["herbs_totGRAZING_kgkm2"] / newTotal
 	}
-	if npp := ideal["NPP_gm2"]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
-	}
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // workflow3GrassNPP handles a direct edit of NPP_gm2.
 func workflow3GrassNPP(ideal map[string]float64) {
-	if npp := ideal[colNPP]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
-	}
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // workflow2aSpeciesCounts handles §4 trigger: herbs_sp_counts_* edited.
@@ -504,7 +524,9 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 			}
 			newCount := ideal[key]
 			ideal[colHerbsSpKgkm2Prefix+commonName] = newCount * trait.BodyMass
-			ideal["herbs_sp_DMI_kgkm2_"+commonName] = newCount * trait.DMIKgIndivYr
+			// counts (indiv/km²) × DMIKgIndivYr (kg/indiv/yr) = kg/km²/yr;
+			// ÷1000 converts to the g/m²/yr stored under colHerbsSpDMIGm2Prefix.
+			ideal[colHerbsSpDMIGm2Prefix+commonName] = newCount * trait.DMIKgIndivYr / 1000.0
 			ideal["herbs_sp_CH4_kgkm2_"+commonName] = newCount * trait.CH4KgIndivYr
 		}
 		// §4 Steps 3–5: recompute all aggregates.
@@ -520,7 +542,7 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 		if oldCount > 0 {
 			scale := newCount / oldCount
 			scaleIdealKey(ideal, colHerbsSpKgkm2Prefix+sp, scale)
-			scaleIdealKey(ideal, "herbs_sp_DMI_kgkm2_"+sp, scale)
+			scaleIdealKey(ideal, colHerbsSpDMIGm2Prefix+sp, scale)
 			scaleIdealKey(ideal, "herbs_sp_CH4_kgkm2_"+sp, scale)
 		}
 	}
@@ -529,7 +551,7 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 		switch {
 		case strings.HasPrefix(k, colHerbsSpKgkm2Prefix):
 			newTotKg += v
-		case strings.HasPrefix(k, "herbs_sp_DMI_kgkm2_"):
+		case strings.HasPrefix(k, colHerbsSpDMIGm2Prefix):
 			newTotDMI += v
 		case strings.HasPrefix(k, "herbs_sp_CH4_kgkm2_"):
 			newTotCH4 += v
@@ -537,7 +559,7 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 	}
 	oldTotal := oldIdeal[colHerbsTot]
 	ideal[colHerbsTot] = newTotKg
-	ideal["herbs_tot_DMI_kgkm2"] = newTotDMI
+	ideal["herbs_tot_DMI_gm2"] = newTotDMI
 	ideal["herbs_tot_CH4_kgkm2"] = newTotCH4
 	if oldTotal > 0 {
 		scale := newTotKg / oldTotal
@@ -547,15 +569,13 @@ func workflow2aSpeciesCounts(ideal map[string]float64, changedSpecies map[string
 			}
 		}
 		scaleIdealKey(ideal, "herbs_totGRAZING_kgkm2", scale)
-		scaleIdealKey(ideal, "herbs_totGRAZING_DMI_kgkm2", scale)
+		scaleIdealKey(ideal, colHerbsTotGrazingDMI, scale)
 		scaleIdealKey(ideal, "herbs_totGRAZING_CH4_kgkm2", scale)
 	}
 	if newTotKg > 0 {
 		ideal["fracGrazing"] = ideal["herbs_totGRAZING_kgkm2"] / newTotKg
 	}
-	if npp := ideal["NPP_gm2"]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
-	}
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // workflow2bSpeciesBiomass handles §4 trigger: herbs_sp_kgkm2_* edited.
@@ -579,7 +599,9 @@ func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]floa
 				newCount = spKg / trait.BodyMass
 			}
 			ideal[colHerbsSpCountsPrefix+commonName] = newCount
-			ideal["herbs_sp_DMI_kgkm2_"+commonName] = newCount * trait.DMIKgIndivYr
+			// counts (indiv/km²) × DMIKgIndivYr (kg/indiv/yr) = kg/km²/yr;
+			// ÷1000 converts to the g/m²/yr stored under colHerbsSpDMIGm2Prefix.
+			ideal[colHerbsSpDMIGm2Prefix+commonName] = newCount * trait.DMIKgIndivYr / 1000.0
 			ideal["herbs_sp_CH4_kgkm2_"+commonName] = newCount * trait.CH4KgIndivYr
 		}
 		recomputeHerbTotals(ideal, lookup.HerbTraits)
@@ -592,7 +614,7 @@ func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]floa
 		switch {
 		case strings.HasPrefix(k, colHerbsSpKgkm2Prefix):
 			newTotKg += v
-		case strings.HasPrefix(k, "herbs_sp_DMI_kgkm2_"):
+		case strings.HasPrefix(k, colHerbsSpDMIGm2Prefix):
 			newTotDMI += v
 		case strings.HasPrefix(k, "herbs_sp_CH4_kgkm2_"):
 			newTotCH4 += v
@@ -600,7 +622,7 @@ func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]floa
 	}
 	oldTotal := oldIdeal[colHerbsTot]
 	ideal[colHerbsTot] = newTotKg
-	ideal["herbs_tot_DMI_kgkm2"] = newTotDMI
+	ideal["herbs_tot_DMI_gm2"] = newTotDMI
 	ideal["herbs_tot_CH4_kgkm2"] = newTotCH4
 	if oldTotal > 0 {
 		scale := newTotKg / oldTotal
@@ -610,15 +632,13 @@ func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]floa
 			}
 		}
 		scaleIdealKey(ideal, "herbs_totGRAZING_kgkm2", scale)
-		scaleIdealKey(ideal, "herbs_totGRAZING_DMI_kgkm2", scale)
+		scaleIdealKey(ideal, colHerbsTotGrazingDMI, scale)
 		scaleIdealKey(ideal, "herbs_totGRAZING_CH4_kgkm2", scale)
 	}
 	if newTotKg > 0 {
 		ideal["fracGrazing"] = ideal["herbs_totGRAZING_kgkm2"] / newTotKg
 	}
-	if npp := ideal["NPP_gm2"]; npp > 0 {
-		ideal["grazing_intensity"] = grazingIntensity(ideal["herbs_totGRAZING_DMI_kgkm2"], npp)
-	}
+	updateGrassBiomassAndGrazingIntensity(ideal)
 }
 
 // ── Fire workflow (§2) ────────────────────────────────────────────────────────
@@ -626,7 +646,10 @@ func workflow2bSpeciesBiomass(ideal map[string]float64, oldIdeal map[string]floa
 // workflow4FireCascade recalculates fire metrics from current NPP, litter,
 // and total grazing DMI.
 func workflow4FireCascade(ideal map[string]float64) {
-	npp := ideal["NPP_gm2"]
+	// 0_6_FireModelling.R builds fuel load from flamNPP_gm2 (flammable-zone
+	// NPP, low-TC classes only), not total NPP_gm2 — fire only carries
+	// through the open, flammable part of the landscape.
+	flamNPP := ideal["flamNPP_gm2"]
 	litter := ideal["LitterBiomass_gm2"]
 	lowTCProp := ideal[colLowTCProp]
 
@@ -635,10 +658,10 @@ func workflow4FireCascade(ideal map[string]float64) {
 		propEarly = 0.45
 	}
 
-	grazingDMI := ideal["herbs_totGRAZING_DMI_kgkm2"] / 1000.0
+	grazingDMI := ideal[colHerbsTotGrazingDMI]
 
 	// Step 1 — Fuel load (g/m²).
-	fuelload := math.Max(0, npp+litter-grazingDMI)
+	fuelload := math.Max(0, flamNPP+litter-grazingDMI)
 	ideal["fuelload_gm2"] = fuelload
 
 	// Step 2 — Fireline intensity.
