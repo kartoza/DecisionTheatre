@@ -16,14 +16,15 @@ type targetStateWarningRule struct {
 var targetStateWarningRules = []targetStateWarningRule{
 	{
 		message: warningNPPGM2,
-		// Fires when target grazing DMI (kg/km²) exceeds the current NPP
-		// capacity. NPP_gm2 (g/m²) × 1000 converts to kg/km² for comparison.
+		// Fires when target grazing DMI (g/m²) exceeds the current NPP
+		// capacity (g/m²) — both are in the same units, so no conversion
+		// is needed.
 		check: func(ideal, reference, current map[string]float64) bool {
 			if ideal == nil || current == nil {
 				return false
 			}
-			herbs, hasHerbs := ideal["herbs_totGRAZING_DMI_kgkm2"]
-			herbsCurrent, hasHerbsCurrent := current["herbs_totGRAZING_DMI_kgkm2"]
+			herbs, hasHerbs := ideal[colHerbsTotGrazingDMI]
+			herbsCurrent, hasHerbsCurrent := current[colHerbsTotGrazingDMI]
 			if !hasHerbs || !hasHerbsCurrent {
 				return false
 			}
@@ -35,7 +36,7 @@ var targetStateWarningRules = []targetStateWarningRule{
 			}
 
 			if herbsCurrent != herbs {
-				return herbs > npp*1000
+				return herbs > npp
 			}
 			return false
 		},
