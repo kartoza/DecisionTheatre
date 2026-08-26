@@ -141,7 +141,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev
+          sudo apt-get install -y libopenblas-dev libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+
+      # webview_go asks pkg-config for webkit2gtk-4.0, which Ubuntu 24.04
+      # runners no longer ship (only 4.1). See scripts/webkit-compat.sh.
+      - name: webkit2gtk-4.0 compatibility shim
+        if: runner.os == 'Linux'
+        run: ./scripts/webkit-compat.sh --github-env
 
       - name: Install CGO deps (macOS)
         if: runner.os == 'macOS'
