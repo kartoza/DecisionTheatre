@@ -331,6 +331,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The release workflow shipped no platform artefacts and no container image,
+  for every release.** Seven release runs, none of them green. Two faults in the
+  macOS legs of the build matrix, each enough on its own to stop everything
+  downstream, because `release` needs all six packaging jobs and `container`
+  needed `release`.
+
+  The first: `Package (unix)` checksums its tarball with `sha256sum`, which is
+  GNU coreutils and is not on a macOS runner — macOS ships `shasum`. The step
+  passed on Linux and failed on both Darwin legs. It now uses whichever of the
+  two is present; they print the same format, so the checksum file is
+  unchanged.
+
+  The second: `macos-13` has been withdrawn, so no runner ever matches the
+  label. The job was never scheduled, sat queued, and was cancelled at
+  GitHub's 24-hour limit — which is why a release looked like it failed the
+  following day. `macos-14` is deprecated and was heading the same way, so both
+  Darwin legs move to the current GA pair, `macos-15-intel` and `macos-15`.
+
+  Neither fault was visible until recently: before `fail-fast: false` was set,
+  the documentation failure cancelled the macOS legs within two minutes, so the
+  packaging failure underneath it never had the chance to report.
+
+- **`ghcr.io/kartoza/decisiontheatre:latest` stopped moving after v2.3.0.** The
+  container job was sequenced after `release` so their release-body writes could
+  not race, but `needs` also means "only if that job succeeded", which put the
+  image behind every platform package. v2.4.0, v2.5.0 and v2.5.1 published no
+  image at all, leaving `:latest` on the v2.3.0 build — indistinguishable, to
+  anyone pulling it, from a release that had been reverted. The server image
+  does not depend on a `.dmg` or an `.msi` existing, so the ordering stays and
+  the gate goes.
+
+
 - **Blank map panes, and fifteen seconds of spinner, on a server with no imagery
   provider.** Maps were constructed against `/api/satellite-style.json` whenever
   the runtime was a browser, without waiting to learn whether satellite was
