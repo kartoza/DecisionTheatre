@@ -7,6 +7,7 @@ import {
   FiActivity, FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
   FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
 } from 'react-icons/fi';
+import { colors } from '../styles/colors';
 import type { RangeMode, ViewMode } from '../types';
 import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/satelliteBasemap';
 
@@ -33,6 +34,7 @@ import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/sate
  */
 const STRINGS = {
   viewGroupLabel: 'View for all panes',
+  noSiteTable: 'The table needs a site — create or select one first',
   rangeGroupLabel: 'Colour range',
   map: 'Map',
   chart: 'Chart',
@@ -86,6 +88,36 @@ const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactElement }[] 
 ];
 
 /**
+ * The accent a control group paints its active state with.
+ *
+ * The header carries three clusters — view, colour range, map display — and
+ * with one shared accent they read as a single undifferentiated row of icons.
+ * Giving each its own accent ties it to the thing it acts on: view keeps the
+ * brand blue, colour range takes the Create Site orange, and the map toggles
+ * take the site green. `selectedFg` is dark on the orange and the green because
+ * white on either sits below the AA contrast floor.
+ *
+ * Passing no tone leaves a group on the brand blue it had before.
+ */
+interface Tone {
+  selectedBg: string;
+  selectedFg: string;
+  underline: string;
+}
+
+const TONE_RANGE: Tone = {
+  selectedBg: colors.orange,
+  selectedFg: colors.dark,
+  underline: colors.pastelDarkOrange,
+};
+
+const TONE_MAP: Tone = {
+  selectedBg: colors.brightGreen,
+  selectedFg: colors.dark,
+  underline: colors.pastelLightGreen,
+};
+
+/**
  * An independent on/off control.
  *
  * Deliberately not a radio: these five are not a set of alternatives, they are
@@ -94,7 +126,7 @@ const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactElement }[] 
  * background, because colour alone is not a distinction everyone can see.
  */
 function ToggleButton({
-  label, icon, isOn, onToggle, isDisabled, disabledLabel,
+  label, icon, isOn, onToggle, isDisabled, disabledLabel, tone,
 }: {
   label: string;
   icon: React.ReactElement;
@@ -102,10 +134,14 @@ function ToggleButton({
   onToggle: () => void;
   isDisabled?: boolean;
   disabledLabel?: string;
+  tone?: Tone;
 }) {
-  const onBg = useColorModeValue('brand.500', 'brand.400');
+  const brandBg = useColorModeValue('brand.500', 'brand.400');
+  const brandUnderline = useColorModeValue('brand.700', 'brand.200');
   const offFg = useColorModeValue('gray.600', 'gray.300');
-  const underline = useColorModeValue('brand.700', 'brand.200');
+  const onBg = tone?.selectedBg ?? brandBg;
+  const onFg = tone?.selectedFg ?? 'white';
+  const underline = tone?.underline ?? brandUnderline;
   return (
     <Tooltip label={isDisabled ? disabledLabel ?? label : label} placement="bottom">
       {/* Tooltip needs a focusable child, so the disabled case wraps in a Box. */}
@@ -120,10 +156,9 @@ function ToggleButton({
           variant="ghost"
           minW={8}
           bg={isOn ? onBg : 'transparent'}
-          color={isOn ? 'white' : offFg}
+          color={isOn ? onFg : offFg}
           borderBottom="2px solid"
           borderColor={isOn ? underline : 'transparent'}
-          borderRadius="md"
           _hover={{ bg: isDisabled ? 'transparent' : isOn ? onBg : 'blackAlpha.100' }}
         />
       </Box>
@@ -174,6 +209,7 @@ function MapToggleCluster({
           onToggle={t.onToggle}
           isDisabled={t.isDisabled}
           disabledLabel={t.disabledLabel}
+          tone={TONE_MAP}
         />
       ))}
       <Tooltip label={STRINGS.zoomToSite} placement="bottom">
@@ -232,20 +268,26 @@ function SegmentedGroup<T extends string>({
   value,
   onChange,
   isOptionDisabled,
+  disabledLabel,
   renderLabel,
+  tone,
 }: {
   label: string;
   options: { id: T; label: string; icon: React.ReactElement }[];
   value: T | undefined;
   onChange: (id: T) => void;
   isOptionDisabled?: (id: T) => boolean;
+  disabledLabel?: string;
   renderLabel?: boolean;
+  tone?: Tone;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const selectedBg = useColorModeValue('brand.500', 'brand.400');
-  const selectedFg = 'white';
+  const brandBg = useColorModeValue('brand.500', 'brand.400');
+  const brandUnderline = useColorModeValue('brand.700', 'brand.200');
   const restFg = useColorModeValue('gray.600', 'gray.300');
-  const underline = useColorModeValue('brand.700', 'brand.200');
+  const selectedBg = tone?.selectedBg ?? brandBg;
+  const selectedFg = tone?.selectedFg ?? 'white';
+  const underline = tone?.underline ?? brandUnderline;
 
   // Arrow keys move within the group and wrap, which is what a radiogroup is
   // expected to do; Home and End jump to the ends.
@@ -284,6 +326,16 @@ function SegmentedGroup<T extends string>({
     onChange(options[next].id);
   }, [options, isOptionDisabled, onChange]);
 
+  // The selected option carries the group's only tab stop — unless it is
+  // itself disabled, which would take the whole group out of the tab order.
+  // That is reachable: the table view disables when the site is cleared, and it
+  // can be the selected view when that happens. The stop falls back to the
+  // first enabled option so the group stays usable from the keyboard.
+  const selectedIndex = options.findIndex((o) => o.id === value);
+  const tabStopIndex = selectedIndex >= 0 && !isOptionDisabled?.(options[selectedIndex].id)
+    ? selectedIndex
+    : options.findIndex((o) => !isOptionDisabled?.(o.id));
+
   return (
     <HStack role="radiogroup" aria-label={label} spacing={0.5}>
       {options.map((option, index) => {
@@ -296,9 +348,10 @@ function SegmentedGroup<T extends string>({
             role="radio"
             aria-checked={isSelected}
             aria-label={renderLabel ? undefined : option.label}
-            // One tab stop for the group: only the selected option is
-            // reachable by Tab, and the arrows move between them.
-            tabIndex={isSelected ? 0 : -1}
+            // One tab stop for the group, and the arrows move between the
+            // options from there. See tabStopIndex above for which option
+            // carries it.
+            tabIndex={index === tabStopIndex ? 0 : -1}
             isDisabled={disabled}
             onClick={() => !disabled && onChange(option.id)}
             onKeyDown={(e) => onKeyDown(e, index)}
@@ -312,7 +365,6 @@ function SegmentedGroup<T extends string>({
             color={isSelected ? selectedFg : restFg}
             borderBottom="2px solid"
             borderColor={isSelected ? underline : 'transparent'}
-            borderRadius="md"
             _hover={{ bg: disabled ? 'transparent' : isSelected ? selectedBg : 'blackAlpha.100' }}
           >
             {renderLabel
@@ -323,7 +375,7 @@ function SegmentedGroup<T extends string>({
         return (
           <Tooltip
             key={option.id}
-            label={disabled ? STRINGS.noSite : `${option.label}${renderLabel ? ` ${STRINGS.rangeSuffix}` : ''}`}
+            label={disabled ? disabledLabel ?? STRINGS.noSite : `${option.label}${renderLabel ? ` ${STRINGS.rangeSuffix}` : ''}`}
             placement="bottom"
           >
             {content}
@@ -357,6 +409,7 @@ function GridControls({
 }: GridControlsProps) {
   const dividerColor = useColorModeValue('gray.300', 'gray.600');
   const noSite = useCallback((id: RangeMode) => id === 'site' && !siteId, [siteId]);
+  const noSiteTable = useCallback((id: ViewMode) => id === 'table' && !siteId, [siteId]);
 
   // Satellite can become unavailable at runtime — quota spent, or no provider
   // configured once /api/info resolves. The button says so rather than offering
@@ -384,6 +437,8 @@ function GridControls({
           options={VIEW_MODES}
           value={viewMode}
           onChange={onViewModeChange}
+          isOptionDisabled={noSiteTable}
+          disabledLabel={STRINGS.noSiteTable}
         />
 
         {onRangeModeChange && (
@@ -395,6 +450,7 @@ function GridControls({
               onChange={onRangeModeChange}
               isOptionDisabled={noSite}
               renderLabel
+              tone={TONE_RANGE}
             />
           </HStack>
         )}
@@ -447,6 +503,8 @@ function GridControls({
           options={VIEW_MODES}
           value={viewMode}
           onChange={onViewModeChange}
+          isOptionDisabled={noSiteTable}
+          disabledLabel={STRINGS.noSiteTable}
         />
         {/*
           The toggles are icons already, so they still fit beside the view
