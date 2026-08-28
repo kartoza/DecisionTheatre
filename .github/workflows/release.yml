@@ -80,20 +80,29 @@ jobs:
             goos: linux
             goarch: arm64
             suffix: linux-arm64
-          # macos-13 was withdrawn, not merely deprecated: the label no longer
-          # matches any runner, so a job requesting it is never scheduled. It
-          # sits queued until GitHub cancels it at the 24-hour limit, which is
-          # why a release appeared to "fail the next day". macos-14 is
-          # deprecated and heading the same way, so both move to the current
-          # GA pair — macos-15-intel for x86_64, macos-15 for Apple Silicon.
-          - os: macos-15-intel
-            goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-          - os: macos-15
-            goos: darwin
-            goarch: arm64
-            suffix: darwin-arm64
+          # --- macOS: DISABLED. Re-enable by uncommenting all six blocks ---
+          #
+          # Every macOS block in this file is commented out rather than
+          # deleted, and each carries the "--- macOS: DISABLED ---" marker.
+          # The six are: this matrix entry, the package-macos job, the
+          # release job's needs, the four macOS rows in the completeness
+          # check, the *.dmg in "Merge checksums", and the macOS rows in the
+          # release body. Grep the marker to find them all.
+          #
+          # The labels below are already corrected and can be uncommented as
+          # they stand: macos-13 was withdrawn rather than deprecated, so
+          # nothing ever matched it and the job sat queued until GitHub
+          # cancelled it at the 24-hour limit; macos-14 is deprecated and was
+          # heading the same way. macos-15-intel and macos-15 are the current
+          # GA pair.
+          # - os: macos-15-intel
+          #   goos: darwin
+          #   goarch: amd64
+          #   suffix: darwin-amd64
+          # - os: macos-15
+          #   goos: darwin
+          #   goarch: arm64
+          #   suffix: darwin-arm64
           - os: windows-latest
             goos: windows
             goarch: amd64
@@ -415,50 +424,55 @@ jobs:
         with:
           name: packages-snap
           path: ${{ steps.snapcraft.outputs.snap }}
+  # --- macOS: DISABLED. See the build matrix for how to re-enable. ---
+  # The whole job is commented out: with no darwin binary uploaded,
+  # download-artifact fails and the run goes red even though the release
+  # job no longer needs it.
+  #
+  # # ==========================================
+  # # macOS: .dmg Application Bundle
+  # # ==========================================
+  # package-macos:
+  # needs: build
+  # strategy:
+  # matrix:
+  # include:
+  # # Same runner labels as the build matrix above, for the same reason.
+  # - suffix: darwin-amd64
+  # arch: amd64
+  # os: macos-15-intel
+  # - suffix: darwin-arm64
+  # arch: arm64
+  # os: macos-15
+  # runs-on: ${{ matrix.os }}
+  # steps:
+  # - uses: actions/checkout@v4
+  #
+  # - uses: actions/download-artifact@v4
+  # with:
+  # name: binary-${{ matrix.suffix }}
+  # path: dist
+  #
+  # - name: Make binary executable
+  # run: chmod +x dist/decision-theatre
+  #
+  # - name: Create DMG
+  # run: |
+  # cd dist
+  # bash ../packaging/macos/create-dmg.sh \
+  # decision-theatre \
+  # "${{ github.ref_name }}" \
+  # "${{ matrix.arch }}"
+  #
+  # - uses: actions/upload-artifact@v4
+  # with:
+  # name: packages-macos-${{ matrix.suffix }}
+  # path: dist/*.dmg
+  #
+  # # ==========================================
+  # # Windows: MSI installer
+  # # ==========================================
 
-  # ==========================================
-  # macOS: .dmg Application Bundle
-  # ==========================================
-  package-macos:
-    needs: build
-    strategy:
-      matrix:
-        include:
-          # Same runner labels as the build matrix above, for the same reason.
-          - suffix: darwin-amd64
-            arch: amd64
-            os: macos-15-intel
-          - suffix: darwin-arm64
-            arch: arm64
-            os: macos-15
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: binary-${{ matrix.suffix }}
-          path: dist
-
-      - name: Make binary executable
-        run: chmod +x dist/decision-theatre
-
-      - name: Create DMG
-        run: |
-          cd dist
-          bash ../packaging/macos/create-dmg.sh \
-            decision-theatre \
-            "${{ github.ref_name }}" \
-            "${{ matrix.arch }}"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: packages-macos-${{ matrix.suffix }}
-          path: dist/*.dmg
-
-  # ==========================================
-  # Windows: MSI installer
-  # ==========================================
   package-windows:
     needs: build
     runs-on: windows-latest
@@ -501,7 +515,8 @@ jobs:
       - package-appimage
       - package-flatpak
       - package-snap
-      - package-macos
+      # --- macOS: DISABLED ---
+      # - package-macos
       - package-windows
     runs-on: ubuntu-latest
     steps:
@@ -540,8 +555,9 @@ jobs:
           expected=(
             "1|decision-theatre-linux-amd64.tar.gz|Linux amd64 archive"
             "1|decision-theatre-linux-arm64.tar.gz|Linux arm64 archive"
-            "1|decision-theatre-darwin-amd64.tar.gz|macOS amd64 archive"
-            "1|decision-theatre-darwin-arm64.tar.gz|macOS arm64 archive"
+            # --- macOS: DISABLED ---
+            # "1|decision-theatre-darwin-amd64.tar.gz|macOS amd64 archive"
+            # "1|decision-theatre-darwin-arm64.tar.gz|macOS arm64 archive"
             "1|decision-theatre-windows-amd64.zip|Windows amd64 archive"
             "2|*.deb|Debian packages (amd64 and arm64)"
             "2|*.rpm|RPM packages (amd64 and arm64)"
@@ -549,8 +565,9 @@ jobs:
             "1|Decision_Theatre-aarch64.AppImage|AppImage, arm64"
             "1|*.flatpak|Flatpak bundle"
             "1|*.snap|Snap package"
-            "1|decision-theatre-darwin-amd64.dmg|macOS amd64 disk image"
-            "1|decision-theatre-darwin-arm64.dmg|macOS arm64 disk image"
+            # --- macOS: DISABLED ---
+            # "1|decision-theatre-darwin-amd64.dmg|macOS amd64 disk image"
+            # "1|decision-theatre-darwin-arm64.dmg|macOS arm64 disk image"
             "1|*.msi|Windows installer"
           )
           incomplete=0
@@ -580,7 +597,10 @@ jobs:
           # No `|| true` here: the step above has already established that every
           # one of these exists, so a failure now is a real failure.
           cd release
-          sha256sum *.deb *.rpm *.AppImage *.flatpak *.snap *.dmg *.msi >> checksums.txt
+          # --- macOS: DISABLED — *.dmg removed. An unmatched glob is passed
+          # through literally and sha256sum exits non-zero on it, which would
+          # fail this job. Restore *.dmg when macOS comes back.
+          sha256sum *.deb *.rpm *.AppImage *.flatpak *.snap *.msi >> checksums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -602,13 +622,12 @@ jobs:
             | **Flatpak** | `.flatpak` | `flatpak install decision-theatre.flatpak` |
             | **Snap** | `.snap` | `sudo snap install --dangerous *.snap` |
             | **NixOS** | Flake | `nix profile install github:kartoza/DecisionTheatre` |
-            | **macOS** | `.dmg` | Open and drag to Applications |
             | **Windows** | `.msi` | Run the installer |
             | **Server (Docker)** | GHCR image | `ghcr.io/kartoza/decisiontheatre` — see **Container image** below |
 
             ### Portable binaries (no installer)
 
-            **Linux/macOS:**
+            **Linux:**
             ```bash
             tar xzf decision-theatre-*.tar.gz
             ./decision-theatre

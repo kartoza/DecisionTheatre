@@ -353,6 +353,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the documentation failure cancelled the macOS legs within two minutes, so the
   packaging failure underneath it never had the chance to report.
 
+  macOS is disabled for now rather than fixed and left to prove itself on a real
+  tag: the Linux packages, the Windows installer and the container image have
+  been unshippable for four releases, and they should not wait on it. Every
+  macOS block is commented out behind a `--- macOS: DISABLED ---` marker, with
+  the corrected runner labels preserved, so restoring it is uncommenting rather
+  than re-diagnosing.
+
 - **`ghcr.io/kartoza/decisiontheatre:latest` stopped moving after v2.3.0.** The
   container job was sequenced after `release` so their release-body writes could
   not race, but `needs` also means "only if that job succeeded", which put the
