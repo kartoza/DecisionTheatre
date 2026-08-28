@@ -153,6 +153,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The control panel reads as one surface instead of a stack of boxes.** Reviewing
+  the panel against the map showed it drawing a frame around each section — the
+  factor card and both scenario cards — inside a panel that is already a container,
+  so every section carried a second edge that said nothing. Those frames are gone,
+  along with the rules between the factor and the scenarios, above the colour
+  scale, and above each scenario's min/mean/max row; the last of these had the
+  scenario description sitting on top of it. Three labels went with them: the
+  "Choose a factor to display in this view" hint under Indicator, the "COLOR SCALE
+  (Full)" heading whose only companion was a button group commented out some time
+  ago, and "Full Zone Statistics", which each scenario printed with the same
+  catchment count as the other and which repeated the zone the control above it
+  already names. That count now sits beside the Zone Range control it belongs to,
+  once. Zone Range is set as a heading like Indicator rather than as small grey
+  all-caps, and its Full/Extent/Site switch spans the panel instead of huddling at
+  the left edge under a full-width heading. The pane number moved off the panel
+  heading onto the factor card, which is the thing the pane number identifies.
+
+- **Each cluster of header controls carries the accent of what it acts on.** View,
+  colour range and map display sat in one row painted a single brand blue, which
+  made three separate decisions look like one long strip of icons. View keeps the
+  blue; colour range takes the Create Site orange; the map toggles take the site
+  green. Both new accents are set with dark text, because white on either falls
+  below the AA contrast floor.
+
+- **Buttons have one corner radius, set once.** The theme's default was `full`,
+  which made pills of controls that sit in dense rows, so individual controls had
+  begun overriding it one at a time — the header icon bar first, then Create Site,
+  the range switch and the aggregate table's toggle. The default is now `md` and
+  the seven overrides restating it are deleted, so a button is consistent by
+  inheriting rather than by remembering.
+
+### Fixed
+
+- **The table view no longer offers a screen it cannot fill.** Table view is a
+  per-site breakdown, so with no site selected it renders "No catchment data
+  available" and nothing else. The icon is now disabled in that state, with a
+  tooltip saying why, in the same way the Site range option already was.
+
+- **A disabled view could take the header's control groups out of the tab order.**
+  Each segmented group puts its single tab stop on the selected option, which is
+  correct until that option is itself disabled — reachable now that the table view
+  can be, by clearing the site while table view is open. The tab stop falls back to
+  the first enabled option, so the group stays reachable by keyboard.
+
+- **The scenario badge in the aggregate table was unreadable.** It asked Chakra for
+  a `colorScheme`, which in dark mode renders the subtle variant as muted olive and
+  grey rather than the brand's orange, green and blue. It now takes its colour from
+  the palette directly, as the scenario badges in the control panel already did.
+
 - **One set of map controls, in the header, instead of thirty-six buttons.** Three
   bands of controls competed for the most space-starved screen in the application.
   A full-width bar above the panes held the view-mode, range-mode, add-pane and
