@@ -16,7 +16,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.5.0";
+        version = "2.6.0";
 
         # MkDocs environment for requirements documentation
         mkdocsEnv = pkgs.python3.withPackages (
