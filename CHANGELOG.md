@@ -185,6 +185,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inheriting rather than by remembering.
 
 ### Fixed
+- **The Windows installer, for the first time.** No release has ever carried an
+  `.msi` — not since v0.2.0 — and until now the failure was invisible, hidden
+  behind the macOS and documentation faults that stopped the run earlier. With
+  those gone it became the only thing standing between a tagged release and its
+  artefacts, and the cause turned out not to be the packaging at all:
+
+      error WIX7015: You must accept the Open Source Maintenance Fee (OSMF)
+      EULA to use WiX Toolset v7
+
+  `dotnet tool install --global wix` names no version, so the job installed
+  whatever was newest on the day it ran. WiX v6 introduced the maintenance fee
+  and v7 enforces it by refusing every command until the EULA is accepted, so
+  the build broke without a commit — and no commit could have prevented it.
+  WiX is now pinned to 5.0.2, the last release before the fee, which reads the
+  v4 schema `packaging/windows/product.wxs` is already written against.
+
+  Adopting v6 or v7 later is a licensing decision rather than a version bump:
+  organisations over $10,000 in annual revenue must sponsor the wixtoolset
+  GitHub organisation to satisfy the fee.
+
 
 - **The table view no longer offers a screen it cannot fill.** Table view is a
   per-site breakdown, so with no site selected it renders "No catchment data

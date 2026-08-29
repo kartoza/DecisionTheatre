@@ -489,7 +489,20 @@ jobs:
           Expand-Archive -Path dist\decision-theatre-windows-amd64.zip -DestinationPath dist\
 
       - name: Install WiX
-        run: dotnet tool install --global wix
+        # Pinned, and it has to stay pinned. WiX v6 introduced the Open Source
+        # Maintenance Fee and v7 enforces it by refusing every command until
+        # the EULA is accepted — so an unpinned `dotnet tool install` rolled
+        # onto v7 on its own and every MSI build since has died with
+        #   error WIX7015: You must accept the Open Source Maintenance Fee
+        #   (OSMF) EULA to use WiX Toolset v7
+        # No commit caused that and none could have prevented it. 5.0.2 is the
+        # last release before the fee; it reads the v4 schema that
+        # packaging/windows/product.wxs is written against.
+        #
+        # Moving to v6 or v7 is a licensing decision, not a version bump:
+        # organisations over $10,000 annual revenue must sponsor the wixtoolset
+        # GitHub organisation to satisfy the fee. See docs.firegiant.com/wix/osmf/.
+        run: dotnet tool install --global wix --version 5.0.2
 
       - name: Build MSI
         run: |
