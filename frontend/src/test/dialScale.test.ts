@@ -12,9 +12,18 @@ import {
   formatValue,
   greenZoneCenter,
   normalize,
+  attributeSpread,
+  capRange,
+  resolveHeldRange,
   tickValues,
 } from '../lib/dialScale';
-import { loadDialShape, saveDialShape } from '../lib/dialShape';
+import type { HeldRange } from '../lib/dialScale';
+import {
+  loadDialShape,
+  loadScaleLock,
+  saveDialShape,
+  saveScaleLock,
+} from '../lib/dialPreferences';
 
 describe('normalize', () => {
   it('maps the ends and the middle', () => {
@@ -142,5 +151,137 @@ describe('the dial shape preference', () => {
     expect(loadDialShape()).toBe('flat');
     saveDialShape('arc');
     expect(loadDialShape()).toBe('arc');
+  });
+});
+
+describe('the scale lock', () => {
+  const range = (key: string, min: number, max: number): HeldRange => ({ key, min, max });
+
+  it('holds nothing while unlocked', () => {
+    expect(resolveHeldRange(null, range('npp|site', 0, 100), false)).toBeNull();
+    // Even one already held is released, so unlocking snaps back to live.
+    expect(resolveHeldRange(range('npp|site', 0, 100), range('npp|site', 0, 200), false)).toBeNull();
+  });
+
+  it('takes the scale as it stands when the lock goes on', () => {
+    expect(resolveHeldRange(null, range('npp|site', 0, 100), true)).toEqual(range('npp|site', 0, 100));
+  });
+
+  it('keeps that scale when the values move, which is the whole point', () => {
+    // A slider moved, so dialData re-derived a wider range. Locked, the axis
+    // must not follow it — only the markers on it move.
+    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
+    const after = resolveHeldRange(held, range('npp|site', -50, 400), true);
+    expect(after).toEqual(range('npp|site', 0, 100));
+  });
+
+  it('survives many moves without drifting', () => {
+    let held = resolveHeldRange(null, range('npp|site', 0, 100), true);
+    for (let i = 1; i <= 20; i += 1) {
+      held = resolveHeldRange(held, range('npp|site', -i, 100 + i * 10), true);
+    }
+    expect(held).toEqual(range('npp|site', 0, 100));
+  });
+
+  it('holds nothing until there is a real range to hold', () => {
+    // A dial renders once before its values arrive. Taking the hold then froze
+    // the placeholder range, and the lock pinned the scale to 0..100 for good.
+    expect(resolveHeldRange(null, null, true)).toBeNull();
+    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
+    // A later null — data momentarily unavailable — must not drop the hold.
+    expect(resolveHeldRange(held, null, true)).toEqual(range('npp|site', 0, 100));
+  });
+
+  it('re-takes the hold for a different factor', () => {
+    // A scale held for one factor is meaningless for another — the units are
+    // not even the same.
+    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
+    const after = resolveHeldRange(held, range('soc|site', -70, 70), true);
+    expect(after).toEqual(range('soc|site', -70, 70));
+  });
+
+  it('re-takes the hold when the range mode changes', () => {
+    // Switching Full/Extent/Site is an explicit request for a different range,
+    // so honouring it is not the same as letting a slider move the axis.
+    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
+    const after = resolveHeldRange(held, range('npp|domain', 0, 1500), true);
+    expect(after).toEqual(range('npp|domain', 0, 1500));
+  });
+});
+
+describe('the scale lock preference', () => {
+  it('is off by default', () => {
+    window.localStorage.clear();
+    expect(loadScaleLock()).toBe(false);
+  });
+
+  it('round-trips, and is independent of the shape preference', () => {
+    window.localStorage.clear();
+    saveScaleLock(true);
+    saveDialShape('arc');
+    expect(loadScaleLock()).toBe(true);
+    expect(loadDialShape()).toBe('arc');
+    saveScaleLock(false);
+    expect(loadScaleLock()).toBe(false);
+    expect(loadDialShape()).toBe('arc');
+  });
+});
+
+describe('the metadata cap on a scale', () => {
+  it('leaves a range alone when no bound is declared', () => {
+    expect(capRange({ min: -500, max: 5000 })).toEqual({ min: -500, max: 5000 });
+    expect(capRange({ min: -500, max: 5000 }, {})).toEqual({ min: -500, max: 5000 });
+  });
+
+  it('leaves a range alone when it is already inside the bounds', () => {
+    expect(capRange({ min: 10, max: 90 }, { min: 0, max: 100 })).toEqual({ min: 10, max: 90 });
+  });
+
+  it('pulls each end in only where it overshoots', () => {
+    // NPP declares Target_min 0: a dataset range reaching below zero is
+    // reaching for values the factor cannot take.
+    expect(capRange({ min: -580, max: 900 }, { min: 0, max: 1000 })).toEqual({ min: 0, max: 900 });
+    expect(capRange({ min: 50, max: 4000 }, { min: 0, max: 1000 })).toEqual({ min: 50, max: 1000 });
+  });
+
+  it('treats a null bound as unspecified, which is how metadata leaves it blank', () => {
+    expect(capRange({ min: -50, max: 4000 }, { min: null, max: 1000 })).toEqual({ min: -50, max: 1000 });
+  });
+
+  it('keeps a signed factor signed', () => {
+    // deltaSOC declares Target_min -10; capping must not floor it at zero.
+    expect(capRange({ min: -70, max: 70 }, { min: -10, max: 10 })).toEqual({ min: -10, max: 10 });
+  });
+
+  it('refuses to collapse the scale', () => {
+    // Bounds narrower than the data must not cross the ends over and leave
+    // nothing to draw against.
+    expect(capRange({ min: 500, max: 900 }, { min: 0, max: 100 })).toEqual({ min: 500, max: 900 });
+  });
+});
+
+describe('the site spread', () => {
+  const c = (ref: number, cur: number) => ({ reference: { npp: ref }, current: { npp: cur } });
+
+  it('spans the lowest and highest catchment values, across both scenarios', () => {
+    expect(attributeSpread([c(10, 20), c(5, 60), c(30, 40)], 'npp')).toEqual({ min: 5, max: 60 });
+  });
+
+  it('ignores catchments with no value for the attribute', () => {
+    const partial = [{ reference: {}, current: {} }, c(10, 20)];
+    expect(attributeSpread(partial, 'npp')).toEqual({ min: 10, max: 20 });
+  });
+
+  it('is null when there is no spread to speak of', () => {
+    expect(attributeSpread([], 'npp')).toBeNull();
+    // Every catchment identical: a zero-width scale is not a scale.
+    expect(attributeSpread([c(7, 7), c(7, 7)], 'npp')).toBeNull();
+  });
+
+  it('does not move when a target moves, which is the whole reason for it', () => {
+    // The spread is taken from observations only. A target is not in it, so
+    // editing one cannot change the axis.
+    const catchments = [c(10, 20), c(5, 60)];
+    expect(attributeSpread(catchments, 'npp')).toEqual({ min: 5, max: 60 });
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Button, Divider, Flex, HStack, IconButton,
   Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay,
@@ -11,12 +11,15 @@ import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { loadDialShape, onDialShapeChange } from '../lib/dialShape';
-import type { DialShape } from '../lib/dialShape';
+import { loadDialShape, onDialShapeChange, loadScaleLock, onScaleLockChange } from '../lib/dialPreferences';
+import type { DialShape } from '../lib/dialPreferences';
+import { attributeSpread, capRange, resolveHeldRange } from '../lib/dialScale';
+import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
+import type { HeldRange } from '../lib/dialScale';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeUnits } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
@@ -148,7 +151,8 @@ function ViewPane({
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const { units: attributeUnits } = useAttributeUnits();
-  const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
+  const { dial0Middle: attributeDial0Middle, loading: dial0MiddleLoading } = useAttributeDial0Middle();
+  const { targetRanges: attributeTargetRanges, loading: targetRangesLoading } = useAttributeTargetRanges();
   const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
 
   // Mount MapView only while the pane is showing a map, plus a grace period.
@@ -195,9 +199,18 @@ function ViewPane({
   const [dialShape, setDialShape] = useState<DialShape>(loadDialShape);
   useEffect(() => onDialShapeChange(setDialShape), []);
 
+  // Whether the dial's scale holds still while its values move. Applied here
+  // rather than inside either dial, because this is where min/max is derived —
+  // so one implementation serves the arc and the flat band alike.
+  const [isScaleLocked, setIsScaleLocked] = useState(loadScaleLock);
+  useEffect(() => onScaleLockChange(setIsScaleLocked), []);
+  const heldRangeRef = useRef<HeldRange | null>(null);
+
   const [dialCatchmentData, setDialCatchmentData] = useState<{
     referenceValue?: number;
     currentValue?: number;
+    /** The site's actual spread for this attribute, across its catchments. */
+    spread?: { min: number; max: number } | null;
   } | null>(null);
   const [dialCatchmentLoading, setDialCatchmentLoading] = useState(false);
   const [dialRangeValues, setDialRangeValues] = useState<{
@@ -205,6 +218,11 @@ function ViewPane({
     currentValue?: number;
   } | null>(null);
   const [dialRangeLoading, setDialRangeLoading] = useState(false);
+
+  // What makes a cached site range stale: the site being re-extracted, or
+  // covering a different set of catchments. Not the clock.
+  const siteExtractedAt = siteIndicators?.extractedAt;
+  const siteCatchmentCount = siteIndicators?.catchmentCount;
 
   useEffect(() => {
     if (viewMode !== 'dial' || !siteId || !comparison.attribute) {
@@ -216,6 +234,18 @@ function ViewPane({
     let cancelled = false;
     setDialCatchmentLoading(true);
 
+    // A remembered spread gives the dial a scale to draw against straight away,
+    // rather than a placeholder until the catchments land. The values still
+    // come from the fetch below; only the axis is answered early.
+    const cachedSpread = loadSiteRange(
+      siteId,
+      siteRangeFingerprint(siteExtractedAt, siteCatchmentCount),
+      comparison.attribute,
+    );
+    if (cachedSpread) {
+      setDialCatchmentData((prev) => (prev ? { ...prev, spread: cachedSpread } : { spread: cachedSpread }));
+    }
+
     getSiteCatchments(siteId)
       .then((catchments) => {
         if (cancelled || !catchments || catchments.length === 0) {
@@ -225,6 +255,12 @@ function ViewPane({
 
         const referenceValue = computeAOIWeightedAttributeValue(catchments, 'reference', comparison.attribute);
         const currentValue = computeAOIWeightedAttributeValue(catchments, 'current', comparison.attribute);
+        const spread = attributeSpread(catchments, comparison.attribute);
+        // Keep the conclusion, not the payload it came from. Two numbers
+        // survive the reload; the catchments do not need to.
+        if (spread && siteId) {
+          saveSiteRange(siteId, siteRangeFingerprint(siteExtractedAt, siteCatchmentCount), comparison.attribute, spread);
+        }
 
         if (referenceValue === undefined && currentValue === undefined) {
           if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
@@ -232,7 +268,7 @@ function ViewPane({
         }
 
         if (!cancelled) {
-          setDialCatchmentData({ referenceValue, currentValue });
+          setDialCatchmentData({ referenceValue, currentValue, spread });
           setDialCatchmentLoading(false);
         }
       })
@@ -241,7 +277,7 @@ function ViewPane({
       });
 
     return () => { cancelled = true; };
-  }, [comparison.attribute, siteId, viewMode]);
+  }, [comparison.attribute, siteId, viewMode, siteExtractedAt, siteCatchmentCount]);
 
   /**
    * The bbox this pane's aggregates are scoped to, as a string, or '' when the
@@ -373,9 +409,19 @@ function ViewPane({
           currentValue = dialCatchmentData.currentValue;
           referenceValue = siteIndicators?.reference?.[attribute] ?? dialCatchmentData.referenceValue;
           targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          // The site's actual spread across its catchments, which is what "Site
+          // range" means — and, unlike a pad around the plotted values, does not
+          // move when a target moves. The pad is kept only as a fallback for a
+          // site whose catchment values cannot be read.
+          const spread = dialCatchmentData.spread;
           const values = [referenceValue, currentValue, targetValue]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
-          if (values.length > 0) {
+          if (spread) {
+            // Still has to contain what it plots: a target set outside the
+            // site's observed spread would otherwise render clamped to an end.
+            min = values.length > 0 ? Math.min(spread.min, ...values) : spread.min;
+            max = values.length > 0 ? Math.max(spread.max, ...values) : spread.max;
+          } else if (values.length > 0) {
             min = Math.min(...values) * 0.9;
             max = Math.max(...values) * 1.1;
           }
@@ -472,6 +518,13 @@ function ViewPane({
         break;
     }
 
+    // Whatever the mode derived, metadata has the final word on how far the
+    // scale may run. A range that reaches values the factor cannot physically
+    // take spends its width on impossible readings and crowds the real ones
+    // together. Applied only where a bound is declared and actually exceeded,
+    // so a factor with no declared bounds keeps its derived range untouched.
+    ({ min, max } = capRange({ min, max }, attributeTargetRanges[attribute]));
+
     // Fallback when statistics are unavailable.
     if (allowMapStatisticsFallback && !siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
@@ -538,7 +591,7 @@ function ViewPane({
     return { min, max, referenceValue, currentValue, targetValue, targetChanged };
   // useMemo has a missing dependency: 'dialCatchmentLoading'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle]);
+  }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle, attributeTargetRanges]);
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
@@ -580,6 +633,44 @@ function ViewPane({
   };
 
   const DialComponent = dialShape === 'flat' ? FlatDial : DialChart;
+
+  // The scale actually drawn against. Unlocked, it is whatever dialData just
+  // derived. Locked, it is whatever was held when the lock was taken — so
+  // moving a slider moves the markers and leaves the axis alone. The hold is
+  // re-taken when the factor or the range mode changes, since a scale held for
+  // one factor means nothing for another and a range-mode switch is an explicit
+  // request for a different range.
+  // A dial that has not got its values yet still produces a dialData — with a
+  // placeholder 0..100 range. Holding that pinned the scale to 0..100 for as
+  // long as the lock stayed on.
+  //
+  // Both observations are required, not merely one: they arrive independently,
+  // and a hold taken on the first of them is a range too narrow for the second,
+  // which then renders clamped to an end of the band. The target is deliberately
+  // not required — it is absent until someone sets one, which is most of the
+  // time, and waiting for it would mean the lock never engaged.
+  const isReading = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  // Settled, not merely present — and that means the metadata too, not just the
+  // data. A pane answers from a coarse fallback while its catchment data is in
+  // flight, and it cannot centre a signed factor on zero or apply a declared
+  // bound until `dial0Middle` and `targetRanges` have arrived. A hold taken
+  // before any of that freezes a scale the user never saw: the zero-centred
+  // factors were the tell, held asymmetric while every unlocked one settled
+  // symmetric.
+  const dialScaleSettled =
+    !dialCatchmentLoading && !dialRangeLoading && !dial0MiddleLoading && !targetRangesLoading;
+  const dialHasValues =
+    dialScaleSettled && isReading(dialData?.referenceValue) && isReading(dialData?.currentValue);
+
+  heldRangeRef.current = resolveHeldRange(
+    heldRangeRef.current,
+    dialData && dialHasValues
+      ? { key: `${comparison.attribute}|${rangeMode}`, min: dialData.min, max: dialData.max }
+      : null,
+    isScaleLocked,
+  );
+  const dialMin = heldRangeRef.current?.min ?? dialData?.min ?? 0;
+  const dialMax = heldRangeRef.current?.max ?? dialData?.max ?? 100;
 
   return (
     <Box
@@ -674,8 +765,9 @@ function ViewPane({
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
         targetValue={targetHasBeenUpdated && (dialData?.targetChanged ?? false) ? dialData?.targetValue : undefined}
-        min={dialData?.min ?? 0}
-        max={dialData?.max ?? 100}
+        min={dialMin}
+        max={dialMax}
+        isScaleLocked={isScaleLocked}
         attribute={dialAttributeLabel}
         unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
         rangeMode={rangeMode}

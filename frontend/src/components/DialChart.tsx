@@ -3,7 +3,7 @@ import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
-import { saveDialShape } from '../lib/dialShape';
+import { saveDialShape } from '../lib/dialPreferences';
 import {
   SCENARIO_COLORS,
   bandGradientStops,

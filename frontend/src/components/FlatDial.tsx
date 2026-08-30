@@ -18,7 +18,7 @@
  * arrows from a common hub, which made an aspiration look like a measurement.
  */
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, Checkbox, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
@@ -30,7 +30,7 @@ import {
   normalize,
   tickValues,
 } from '../lib/dialScale';
-import { saveDialShape } from '../lib/dialShape';
+import { saveDialShape, saveScaleLock } from '../lib/dialPreferences';
 
 const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
   { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
@@ -55,6 +55,8 @@ export interface FlatDialProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
+  /** Whether the scale is being held still while values move. */
+  isScaleLocked?: boolean;
 }
 
 function FlatDial({
@@ -77,6 +79,7 @@ function FlatDial({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
+  isScaleLocked = false,
 }: FlatDialProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 300 });
@@ -363,6 +366,23 @@ function FlatDial({
                     >
                       Arc
                     </Button>
+                  </Tooltip>
+                  <Tooltip
+                    label={isScaleLocked
+                      ? 'Scale is held still — only the values move'
+                      : 'Hold the scale still so only the values move'}
+                    placement="bottom"
+                  >
+                    <Box pl={2} ml={1} borderLeft="1px solid" borderColor="whiteAlpha.300">
+                      <Checkbox
+                        size="sm"
+                        colorScheme="cyan"
+                        isChecked={isScaleLocked}
+                        onChange={(e) => saveScaleLock(e.target.checked)}
+                      >
+                        <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
+                      </Checkbox>
+                    </Box>
                   </Tooltip>
                 </HStack>
               </Box>

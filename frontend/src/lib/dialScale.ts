@@ -114,3 +114,101 @@ export function tickValues(min: number, max: number, count = 11) {
     return { t, value: min + t * (max - min), isMajor: i % 2 === 0 };
   });
 }
+
+/** A scale being held still, and what it was held for. */
+export interface HeldRange {
+  /** What the range was computed for. Changing this re-takes the hold. */
+  key: string;
+  min: number;
+  max: number;
+}
+
+/**
+ * Decide which scale to draw against when the scale is locked.
+ *
+ * The axis is normally derived from the values on it, so moving a target moves
+ * the axis, and every other marker slides even though nothing about it changed.
+ * That makes an edit hard to read: you cannot tell what you moved from what the
+ * scale did underneath you. Locking holds the axis so only the values move.
+ *
+ * The hold is re-taken when `key` changes — a different factor, or a different
+ * range mode — because a scale held for one factor means nothing for another,
+ * and switching range mode is an explicit request for a different range. What
+ * the lock is for is slider movement, and only that.
+ *
+ * Returns the range to hold, or null when nothing should be held.
+ */
+export function resolveHeldRange(
+  held: HeldRange | null,
+  incoming: HeldRange | null,
+  locked: boolean,
+): HeldRange | null {
+  if (!locked) return null;
+  // Nothing real to hold yet. A dial renders once before its values arrive,
+  // and taking the hold then froze the placeholder range — the lock pinned the
+  // scale to 0..100 and never let go.
+  if (incoming === null) return held;
+  if (held === null || held.key !== incoming.key) return incoming;
+  return held;
+}
+
+/** A metadata cap on how far a scale may run, from `Target_min`/`Target_max`. */
+export interface ScaleCap {
+  min?: number | null;
+  max?: number | null;
+}
+
+/**
+ * Constrain a derived range to the bounds metadata declares for the factor.
+ *
+ * The three range modes each answer a different question — what the whole
+ * dataset covers, what is on screen, what the site covers — and any of them can
+ * run past what the factor can physically be. Where `metadata.csv` says so, the
+ * declared bound wins: a scale that runs to a value the factor cannot take
+ * spends its width on impossible readings and squeezes the real ones together.
+ *
+ * Only applied where the cap is actually specified and actually exceeded, so a
+ * factor with no declared bounds keeps its derived range untouched, and a range
+ * already inside them is left alone.
+ */
+export function capRange(
+  range: { min: number; max: number },
+  cap?: ScaleCap,
+): { min: number; max: number } {
+  let { min, max } = range;
+  if (cap) {
+    if (typeof cap.min === 'number' && Number.isFinite(cap.min) && min < cap.min) min = cap.min;
+    if (typeof cap.max === 'number' && Number.isFinite(cap.max) && max > cap.max) max = cap.max;
+  }
+  // Capping both ends can cross them over on a factor whose declared bounds are
+  // narrower than its data. A collapsed scale would divide by zero downstream,
+  // so the derived range wins in that case — the cap is a sanity bound, not a
+  // licence to draw nothing.
+  if (!(max > min)) return range;
+  return { min, max };
+}
+
+/**
+ * The spread of one attribute across a set of catchments.
+ *
+ * Site mode used to size its scale from the three plotted values with a 10%
+ * pad, which made the axis a function of the target: move the target and every
+ * other marker slid. The site's actual spread does not move when a target does.
+ */
+export function attributeSpread(
+  catchments: Array<{ reference?: Record<string, number>; current?: Record<string, number> }>,
+  attribute: string,
+): { min: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const catchment of catchments) {
+    for (const values of [catchment.reference, catchment.current]) {
+      const raw = values?.[attribute];
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
+      if (raw < min) min = raw;
+      if (raw > max) max = raw;
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return { min, max };
+}
