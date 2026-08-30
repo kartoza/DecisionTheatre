@@ -385,15 +385,28 @@ function App() {
   const isLoadingSiteRef = useRef(false); // Prevent saving while loading
   const boundaryUpdateRequestSeqRef = useRef(0);
 
-    // Target values popup state (lifted from ContentArea)
+    // Target values panel state (lifted from ContentArea)
   const { isOpen: isTargetModalOpen, onOpen: onOpenTargetModal, onClose: onCloseTargetModal } = useDisclosure();
   const handleToggleTargetModal = () => {
     if (isTargetModalOpen) {
       onCloseTargetModal();
     } else {
+      // The target editor and the single-factor control panel dock into the
+      // same slot on the right, so opening one dismisses the other rather
+      // than stacking two panels on the same pixels.
+      setIndicatorPaneIndex(null);
+      setIsGridControlModal(false);
       onOpenTargetModal();
     }
   };
+
+  // The other direction of the same rule. The control panel is opened from a
+  // dozen places — pane clicks, focus changes, the guided tours — so closing
+  // the target editor is done here once rather than threaded through each of
+  // them.
+  useEffect(() => {
+    if (indicatorPaneIndex !== null) onCloseTargetModal();
+  }, [indicatorPaneIndex, onCloseTargetModal]);
 
   useEffect(() => {
     // Don't save if no site is open, we're loading a site, on create-site page,
@@ -1188,10 +1201,20 @@ function App() {
 
       <Flex flex={1} overflow="hidden" position="relative">
         {/* Main content area - shrinks when panel opens */}
+        {/*
+          Both right-hand panels dock into the same slot, so the content area
+          gives up the same strip of width for either of them. The target
+          editor in particular has to shrink the content rather than cover it:
+          its whole point is watching the dials behind it respond.
+        */}
         <Box
           flex={1}
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-          mr={isIndicatorOpen ? { base: 0, md: '400px', lg: '440px' } : 0}
+          mr={isIndicatorOpen
+            ? { base: 0, md: '400px', lg: '440px' }
+            : isTargetModalOpen
+              ? { base: 0, md: '440px' }
+              : 0}
           position="relative"
         >
           <ContentArea
