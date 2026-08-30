@@ -235,6 +235,44 @@ Each pane supports three visualization modes, cycled via toolbar button:
 - Range mode toggle positioned in top-right of chart
 - Re-animates when range, factor, or scenario changes
 
+### Target Editor (Slide-out)
+
+Opened from the **Targets** button in the header, once the open site has indicators.
+
+- Docked into the right-hand slide-out slot, not a modal overlay: the editor's purpose
+  is watching the dials, charts and maps respond to a slider, so it must not cover them.
+  The content area shrinks to make room.
+- Shares that slot with the Control Panel below — opening either dismisses the other.
+- Indicators grouped by variable type in a collapsible accordion, one slider per
+  indicator, labelled with its value, unit and allowed range.
+- Only sliders the user has actually moved are submitted. Returning a slider to its
+  opening value clears the target previously set for it.
+- **Live update** checkbox:
+  - On: targets recalculate continuously during a drag.
+  - Off: they recalculate once the drag ends.
+  - Defaults to on at or below 20 catchments and off above it, since a recalculation
+    rescores every catchment in the site.
+  - An explicit tick or untick is persisted (`dt.targets.liveUpdate` in local storage)
+    and thereafter overrides the catchment-count default for every site.
+- Recalculations are coalesced: at most one request is in flight, and edits made while
+  it runs collapse into a single follow-up, so the sequence converges on the released
+  value without queueing one request per pointer move.
+- Sliders are never disabled mid-recalculation. Progress is a small inline indicator in
+  the panel header rather than an overlay. Automatic focus-on-value-change is off, so a
+  cascade cannot pull focus onto an unrelated slider and scroll the panel to it; focus
+  moves only to the slider the pointer lands on, without scrolling.
+- The panel offsets itself by the measured header height, not a fixed value — the header
+  is content-sized.
+
+### Dial redraw behaviour
+
+`DialChart` is memoised, so a dial whose values did not change is not re-rendered when a
+target edit replaces the indicators object. Within a dial, the reveal animation (which
+drives opacity across the whole widget) runs only when the dial becomes visible; a value
+change eases the needle to its new angle and a rescale redraws at the new scale, neither
+of which fades the dial out. This is what makes live target editing legible rather than
+a strobe.
+
 ### Control Panel (Slide-out)
 - Scenario 1 selector (left map)
 - Scenario 2 selector (right map)

@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live update in the target editor, and an end to the redraw after every
+  change.** Moving a slider used to disable every other slider, drop a spinner
+  over the whole form, and re-enable them a moment later. Focus moved, the
+  scroll position went with it, and the user had to find their place again
+  after each edit. Sliders now stay live throughout and progress is a small
+  indicator in the panel header.
+
+  A new **Live update** checkbox decides *when* the recalculation runs. Ticked,
+  the sliders and the charts behind them recalculate continuously as you drag;
+  cleared, they wait for the drag to end. Because a recalculation rescores every
+  catchment in the site, the default follows the site's size — on at or below 20
+  catchments, off above it. An explicit tick or untick is remembered across
+  sites and sessions and overrules the count from then on, so a large site can
+  be dragged live on a machine that keeps up and a small one need not be.
+
+  Live dragging never queues a backlog: at most one recalculation is in flight,
+  and movement made while it runs collapses into a single follow-up, so the
+  result converges on the value the pointer was released at rather than
+  replaying every intermediate one.
+
+- **The target editor is a docked side panel rather than a modal overlay.** It
+  takes the same right-hand slot as the single-factor controls — opening either
+  dismisses the other — and the views shrink to make room instead of being
+  covered. The editor exists to show the dials answering a slider, and an
+  overlay hid exactly what it was meant to show.
+
+### Fixed
+
+- **The dials no longer flicker while a target slider moves.** Every value
+  change replayed the dial's *entry* animation, and the two progress values
+  that animation drives are wired to `opacity` throughout the widget — so each
+  change faded the whole dial out and back in. Under live editing that is
+  several strobes a second. The reveal now runs only when a dial appears; a
+  value change eases the needle to its new angle instead, and a rescale simply
+  redraws at the new scale. Neither makes the dial disappear first.
+
+  The needle's easing deliberately overshoots so it springs onto its mark, which
+  meant the reveal briefly asked for a *negative* opacity. The overshoot now
+  applies to the angle only.
+
+- **A dial whose own values did not change is no longer redrawn.** Editing a
+  target replaces the whole indicators object, so all six dials re-rendered on
+  every recalculation even though at most one of them had changed. `DialChart`
+  is memoised on its props, which are all primitives or stable callbacks.
+  Measured on a live drag: one dial of the sixty SVGs on screen redrew, where
+  previously the count of mutated attributes ran into the thousands.
+
+- **Releasing a drag no longer throws focus onto another slider and scrolls the
+  panel to it.** Chakra focuses a slider's thumb whenever its *value* changes,
+  using a bare `.focus()` that scrolls the element into view. A recalculation
+  cascades into the other sliders' values, so letting go of one slider sent the
+  panel off to an unrelated one. Focus is now moved deliberately, on pointer
+  down, to the slider actually being used, and without scrolling.
+
+- **The target panel's heading no longer sits under the top bar.** The panel
+  offset itself by a hard-coded 70px; the header is content-sized and is
+  actually taller than that. It is now measured.
+
+- **Dragging a target back to where it started now clears it.** The editor
+  diffed against the values it opened with and skipped anything that matched, so
+  a slider returned to its opening position submitted nothing and the target set
+  a moment earlier stayed in place with no way to undo it. It now tracks which
+  sliders were actually touched, and sends a touched slider's value whether or
+  not it happens to equal the one it started at.
+
 - **Deployment documentation for the published container image** — how to pull it
   from GHCR, how to run it with the data and resources directories mounted, and
   what to do about permissions. Covers the two failures that produce a confusing
