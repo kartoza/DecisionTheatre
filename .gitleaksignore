@@ -54,3 +54,15 @@ d7cd03dc8354e299cb946fd63ae85b3686cc2080:internal/config/config.go:generic-api-k
 # A long opaque string in a React component that the generic-api-key heuristic
 # matched on shape alone. The line no longer exists in the current tree.
 4ce85609a94ff8b123eb6956d34d6c6d4b2a8fdf:frontend/src/components/IndicatorEditorPage.tsx:generic-api-key:1061
+
+# A test constant holding an indicator column name from metadata.csv — one of
+# the prop_X..Mgha columns — not a credential. Same heuristic as above: an
+# identifier named KEY sitting next to an opaque-looking string was enough on
+# shape alone. It has since been renamed to COLUMN, which is both the better
+# name and outside the rule, so the pattern is gone from the current tree. This
+# entry covers only the commit that introduced it, which was already pushed by
+# the time CI reported it.
+#
+# Deliberately does not quote the offending line: writing it out here reproduced
+# the pattern, and the ignore file failed its own scan.
+68221ce5e52cfda081f351ddc3fad0bb32661343:frontend/src/test/targetPanel.test.tsx:generic-api-key:32

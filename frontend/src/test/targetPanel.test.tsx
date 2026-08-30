@@ -29,15 +29,18 @@ import type { SiteIndicators } from '../types';
 // The panes are irrelevant here and drag in MapView, deck.gl and maplibre.
 vi.mock('../components/ViewPane', () => ({ default: () => <div data-testid="view-pane" /> }));
 
-const KEY = 'prop_X40_50Mgha';
+// An indicator column from metadata.csv, not a credential. Named for what it
+// actually is: when this was called KEY, the opaque-looking string next to that
+// name was enough for gitleaks' generic-api-key rule to report it as a secret.
+const COLUMN = 'prop_X40_50Mgha';
 
 vi.mock('../hooks/useApi', () => ({
-  useAttributeDetails: () => ({ details: { [KEY]: 'Tree biomass 40-50Mgha' } }),
-  useAttributeTargetInputs: () => ({ targetInputs: { [KEY]: true } }),
-  useAttributeUnits: () => ({ units: { [KEY]: 'proportion' } }),
-  useAttributeTargetRanges: () => ({ targetRanges: { [KEY]: { min: 0, max: 1 } } }),
-  useAttributeVariableTypes: () => ({ variableTypes: { [KEY]: 'Trees' } }),
-  useAttributeOrder: () => ({ order: { [KEY]: 1 } }),
+  useAttributeDetails: () => ({ details: { [COLUMN]: 'Tree biomass 40-50Mgha' } }),
+  useAttributeTargetInputs: () => ({ targetInputs: { [COLUMN]: true } }),
+  useAttributeUnits: () => ({ units: { [COLUMN]: 'proportion' } }),
+  useAttributeTargetRanges: () => ({ targetRanges: { [COLUMN]: { min: 0, max: 1 } } }),
+  useAttributeVariableTypes: () => ({ variableTypes: { [COLUMN]: 'Trees' } }),
+  useAttributeOrder: () => ({ order: { [COLUMN]: 1 } }),
 }));
 
 type Props = ComponentProps<typeof ContentArea>;
@@ -49,7 +52,7 @@ type Props = ComponentProps<typeof ContentArea>;
  */
 function indicators(
   catchmentCount: number,
-  values: Record<string, number> = { [KEY]: 0.08 },
+  values: Record<string, number> = { [COLUMN]: 0.08 },
 ): SiteIndicators {
   return {
     reference: Object.fromEntries(Object.keys(values).map((k) => [k, 0.5])),
@@ -156,7 +159,7 @@ describe('the docked panel', () => {
 
   it('submits only the target the user actually moved', () => {
     const { onSiteIndicatorsChange } = renderPanel({
-      siteIndicators: indicators(5, { [KEY]: 0.08, other: 3 }),
+      siteIndicators: indicators(5, { [COLUMN]: 0.08, other: 3 }),
     });
     fireEvent.keyDown(expandGroupSlider('Trees'), { key: 'ArrowRight' });
 
@@ -165,7 +168,7 @@ describe('the docked panel', () => {
     // edit — telling the backend every indicator changed at once derails the
     // cascade for the one being edited.
     expect(submitted.ideal.other).toBe(3);
-    expect(submitted.ideal[KEY]).toBeGreaterThan(0.08);
+    expect(submitted.ideal[COLUMN]).toBeGreaterThan(0.08);
   });
 });
 
