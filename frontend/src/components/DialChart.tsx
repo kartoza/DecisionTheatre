@@ -3,66 +3,13 @@ import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
-
-// Scenario colors from the design system
-const SCENARIO_COLORS = {
-  reference: '#e65100',  // Orange
-  current: '#2bb0ed',    // Blue
-  future: '#4caf50',     // Green
-};
-
-// Dynamic gradient stops for the arc: green zone for reference, yellow-red outside
-// Center the green zone on the reference value by default
-function getArcGradientStops(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08) {
-  // greenWidth: fraction of total (e.g. 0.1 = 10% of range)
-  if (referenceValue === undefined || isNaN(referenceValue)) {
-    // fallback: all yellow-red
-    return [
-      { offset: 0, color: '#ffdc00' }, // yellow
-      { offset: 0.5, color: '#ff851b' },
-      { offset: 1, color: '#e8003f' },
-    ];
-  }
-  const range = max - min;
-  if (range <= 0) {
-    return [
-      { offset: 0, color: '#2ecc40' },
-      { offset: 1, color: '#2ecc40' },
-    ];
-  }
-  // Center green zone on referenceValue
-  let refNorm = (referenceValue - min) / range;
-  refNorm = Math.max(0, Math.min(1, refNorm));
-  const halfGreen = greenWidth / 2;
-  const greenStart = Math.max(0, refNorm - halfGreen);
-  const greenEnd = Math.min(1, refNorm + halfGreen);
-  // Add intermediate stops for a smoother fade
-  const fadeWidth = Math.max(0.01, greenWidth * 0.5);
-  const fadeStart = Math.max(0, greenStart - fadeWidth);
-  const fadeEnd = Math.min(1, greenEnd + fadeWidth);
-  return [
-    { offset: 0, color: '#ff4136' }, // red
-    { offset: fadeStart, color: '#ffdc00' }, // yellow
-    { offset: greenStart, color: '#b6e86f' }, // yellow-green
-    { offset: (greenStart + greenEnd) / 2, color: '#2ecc40' }, // green center
-    { offset: greenEnd, color: '#b6e86f' }, // yellow-green
-    { offset: fadeEnd, color: '#ffdc00' }, // yellow
-    { offset: 1, color: '#e8003f' }, // red
-  ];
-}
-
-// Compute the normalized center (0..1) of the green zone so arrows can align
-function computeGreenCenter(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08): number | null {
-  if (referenceValue === undefined || isNaN(referenceValue)) return null;
-  const range = max - min;
-  if (range <= 0) return 0.5;
-  let refNorm = (referenceValue - min) / range;
-  refNorm = Math.max(0, Math.min(1, refNorm));
-  const halfGreen = greenWidth / 2;
-  const greenStart = Math.max(0, refNorm - halfGreen);
-  const greenEnd = Math.min(1, refNorm + halfGreen);
-  return (greenStart + greenEnd) / 2;
-}
+import { saveDialShape } from '../lib/dialShape';
+import {
+  SCENARIO_COLORS,
+  bandGradientStops,
+  formatValue,
+  greenZoneCenter,
+} from '../lib/dialScale';
 
 // Range mode config
 const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
@@ -79,15 +26,6 @@ function easeOutBack(t: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
-
-// Format a number for display
-function formatValue(value: number): string {
-  if (Math.abs(value) >= 1000000) return (value / 1000000).toFixed(1) + 'M';
-  if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'K';
-  if (Math.abs(value) < 0.01 && value !== 0) return value.toExponential(1);
-  if (Math.abs(value) < 10) return value.toFixed(2);
-  return value.toFixed(1);
 }
 
 // Convert a value to an angle on the dial
@@ -513,13 +451,13 @@ function DialChart({
 
   const gradientId = 'dial-gradient-main';
   const arcGradientStops = useMemo(
-    () => getArcGradientStops(min, max, referenceValue, 0.12, 0.08),
+    () => bandGradientStops(min, max, referenceValue, 0.12),
     [min, max, referenceValue]
   );
 
   // Normalized center of the green zone (0..1) so needles can be aligned visually
   const greenCenter = useMemo(
-    () => computeGreenCenter(min, max, referenceValue, 0.12, 0.08),
+    () => greenZoneCenter(min, max, referenceValue, 0.12),
     [min, max, referenceValue]
   );
 
@@ -675,6 +613,24 @@ function DialChart({
                       </Tooltip>
                     );
                   })}
+                  <Tooltip label="Show as a flat band" placement="bottom">
+                    <Button
+                      size="sm"
+                      aria-label="Show as a flat band"
+                      onClick={() => saveDialShape('flat')}
+                      variant="ghost"
+                      color="gray.300"
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                      fontSize="xs"
+                      px={2}
+                      ml={1}
+                      borderLeft="1px solid"
+                      borderColor="whiteAlpha.300"
+                      borderRadius={0}
+                    >
+                      Flat
+                    </Button>
+                  </Tooltip>
                 </HStack>
               </Box>
             )}

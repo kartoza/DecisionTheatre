@@ -10,6 +10,9 @@ import { BsGrid3X3, BsGrid } from 'react-icons/bs';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
+import FlatDial from './FlatDial';
+import { loadDialShape, onDialShapeChange } from '../lib/dialShape';
+import type { DialShape } from '../lib/dialShape';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
@@ -184,6 +187,13 @@ function ViewPane({
     const id = setTimeout(() => setMapMountReady(true), paneIndex * 250);
     return () => clearTimeout(id);
   }, [paneIndex]);
+
+  // Arc gauge or flat band. Both read the same scale (lib/dialScale) and take
+  // the same props; only the drawing differs, so the choice is a swap of the
+  // component and nothing else. Global rather than per pane — the point of
+  // having two is comparing them, and six panes disagreeing would not help.
+  const [dialShape, setDialShape] = useState<DialShape>(loadDialShape);
+  useEffect(() => onDialShapeChange(setDialShape), []);
 
   const [dialCatchmentData, setDialCatchmentData] = useState<{
     referenceValue?: number;
@@ -569,6 +579,8 @@ function ViewPane({
     return n.toFixed(1);
   };
 
+  const DialComponent = dialShape === 'flat' ? FlatDial : DialChart;
+
   return (
     <Box
       className="dt-pane"
@@ -657,7 +669,7 @@ function ViewPane({
       />
 
       {/* Dial Chart layer */}
-      <DialChart
+      <DialComponent
         visible={viewMode === 'dial' && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
