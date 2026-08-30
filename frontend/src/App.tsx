@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
+import ChartDetailsPanel from './components/ChartDetailsPanel';
 import Header from './components/Header';
 import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
@@ -39,6 +40,7 @@ import {
   markSessionActive,
   shouldPromptResumeSession,
 } from './types';
+import type { ScaleDerivation } from './lib/dialScale';
 import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
@@ -391,21 +393,39 @@ function App() {
     if (isTargetModalOpen) {
       onCloseTargetModal();
     } else {
-      // The target editor and the single-factor control panel dock into the
-      // same slot on the right, so opening one dismisses the other rather
-      // than stacking two panels on the same pixels.
+      // The three right-hand panels dock into the same slot, so opening one
+      // dismisses the others rather than stacking on the same pixels.
       setIndicatorPaneIndex(null);
       setIsGridControlModal(false);
+      setChartDetails(null);
       onOpenTargetModal();
     }
   };
+
+  // The chart details panel: which pane it is explaining, and the account it
+  // was handed when it opened. The derivation is stored rather than recomputed
+  // here, because half of it is intermediate state of ViewPane's dial
+  // calculation that cannot be reproduced from outside it.
+  const [chartDetails, setChartDetails] = useState<{ paneIndex: number; derivation: ScaleDerivation | null } | null>(null);
+
+  const handleOpenChartDetails = useCallback((paneIndex: number, derivation: ScaleDerivation | null) => {
+    // All three right-hand panels share one slot, so opening this closes the
+    // others rather than stacking on the same pixels.
+    setIndicatorPaneIndex(null);
+    setIsGridControlModal(false);
+    onCloseTargetModal();
+    setChartDetails({ paneIndex, derivation });
+  }, [onCloseTargetModal]);
 
   // The other direction of the same rule. The control panel is opened from a
   // dozen places — pane clicks, focus changes, the guided tours — so closing
   // the target editor is done here once rather than threaded through each of
   // them.
   useEffect(() => {
-    if (indicatorPaneIndex !== null) onCloseTargetModal();
+    if (indicatorPaneIndex !== null) {
+      onCloseTargetModal();
+      setChartDetails(null);
+    }
   }, [indicatorPaneIndex, onCloseTargetModal]);
 
   useEffect(() => {
@@ -1227,7 +1247,7 @@ function App() {
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
           mr={isIndicatorOpen
             ? { base: 0, md: '400px', lg: '440px' }
-            : isTargetModalOpen
+            : (isTargetModalOpen || chartDetails !== null)
               ? { base: 0, md: '440px' }
               : 0}
           position="relative"
@@ -1241,6 +1261,7 @@ function App() {
             onFocusPane={handleFocusPane}
             onGoQuad={handleGoQuad}
             onOpenControlPanel={handleOpenGridControlPanel}
+            onOpenChartDetails={handleOpenChartDetails}
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
@@ -1280,6 +1301,12 @@ function App() {
             fullDomainData={fullDomainData}
           />
         </Box>
+
+        <ChartDetailsPanel
+          isOpen={chartDetails !== null}
+          onClose={() => setChartDetails(null)}
+          derivation={chartDetails?.derivation ?? null}
+        />
 
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel

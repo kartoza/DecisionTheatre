@@ -15,7 +15,7 @@ import { loadDialShape, onDialShapeChange, loadScaleLock, onScaleLockChange } fr
 import type { DialShape } from '../lib/dialPreferences';
 import { attributeSpread, capRange, resolveHeldRange } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
-import type { HeldRange } from '../lib/dialScale';
+import type { HeldRange, ScaleDerivation } from '../lib/dialScale';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
@@ -35,6 +35,12 @@ interface ViewPaneProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
+  /**
+   * Open the details panel for this pane, handing up the derivation it should
+   * show. Passed at the moment of opening rather than held in App, so the panel
+   * cannot show a stale account of a chart that has since changed.
+   */
+  onOpenChartDetails?: (paneIndex: number, derivation: ScaleDerivation | null) => void;
   canRemove?: boolean;
   onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
@@ -110,6 +116,7 @@ function ViewPane({
   onFocusPane,
   onGoQuad,
   onOpenControlPanel,
+  onOpenChartDetails,
   canRemove = false,
   onRemovePane,
   onIdentify,
@@ -523,7 +530,9 @@ function ViewPane({
     // take spends its width on impossible readings and crowds the real ones
     // together. Applied only where a bound is declared and actually exceeded,
     // so a factor with no declared bounds keeps its derived range untouched.
+    const beforeCap = { min, max };
     ({ min, max } = capRange({ min, max }, attributeTargetRanges[attribute]));
+    const afterCap = { min, max };
 
     // Fallback when statistics are unavailable.
     if (allowMapStatisticsFallback && !siteIndicators && !dialCatchmentData && mapStatistics) {
@@ -562,6 +571,8 @@ function ViewPane({
       }
     }
 
+    const afterValues = { min, max };
+
     // Ensure min < max
     if (min >= max) {
       const mid = (min + max) / 2 || 50;
@@ -588,7 +599,14 @@ function ViewPane({
       ? siteIdeal !== siteCurrentForTarget
       : (typeof targetValue === 'number' && typeof currentValue === 'number' && targetValue !== currentValue);
 
-    return { min, max, referenceValue, currentValue, targetValue, targetChanged };
+    return {
+      min, max, referenceValue, currentValue, targetValue, targetChanged,
+      // The workings, for the chart details panel. Kept rather than recomputed
+      // there: half these numbers are intermediate states of this function and
+      // could not be reproduced from outside it without repeating it.
+      beforeCap, afterCap, afterValues,
+      zeroCentred: Boolean(attributeDial0Middle[attribute]),
+    };
   // useMemo has a missing dependency: 'dialCatchmentLoading'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [comparison.attribute, siteIndicators, dialCatchmentData, dialRangeValues, rangeMode, mapStatistics, layoutMode, attributeDial0Middle, attributeTargetRanges]);
@@ -632,6 +650,31 @@ function ViewPane({
     return n.toFixed(1);
   };
 
+  /**
+   * What each range mode would give, whether or not it is the active one.
+   *
+   * The dial only ever computes the mode in use, so the other two have to be
+   * derived separately for the details panel. Read from the same sources the
+   * switch reads, and null where that source has not loaded — a diagnostic that
+   * fills in a plausible number is worse than one that says it does not know.
+   */
+  const candidateRanges = useMemo(() => {
+    const spanOf = (stats: Array<{ min?: number; max?: number } | null | undefined>) => {
+      const mins = stats.map((s) => s?.min).filter((v): v is number => typeof v === 'number' && !isNaN(v));
+      const maxs = stats.map((s) => s?.max).filter((v): v is number => typeof v === 'number' && !isNaN(v));
+      if (mins.length === 0 || maxs.length === 0) return null;
+      return { min: Math.min(...mins), max: Math.max(...maxs) };
+    };
+    return {
+      domain: mapStatistics?.fullStats
+        ? spanOf([mapStatistics.fullStats.left, mapStatistics.fullStats.right])
+        : mapStatistics?.domainRange ?? null,
+      extent: spanOf([mapStatistics?.leftStats, mapStatistics?.rightStats]),
+      site: dialCatchmentData?.spread
+        ?? spanOf([mapStatistics?.siteStats?.left, mapStatistics?.siteStats?.right]),
+    };
+  }, [mapStatistics, dialCatchmentData]);
+
   const DialComponent = dialShape === 'flat' ? FlatDial : DialChart;
 
   // The scale actually drawn against. Unlocked, it is whatever dialData just
@@ -671,6 +714,49 @@ function ViewPane({
   );
   const dialMin = heldRangeRef.current?.min ?? dialData?.min ?? 0;
   const dialMax = heldRangeRef.current?.max ?? dialData?.max ?? 100;
+
+  /**
+   * Everything behind the number on screen, for the details panel.
+   *
+   * Includes where each value came from, because the dial does not use one
+   * source: in Site mode current is an AOI-weighted catchment mean while
+   * reference and target are site-level indicators, and those are different
+   * computations that can disagree. That is invisible on the dial and is
+   * exactly the kind of thing this panel exists to show.
+   */
+  const dialDerivation = useMemo<ScaleDerivation | null>(() => {
+    if (!comparison.attribute || !dialData) return null;
+    const usedCatchments = rangeMode === 'site' && Boolean(dialCatchmentData);
+    const trace = (value: number | undefined, source: string) => ({ value, source });
+    return {
+      attribute: dialAttributeLabel ?? comparison.attribute,
+      unit: attributeUnits[comparison.attribute] ?? '',
+      activeMode: rangeMode ?? 'domain',
+      candidates: candidateRanges,
+      cap: attributeTargetRanges[comparison.attribute]
+        ? {
+            min: attributeTargetRanges[comparison.attribute].min ?? null,
+            max: attributeTargetRanges[comparison.attribute].max ?? null,
+          }
+        : null,
+      beforeCap: dialData.beforeCap,
+      afterCap: dialData.afterCap,
+      afterValues: dialData.afterValues,
+      held: heldRangeRef.current ? { min: heldRangeRef.current.min, max: heldRangeRef.current.max } : null,
+      final: { min: dialMin, max: dialMax },
+      zeroCentred: dialData.zeroCentred,
+      reference: trace(dialData.referenceValue, usedCatchments ? 'Site indicators (reference)' : 'Map statistics'),
+      current: trace(
+        dialData.currentValue,
+        usedCatchments ? 'AOI-weighted catchment mean' : 'Map statistics / site indicators',
+      ),
+      target: trace(dialData.targetValue, 'Site indicators (ideal)'),
+    };
+  }, [
+    comparison.attribute, dialAttributeLabel, attributeUnits, rangeMode, candidateRanges,
+    attributeTargetRanges, dialData, dialMin, dialMax, dialCatchmentData,
+  ]);
+
 
   return (
     <Box
@@ -768,6 +854,7 @@ function ViewPane({
         min={dialMin}
         max={dialMax}
         isScaleLocked={isScaleLocked}
+        onOpenChartDetails={onOpenChartDetails ? () => onOpenChartDetails(paneIndex, dialDerivation) : undefined}
         attribute={dialAttributeLabel}
         unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
         rangeMode={rangeMode}

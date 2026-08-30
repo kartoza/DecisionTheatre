@@ -212,3 +212,53 @@ export function attributeSpread(
   if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
   return { min, max };
 }
+
+/** One value on the dial, and where it came from. */
+export interface TracedValue {
+  value: number | undefined;
+  /** Which computation produced it — the dial does not use one source. */
+  source: string;
+}
+
+/**
+ * How a dial arrived at the scale it is drawing.
+ *
+ * The scale is the product of half a dozen steps — a range per mode, a
+ * metadata cap, an expansion to fit the plotted values, a balance cap, an
+ * optional hold — and by the time it is on screen it is two numbers with no
+ * account of itself. That is fine until someone asks why a marker is where it
+ * is, at which point the only way to answer has been to read the code and
+ * guess which branch ran.
+ *
+ * This records the workings so the question can be answered from the screen.
+ * Every field is nullable: a range that has not loaded is reported as absent
+ * rather than filled in with a plausible number, because a diagnostic that
+ * invents values is worse than none.
+ */
+export interface ScaleDerivation {
+  attribute: string;
+  unit: string;
+  activeMode: string;
+  /** What each mode would give, whether or not it is the active one. */
+  candidates: {
+    domain: { min: number; max: number } | null;
+    extent: { min: number; max: number } | null;
+    site: { min: number; max: number } | null;
+  };
+  /** Metadata bounds from `Target_min`/`Target_max`, where declared. */
+  cap: { min: number | null; max: number | null } | null;
+  /** The active mode's range, before and after the cap was applied. */
+  beforeCap: { min: number; max: number } | null;
+  afterCap: { min: number; max: number } | null;
+  /** After widening to contain the plotted values, and after the balance cap. */
+  afterValues: { min: number; max: number } | null;
+  /** The range being held by the scale lock, when one is. */
+  held: { min: number; max: number } | null;
+  /** What the dial is actually drawn against. */
+  final: { min: number; max: number };
+  /** True when the scale was centred on zero for a signed factor. */
+  zeroCentred: boolean;
+  reference: TracedValue;
+  current: TracedValue;
+  target: TracedValue;
+}

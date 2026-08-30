@@ -8,6 +8,7 @@ import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
+import type { ScaleDerivation } from '../lib/dialScale';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
@@ -19,6 +20,7 @@ interface ContentAreaProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
+  onOpenChartDetails?: (paneIndex: number, derivation: ScaleDerivation | null) => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
@@ -136,6 +138,7 @@ function ContentArea({
   onFocusPane,
   onGoQuad,
   onOpenControlPanel,
+  onOpenChartDetails,
   onRemovePane,
   onIdentify,
   identifyResult,
@@ -550,6 +553,7 @@ function ContentArea({
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   onOpenControlPanel={onOpenControlPanel}
+                  onOpenChartDetails={onOpenChartDetails}
                   canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
@@ -605,6 +609,7 @@ function ContentArea({
             onViewModeChange={onViewModeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
+            onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
             onMapExtentChange={onMapExtentChange}

@@ -57,6 +57,8 @@ export interface FlatDialProps {
   zeroCentered?: boolean;
   /** Whether the scale is being held still while values move. */
   isScaleLocked?: boolean;
+  /** Open the details panel explaining how this chart's numbers were reached. */
+  onOpenChartDetails?: () => void;
 }
 
 function FlatDial({
@@ -80,6 +82,7 @@ function FlatDial({
   isLoading = false,
   zeroCentered = false,
   isScaleLocked = false,
+  onOpenChartDetails,
 }: FlatDialProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 300 });
@@ -395,6 +398,25 @@ function FlatDial({
                         <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
                       </Checkbox>
                     </Box>
+                  </Tooltip>
+                  <Tooltip label="Explain this chart's numbers" placement="bottom">
+                    <Button
+                      size="sm"
+                      aria-label="Explain this chart's numbers"
+                      onClick={() => onOpenChartDetails?.()}
+                      variant="ghost"
+                      color="gray.300"
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                      fontSize="sm"
+                      fontWeight={700}
+                      px={2}
+                      ml={1}
+                      borderLeft="1px solid"
+                      borderColor="whiteAlpha.300"
+                      borderRadius={0}
+                    >
+                      ?
+                    </Button>
                   </Tooltip>
                 </HStack>
               </Box>

@@ -57,6 +57,8 @@ interface DialChartProps {
   zeroCentered?: boolean;
   /** Whether the scale is being held still while values move. */
   isScaleLocked?: boolean;
+  /** Open the details panel explaining how this chart's numbers were reached. */
+  onOpenChartDetails?: () => void;
 }
 
 function DialChart({
@@ -77,6 +79,7 @@ function DialChart({
   isLoading = false,
   zeroCentered = false,
   isScaleLocked = false,
+  onOpenChartDetails,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -658,6 +661,25 @@ function DialChart({
                         <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
                       </Checkbox>
                     </Box>
+                  </Tooltip>
+                  <Tooltip label="Explain this chart's numbers" placement="bottom">
+                    <Button
+                      size="sm"
+                      aria-label="Explain this chart's numbers"
+                      onClick={() => onOpenChartDetails?.()}
+                      variant="ghost"
+                      color="gray.300"
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                      fontSize="sm"
+                      fontWeight={700}
+                      px={2}
+                      ml={1}
+                      borderLeft="1px solid"
+                      borderColor="whiteAlpha.300"
+                      borderRadius={0}
+                    >
+                      ?
+                    </Button>
                   </Tooltip>
                 </HStack>
               </Box>
