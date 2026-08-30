@@ -313,10 +313,10 @@ function FlatDial({
             exit={{ opacity: 0, y: 8, transition: { duration: 0.25 } }}
             style={{ width: '100%', height: '100%', position: 'relative' }}
           >
-            {onRangeModeChange && (
+            {(
               <Box position="absolute" top={4} right={4} zIndex={10} bg="blackAlpha.600" borderRadius="xl" p={1} backdropFilter="blur(8px)">
                 <HStack spacing={1}>
-                  {RANGE_MODES.map((mode) => {
+                  {onRangeModeChange && RANGE_MODES.map((mode) => {
                     const isActive = rangeMode === mode.id;
                     const isDisabled = mode.id === 'site' && !isSiteAvailable;
                     return (
@@ -350,7 +350,7 @@ function FlatDial({
                       fontSize="xs"
                       px={2}
                       ml={1}
-                      borderLeft="1px solid"
+                      borderLeft={onRangeModeChange ? "1px solid" : undefined}
                       borderColor="whiteAlpha.300"
                       borderRadius={0}
                     >

@@ -125,8 +125,15 @@ describe('tickValues', () => {
 });
 
 describe('the dial shape preference', () => {
-  it('defaults to the arc gauge that predates the flat band', () => {
+  it('defaults to the flat band, which is what this branch exists to show', () => {
     window.localStorage.clear();
+    expect(loadDialShape()).toBe('flat');
+  });
+
+  it('honours a stored arc choice over that default', () => {
+    // Otherwise switching back to the arc would not survive a reload, and the
+    // comparison the toggle exists for only works in one direction.
+    saveDialShape('arc');
     expect(loadDialShape()).toBe('arc');
   });
 

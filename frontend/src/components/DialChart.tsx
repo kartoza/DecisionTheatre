@@ -578,7 +578,7 @@ function DialChart({
             style={{ width: '100%', height: '100%', position: 'relative' }}
           >
             {/* Range mode toggle - positioned inside chart area */}
-            {onRangeModeChange && (
+            {(
               <Box
                 position="absolute"
                 top={4}
@@ -590,7 +590,7 @@ function DialChart({
                 backdropFilter="blur(8px)"
               >
                 <HStack spacing={1}>
-                  {RANGE_MODES.map((mode) => {
+                  {onRangeModeChange && RANGE_MODES.map((mode) => {
                     const isActive = rangeMode === mode.id;
                     const isDisabled = mode.id === 'site' && !isSiteAvailable;
                     return (
@@ -624,7 +624,7 @@ function DialChart({
                       fontSize="xs"
                       px={2}
                       ml={1}
-                      borderLeft="1px solid"
+                      borderLeft={onRangeModeChange ? "1px solid" : undefined}
                       borderColor="whiteAlpha.300"
                       borderRadius={0}
                     >

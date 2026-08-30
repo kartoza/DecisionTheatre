@@ -18,15 +18,27 @@ export type DialShape = 'arc' | 'flat';
 const KEY = 'dt.dial.shape';
 const EVENT = 'dt:dial-shape-changed';
 
-/** The shape to draw, defaulting to the arc gauge that predates the flat one. */
+/**
+ * The shape to draw.
+ *
+ * Defaults to the flat band on this branch, because the flat band is what the
+ * branch exists to look at — a default of `arc` meant opening the dial view
+ * showed the thing that was already there, with the alternative hidden behind a
+ * button. Flip DEFAULT_SHAPE to 'arc' to make the arc the default again.
+ */
+const DEFAULT_SHAPE: DialShape = 'flat';
+
 export function loadDialShape(): DialShape {
-  if (typeof window === 'undefined') return 'arc';
+  if (typeof window === 'undefined') return DEFAULT_SHAPE;
   try {
-    return window.localStorage.getItem(KEY) === 'flat' ? 'flat' : 'arc';
+    const raw = window.localStorage.getItem(KEY);
+    if (raw === 'flat') return 'flat';
+    if (raw === 'arc') return 'arc';
+    return DEFAULT_SHAPE;
   } catch {
     // Storage blocked entirely. The toggle still works for this session; it
     // just will not be remembered.
-    return 'arc';
+    return DEFAULT_SHAPE;
   }
 }
 
