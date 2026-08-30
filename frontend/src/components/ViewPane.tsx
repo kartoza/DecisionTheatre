@@ -588,6 +588,13 @@ function ViewPane({
       max = absMax;
     }
 
+    // A declared bound is the scale, so it gets the last word — every step
+    // since the cap was applied (fitting the plotted values, the balance cap,
+    // zero-centring) is free to move an end that metadata does not pin, and
+    // none of them may move one it does. Percent burned is 0–100 because it is
+    // a percentage, whatever this site happens to span.
+    ({ min, max } = capRange({ min, max }, attributeTargetRanges[attribute]));
+
     // Only expose target when it actually differs from current — prevents showing a
     // spurious target marker for factors the user never changed (target now starts
     // as a copy of the current state, not reference).

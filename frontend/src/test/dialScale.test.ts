@@ -14,6 +14,8 @@ import {
   normalize,
   attributeSpread,
   capRange,
+  hasDeclaredMax,
+  hasDeclaredMin,
   resolveHeldRange,
   tickValues,
 } from '../lib/dialScale';
@@ -227,36 +229,48 @@ describe('the scale lock preference', () => {
   });
 });
 
-describe('the metadata cap on a scale', () => {
+describe('metadata scale bounds', () => {
   it('leaves a range alone when no bound is declared', () => {
     expect(capRange({ min: -500, max: 5000 })).toEqual({ min: -500, max: 5000 });
     expect(capRange({ min: -500, max: 5000 }, {})).toEqual({ min: -500, max: 5000 });
   });
 
-  it('leaves a range alone when it is already inside the bounds', () => {
-    expect(capRange({ min: 10, max: 90 }, { min: 0, max: 100 })).toEqual({ min: 10, max: 90 });
+  it('uses a declared bound even when the data is well inside it', () => {
+    // The reported case: Percent burned declares 0..100 and the site spans
+    // 45..97.5. It is a percentage — its scale is 0..100 whatever this site
+    // happens to cover, or two sites cannot be compared by eye.
+    expect(capRange({ min: 45, max: 97.5 }, { min: 0, max: 100 }))
+      .toEqual({ min: 0, max: 100 });
   });
 
-  it('pulls each end in only where it overshoots', () => {
-    // NPP declares Target_min 0: a dataset range reaching below zero is
-    // reaching for values the factor cannot take.
-    expect(capRange({ min: -580, max: 900 }, { min: 0, max: 1000 })).toEqual({ min: 0, max: 900 });
-    expect(capRange({ min: 50, max: 4000 }, { min: 0, max: 1000 })).toEqual({ min: 50, max: 1000 });
+  it('uses a declared bound when the data overshoots it', () => {
+    expect(capRange({ min: -580, max: 4000 }, { min: 0, max: 1000 }))
+      .toEqual({ min: 0, max: 1000 });
   });
 
-  it('treats a null bound as unspecified, which is how metadata leaves it blank', () => {
-    expect(capRange({ min: -50, max: 4000 }, { min: null, max: 1000 })).toEqual({ min: -50, max: 1000 });
+  it('replaces only the end that is declared', () => {
+    expect(capRange({ min: 45, max: 4000 }, { min: 0, max: null }))
+      .toEqual({ min: 0, max: 4000 });
+    expect(capRange({ min: 45, max: 4000 }, { min: null, max: 1000 }))
+      .toEqual({ min: 45, max: 1000 });
   });
 
   it('keeps a signed factor signed', () => {
-    // deltaSOC declares Target_min -10; capping must not floor it at zero.
-    expect(capRange({ min: -70, max: 70 }, { min: -10, max: 10 })).toEqual({ min: -10, max: 10 });
+    // deltaSOC declares Target_min -10; the bound must not floor it at zero.
+    expect(capRange({ min: -70, max: 70 }, { min: -10, max: 10 }))
+      .toEqual({ min: -10, max: 10 });
   });
 
   it('refuses to collapse the scale', () => {
-    // Bounds narrower than the data must not cross the ends over and leave
-    // nothing to draw against.
-    expect(capRange({ min: 500, max: 900 }, { min: 0, max: 100 })).toEqual({ min: 500, max: 900 });
+    // Bounds that cross over describe no scale at all.
+    expect(capRange({ min: 500, max: 900 }, { min: 100, max: 0 }))
+      .toEqual({ min: 500, max: 900 });
+  });
+
+  it('reports which ends are pinned', () => {
+    expect(hasDeclaredMin({ min: 0, max: null })).toBe(true);
+    expect(hasDeclaredMax({ min: 0, max: null })).toBe(false);
+    expect(hasDeclaredMin(undefined)).toBe(false);
   });
 });
 

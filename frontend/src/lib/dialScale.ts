@@ -159,17 +159,16 @@ export interface ScaleCap {
 }
 
 /**
- * Constrain a derived range to the bounds metadata declares for the factor.
+ * Apply the scale bounds metadata declares for the factor.
  *
- * The three range modes each answer a different question — what the whole
- * dataset covers, what is on screen, what the site covers — and any of them can
- * run past what the factor can physically be. Where `metadata.csv` says so, the
- * declared bound wins: a scale that runs to a value the factor cannot take
- * spends its width on impossible readings and squeezes the real ones together.
+ * A declared bound *is* the scale, not a limit on one. `Percent burned` is a
+ * percentage: its scale is 0–100 whatever this particular site happens to span,
+ * and drawing it 45–97.5 because that is the observed spread exaggerates the
+ * variation and makes two sites incomparable. Where metadata states the range,
+ * that is the range.
  *
- * Only applied where the cap is actually specified and actually exceeded, so a
- * factor with no declared bounds keeps its derived range untouched, and a range
- * already inside them is left alone.
+ * Only the ends that are actually declared are replaced, so a factor with a
+ * floor but no ceiling keeps its derived maximum.
  */
 export function capRange(
   range: { min: number; max: number },
@@ -177,15 +176,22 @@ export function capRange(
 ): { min: number; max: number } {
   let { min, max } = range;
   if (cap) {
-    if (typeof cap.min === 'number' && Number.isFinite(cap.min) && min < cap.min) min = cap.min;
-    if (typeof cap.max === 'number' && Number.isFinite(cap.max) && max > cap.max) max = cap.max;
+    if (typeof cap.min === 'number' && Number.isFinite(cap.min)) min = cap.min;
+    if (typeof cap.max === 'number' && Number.isFinite(cap.max)) max = cap.max;
   }
-  // Capping both ends can cross them over on a factor whose declared bounds are
-  // narrower than its data. A collapsed scale would divide by zero downstream,
-  // so the derived range wins in that case — the cap is a sanity bound, not a
-  // licence to draw nothing.
+  // Declared bounds that cross over describe no scale at all. The derived range
+  // wins there, because drawing nothing helps nobody.
   if (!(max > min)) return range;
   return { min, max };
+}
+
+/** Whether metadata pins an end of the scale, so nothing downstream may move it. */
+export function hasDeclaredMin(cap?: ScaleCap): boolean {
+  return typeof cap?.min === 'number' && Number.isFinite(cap.min);
+}
+
+export function hasDeclaredMax(cap?: ScaleCap): boolean {
+  return typeof cap?.max === 'number' && Number.isFinite(cap.max);
 }
 
 /**
