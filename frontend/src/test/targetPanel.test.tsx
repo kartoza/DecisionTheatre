@@ -53,11 +53,12 @@ type Props = ComponentProps<typeof ContentArea>;
 function indicators(
   catchmentCount: number,
   values: Record<string, number> = { [COLUMN]: 0.08 },
+  ideal?: Record<string, number>,
 ): SiteIndicators {
   return {
     reference: Object.fromEntries(Object.keys(values).map((k) => [k, 0.5])),
     current: { ...values },
-    ideal: { ...values },
+    ideal: { ...(ideal ?? values) },
     extractedAt: '2026-08-29T00:00:00Z',
     catchmentCount,
     totalAreaKm2: 120,
@@ -206,5 +207,71 @@ describe('the live update checkbox', () => {
     // that does not match the machine or the network, and being asked to
     // overrule it again on every reload would defeat that.
     expect(loadLiveUpdatePreference()).toBe(false);
+  });
+});
+
+describe('resetting the target set', () => {
+  const resetButton = (name: RegExp) => screen.getByRole('button', { name });
+
+  it('offers a reset to each observed scenario', () => {
+    renderPanel();
+    expect(resetButton(/reset to reference/i)).toBeInTheDocument();
+    expect(resetButton(/reset to current/i)).toBeInTheDocument();
+  });
+
+  it('asks before discarding target work, in the panel rather than a dialog', () => {
+    const { onSiteIndicatorsChange } = renderPanel();
+    fireEvent.click(resetButton(/reset to reference/i));
+
+    // Nothing has happened yet — the first click only poses the question.
+    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
+    expect(screen.getByText(/Set every target to the reference\?/)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does nothing when the confirmation is declined', () => {
+    const { onSiteIndicatorsChange } = renderPanel();
+    fireEvent.click(resetButton(/reset to reference/i));
+    fireEvent.click(resetButton(/cancel/i));
+
+    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
+    expect(resetButton(/reset to reference/i)).toBeInTheDocument();
+  });
+
+  it('sets every editable target to the reference once confirmed', () => {
+    const { onSiteIndicatorsChange } = renderPanel({
+      siteIndicators: indicators(5, { [COLUMN]: 0.08 }),
+    });
+    fireEvent.click(resetButton(/reset to reference/i));
+    fireEvent.click(resetButton(/^reset$/i));
+
+    const submitted = onSiteIndicatorsChange.mock.calls[0][0];
+    // indicators() puts every reference at 0.5.
+    expect(submitted.ideal[COLUMN]).toBe(0.5);
+  });
+
+  it('clears a target by resetting it to current', () => {
+    // A site with a target already set: ideal has diverged from current.
+    const { onSiteIndicatorsChange } = renderPanel({
+      siteIndicators: indicators(5, { [COLUMN]: 0.08 }, { [COLUMN]: 0.42 }),
+    });
+    fireEvent.click(resetButton(/reset to current/i));
+    fireEvent.click(resetButton(/^reset$/i));
+
+    const submitted = onSiteIndicatorsChange.mock.calls[0][0];
+    // Ideal back on current means no divergence, which is what makes the dials
+    // stop showing a target at all.
+    expect(submitted.ideal[COLUMN]).toBe(0.08);
+  });
+
+  it('submits nothing when the targets already sit on the scenario asked for', () => {
+    // Resetting to current when nothing has diverged is a no-op, and must not
+    // cost a recalculation that rescores every catchment for no change.
+    const { onSiteIndicatorsChange } = renderPanel({
+      siteIndicators: indicators(5, { [COLUMN]: 0.08 }),
+    });
+    fireEvent.click(resetButton(/reset to current/i));
+    fireEvent.click(resetButton(/^reset$/i));
+    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
   });
 });

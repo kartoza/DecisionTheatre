@@ -1,4 +1,4 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { FiChevronRight } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
@@ -98,6 +98,16 @@ const STRINGS = {
   liveUpdateHintOff:
     'Charts and sliders recalculate once you let go of a slider. Best on large sites.',
   recalculating: 'Recalculating…',
+  resetToReference: 'Reset to reference',
+  resetToCurrent: 'Reset to current',
+  resetToReferenceHint: 'Set every target to the ecological reference value',
+  resetToCurrentHint: 'Set every target back to the current state, clearing all targets',
+  resetConfirmReference: 'Set every target to the reference?',
+  resetConfirmCurrent: 'Set every target back to current?',
+  resetConfirmBody: 'This replaces the targets you have set.',
+  resetConfirm: 'Reset',
+  resetCancel: 'Cancel',
+  resetUnavailable: 'No values to reset to',
   invalidTargetTitle: 'Invalid target value',
   invalidTargetBody: (label: string) => `Please enter a valid number for ${label}.`,
   updateFailed: 'Failed to update target values',
@@ -167,6 +177,10 @@ function ContentArea({
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+  // Which reset is awaiting confirmation, or null. A reset discards target work
+  // and cannot be undone, so it is confirmed — but in place rather than in a
+  // dialog, so the panel the user is working in is where the question appears.
+  const [pendingReset, setPendingReset] = useState<'reference' | 'current' | null>(null);
 
   // --- Live update -------------------------------------------------------
   //
@@ -411,6 +425,32 @@ function ContentArea({
     } catch {
       toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
     }
+  };
+
+  /**
+   * Point every editable target at one of the observed scenarios.
+   *
+   * Both buttons go through the same path a slider does — set the drafts, mark
+   * the keys as touched, schedule a recalculation — so a reset cascades exactly
+   * as a manual edit would and cannot land the site in a state the sliders
+   * could not have produced.
+   *
+   * Resetting to current is the "clear my targets" case: with ideal equal to
+   * current there is no divergence, so the dials stop showing a target at all.
+   */
+  const resetTargetsTo = (scenario: 'reference' | 'current') => {
+    const source = siteIndicators?.[scenario];
+    if (!source) return;
+    const nextDrafts = { ...targetDraftValues };
+    for (const key of editableTargetKeys) {
+      const value = source[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        nextDrafts[key] = String(value);
+        touchedTargetKeysRef.current.add(key);
+      }
+    }
+    setTargetDraftValues(nextDrafts);
+    scheduleRecalculation(nextDrafts);
   };
 
   // The scheduler is created once and reaches the current render's
@@ -661,6 +701,67 @@ function ContentArea({
                 </Checkbox>
               </Box>
             </Tooltip>
+          </Box>
+
+          {/*
+            Reset the whole target set to one of the observed scenarios.
+            Confirmed in place rather than in a dialog: this discards target
+            work and cannot be undone, and the question belongs in the panel
+            the user is already working in.
+          */}
+          <Box px={4} pb={3}>
+            {pendingReset === null ? (
+              <HStack spacing={2}>
+                <Tooltip label={STRINGS.resetToReferenceHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="orange"
+                    isDisabled={!siteIndicators?.reference}
+                    onClick={() => setPendingReset('reference')}
+                  >
+                    {STRINGS.resetToReference}
+                  </Button>
+                </Tooltip>
+                <Tooltip label={STRINGS.resetToCurrentHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="cyan"
+                    isDisabled={!siteIndicators?.current}
+                    onClick={() => setPendingReset('current')}
+                  >
+                    {STRINGS.resetToCurrent}
+                  </Button>
+                </Tooltip>
+              </HStack>
+            ) : (
+              <Box bg="whiteAlpha.100" borderRadius="md" p={3}>
+                <Box fontSize="sm" color="gray.100" fontWeight="600">
+                  {pendingReset === 'reference'
+                    ? STRINGS.resetConfirmReference
+                    : STRINGS.resetConfirmCurrent}
+                </Box>
+                <Box fontSize="xs" color="gray.400" mt={1} mb={2}>
+                  {STRINGS.resetConfirmBody}
+                </Box>
+                <HStack spacing={2}>
+                  <Button
+                    size="xs"
+                    colorScheme={pendingReset === 'reference' ? 'orange' : 'cyan'}
+                    onClick={() => {
+                      resetTargetsTo(pendingReset);
+                      setPendingReset(null);
+                    }}
+                  >
+                    {STRINGS.resetConfirm}
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setPendingReset(null)}>
+                    {STRINGS.resetCancel}
+                  </Button>
+                </HStack>
+              </Box>
+            )}
           </Box>
 
           <Box px={4} pb={4} flex="1" overflowY="auto">
