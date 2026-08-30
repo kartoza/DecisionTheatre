@@ -1,9 +1,9 @@
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, Checkbox, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
-import { saveDialShape } from '../lib/dialPreferences';
+import { saveDialShape, saveScaleLock } from '../lib/dialPreferences';
 import {
   SCENARIO_COLORS,
   bandGradientStops,
@@ -638,6 +638,26 @@ function DialChart({
                     >
                       Flat
                     </Button>
+                  </Tooltip>
+                  {/* The same control the flat band carries. The hold itself is
+                      applied in ViewPane, so it has always reached the arc — it
+                      just had no way to be switched on from here. */}
+                  <Tooltip
+                    label={isScaleLocked
+                      ? 'Scale is held still — only the values move'
+                      : 'Hold the scale still so only the values move'}
+                    placement="bottom"
+                  >
+                    <Box pl={2} ml={1} borderLeft="1px solid" borderColor="whiteAlpha.300">
+                      <Checkbox
+                        size="sm"
+                        colorScheme="cyan"
+                        isChecked={isScaleLocked}
+                        onChange={(e) => saveScaleLock(e.target.checked)}
+                      >
+                        <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
+                      </Checkbox>
+                    </Box>
                   </Tooltip>
                 </HStack>
               </Box>

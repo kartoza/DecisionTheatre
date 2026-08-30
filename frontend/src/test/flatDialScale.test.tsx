@@ -15,6 +15,7 @@ import { render, screen, cleanup } from '@testing-library/react';
 import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import FlatDial from '../components/FlatDial';
+import DialChart from '../components/DialChart';
 
 function axisOf(): { min: string; max: string } {
   const ticks = Array.from(document.querySelectorAll('text'))
@@ -75,5 +76,69 @@ describe('an unlocked belt', () => {
     const before = renderBelt(1200, false);
     const after = renderBelt(2500, false);
     expect(after.max).not.toBe(before.max);
+  });
+});
+
+/**
+ * The lock applies to the arc too.
+ *
+ * The hold is taken in ViewPane, so it always reached both shapes — but the arc
+ * widened the handed-down range again locally, exactly as the belt did, and had
+ * no checkbox to switch the lock on from.
+ */
+function renderArc(targetValue: number, isScaleLocked: boolean) {
+  cleanup();
+  render(
+    <ChakraProvider theme={theme}>
+      <DialChart
+        visible
+        attribute="Total Methane production"
+        min={328.9}
+        max={1200}
+        referenceValue={365.4}
+        currentValue={836.3}
+        targetValue={targetValue}
+        isScaleLocked={isScaleLocked}
+        onRangeModeChange={() => {}}
+      />
+    </ChakraProvider>,
+  );
+  // The scale only: the legend carries the target's value, which is supposed to
+  // change. What must not change is the ruler it is read against.
+  return Array.from(document.querySelectorAll('text'))
+    .map((t) => t.textContent ?? '')
+    .filter((t) => t !== '' && !t.includes(':') && !/[A-Za-z]{2}/.test(t))
+    .join('|');
+}
+
+describe('a locked arc', () => {
+  it('does not let a growing target drag its scale with it', () => {
+    const before = renderArc(1200, true);
+    const after = renderArc(2500, true);
+    expect(after).toBe(before);
+  });
+
+  it('grows when unlocked, which is why the lock exists', () => {
+    const before = renderArc(1200, false);
+    const after = renderArc(2500, false);
+    expect(after).not.toBe(before);
+  });
+
+  it('offers the lock control, not only the flat band', () => {
+    renderArc(1200, false);
+    expect(screen.getByRole('checkbox', { name: /lock scale/i })).toBeInTheDocument();
+  });
+});
+
+describe('the shape toggle label', () => {
+  it('calls the arc a dial, which is what it is called everywhere else', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
+      </ChakraProvider>,
+    );
+    expect(screen.getByRole('button', { name: /show as a dial/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /arc/i })).toBeNull();
   });
 });

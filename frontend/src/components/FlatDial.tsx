@@ -361,10 +361,10 @@ function FlatDial({
                       </Tooltip>
                     );
                   })}
-                  <Tooltip label="Show as an arc gauge" placement="bottom">
+                  <Tooltip label="Show as a dial" placement="bottom">
                     <Button
                       size="sm"
-                      aria-label="Show as an arc gauge"
+                      aria-label="Show as a dial"
                       onClick={() => saveDialShape('arc')}
                       variant="ghost"
                       color="gray.300"
@@ -376,7 +376,7 @@ function FlatDial({
                       borderColor="whiteAlpha.300"
                       borderRadius={0}
                     >
-                      Arc
+                      Dial
                     </Button>
                   </Tooltip>
                   <Tooltip
