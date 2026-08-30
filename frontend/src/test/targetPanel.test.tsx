@@ -67,6 +67,7 @@ function indicators(
 
 function renderPanel(overrides: Partial<Props> = {}) {
   const onSiteIndicatorsChange = vi.fn(async (_indicators: SiteIndicators) => {});
+  const onResetTargets = vi.fn(async (_scenario: 'reference' | 'current') => {});
   const props: Props = {
     mode: 'single',
     paneStates: DEFAULT_PANE_STATES,
@@ -81,6 +82,7 @@ function renderPanel(overrides: Partial<Props> = {}) {
     isTargetModalOpen: true,
     onCloseTargetModal: vi.fn(),
     onSiteIndicatorsChange,
+    onResetTargets,
     siteIndicators: indicators(5),
     ...overrides,
   };
@@ -89,7 +91,7 @@ function renderPanel(overrides: Partial<Props> = {}) {
       <ContentArea {...props} />
     </ChakraProvider>,
   );
-  return { onSiteIndicatorsChange, props };
+  return { onSiteIndicatorsChange, onResetTargets, props };
 }
 
 /**
@@ -220,56 +222,43 @@ describe('resetting the target set', () => {
   });
 
   it('asks before discarding target work, in the panel rather than a dialog', () => {
-    const { onSiteIndicatorsChange } = renderPanel();
+    const { onResetTargets } = renderPanel();
     fireEvent.click(resetButton(/reset to reference/i));
 
     // Nothing has happened yet — the first click only poses the question.
-    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
+    expect(onResetTargets).not.toHaveBeenCalled();
     expect(screen.getByText(/Set every target to the reference\?/)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('does nothing when the confirmation is declined', () => {
-    const { onSiteIndicatorsChange } = renderPanel();
+    const { onResetTargets } = renderPanel();
     fireEvent.click(resetButton(/reset to reference/i));
     fireEvent.click(resetButton(/cancel/i));
 
-    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
+    expect(onResetTargets).not.toHaveBeenCalled();
     expect(resetButton(/reset to reference/i)).toBeInTheDocument();
   });
 
-  it('sets every editable target to the reference once confirmed', () => {
-    const { onSiteIndicatorsChange } = renderPanel({
-      siteIndicators: indicators(5, { [COLUMN]: 0.08 }),
-    });
+  it('asks for the scenario the user picked, once confirmed', () => {
+    const { onResetTargets } = renderPanel();
     fireEvent.click(resetButton(/reset to reference/i));
     fireEvent.click(resetButton(/^reset$/i));
-
-    const submitted = onSiteIndicatorsChange.mock.calls[0][0];
-    // indicators() puts every reference at 0.5.
-    expect(submitted.ideal[COLUMN]).toBe(0.5);
+    expect(onResetTargets).toHaveBeenCalledWith('reference');
   });
 
-  it('clears a target by resetting it to current', () => {
-    // A site with a target already set: ideal has diverged from current.
-    const { onSiteIndicatorsChange } = renderPanel({
-      siteIndicators: indicators(5, { [COLUMN]: 0.08 }, { [COLUMN]: 0.42 }),
-    });
+  it('asks for current when that is the button pressed', () => {
+    const { onResetTargets } = renderPanel();
     fireEvent.click(resetButton(/reset to current/i));
     fireEvent.click(resetButton(/^reset$/i));
-
-    const submitted = onSiteIndicatorsChange.mock.calls[0][0];
-    // Ideal back on current means no divergence, which is what makes the dials
-    // stop showing a target at all.
-    expect(submitted.ideal[COLUMN]).toBe(0.08);
+    expect(onResetTargets).toHaveBeenCalledWith('current');
   });
 
-  it('submits nothing when the targets already sit on the scenario asked for', () => {
-    // Resetting to current when nothing has diverged is a no-op, and must not
-    // cost a recalculation that rescores every catchment for no change.
-    const { onSiteIndicatorsChange } = renderPanel({
-      siteIndicators: indicators(5, { [COLUMN]: 0.08 }),
-    });
+  it('does not route a reset through the cascading edit path', () => {
+    // A reset that cascaded would recompute derived values from the primary
+    // inputs and land near the scenario rather than on it — which is what made
+    // the target marker miss the current one.
+    const { onSiteIndicatorsChange } = renderPanel();
     fireEvent.click(resetButton(/reset to current/i));
     fireEvent.click(resetButton(/^reset$/i));
     expect(onSiteIndicatorsChange).not.toHaveBeenCalled();

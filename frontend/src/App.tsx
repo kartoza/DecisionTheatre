@@ -16,7 +16,7 @@ import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
-import { patchSite, patchSiteIndicators, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -989,6 +989,21 @@ function App() {
     }
   }, [currentSiteId, currentSite, toast]);
 
+  /**
+   * Point every target at an observed scenario.
+   *
+   * Goes to the reset endpoint rather than through handleSiteIndicatorsChange,
+   * because that path cascades: it recomputes derived values from whichever
+   * primary inputs changed, so a reset to current lands *near* current instead
+   * of on it and the target marker misses the current one.
+   */
+  const handleResetTargets = useCallback(async (scenario: 'reference' | 'current') => {
+    if (!currentSiteId) return;
+    const updatedSite = await resetSiteIdeal(currentSiteId, scenario, currentSite ?? undefined);
+    setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
+    setMapRefreshSeq((seq) => seq + 1);
+  }, [currentSiteId, currentSite]);
+
   // Only treat the panel as the grid-view modal while actually in quad layout —
   // guards against isGridControlModal staying stale true if some other flow
   // (e.g. a demo tour reset) forces layoutMode back to 'single' without going
@@ -1256,6 +1271,7 @@ function App() {
             chartGraphModes={chartGraphModes}
             mapExtent={mapExtent}
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
+            onResetTargets={handleResetTargets}
             isTargetModalOpen={isTargetModalOpen}
             onCloseTargetModal={onCloseTargetModal}
             refreshKey={mapRefreshSeq}

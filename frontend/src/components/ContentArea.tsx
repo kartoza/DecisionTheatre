@@ -52,6 +52,12 @@ interface ContentAreaProps {
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  /**
+   * Point every target at an observed scenario. Separate from
+   * onSiteIndicatorsChange because a reset must not cascade — see
+   * resetSiteIdeal in hooks/useApi.
+   */
+  onResetTargets?: (scenario: 'reference' | 'current') => Promise<void> | void;
   // For target panel control from parent
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
@@ -160,6 +166,7 @@ function ContentArea({
   chartGraphModes,
   mapExtent,
   onSiteIndicatorsChange,
+  onResetTargets,
   isTargetModalOpen,
   onCloseTargetModal,
   refreshKey,
@@ -439,18 +446,20 @@ function ContentArea({
    * current there is no divergence, so the dials stop showing a target at all.
    */
   const resetTargetsTo = (scenario: 'reference' | 'current') => {
-    const source = siteIndicators?.[scenario];
-    if (!source) return;
-    const nextDrafts = { ...targetDraftValues };
-    for (const key of editableTargetKeys) {
-      const value = source[key];
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        nextDrafts[key] = String(value);
-        touchedTargetKeysRef.current.add(key);
+    if (!onResetTargets) return;
+    // Every editable slider is untouched again: the reset has replaced the
+    // targets wholesale, so nothing the user did before it is still pending.
+    touchedTargetKeysRef.current = new Set();
+    setIsSavingTargets(true);
+    void (async () => {
+      try {
+        await onResetTargets(scenario);
+      } catch {
+        toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
+      } finally {
+        setIsSavingTargets(false);
       }
-    }
-    setTargetDraftValues(nextDrafts);
-    scheduleRecalculation(nextDrafts);
+    })();
   };
 
   // The scheduler is created once and reaches the current render's
@@ -717,7 +726,7 @@ function ContentArea({
                     size="xs"
                     variant="outline"
                     colorScheme="orange"
-                    isDisabled={!siteIndicators?.reference}
+                    isDisabled={!onResetTargets || !siteIndicators?.reference}
                     onClick={() => setPendingReset('reference')}
                   >
                     {STRINGS.resetToReference}
@@ -728,7 +737,7 @@ function ContentArea({
                     size="xs"
                     variant="outline"
                     colorScheme="cyan"
-                    isDisabled={!siteIndicators?.current}
+                    isDisabled={!onResetTargets || !siteIndicators?.current}
                     onClick={() => setPendingReset('current')}
                   >
                     {STRINGS.resetToCurrent}
