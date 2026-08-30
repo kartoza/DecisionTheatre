@@ -133,17 +133,24 @@ function FlatDial({
   // instead leaves the whole thing riding high with dead space underneath,
   // which wastes the vertical room the flat shape was chosen to save.
   const markerOverhang = barH * (compact ? 0.62 : 0.7);
-  const titleH = veryDense ? 0 : fontLegend + (compact ? 10 : 16);
   const aboveBand = markerOverhang + (veryDense ? 6 : fontTick + (compact ? 8 : 12));
   const ticksH = 4 + tickLen + fontTick + 4;
   const legendGap = veryDense ? 18 : compact ? 26 : 40;
   const legendH = fontLegend + 12;
-  const clusterH = titleH + aboveBand + barH + ticksH + legendGap + legendH;
+  const clusterH = aboveBand + barH + ticksH + legendGap + legendH;
+
+  // The title is pinned to the top of the pane rather than hung off the band,
+  // and matches the arc gauge's treatment exactly — same baseline, same weight,
+  // same size. It names what the pane is showing, so it belongs to the pane and
+  // must not move when the band re-centres or drop out as panes get denser.
+  const titleY = veryDense ? 24 : compact ? 34 : 50;
+  const titleFont = veryDense ? 15 : compact ? 17 : 20;
+  const titleReserve = titleY + (veryDense ? 10 : 16);
 
   const barX = padX;
   const barW = Math.max(40, width - padX * 2);
   const bandY = Math.round(
-    Math.max(clusterH / 2, (height - clusterH) / 2 + titleH + aboveBand + barH / 2),
+    titleReserve + Math.max(0, (height - titleReserve - clusterH) / 2) + aboveBand + barH / 2,
   );
   const barTop = bandY - barH / 2;
   const barBottom = bandY + barH / 2;
@@ -378,17 +385,20 @@ function FlatDial({
                 </linearGradient>
               </defs>
 
-              {/* The factor being shown, above the band. */}
-              {attribute && !veryDense && (
+              {/* The factor being shown. Always drawn: without it a belt is an
+                  unlabelled coloured bar, and in a grid there is nothing else
+                  saying which of six factors a pane is for. */}
+              {attribute && (
                 <text
                   x={barX}
-                  y={barTop - aboveBand - 4}
-                  fill="#a0aec0"
-                  fontSize={fontLegend}
-                  fontWeight={600}
+                  y={titleY}
+                  textAnchor="start"
+                  fill="#f7fafc"
+                  fontSize={titleFont}
+                  fontFamily="Inter, system-ui, sans-serif"
+                  fontWeight="700"
                 >
-                  {attribute}
-                  {unit ? `  (${unit})` : ''}
+                  {attribute}{unit ? ` (${unit})` : ''}
                 </text>
               )}
 
