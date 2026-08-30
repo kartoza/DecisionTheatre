@@ -175,17 +175,47 @@ Switch a pane's view mode from its per-pane toolbar. See [Scenario Comparison](.
 | **Dial** | ![Dial view](../assets/images/screenshots/view-dial.png) Gauge showing Current and Target relative to the Ecological Reference band |
 | **Table** | ![Table view](../assets/images/screenshots/view-table.png) Site Aggregate Calculation -- area-weighted average, with an optional per-catchment breakdown |
 
-## Targets Modal
+## Targets Panel
 
 Opened via the **Targets** button in the grid-view toolbar, once a site has indicators.
+It docks into the right-hand side panel -- the same slot the single-factor
+controls use, so only one of the two is open at a time -- and the views shrink to
+make room rather than being covered. The dials, charts and maps stay visible
+while you drag, which is the point: you are watching them answer the slider.
 
-![Edit Target Values modal](../assets/images/screenshots/targets-modal.jpg)
+![Edit Target Values panel](../assets/images/screenshots/targets-modal.jpg)
 
 | Component | Description |
 |-----------|-------------|
+| **Live update** | Whether targets recalculate continuously while you drag, or once you let go. See below |
 | **Category accordion** | Collapsible groups (e.g. Fire, Herbivores, Vegetation Structure) with an indicator count |
 | **Slider rows** | One per indicator, showing current value, unit, and min/max range |
-| **Cancel / Save** | Save applies only the sliders actually moved |
+| **Close** | Dismisses the panel. Edits apply as you make them -- there is nothing to save |
+
+Only the sliders you actually move are submitted. Dragging one back to where it
+started clears the target you set for it.
+
+### Live update
+
+Every target edit costs a recalculation that rescores each catchment in the
+site, so its cost grows with how many catchments the site has.
+
+| Setting | Behaviour |
+|---------|-----------|
+| **On** | Sliders, dials and charts recalculate continuously as you drag |
+| **Off** | Everything recalculates once you release a slider |
+
+The box is ticked by default on sites of **20 catchments or fewer**, and cleared
+by default on larger ones. Ticking or clearing it yourself replaces that
+judgement permanently: your choice is remembered across sites and sessions, and
+the catchment count stops being consulted. Turn it on for a large site if your
+machine and connection can keep up; turn it off for a small one if you would
+rather not recalculate mid-drag.
+
+With live update on, a drag never queues up a backlog of requests. At most one
+recalculation is in flight at a time, and movement made while it runs collapses
+into a single follow-up, so the result always converges on the value you
+actually let go at.
 
 ## Indicators Page
 

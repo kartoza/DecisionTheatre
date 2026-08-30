@@ -1,12 +1,14 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, FormControl, FormLabel, HStack, Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { FiChevronRight } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
+import { createRecalculationScheduler, loadLiveUpdatePreference, resolveLiveUpdate, saveLiveUpdatePreference } from '../lib/liveTargetUpdate';
 import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
   mode: LayoutMode;
@@ -50,7 +52,7 @@ interface ContentAreaProps {
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
-  // For target modal control from parent
+  // For target panel control from parent
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
@@ -80,6 +82,26 @@ const paneVariants = {
     },
   }),
 };
+
+/**
+ * Every user-visible string the target editor owns, in one object — the same
+ * arrangement GridControls uses, and for the same reason: there is no i18n
+ * layer yet, and collecting the strings makes the eventual extraction
+ * mechanical rather than a hunt through JSX.
+ */
+const STRINGS = {
+  targetsHeading: 'Edit Target Values',
+  closePanel: 'Close target editor',
+  liveUpdate: 'Live update',
+  liveUpdateHintOn:
+    'Charts and sliders recalculate continuously while you drag. Best on small sites.',
+  liveUpdateHintOff:
+    'Charts and sliders recalculate once you let go of a slider. Best on large sites.',
+  recalculating: 'Recalculating…',
+  invalidTargetTitle: 'Invalid target value',
+  invalidTargetBody: (label: string) => `Please enter a valid number for ${label}.`,
+  updateFailed: 'Failed to update target values',
+} as const;
 
 function formatVariableType(value: string): string {
   return value
@@ -145,13 +167,26 @@ function ContentArea({
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
-  // Disabling every slider mid-drag-release moves focus off the thumb the
-  // user just let go of; the modal's focus trap then jumps focus to another
-  // element inside it, which drags the scroll position along with it. We
-  // capture the modal body's scroll position right before disabling and
-  // restore it once the disable/re-enable render has committed.
-  const modalBodyRef = useRef<HTMLDivElement>(null);
-  const savedTargetScrollTopRef = useRef(0);
+
+  // --- Live update -------------------------------------------------------
+  //
+  // `storedLiveUpdate` is the user's explicit choice and null until they make
+  // one, which is what keeps the checkbox stateful: the catchment count only
+  // decides the default, and only for as long as nobody has overruled it.
+  const [storedLiveUpdate, setStoredLiveUpdate] = useState<boolean | null>(() => loadLiveUpdatePreference());
+  // The count the recalculation actually iterates over, straight off the
+  // extraction that produced these indicators — the same number the backend
+  // rescores on every edit, which is what makes it the right one to size the
+  // default by.
+  const catchmentCount = siteIndicators?.catchmentCount ?? 0;
+  const isLiveUpdate = resolveLiveUpdate(catchmentCount, storedLiveUpdate);
+
+  const handleLiveUpdateChange = useCallback((enabled: boolean) => {
+    setStoredLiveUpdate(enabled);
+    saveLiveUpdatePreference(enabled);
+  }, []);
+
+
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
 
@@ -249,118 +284,151 @@ function ContentArea({
     return nextDrafts;
   };
 
-  // Populate draft values whenever the modal opens, regardless of which entry
+  // The keys whose slider the user has actually moved since opening the
+  // editor. Untouched sliders still carry a draft — it defaults to the
+  // current-state value so they start somewhere meaningful — and submitting
+  // those as edits would tell the backend every indicator changed at once,
+  // derailing the cascade for the one being edited.
+  const touchedTargetKeysRef = useRef<Set<string>>(new Set());
+  // Which slider the pointer is on right now, or null between drags. Only the
+  // dragged slider is exempt from the resync below; every other slider still
+  // picks up cascade results live.
+  const draggingTargetKeyRef = useRef<string | null>(null);
+
+  // Recalculations are chained, so a second one in the same drag must build on
+  // what the first returned rather than on the `siteIndicators` captured when
+  // the drag started.
+  const siteIndicatorsRef = useRef(siteIndicators);
+  siteIndicatorsRef.current = siteIndicators;
+
+  // Populate draft values whenever the panel opens, regardless of which entry
   // point triggered it (header "Targets" button vs internal button). While
-  // the modal stays open, also resync drafts whenever `siteIndicators`
+  // the panel stays open, also resync drafts whenever `siteIndicators`
   // itself changes — a recalculation can cascade into other factors (e.g.
   // dropping grass cover fraction shifts the tree cover target), and those
   // sliders need to pick up the new value without the user closing and
-  // reopening the modal.
-  const targetModalWasOpenRef = useRef(false);
+  // reopening the panel.
+  const targetPanelWasOpenRef = useRef(false);
   useEffect(() => {
     if (!isTargetModalOpen) {
-      targetModalWasOpenRef.current = false;
+      targetPanelWasOpenRef.current = false;
+      touchedTargetKeysRef.current = new Set();
       return;
     }
 
     const nextDrafts = computeTargetDrafts();
-    setTargetDraftValues(nextDrafts);
+    // Mid-drag, a live recalculation's cascade must not yank the thumb out
+    // from under the pointer, so the dragged slider keeps the user's value
+    // and everything else takes the freshly calculated one.
+    const draggingKey = draggingTargetKeyRef.current;
+    setTargetDraftValues((prev) =>
+      draggingKey != null && prev[draggingKey] !== undefined
+        ? { ...nextDrafts, [draggingKey]: prev[draggingKey] }
+        : nextDrafts
+    );
 
-    if (!targetModalWasOpenRef.current) {
+    if (!targetPanelWasOpenRef.current) {
       // Only snapshot the "opened at" values on the initial open — this
-      // snapshot is what later edits are diffed against to detect which
-      // sliders the user actually touched.
+      // snapshot is what the reset-to-origin check below diffs against.
       setTargetDefaultValues(
         Object.fromEntries(
           Object.entries(nextDrafts).map(([key, value]) => [key, Number(value)])
         )
       );
     }
-    targetModalWasOpenRef.current = true;
+    targetPanelWasOpenRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTargetModalOpen, siteIndicators]);
 
 
-  // Broadcast open/close so the guided tour can hide itself while the modal
-  // is visible. Using a ref to skip the initial mount dispatch.
-  const prevModalOpenRef = useRef(false);
+  // The application header is content-sized — logos plus padding — not a fixed
+  // height, so the docked panel measures it instead of repeating a magic number
+  // that goes stale the moment the header's contents change. Getting this wrong
+  // tucks the panel's heading up underneath the top bar.
+  const [headerOffset, setHeaderOffset] = useState(0);
+  useEffect(() => {
+    const header = document.querySelector('header');
+    if (!header) return;
+    const apply = () => setHeaderOffset(header.getBoundingClientRect().height);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  // Broadcast open/close so the guided tour can react to the panel appearing.
+  // Using a ref to skip the initial mount dispatch. The event names predate
+  // the panel being a docked panel rather than a modal and are kept as-is so
+  // the tours keep working.
+  const prevPanelOpenRef = useRef(false);
   useEffect(() => {
     const isOpen = isTargetModalOpen ?? false;
-    if (isOpen && !prevModalOpenRef.current) {
+    if (isOpen && !prevPanelOpenRef.current) {
       window.dispatchEvent(new Event('dt:targets-modal-opened'));
-    } else if (!isOpen && prevModalOpenRef.current) {
+    } else if (!isOpen && prevPanelOpenRef.current) {
       window.dispatchEvent(new Event('dt:targets-modal-closed'));
     }
-    prevModalOpenRef.current = isOpen;
+    prevPanelOpenRef.current = isOpen;
   }, [isTargetModalOpen]);
 
-  // Runs on every slider's release handler. `draftValues` is passed in
-  // rather than read from `targetDraftValues` state so a just-released
-  // slider's final value is guaranteed to be included, even though the
-  // setState call that recorded it may not have flushed to state yet by the
-  // time this runs.
-  const recalculateTargets = async (draftValues: Record<string, string>) => {
-    if (!siteIndicators || !onSiteIndicatorsChange) return;
+  // One recalculation round trip. `draftValues` is passed in rather than read
+  // from `targetDraftValues` state so the value that triggered it is
+  // guaranteed to be included, even though the setState that recorded it may
+  // not have flushed to state yet by the time this runs.
+  const runRecalculation = async (draftValues: Record<string, string>) => {
+    const indicators = siteIndicatorsRef.current;
+    if (!indicators || !onSiteIndicatorsChange) return;
 
-    const nextIdeal = { ...(siteIndicators.ideal ?? {}) };
+    const currentIdeal = indicators.ideal ?? {};
+    const nextIdeal = { ...currentIdeal };
     let hasChanges = false;
 
     for (const key of editableTargetKeys) {
+      if (!touchedTargetKeysRef.current.has(key)) continue;
       const raw = (draftValues[key] ?? '').trim();
       if (raw === '') continue;
       const parsed = Number(raw);
       if (!Number.isFinite(parsed)) {
         toast({
-          title: 'Invalid target value',
-          description: `Please enter a valid number for ${attributeDetails[key] ?? key}.`,
+          title: STRINGS.invalidTargetTitle,
+          description: STRINGS.invalidTargetBody(attributeDetails[key] ?? key),
           status: 'error',
           duration: 2500,
         });
         return;
       }
-      // Sliders the user never touched still hold a draft — it defaults to
-      // the current-state value so untouched sliders start somewhere
-      // meaningful (see the modal-open effect above). Submitting that
-      // untouched draft as an "ideal" edit would make the backend think
-      // every uncustomized indicator changed at once, which derails the
-      // cascade recalculation for the one field actually being edited.
-      // Only include keys whose draft has actually moved from its
-      // modal-open snapshot.
-      const openedAt = targetDefaultValues[key];
-      if (typeof openedAt === 'number' && parsed === openedAt) continue;
+      // Always send a touched key, even when the user has dragged it back to
+      // where it started: that is a request to clear the target, and skipping
+      // it would leave the previously submitted ideal in place forever.
       nextIdeal[key] = parsed;
-      hasChanges = true;
+      if (currentIdeal[key] !== parsed) hasChanges = true;
     }
 
     if (!hasChanges) return;
 
-    savedTargetScrollTopRef.current = modalBodyRef.current?.scrollTop ?? 0;
-    // Move focus onto the modal body itself — a stable element that never
-    // gets disabled — rather than letting it fall out of the modal
-    // entirely. react-focus-lock only intervenes (and drags the scroll
-    // position with it) once it sees focus escape the modal; keeping focus
-    // inside means the disabled slider/button below never triggers that.
-    modalBodyRef.current?.focus({ preventScroll: true });
-    setIsSavingTargets(true);
     try {
-      await onSiteIndicatorsChange({
-        ...siteIndicators,
-        ideal: nextIdeal,
-      });
+      await onSiteIndicatorsChange({ ...indicators, ideal: nextIdeal });
     } catch {
-      toast({ title: 'Failed to update target values', status: 'error', duration: 2500 });
-    } finally {
-      setIsSavingTargets(false);
+      toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
     }
   };
 
-  // Runs after every isSavingTargets flip (sliders getting disabled, then
-  // re-enabled) and pins the scroll position back to where it was
-  // immediately beforehand — see the comment by savedTargetScrollTopRef.
-  useLayoutEffect(() => {
-    const el = modalBodyRef.current;
-    if (el) el.scrollTop = savedTargetScrollTopRef.current;
-  }, [isSavingTargets]);
+  // The scheduler is created once and reaches the current render's
+  // `runRecalculation` through a ref, so a request chained after an await
+  // still sees the latest props rather than the ones captured when the drag
+  // started.
+  const runRecalculationRef = useRef(runRecalculation);
+  runRecalculationRef.current = runRecalculation;
+  const schedulerRef = useRef<ReturnType<typeof createRecalculationScheduler<Record<string, string>>> | null>(null);
+  if (schedulerRef.current === null) {
+    schedulerRef.current = createRecalculationScheduler<Record<string, string>>(
+      (drafts) => runRecalculationRef.current(drafts),
+      setIsSavingTargets,
+    );
+  }
+  const scheduleRecalculation = (draftValues: Record<string, string>) => {
+    schedulerRef.current?.schedule(draftValues);
+  };
 
   const visibleIndices = isQuad
     ? paneStates.map((_, index) => index)
@@ -526,36 +594,76 @@ function ContentArea({
       )}
       </Box>
 
-      <Modal
-        isOpen={isTargetModalOpen ?? false}
-        onClose={onCloseTargetModal ?? (() => {})}
-        size="xl"
-        scrollBehavior="inside"
-        closeOnOverlayClick={!isSavingTargets}
-        closeOnEsc={!isSavingTargets}
+      {/*
+        A docked right-hand panel rather than a modal overlay. The editor is
+        something you work *alongside* — its whole purpose is watching the
+        dials behind it answer a slider — and an overlay hid exactly what it
+        was meant to show. It takes the same slot as the single-factor
+        ControlPanel, which is never open at the same time.
+      */}
+      <Slide
+        direction="right"
+        in={isTargetModalOpen ?? false}
+        style={{
+          zIndex: 15,
+          position: 'fixed',
+          top: headerOffset,
+          right: 0,
+          height: `calc(100% - ${headerOffset}px)`,
+          width: 'auto',
+        }}
       >
-        <ModalOverlay />
-        <ModalContent bg="gray.800" color="white">
-          <ModalHeader>Edit Target Values</ModalHeader>
-          <ModalCloseButton isDisabled={isSavingTargets} />
-          <ModalBody ref={modalBodyRef} tabIndex={-1} position="relative">
+        <Box
+          id="tour-target-panel"
+          role="region"
+          aria-label={STRINGS.targetsHeading}
+          w={{ base: '100vw', md: '440px' }}
+          h="100%"
+          bg="gray.800"
+          color="white"
+          borderLeft="1px"
+          borderColor="whiteAlpha.200"
+          boxShadow="-4px 0 24px rgba(0,0,0,0.35)"
+          display="flex"
+          flexDirection="column"
+        >
+          <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
+            <Box fontSize="md" fontWeight="bold" flex="1">{STRINGS.targetsHeading}</Box>
             {isSavingTargets && (
-              <Box
-                position="absolute"
-                top={0} left={0} right={0} bottom={0}
-                display="flex"
-                alignItems="center"
-                justifyContent="center"
-                bg="rgba(26, 32, 44, 0.6)"
-                zIndex={10}
-                backdropFilter="blur(2px)"
-              >
-                <VStack spacing={2}>
-                  <Spinner size="xl" color="cyan.400" thickness="3px" speed="0.7s" />
-                  <Box fontSize="sm" color="gray.200">Recalculating…</Box>
-                </VStack>
-              </Box>
+              <HStack spacing={2} color="cyan.300" fontSize="xs">
+                <Spinner size="xs" thickness="2px" speed="0.7s" />
+                <Box>{STRINGS.recalculating}</Box>
+              </HStack>
             )}
+            <IconButton
+              aria-label={STRINGS.closePanel}
+              icon={<FiChevronRight />}
+              size="sm"
+              variant="ghost"
+              onClick={onCloseTargetModal}
+            />
+          </HStack>
+
+          <Box px={4} pb={3}>
+            <Tooltip
+              label={isLiveUpdate ? STRINGS.liveUpdateHintOn : STRINGS.liveUpdateHintOff}
+              placement="left"
+              openDelay={400}
+            >
+              <Box>
+                <Checkbox
+                  colorScheme="cyan"
+                  size="sm"
+                  isChecked={isLiveUpdate}
+                  onChange={(e) => handleLiveUpdateChange(e.target.checked)}
+                >
+                  <Box fontSize="sm" color="gray.200">{STRINGS.liveUpdate}</Box>
+                </Checkbox>
+              </Box>
+            </Tooltip>
+          </Box>
+
+          <Box px={4} pb={4} flex="1" overflowY="auto">
             <Accordion allowMultiple>
               {targetGroups.map((group) => (
                 <AccordionItem key={group.groupName} border="none" mb={3}>
@@ -604,14 +712,45 @@ function ContentArea({
                               max={safeMax}
                               step={step}
                               colorScheme="cyan"
-                              isDisabled={isSavingTargets}
-                              onChange={(val) =>
-                                setTargetDraftValues((prev) => ({ ...prev, [key]: String(val) }))
-                              }
-                              onChangeEnd={(val) => {
+                              // Deliberately never disabled while a
+                              // recalculation runs. Disabling every slider
+                              // mid-edit was what made the editor feel like it
+                              // redrew itself: focus moved, the scroll
+                              // position jumped, and the user had to find
+                              // their place again after each change.
+                              //
+                              // Chakra focuses a thumb whenever its *value*
+                              // changes, with a bare .focus() that scrolls the
+                              // element into view. A cascade rewrites the
+                              // other sliders' values, so releasing one drag
+                              // threw focus onto an unrelated slider and
+                              // scrolled the panel to it. Focus is restored
+                              // deliberately in onPointerDown below instead —
+                              // on the slider the pointer actually landed on,
+                              // and without scrolling.
+                              focusThumbOnChange={false}
+                              onPointerDown={(e) => {
+                                const thumb = e.currentTarget.querySelector('[role="slider"]');
+                                if (thumb instanceof HTMLElement) thumb.focus({ preventScroll: true });
+                              }}
+                              onChange={(val) => {
+                                draggingTargetKeyRef.current = key;
+                                touchedTargetKeysRef.current.add(key);
                                 const nextDraft = { ...targetDraftValues, [key]: String(val) };
                                 setTargetDraftValues(nextDraft);
-                                void recalculateTargets(nextDraft);
+                                if (isLiveUpdate) scheduleRecalculation(nextDraft);
+                              }}
+                              onChangeEnd={(val) => {
+                                draggingTargetKeyRef.current = null;
+                                touchedTargetKeysRef.current.add(key);
+                                const nextDraft = { ...targetDraftValues, [key]: String(val) };
+                                setTargetDraftValues(nextDraft);
+                                // Runs in both modes. With live update off it
+                                // is the only recalculation; with it on it is
+                                // the one that guarantees the released value
+                                // is the value that was scored, whatever the
+                                // coalescing dropped on the way.
+                                scheduleRecalculation(nextDraft);
                               }}
                             >
                               <SliderTrack bg="whiteAlpha.200">
@@ -631,12 +770,9 @@ function ContentArea({
                 </AccordionItem>
               ))}
             </Accordion>
-          </ModalBody>
-          <ModalFooter>
-            <Button colorScheme="cyan" onClick={onCloseTargetModal} isDisabled={isSavingTargets}>Close</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+          </Box>
+        </Box>
+      </Slide>
     </Box>
   );
 }

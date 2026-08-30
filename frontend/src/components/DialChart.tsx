@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
@@ -162,9 +162,15 @@ function DialChart({
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [needleProgress, setNeedleProgress] = useState(0);
   const [arcProgress, setArcProgress] = useState(0);
+  // `needleProgress` is eased with easeOutBack, which deliberately overshoots
+  // outside 0..1 so the needle springs past its mark and settles. That is right
+  // for an angle and wrong for an opacity — the overshoot renders as a negative
+  // opacity at the start of the reveal — so anything driving transparency uses
+  // the clamped value and only the angle uses the raw one.
+  const needleOpacity = Math.min(1, Math.max(0, needleProgress));
+  const arcOpacity = Math.min(1, Math.max(0, arcProgress));
   const animFrameRef = useRef<number>(0);
   const controls = useAnimation();
-  const prevValuesRef = useRef({ currentValue, referenceValue, targetValue, min, max });
 
   // Responsive sizing
   useEffect(() => {
@@ -211,21 +217,62 @@ function DialChart({
     animFrameRef.current = requestAnimationFrame(tick);
   }, []);
 
-  // Re-animate when values change
-  useEffect(() => {
-    const prev = prevValuesRef.current;
-    const changed =
-      prev.currentValue !== currentValue ||
-      prev.referenceValue !== referenceValue ||
-      prev.targetValue !== targetValue ||
-      prev.min !== min ||
-      prev.max !== max;
+  // `runAnimation` is the *reveal*, and it now runs only when the dial becomes
+  // visible (see the effect below it). It used to be replayed whenever the
+  // values or the scale changed, which was the flicker: `arcProgress` and
+  // `needleOpacity` drive opacity throughout this component, so every replay
+  // drove the whole widget's opacity back to zero and faded it in again. Under
+  // live target editing that happens several times a second.
+  //
+  // A value change is handled by easing the drawn values instead (below); a
+  // rescale simply redraws at the new scale. Neither needs the dial to
+  // disappear first.
 
-    if (changed && visible) {
-      prevValuesRef.current = { currentValue, referenceValue, targetValue, min, max };
-      runAnimation();
+  // The values the needles are actually drawn from, eased toward the incoming
+  // ones so a change reads as the needle travelling to its new angle rather
+  // than teleporting. This is the update animation; `runAnimation` above is the
+  // entry one, and the two must not be the same thing.
+  const [displayValues, setDisplayValues] = useState({ currentValue, referenceValue, targetValue });
+  const displayValuesRef = useRef(displayValues);
+  displayValuesRef.current = displayValues;
+  const valueFrameRef = useRef(0);
+
+  useEffect(() => {
+    const from = displayValuesRef.current;
+    const to = { currentValue, referenceValue, targetValue };
+    if (from.currentValue === to.currentValue &&
+        from.referenceValue === to.referenceValue &&
+        from.targetValue === to.targetValue) {
+      return;
     }
-  }, [currentValue, referenceValue, targetValue, min, max, visible, runAnimation]);
+
+    // A needle that is appearing or disappearing has no previous angle to
+    // travel from, so it takes the new value at once instead of sweeping in
+    // from wherever undefined would land it.
+    const ease = (a: number | undefined, b: number | undefined, t: number) =>
+      (typeof a === 'number' && Number.isFinite(a) && typeof b === 'number' && Number.isFinite(b))
+        ? a + (b - a) * t
+        : b;
+
+    const duration = 400;
+    const start = performance.now();
+    cancelAnimationFrame(valueFrameRef.current);
+
+    const tick = (now: number) => {
+      const linear = Math.min((now - start) / duration, 1);
+      // easeOutCubic: settles onto the value without the overshoot the entry
+      // animation uses, because during a drag it is immediately superseded.
+      const t = 1 - Math.pow(1 - linear, 3);
+      setDisplayValues({
+        currentValue: ease(from.currentValue, to.currentValue, t),
+        referenceValue: ease(from.referenceValue, to.referenceValue, t),
+        targetValue: ease(from.targetValue, to.targetValue, t),
+      });
+      if (linear < 1) valueFrameRef.current = requestAnimationFrame(tick);
+    };
+    valueFrameRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(valueFrameRef.current);
+  }, [currentValue, referenceValue, targetValue]);
 
   // Initial animation
   useEffect(() => {
@@ -413,7 +460,7 @@ function DialChart({
             d={arrowPath}
             fill="rgba(0,0,0,0.5)"
             transform="translate(3, 3)"
-            opacity={needleProgress}
+            opacity={needleOpacity}
           />
           {/* Main needle */}
           <path
@@ -422,7 +469,7 @@ function DialChart({
             stroke={color}
             strokeWidth={2}
             strokeLinecap="round"
-            opacity={needleProgress}
+            opacity={needleOpacity}
           />
           {/* Tip highlight */}
           <circle
@@ -430,7 +477,7 @@ function DialChart({
             cy={tipY}
             r={4}
             fill="white"
-            opacity={0.9 * needleProgress}
+            opacity={0.9 * needleOpacity}
           />
         </g>
       );
@@ -452,12 +499,12 @@ function DialChart({
           strokeWidth={4}
           strokeDasharray="8,6"
           strokeLinecap="round"
-          opacity={needleProgress}
+          opacity={needleOpacity}
         />
         <polygon
           points={`${leftX} ${leftY} ${tipX} ${tipY} ${rightX} ${rightY}`}
           fill={color}
-          opacity={needleProgress}
+          opacity={needleOpacity}
         />
       </g>
     );
@@ -478,9 +525,12 @@ function DialChart({
 
   // If the target equals the reference and a green center exists, render the target arrow
   // at the visual center of the green zone so arrow and gradient match.
+  // The "target sits on the reference" test uses the real values — it is a
+  // question about the data, not about where the needle happens to be
+  // mid-transition — but what gets drawn is the eased value.
   const targetRenderValue = (targetValue !== undefined && referenceValue !== undefined && targetValue === referenceValue && greenCenter !== null)
     ? min + (max - min) * greenCenter
-    : targetValue;
+    : displayValues.targetValue;
 
   // Compute final tip coordinates for the target (used for a verification marker).
   const targetTip = useMemo(() => {
@@ -666,7 +716,7 @@ function DialChart({
                 stroke="#2d3748"
                 strokeWidth={1}
                 strokeDasharray="4,8"
-                opacity={0.5 * arcProgress}
+                opacity={0.5 * arcOpacity}
               />
 
               {/* Arc background */}
@@ -675,7 +725,7 @@ function DialChart({
                 fill="#1e2533"
                 stroke="#2d3748"
                 strokeWidth={2}
-                opacity={arcProgress}
+                opacity={arcOpacity}
               />
               
               {/* Conic gradient arc */}
@@ -686,7 +736,7 @@ function DialChart({
                 height={height}
                 mask={`url(#${gradientId}-mask)`}
                 style={{ filter: 'url(#arc-glow)' }}
-                opacity={0.95 * arcProgress}
+                opacity={0.95 * arcOpacity}
               >
                 <div
                   style={{
@@ -705,7 +755,7 @@ function DialChart({
 
               {/* Tick marks */}
               {ticks.map((tick, i) => (
-                <g key={i} opacity={arcProgress}>
+                <g key={i} opacity={arcOpacity}>
                   <line
                     x1={tick.x1}
                     y1={tick.y1}
@@ -733,7 +783,7 @@ function DialChart({
               ))}
 
               {zeroTick && (
-                <g opacity={arcProgress}>
+                <g opacity={arcOpacity}>
                   <line
                     x1={zeroTick.x1}
                     y1={zeroTick.y1}
@@ -759,7 +809,7 @@ function DialChart({
               )}
 
               {referenceCallout && (
-                <g opacity={arcProgress}>
+                <g opacity={arcOpacity}>
                   {referenceCallout.markerOnly ? (
                     // Compact quad: no space for a full callout — show a small tick on the arc
                     <circle
@@ -802,10 +852,10 @@ function DialChart({
              
 
               {/* Center hub */}
-              <circle cx={centerX} cy={centerY} r={centerHubOuterRadius} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={centerHubMidRadius} fill="#2d3748" opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={centerHubInnerRadius} fill="#4a5568" opacity={arcProgress} />
-              <circle cx={centerX} cy={centerY} r={centerHubCoreRadius} fill="#5a6a7c" opacity={arcProgress} />
+              <circle cx={centerX} cy={centerY} r={centerHubOuterRadius} fill="#1a202c" stroke="#3d4a5c" strokeWidth={4} opacity={arcOpacity} />
+              <circle cx={centerX} cy={centerY} r={centerHubMidRadius} fill="#2d3748" opacity={arcOpacity} />
+              <circle cx={centerX} cy={centerY} r={centerHubInnerRadius} fill="#4a5568" opacity={arcOpacity} />
+              <circle cx={centerX} cy={centerY} r={centerHubCoreRadius} fill="#5a6a7c" opacity={arcOpacity} />
 
               {/* Needles */}
               {/* Reference arrow removed as requested */}
@@ -816,17 +866,17 @@ function DialChart({
                 false,
                 true
               )}
-              {createArrowNeedle(currentValue, SCENARIO_COLORS.current, true)}
+              {createArrowNeedle(displayValues.currentValue, SCENARIO_COLORS.current, true)}
 
               {/* Verification marker: final target tip position (helps confirm arrow alignment) */}
               {targetTip && (
-                <g opacity={Math.min(1, 0.6 + 0.4 * needleProgress)}>
+                <g opacity={Math.min(1, 0.6 + 0.4 * needleOpacity)}>
                   <circle cx={targetTip.x} cy={targetTip.y} r={7} fill="#fff" stroke={SCENARIO_COLORS.future} strokeWidth={1.5} />
                 </g>
               )}
 
               {/* Center cap */}
-              <circle cx={centerX} cy={centerY} r={centerCapRadius} fill="#4a5568" stroke="#718096" strokeWidth={2} opacity={needleProgress} />
+              <circle cx={centerX} cy={centerY} r={centerCapRadius} fill="#4a5568" stroke="#718096" strokeWidth={2} opacity={needleOpacity} />
 
               
 
@@ -840,14 +890,14 @@ function DialChart({
                   fontSize={veryDenseLayout ? 15 : 20}
                   fontFamily="Inter, system-ui, sans-serif"
                   fontWeight="700"
-                  opacity={arcProgress}
+                  opacity={arcOpacity}
                 >
                   {attribute}{unit ? ` (${unit})` : ''}
                 </text>
               )}
 
               {/* Legend */}
-              <g opacity={needleProgress}>
+              <g opacity={needleOpacity}>
                 {/* Reference */}
                 <g transform={`translate(${legendReferenceX}, ${legendY})`}>
                   <circle cx={8} cy={0} r={8} fill="#2ecc40" stroke="#fff" strokeWidth={1.5} />
@@ -899,4 +949,15 @@ function DialChart({
   );
 }
 
-export default DialChart;
+/**
+ * Memoised on its props, every one of which is a primitive or a stable
+ * callback.
+ *
+ * A dial is expensive to draw — arc gradient, tick ring, needles, callouts —
+ * and there are up to six on screen. Editing a target replaces the whole
+ * `siteIndicators` object, so without this every dial re-rendered on every
+ * recalculation even when its own factor was untouched. Under live editing
+ * that is several full redraws a second of widgets whose values did not
+ * change.
+ */
+export default memo(DialChart);

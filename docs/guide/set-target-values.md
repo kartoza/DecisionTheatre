@@ -27,9 +27,11 @@ Target State starts equal to Current State. It only diverges where you make it.
 
 ## Steps
 
-### Quick edit — the Targets modal
+### Quick edit — the Targets panel
 
-1. In grid view, once the site has indicators, click **Targets** in the top toolbar.
+1. In grid view, once the site has indicators, click **Targets** in the top toolbar. The
+   editor docks into the right-hand side panel and the views shrink to make room, so the
+   dials, charts and maps stay visible while you work.
 
 ![Editing target values by category](../assets/images/screenshots/targets-modal.jpg)
 
@@ -37,7 +39,20 @@ Target State starts equal to Current State. It only diverges where you make it.
    a collapsible accordion.
 3. Expand a group to reveal a labelled slider per indicator, showing its current value,
    unit and allowed range.
-4. Click **Save**. Only the sliders you actually moved are applied.
+4. Drag a slider. Only the ones you actually move are applied, and there is nothing to
+   save — the recalculation happens as you go. Dragging a slider back to where it started
+   clears the target you set for it.
+
+!!! tip "Live update"
+    A recalculation rescores every catchment in the site, so what it costs depends on how
+    big the site is. The **Live update** box at the top of the panel decides when it runs:
+    ticked, the sliders and the charts behind them recalculate continuously as you drag;
+    cleared, they wait until you let go.
+
+    It starts ticked on sites of 20 catchments or fewer and cleared on larger ones. Tick
+    or clear it yourself and that choice sticks — across sites and across sessions — so a
+    large site can be dragged live if your machine keeps up, and a small one need not
+    be.
 
 ### Full editor — the Indicators page
 
@@ -57,6 +72,7 @@ redraw against your target rather than current conditions.
 
 !!! success "What you achieved"
     - You can set target values for any indicator
+    - You can choose whether the landscape recalculates as you drag or after
     - You have seen dependent factors recalculate
     - You can compare Target State against Current on any view
 
