@@ -55,6 +55,8 @@ interface DialChartProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
+  /** Whether the scale is being held still while values move. */
+  isScaleLocked?: boolean;
 }
 
 function DialChart({
@@ -74,6 +76,7 @@ function DialChart({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
+  isScaleLocked = false,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -83,18 +86,23 @@ function DialChart({
   let min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
   // Ensure we include zero unless input explicitly larger; then allow negatives
   min = Math.min(min, 0);
-  const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
-    (v): v is number => typeof v === 'number' && !isNaN(v) && v < min
-  );
-  if (negativeCandidates.length > 0) {
-    min = Math.min(min, ...negativeCandidates);
-  }
-  // Adjust max if current or target is above 100
+  // See the same guard in FlatDial: widening to fit the plotted values follows
+  // the target, which moves the axis and slides every other marker. A locked
+  // scale takes the range it was handed and leaves it alone.
   let max = inputMax;
-  if ((currentValue !== undefined && currentValue > 100) || (targetValue !== undefined && targetValue > 100)) {
-    max = Math.max(inputMax, currentValue ?? -Infinity, targetValue ?? -Infinity);
-    // Optionally add a small buffer
-    max = Math.ceil(max * 1.05);
+  if (!isScaleLocked) {
+    const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
+      (v): v is number => typeof v === 'number' && !isNaN(v) && v < min
+    );
+    if (negativeCandidates.length > 0) {
+      min = Math.min(min, ...negativeCandidates);
+    }
+    // Adjust max if current or target is above 100
+    if ((currentValue !== undefined && currentValue > 100) || (targetValue !== undefined && targetValue > 100)) {
+      max = Math.max(inputMax, currentValue ?? -Infinity, targetValue ?? -Infinity);
+      // Optionally add a small buffer
+      max = Math.ceil(max * 1.05);
+    }
   }
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });

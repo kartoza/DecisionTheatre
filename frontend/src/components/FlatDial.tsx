@@ -107,15 +107,27 @@ function FlatDial({
 
   // Never assume a floor of zero: a factor whose values go negative needs the
   // band to reach them or its markers fall off the left end.
-  const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
-    (v): v is number => typeof v === 'number' && !isNaN(v) && v < 0,
-  );
+  // Widening the band to fit whatever it is asked to plot is right for a scale
+  // that is free to move, and is exactly what a locked scale must not do: the
+  // target is one of the values, so following it moves the axis, and every
+  // other marker slides while the value it stands for has not changed. That is
+  // what "the current line moves when I drag a slider" turned out to be.
+  //
+  // Locked, the range that was handed down is the range. A value outside it
+  // renders at the end of the band, which is the honest reading of a scale the
+  // user asked to hold still.
   let min = typeof inputMin === 'number' && !isNaN(inputMin) ? inputMin : 0;
-  if (negativeCandidates.length > 0) min = Math.min(min, ...negativeCandidates);
-  const max = Math.max(
-    inputMax,
-    ...[currentValue, targetValue].filter((v): v is number => typeof v === 'number' && !isNaN(v)),
-  );
+  let max = inputMax;
+  if (!isScaleLocked) {
+    const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
+      (v): v is number => typeof v === 'number' && !isNaN(v) && v < 0,
+    );
+    if (negativeCandidates.length > 0) min = Math.min(min, ...negativeCandidates);
+    max = Math.max(
+      inputMax,
+      ...[currentValue, targetValue].filter((v): v is number => typeof v === 'number' && !isNaN(v)),
+    );
+  }
 
   const veryDense = compact && paneCount > 5;
   const { width, height } = size;
