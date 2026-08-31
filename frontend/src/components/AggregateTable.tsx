@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from 'react';
-import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner, Button } from '@chakra-ui/react';
+import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
@@ -35,15 +35,9 @@ function AggregateTable({
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
-  const [isTableVisible, setIsTableVisible] = useState(true);
   const { details: attributeDetails } = useAttributeDetails();
 
   const attributeLabel = attributeDetails[attribute] ?? attribute;
-
-  // Show the table by default whenever the panel opens; reset when it closes.
-  useEffect(() => {
-    setIsTableVisible(visible);
-  }, [visible]);
 
   // Fetch catchment data when panel is visible and siteId is available.
   useEffect(() => {
@@ -191,29 +185,16 @@ function AggregateTable({
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
             style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}
           >
-            {/* Header + summary cards — scrolls together with the table below. */}
-            <Box px={6} pt={6} pb={4} flexShrink={0}>
-              {/* Header */}
-              <VStack spacing={4} align="stretch" mb={6}>
-                {/*
-                  The factor title and the scenario badge that used to head this
-                  widget are now drawn by the pane, in the same place and style
-                  as every other view mode — see PaneHeader. What is left here
-                  is the control that belongs to the table itself.
-                */}
-                <HStack justify="flex-end" align="center">
-                  <Button
-                    size="sm"
-                    colorScheme="cyan"
-                    variant={isTableVisible ? 'outline' : 'solid'}
-                    onClick={() => setIsTableVisible((prev) => !prev)}
-                  >
-                    {isTableVisible ? 'Hide Table' : 'Show Table'}
-                  </Button>
-                </HStack>
-              </VStack>
+            {/*
+              Summary cards, then the table — they scroll together.
 
-              {/* Summary cards */}
+              The header that used to sit above them is gone entirely: its title
+              and scenario badge are drawn by the pane now (see PaneHeader), and
+              its Hide Table button hid the thing this view exists to show. The
+              top padding leaves room for the pane's own title chip, which
+              overhangs the top edge.
+            */}
+            <Box px={6} pt={12} pb={4} flexShrink={0}>
               <HStack spacing={4} justify="center">
                 {/* Total Area */}
                 <Box
@@ -282,23 +263,7 @@ function AggregateTable({
 
             {/* Table section — height comes from content; the outer pane scrolls, not this box. */}
             <Box px={6} pb={6}>
-              {!isTableVisible ? (
-                <Box
-                  bg="whiteAlpha.50"
-                  borderRadius="xl"
-                  border="1px solid"
-                  borderColor="whiteAlpha.200"
-                  p={10}
-                  textAlign="center"
-                >
-                  <Text color="gray.400" fontSize="lg" mb={2}>
-                    Aggregate table hidden
-                  </Text>
-                  <Text color="gray.500" fontSize="sm">
-                    Use the Show Table button to view the full calculation breakdown
-                  </Text>
-                </Box>
-              ) : loading ? (
+              {loading ? (
                 <Box
                   bg="whiteAlpha.50"
                   borderRadius="xl"
