@@ -1,9 +1,8 @@
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, Checkbox, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
-import { saveScaleLock } from '../lib/dialPreferences';
 import {
   SCENARIO_COLORS,
   bandGradientStops,
@@ -55,8 +54,6 @@ interface DialChartProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
-  /** Whether the scale is being held still while values move. */
-  isScaleLocked?: boolean;
 }
 
 function DialChart({
@@ -76,34 +73,16 @@ function DialChart({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
-  isScaleLocked = false,
 }: DialChartProps) {
-  const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
-  // Determine minimum for the dial. Prefer the provided input min, but never
-  // assume 0 if any of the values go negative — expand the minimum to include
-  // negative current/reference/target values so the needle and ticks render correctly.
-  let min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
-  // Ensure we include zero unless input explicitly larger; then allow negatives
-  min = Math.min(min, 0);
-  // See the same guard in FlatDial: widening to fit the plotted values follows
-  // the target, which moves the axis and slides every other marker. A locked
-  // scale takes the range it was handed and leaves it alone.
-  let max = inputMax;
-  if (!isScaleLocked) {
-    const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
-      (v): v is number => typeof v === 'number' && !isNaN(v) && v < min
-    );
-    if (negativeCandidates.length > 0) {
-      min = Math.min(min, ...negativeCandidates);
-    }
-    // Adjust max if current or target is above 100
-    if ((currentValue !== undefined && currentValue > 100) || (targetValue !== undefined && targetValue > 100)) {
-      max = Math.max(inputMax, currentValue ?? -Infinity, targetValue ?? -Infinity);
-      // Optionally add a small buffer
-      max = Math.ceil(max * 1.05);
-    }
-  }
+  // The range handed down is the range — see the same note in FlatDial. It is
+  // fixed upstream by the metadata bound, or failing that by the range mode's
+  // own minima and maxima, and widening it here to fit the plotted values would
+  // undo that: the target is one of those values, so following it moved the
+  // axis and slid every other marker.
+  const min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
+  const max = inputMax;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [needleProgress, setNeedleProgress] = useState(0);
@@ -624,23 +603,6 @@ function DialChart({
                   {/* The same control the flat band carries. The hold itself is
                       applied in ViewPane, so it has always reached the arc — it
                       just had no way to be switched on from here. */}
-                  <Tooltip
-                    label={isScaleLocked
-                      ? 'Scale is held still — only the values move'
-                      : 'Hold the scale still so only the values move'}
-                    placement="bottom"
-                  >
-                    <Box pl={2} ml={1} borderLeft="1px solid" borderColor="whiteAlpha.300">
-                      <Checkbox
-                        size="sm"
-                        colorScheme="cyan"
-                        isChecked={isScaleLocked}
-                        onChange={(e) => saveScaleLock(e.target.checked)}
-                      >
-                        <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
-                      </Checkbox>
-                    </Box>
-                  </Tooltip>
                 </HStack>
               </Box>
             )}
@@ -651,6 +613,10 @@ function DialChart({
               viewBox={`0 0 ${width} ${height}`}
               style={{ display: 'block' }}
             >
+              {/* The visible title is the pane's, beside the scenario labels.
+                  This is what a screen reader reads. */}
+              <title>{attribute}{unit ? ` (${unit})` : ''}</title>
+
               {/* Background */}
               <rect width={width} height={height} fill="#1a202c" />
 
@@ -846,21 +812,8 @@ function DialChart({
 
               
 
-              {/* Attribute label */}
-              {attribute && (
-                <text
-                  x={padding.left}
-                  y={veryDenseLayout ? 24 : 50}
-                  textAnchor="start"
-                  fill="#f7fafc"
-                  fontSize={veryDenseLayout ? 15 : 20}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="700"
-                  opacity={arcOpacity}
-                >
-                  {attribute}{unit ? ` (${unit})` : ''}
-                </text>
-              )}
+              {/* The factor title is drawn by the pane now, beside the two
+                  scenario labels. */}
 
               {/* Legend */}
               <g opacity={needleOpacity}>

@@ -16,16 +16,8 @@ import {
   capRange,
   hasDeclaredMax,
   hasDeclaredMin,
-  resolveHeldRange,
   tickValues,
 } from '../lib/dialScale';
-import type { HeldRange } from '../lib/dialScale';
-import {
-  loadDialShape,
-  loadScaleLock,
-  saveDialShape,
-  saveScaleLock,
-} from '../lib/dialPreferences';
 
 describe('normalize', () => {
   it('maps the ends and the middle', () => {
@@ -132,100 +124,6 @@ describe('tickValues', () => {
   it('marks every other tick major, so labels do not collide', () => {
     const ticks = tickValues(0, 100, 11);
     expect(ticks.filter((t) => t.isMajor)).toHaveLength(6);
-  });
-});
-
-describe('the dial shape preference', () => {
-  it('defaults to the flat band, which is what this branch exists to show', () => {
-    window.localStorage.clear();
-    expect(loadDialShape()).toBe('flat');
-  });
-
-  it('honours a stored arc choice over that default', () => {
-    // Otherwise switching back to the arc would not survive a reload, and the
-    // comparison the toggle exists for only works in one direction.
-    saveDialShape('arc');
-    expect(loadDialShape()).toBe('arc');
-  });
-
-  it('round-trips a choice', () => {
-    saveDialShape('flat');
-    expect(loadDialShape()).toBe('flat');
-    saveDialShape('arc');
-    expect(loadDialShape()).toBe('arc');
-  });
-});
-
-describe('the scale lock', () => {
-  const range = (key: string, min: number, max: number): HeldRange => ({ key, min, max });
-
-  it('holds nothing while unlocked', () => {
-    expect(resolveHeldRange(null, range('npp|site', 0, 100), false)).toBeNull();
-    // Even one already held is released, so unlocking snaps back to live.
-    expect(resolveHeldRange(range('npp|site', 0, 100), range('npp|site', 0, 200), false)).toBeNull();
-  });
-
-  it('takes the scale as it stands when the lock goes on', () => {
-    expect(resolveHeldRange(null, range('npp|site', 0, 100), true)).toEqual(range('npp|site', 0, 100));
-  });
-
-  it('keeps that scale when the values move, which is the whole point', () => {
-    // A slider moved, so dialData re-derived a wider range. Locked, the axis
-    // must not follow it — only the markers on it move.
-    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
-    const after = resolveHeldRange(held, range('npp|site', -50, 400), true);
-    expect(after).toEqual(range('npp|site', 0, 100));
-  });
-
-  it('survives many moves without drifting', () => {
-    let held = resolveHeldRange(null, range('npp|site', 0, 100), true);
-    for (let i = 1; i <= 20; i += 1) {
-      held = resolveHeldRange(held, range('npp|site', -i, 100 + i * 10), true);
-    }
-    expect(held).toEqual(range('npp|site', 0, 100));
-  });
-
-  it('holds nothing until there is a real range to hold', () => {
-    // A dial renders once before its values arrive. Taking the hold then froze
-    // the placeholder range, and the lock pinned the scale to 0..100 for good.
-    expect(resolveHeldRange(null, null, true)).toBeNull();
-    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
-    // A later null — data momentarily unavailable — must not drop the hold.
-    expect(resolveHeldRange(held, null, true)).toEqual(range('npp|site', 0, 100));
-  });
-
-  it('re-takes the hold for a different factor', () => {
-    // A scale held for one factor is meaningless for another — the units are
-    // not even the same.
-    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
-    const after = resolveHeldRange(held, range('soc|site', -70, 70), true);
-    expect(after).toEqual(range('soc|site', -70, 70));
-  });
-
-  it('re-takes the hold when the range mode changes', () => {
-    // Switching Full/Extent/Site is an explicit request for a different range,
-    // so honouring it is not the same as letting a slider move the axis.
-    const held = resolveHeldRange(null, range('npp|site', 0, 100), true);
-    const after = resolveHeldRange(held, range('npp|domain', 0, 1500), true);
-    expect(after).toEqual(range('npp|domain', 0, 1500));
-  });
-});
-
-describe('the scale lock preference', () => {
-  it('is off by default', () => {
-    window.localStorage.clear();
-    expect(loadScaleLock()).toBe(false);
-  });
-
-  it('round-trips, and is independent of the shape preference', () => {
-    window.localStorage.clear();
-    saveScaleLock(true);
-    saveDialShape('arc');
-    expect(loadScaleLock()).toBe(true);
-    expect(loadDialShape()).toBe('arc');
-    saveScaleLock(false);
-    expect(loadScaleLock()).toBe(false);
-    expect(loadDialShape()).toBe('arc');
   });
 });
 

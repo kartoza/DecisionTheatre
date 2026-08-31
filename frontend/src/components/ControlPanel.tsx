@@ -419,6 +419,7 @@ function ScenarioSelector({
 
 function ControlPanel({
   isOpen,
+  onClose,
   comparison,
   onLeftChange,
   onRightChange,
@@ -1198,14 +1199,22 @@ function ControlPanel({
           onMouseDown={handleResizeStart}
           _hover={{ bg: 'blackAlpha.200' }}
         />
-        {/* Close hint for mobile */}
-        <Box display={{ base: 'block', md: 'none' }} p={2} textAlign="right">
-          <IconButton
-            aria-label="Close panel"
-            icon={<FiChevronRight />}
-            size="sm"
-            variant="ghost"
-          />
+        {/*
+          Collapse. Shown at every width, and wired: this was a mobile-only
+          affordance with no onClick at all, so on a desktop there was no way to
+          put the panel away and on a phone the one button offered did nothing.
+          The other two right-hand panels have carried a working one all along.
+        */}
+        <Box position="absolute" top={2} right={2} zIndex={3}>
+          <Tooltip label="Collapse panel" placement="left">
+            <IconButton
+              aria-label="Collapse panel"
+              icon={<FiChevronRight />}
+              size="sm"
+              variant="ghost"
+              onClick={() => onClose?.()}
+            />
+          </Tooltip>
         </Box>
 
         {panelContent}

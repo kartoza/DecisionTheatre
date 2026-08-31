@@ -1,14 +1,15 @@
 /**
- * What the belt draws its axis against.
+ * What a chart draws its axis against.
  *
  * Reported from use: dragging the Black Rhino slider moved the blue current
- * line, with Lock scale ticked. Current had not changed — it read 836.3 before
- * and after. The axis had: its maximum tracked the target, 1.2K to 2.5K, and
- * the same value slid left on a wider band.
+ * line. Current had not changed — it read 836.3 before and after. The axis had:
+ * its maximum tracked the target, 1.2K to 2.5K, and the same value slid left on
+ * a wider band.
  *
- * The lock held the range in ViewPane, and then the dial widened it again
- * locally to fit whatever it was asked to plot. Since the target is one of
- * those values, the axis followed the target and the lock did nothing.
+ * The scale is now pinned before any target exists — by the metadata bound
+ * where one is declared, otherwise by the range mode's own minima and maxima —
+ * and nothing downstream may widen it to fit the target. There is no lock any
+ * more because there is nothing left for a lock to hold.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
@@ -17,16 +18,15 @@ import { theme } from '../styles/theme';
 import FlatDial from '../components/FlatDial';
 import DialChart from '../components/DialChart';
 
-function axisOf(): { min: string; max: string } {
-  const ticks = Array.from(document.querySelectorAll('text'))
-    .filter((t) => t.getAttribute('fill') === '#718096');
-  return {
-    min: ticks[0]?.textContent ?? '',
-    max: ticks[ticks.length - 1]?.textContent ?? '',
-  };
+/** The tick labels only: the legend carries the target, which is meant to change. */
+function axis(): string {
+  return Array.from(document.querySelectorAll('text'))
+    .map((t) => t.textContent ?? '')
+    .filter((t) => t !== '' && !t.includes(':') && !/[A-Za-z]{2}/.test(t))
+    .join('|');
 }
 
-function renderBelt(targetValue: number, isScaleLocked: boolean) {
+function renderBelt(targetValue: number) {
   cleanup();
   render(
     <ChakraProvider theme={theme}>
@@ -38,55 +38,13 @@ function renderBelt(targetValue: number, isScaleLocked: boolean) {
         referenceValue={365.4}
         currentValue={836.3}
         targetValue={targetValue}
-        isScaleLocked={isScaleLocked}
       />
     </ChakraProvider>,
   );
-  return axisOf();
+  return axis();
 }
 
-afterEach(cleanup);
-
-describe('a locked belt', () => {
-  it('does not let a growing target drag the axis with it', () => {
-    const before = renderBelt(1200, true);
-    const after = renderBelt(2500, true);
-    expect(after).toEqual(before);
-  });
-
-  it('keeps the current marker where it was, since its value did not change', () => {
-    // The reported symptom, stated directly: same value, same place.
-    const before = renderBelt(1200, true);
-    const beforeX = document.querySelectorAll('line').length;
-    const after = renderBelt(2500, true);
-    expect(after.min).toBe(before.min);
-    expect(after.max).toBe(before.max);
-    expect(document.querySelectorAll('line').length).toBe(beforeX);
-  });
-
-  it('still shows the factor and its readings', () => {
-    renderBelt(2500, true);
-    expect(screen.getByText(/Total Methane production/)).toBeInTheDocument();
-    expect(screen.getByText(/Current: 836.3/)).toBeInTheDocument();
-  });
-});
-
-describe('an unlocked belt', () => {
-  it('grows to fit a target beyond its range, which is why the lock exists', () => {
-    const before = renderBelt(1200, false);
-    const after = renderBelt(2500, false);
-    expect(after.max).not.toBe(before.max);
-  });
-});
-
-/**
- * The lock applies to the arc too.
- *
- * The hold is taken in ViewPane, so it always reached both shapes — but the arc
- * widened the handed-down range again locally, exactly as the belt did, and had
- * no checkbox to switch the lock on from.
- */
-function renderArc(targetValue: number, isScaleLocked: boolean) {
+function renderArc(targetValue: number) {
   cleanup();
   render(
     <ChakraProvider theme={theme}>
@@ -98,69 +56,61 @@ function renderArc(targetValue: number, isScaleLocked: boolean) {
         referenceValue={365.4}
         currentValue={836.3}
         targetValue={targetValue}
-        isScaleLocked={isScaleLocked}
         onRangeModeChange={() => {}}
       />
     </ChakraProvider>,
   );
-  // The scale only: the legend carries the target's value, which is supposed to
-  // change. What must not change is the ruler it is read against.
-  return Array.from(document.querySelectorAll('text'))
-    .map((t) => t.textContent ?? '')
-    .filter((t) => t !== '' && !t.includes(':') && !/[A-Za-z]{2}/.test(t))
-    .join('|');
+  return axis();
 }
 
-describe('a locked arc', () => {
-  it('does not let a growing target drag its scale with it', () => {
-    const before = renderArc(1200, true);
-    const after = renderArc(2500, true);
-    expect(after).toBe(before);
+afterEach(cleanup);
+
+describe('the belt', () => {
+  it('does not let a growing target drag the axis with it', () => {
+    // The reported numbers exactly: target 1.2K then 2.5K, current unchanged.
+    expect(renderBelt(2500)).toBe(renderBelt(1200));
   });
 
-  it('grows when unlocked, which is why the lock exists', () => {
-    const before = renderArc(1200, false);
-    const after = renderArc(2500, false);
-    expect(after).not.toBe(before);
+  it('still reads the current value it was given', () => {
+    renderBelt(2500);
+    expect(screen.getByText(/Current: 836.3/)).toBeInTheDocument();
   });
 
-  it('offers the lock control, not only the flat band', () => {
-    renderArc(1200, false);
-    expect(screen.getByRole('checkbox', { name: /lock scale/i })).toBeInTheDocument();
+  it('keeps the factor title, which a grid of six needs to be distinguishable', () => {
+    renderBelt(1200);
+    expect(screen.getByText(/Total Methane production/)).toBeInTheDocument();
+  });
+});
+
+describe('the arc', () => {
+  it('does not let a growing target drag its scale either', () => {
+    expect(renderArc(2500)).toBe(renderArc(1200));
   });
 });
 
 describe('the widget control cluster', () => {
-  it('carries no shape toggle — the shape is a view mode in the header', () => {
-    // Six panes each carrying a Dial/Flat button was six copies of one global
-    // choice. It is picked once now, from the same cluster as the other views.
+  const renderPlain = () => {
     cleanup();
     render(
       <ChakraProvider theme={theme}>
         <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
       </ChakraProvider>,
     );
+  };
+
+  it('carries no shape toggle — the shape is a view mode in the header', () => {
+    renderPlain();
     expect(screen.queryByRole('button', { name: /show as a dial/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /flat band/i })).toBeNull();
   });
 
-  it('carries no help button — the pane\'s own info icon opens the panel', () => {
-    cleanup();
-    render(
-      <ChakraProvider theme={theme}>
-        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
-      </ChakraProvider>,
-    );
+  it("carries no help button — the pane's own info icon opens the panel", () => {
+    renderPlain();
     expect(screen.queryByRole('button', { name: /explain this chart/i })).toBeNull();
   });
 
-  it('keeps the lock, which is per-chart rather than global', () => {
-    cleanup();
-    render(
-      <ChakraProvider theme={theme}>
-        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
-      </ChakraProvider>,
-    );
-    expect(screen.getByRole('checkbox', { name: /lock scale/i })).toBeInTheDocument();
+  it('carries no scale lock — the scale can no longer move', () => {
+    renderPlain();
+    expect(screen.queryByRole('checkbox', { name: /lock scale/i })).toBeNull();
   });
 });

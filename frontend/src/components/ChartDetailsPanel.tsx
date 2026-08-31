@@ -41,7 +41,6 @@ const STRINGS = {
   beforeCap: 'Active mode range',
   afterCap: 'After metadata cap',
   afterValues: 'After fitting the values',
-  held: 'Held by scale lock',
   final: 'Drawn against',
   values: 'Values',
   reference: 'Reference',
@@ -246,9 +245,6 @@ function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartD
                 <Row label={STRINGS.beforeCap}><Range range={derivation.beforeCap} /></Row>
                 <Row label={STRINGS.afterCap}><Range range={derivation.afterCap} /></Row>
                 <Row label={STRINGS.afterValues}><Range range={derivation.afterValues} /></Row>
-                {derivation.held && (
-                  <Row label={STRINGS.held}><Range range={derivation.held} /></Row>
-                )}
                 <Row label={STRINGS.final} highlight><Range range={derivation.final} /></Row>
                 {derivation.zeroCentred && (
                   <Box px={2} pt={1} fontSize="2xs" color="gray.500">{STRINGS.zeroCentred}</Box>

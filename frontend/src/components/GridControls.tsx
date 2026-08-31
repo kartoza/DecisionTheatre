@@ -4,9 +4,10 @@ import {
   MenuItem, MenuList, Spinner, Tooltip, useColorModeValue,
 } from '@chakra-ui/react';
 import {
-  FiActivity, FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
+  FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
   FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
 } from 'react-icons/fi';
+import { BsSpeedometer2 } from 'react-icons/bs';
 import { colors } from '../styles/colors';
 import type { RangeMode, ViewMode } from '../types';
 import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/satelliteBasemap';
@@ -79,7 +80,9 @@ const VIEW_MODES: { id: ViewMode; label: string; icon: React.ReactElement }[] = 
   { id: 'map', label: STRINGS.map, icon: <FiMap /> },
   { id: 'chart', label: STRINGS.chart, icon: <FiBarChart2 /> },
   { id: 'flat', label: STRINGS.flat, icon: <FiMinus /> },
-  { id: 'dial', label: STRINGS.dial, icon: <FiActivity /> },
+  // A half-circle gauge rather than a zigzag: the icon should look like the
+  // thing it switches to.
+  { id: 'dial', label: STRINGS.dial, icon: <BsSpeedometer2 /> },
   { id: 'table', label: STRINGS.table, icon: <FiTable /> },
 ];
 

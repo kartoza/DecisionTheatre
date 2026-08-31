@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box, Flex, HStack, IconButton, Spinner, Text, Tooltip,
   useColorModeValue,
 } from '@chakra-ui/react';
-import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
-import { BsGrid3X3, BsGrid } from 'react-icons/bs';
+import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
+import { BsGrid3X3, BsGrid, BsSpeedometer2 } from 'react-icons/bs';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { loadScaleLock, onScaleLockChange } from '../lib/dialPreferences';
-import { attributeSpread, capRange, resolveHeldRange } from '../lib/dialScale';
+import { attributeSpread, capRange, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
-import type { HeldRange, ScaleDerivation } from '../lib/dialScale';
+import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
@@ -103,7 +102,7 @@ const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: stri
   map: { icon: <FiMap />, label: 'Map', nextLabel: 'Show line chart' },
   chart: { icon: <FiBarChart2 />, label: 'Chart', nextLabel: 'Show flat band' },
   flat: { icon: <FiMinus />, label: 'Flat', nextLabel: 'Show dial gauge' },
-  dial: { icon: <FiActivity />, label: 'Dial', nextLabel: 'Show aggregate table' },
+  dial: { icon: <BsSpeedometer2 />, label: 'Dial', nextLabel: 'Show aggregate table' },
   table: { icon: <FiTable />, label: 'Table', nextLabel: 'Show map' },
 };
 
@@ -160,8 +159,8 @@ function ViewPane({
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const { units: attributeUnits } = useAttributeUnits();
-  const { dial0Middle: attributeDial0Middle, loading: dial0MiddleLoading } = useAttributeDial0Middle();
-  const { targetRanges: attributeTargetRanges, loading: targetRangesLoading } = useAttributeTargetRanges();
+  const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
+  const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
 
   // Mount MapView only while the pane is showing a map, plus a grace period.
   // A pane that has never been in map mode never pays for map initialization
@@ -210,12 +209,6 @@ function ViewPane({
   // now picked once from the header, beside the other views.
   const isDialView = viewMode === 'dial' || viewMode === 'flat';
 
-  // Whether the dial's scale holds still while its values move. Applied here
-  // rather than inside either dial, because this is where min/max is derived —
-  // so one implementation serves the arc and the flat band alike.
-  const [isScaleLocked, setIsScaleLocked] = useState(loadScaleLock);
-  useEffect(() => onScaleLockChange(setIsScaleLocked), []);
-  const heldRangeRef = useRef<HeldRange | null>(null);
 
   const [dialCatchmentData, setDialCatchmentData] = useState<{
     referenceValue?: number;
@@ -571,30 +564,38 @@ function ViewPane({
       targetValue = referenceValue;
     }
 
-    // Guard against min/max coming from a source (e.g. mapStatistics) that doesn't
-    // actually bound the reference/current/target values (e.g. dialRangeValues) —
-    // otherwise the dial clamps the reference marker to min/max and renders it at
-    // the wrong position instead of off-scale.
-    const displayedValues = [referenceValue, currentValue, targetValue]
+    // The scale is pinned by something that does not move while you edit.
+    //
+    // Where metadata declares a bound, that bound is the scale and nothing
+    // widens it. Where it does not, the range mode's own minima and maxima —
+    // the site's spread, the visible extent, the whole dataset — serve as the
+    // cap instead. Either way the ruler is fixed before any target exists.
+    //
+    // The target is deliberately excluded from what may widen the scale. It is
+    // the one value the user changes, so letting it stretch the axis meant
+    // every other marker slid while the reading it stood for had not moved —
+    // "the blue line moves when I drag rhino". A target beyond the scale reads
+    // at the end of the band, which is the honest rendering of a target outside
+    // what the data or the metadata says is reachable.
+    //
+    // The observations may still widen an *underived* end, because the range
+    // and the values do not always come from the same computation, and a
+    // reference marker pinned to an edge it does not actually sit on is a lie
+    // about a measurement. Neither of them moves when a target is edited, so
+    // the scale stays still regardless.
+    const cap = attributeTargetRanges[attribute];
+    const observedValues = [referenceValue, currentValue]
       .filter((v): v is number => typeof v === 'number' && !isNaN(v));
-    if (displayedValues.length > 0) {
-      min = Math.min(min, ...displayedValues);
-      max = Math.max(max, ...displayedValues);
+    if (observedValues.length > 0) {
+      if (!hasDeclaredMin(cap)) min = Math.min(min, ...observedValues);
+      if (!hasDeclaredMax(cap)) max = Math.max(max, ...observedValues);
     }
 
-    // Keep the dial's scale in proportion to what it's actually displaying —
-    // a domain-wide max pulled from an outlier catchment (or a scenario with
-    // no curated metadata.csv max) shouldn't dwarf a reference/current/target
-    // that are an order of magnitude smaller, making the needle unreadable.
-    const DIAL_BALANCE_MULTIPLIER = 4;
-    if (displayedValues.length > 0) {
-      const maxDisplayedMagnitude = Math.max(...displayedValues.map((v) => Math.abs(v)));
-      if (maxDisplayedMagnitude > 0) {
-        const balanceCap = maxDisplayedMagnitude * DIAL_BALANCE_MULTIPLIER;
-        if (max > balanceCap) max = balanceCap;
-        if (min < -balanceCap) min = -balanceCap;
-      }
-    }
+    // The balance cap that used to sit here shrank the scale toward whatever
+    // was being displayed, target included, so it was a second way for an edit
+    // to move the ruler. It existed to stop an outlier-driven domain maximum
+    // dwarfing the values; that is now the range mode's business, and the mode
+    // the user picked is the answer.
 
     const afterValues = { min, max };
 
@@ -716,37 +717,10 @@ function ViewPane({
   // re-taken when the factor or the range mode changes, since a scale held for
   // one factor means nothing for another and a range-mode switch is an explicit
   // request for a different range.
-  // A dial that has not got its values yet still produces a dialData — with a
-  // placeholder 0..100 range. Holding that pinned the scale to 0..100 for as
-  // long as the lock stayed on.
-  //
-  // Both observations are required, not merely one: they arrive independently,
-  // and a hold taken on the first of them is a range too narrow for the second,
-  // which then renders clamped to an end of the band. The target is deliberately
-  // not required — it is absent until someone sets one, which is most of the
-  // time, and waiting for it would mean the lock never engaged.
-  const isReading = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-  // Settled, not merely present — and that means the metadata too, not just the
-  // data. A pane answers from a coarse fallback while its catchment data is in
-  // flight, and it cannot centre a signed factor on zero or apply a declared
-  // bound until `dial0Middle` and `targetRanges` have arrived. A hold taken
-  // before any of that freezes a scale the user never saw: the zero-centred
-  // factors were the tell, held asymmetric while every unlocked one settled
-  // symmetric.
-  const dialScaleSettled =
-    !dialCatchmentLoading && !dialRangeLoading && !dial0MiddleLoading && !targetRangesLoading;
-  const dialHasValues =
-    dialScaleSettled && isReading(dialData?.referenceValue) && isReading(dialData?.currentValue);
-
-  heldRangeRef.current = resolveHeldRange(
-    heldRangeRef.current,
-    dialData && dialHasValues
-      ? { key: `${comparison.attribute}|${rangeMode}`, min: dialData.min, max: dialData.max }
-      : null,
-    isScaleLocked,
-  );
-  const dialMin = heldRangeRef.current?.min ?? dialData?.min ?? 0;
-  const dialMax = heldRangeRef.current?.max ?? dialData?.max ?? 100;
+  // No hold to consult any more: the scale is already fixed by the metadata
+  // bound or, failing that, by the range mode's own minima and maxima.
+  const dialMin = dialData?.min ?? 0;
+  const dialMax = dialData?.max ?? 100;
 
   /**
    * Everything behind the number on screen, for the details panel.
@@ -775,7 +749,6 @@ function ViewPane({
       beforeCap: dialData.beforeCap,
       afterCap: dialData.afterCap,
       afterValues: dialData.afterValues,
-      held: heldRangeRef.current ? { min: heldRangeRef.current.min, max: heldRangeRef.current.max } : null,
       final: { min: dialMin, max: dialMax },
       zeroCentred: dialData.zeroCentred,
       reference: trace(dialData.referenceValue, usedCatchments ? 'Site indicators (reference)' : 'Map statistics'),
@@ -886,7 +859,6 @@ function ViewPane({
         targetValue={targetHasBeenUpdated && (dialData?.targetChanged ?? false) ? dialData?.targetValue : undefined}
         min={dialMin}
         max={dialMax}
-        isScaleLocked={isScaleLocked}
         attribute={dialAttributeLabel}
         unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
         rangeMode={rangeMode}
@@ -935,8 +907,95 @@ function ViewPane({
         siteIndicators={siteIndicators}
       />
 
+      {/*
+        Dial and flat panes get the map's arrangement: the scenario being
+        compared on each side, and the factor between them. Previously the
+        combined "A vs B" label sat in the top-left and the factor was drawn
+        inside the chart's own SVG, so on a narrow pane the two overlapped and
+        the factor name was legible only in fragments.
+
+        Both scenario labels shrink and ellipsise; the factor does not, because
+        it names what the pane is showing and a grid of six unlabelled charts is
+        the thing worth avoiding.
+      */}
+      {isDialView && comparison.attribute && (
+        <>
+          <Box
+            position="absolute"
+            top={0}
+            left={0}
+            zIndex={6}
+            maxW="34%"
+            bg="blackAlpha.700"
+            color="gray.200"
+            px={2}
+            py={1}
+            borderRadius="0 0 10px 0"
+            borderRight="3px solid"
+            borderColor={leftInfo?.color || 'whiteAlpha.400'}
+            fontSize="2xs"
+            fontWeight="600"
+            whiteSpace="nowrap"
+            overflow="hidden"
+            textOverflow="ellipsis"
+            backdropFilter="blur(8px)"
+            pointerEvents="none"
+          >
+            {leftInfo?.label || comparison.leftScenario}
+          </Box>
+
+          <Box
+            position="absolute"
+            top={0}
+            left="50%"
+            transform="translateX(-50%)"
+            zIndex={7}
+            maxW="60%"
+            bg="blackAlpha.800"
+            color="white"
+            px={4}
+            py={1.5}
+            borderRadius="0 0 10px 10px"
+            fontSize={compact ? 'xs' : 'sm'}
+            fontWeight="700"
+            letterSpacing="0.5px"
+            whiteSpace="nowrap"
+            overflow="hidden"
+            textOverflow="ellipsis"
+            backdropFilter="blur(8px)"
+            pointerEvents="none"
+          >
+            {dialAttributeLabel}
+          </Box>
+
+          <Box
+            position="absolute"
+            top={0}
+            right={0}
+            zIndex={6}
+            maxW="34%"
+            bg="blackAlpha.700"
+            color="gray.200"
+            px={2}
+            py={1}
+            borderRadius="0 0 0 10px"
+            borderLeft="3px solid"
+            borderColor={rightInfo?.color || 'whiteAlpha.400'}
+            fontSize="2xs"
+            fontWeight="600"
+            whiteSpace="nowrap"
+            overflow="hidden"
+            textOverflow="ellipsis"
+            backdropFilter="blur(8px)"
+            pointerEvents="none"
+          >
+            {rightInfo?.label || comparison.rightScenario}
+          </Box>
+        </>
+      )}
+
       {/* Pane label (shown in quad mode except dial view) */}
-      {compact && viewMode !== 'dial' && !hidePaneLabel && (
+      {compact && !isDialView && !hidePaneLabel && (
         <Box
           position="absolute"
           top={2}

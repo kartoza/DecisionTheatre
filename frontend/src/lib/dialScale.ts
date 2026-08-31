@@ -115,43 +115,6 @@ export function tickValues(min: number, max: number, count = 11) {
   });
 }
 
-/** A scale being held still, and what it was held for. */
-export interface HeldRange {
-  /** What the range was computed for. Changing this re-takes the hold. */
-  key: string;
-  min: number;
-  max: number;
-}
-
-/**
- * Decide which scale to draw against when the scale is locked.
- *
- * The axis is normally derived from the values on it, so moving a target moves
- * the axis, and every other marker slides even though nothing about it changed.
- * That makes an edit hard to read: you cannot tell what you moved from what the
- * scale did underneath you. Locking holds the axis so only the values move.
- *
- * The hold is re-taken when `key` changes — a different factor, or a different
- * range mode — because a scale held for one factor means nothing for another,
- * and switching range mode is an explicit request for a different range. What
- * the lock is for is slider movement, and only that.
- *
- * Returns the range to hold, or null when nothing should be held.
- */
-export function resolveHeldRange(
-  held: HeldRange | null,
-  incoming: HeldRange | null,
-  locked: boolean,
-): HeldRange | null {
-  if (!locked) return null;
-  // Nothing real to hold yet. A dial renders once before its values arrive,
-  // and taking the hold then froze the placeholder range — the lock pinned the
-  // scale to 0..100 and never let go.
-  if (incoming === null) return held;
-  if (held === null || held.key !== incoming.key) return incoming;
-  return held;
-}
-
 /** A metadata cap on how far a scale may run, from `Target_min`/`Target_max`. */
 export interface ScaleCap {
   min?: number | null;
@@ -258,8 +221,6 @@ export interface ScaleDerivation {
   afterCap: { min: number; max: number } | null;
   /** After widening to contain the plotted values, and after the balance cap. */
   afterValues: { min: number; max: number } | null;
-  /** The range being held by the scale lock, when one is. */
-  held: { min: number; max: number } | null;
   /** What the dial is actually drawn against. */
   final: { min: number; max: number };
   /** True when the scale was centred on zero for a signed factor. */

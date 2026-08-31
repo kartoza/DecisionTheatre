@@ -18,7 +18,7 @@
  * arrows from a common hub, which made an aspiration look like a measurement.
  */
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Box, Checkbox, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
@@ -30,7 +30,6 @@ import {
   normalize,
   tickValues,
 } from '../lib/dialScale';
-import { saveScaleLock } from '../lib/dialPreferences';
 
 const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
   { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
@@ -55,8 +54,6 @@ export interface FlatDialProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
-  /** Whether the scale is being held still while values move. */
-  isScaleLocked?: boolean;
 }
 
 function FlatDial({
@@ -79,7 +76,6 @@ function FlatDial({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
-  isScaleLocked = false,
 }: FlatDialProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 300 });
@@ -105,29 +101,14 @@ function FlatDial({
     );
   }, [visible, controls]);
 
-  // Never assume a floor of zero: a factor whose values go negative needs the
-  // band to reach them or its markers fall off the left end.
-  // Widening the band to fit whatever it is asked to plot is right for a scale
-  // that is free to move, and is exactly what a locked scale must not do: the
-  // target is one of the values, so following it moves the axis, and every
-  // other marker slides while the value it stands for has not changed. That is
-  // what "the current line moves when I drag a slider" turned out to be.
-  //
-  // Locked, the range that was handed down is the range. A value outside it
-  // renders at the end of the band, which is the honest reading of a scale the
-  // user asked to hold still.
-  let min = typeof inputMin === 'number' && !isNaN(inputMin) ? inputMin : 0;
-  let max = inputMax;
-  if (!isScaleLocked) {
-    const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
-      (v): v is number => typeof v === 'number' && !isNaN(v) && v < 0,
-    );
-    if (negativeCandidates.length > 0) min = Math.min(min, ...negativeCandidates);
-    max = Math.max(
-      inputMax,
-      ...[currentValue, targetValue].filter((v): v is number => typeof v === 'number' && !isNaN(v)),
-    );
-  }
+  // The range handed down is the range. It is already fixed upstream — by the
+  // metadata bound where one is declared, otherwise by the range mode's own
+  // minima and maxima — and widening it here to fit the plotted values would
+  // undo that, because the target is one of those values. A value outside the
+  // scale renders at the end of the band, which is the honest reading of a
+  // value outside what the data or the metadata says is reachable.
+  const min = typeof inputMin === 'number' && !isNaN(inputMin) ? inputMin : 0;
+  const max = inputMax;
 
   const veryDense = compact && paneCount > 5;
   const { width, height } = size;
@@ -154,13 +135,9 @@ function FlatDial({
   const legendH = fontLegend + 12;
   const clusterH = aboveBand + barH + ticksH + legendGap + legendH;
 
-  // The title is pinned to the top of the pane rather than hung off the band,
-  // and matches the arc gauge's treatment exactly — same baseline, same weight,
-  // same size. It names what the pane is showing, so it belongs to the pane and
-  // must not move when the band re-centres or drop out as panes get denser.
-  const titleY = veryDense ? 24 : compact ? 34 : 50;
-  const titleFont = veryDense ? 15 : compact ? 17 : 20;
-  const titleReserve = titleY + (veryDense ? 10 : 16);
+  // Room for the pane's header row above the band, which now carries the
+  // factor name and both scenario labels.
+  const titleReserve = veryDense ? 30 : compact ? 40 : 54;
 
   const barX = padX;
   const barW = Math.max(40, width - padX * 2);
@@ -361,23 +338,6 @@ function FlatDial({
                       </Tooltip>
                     );
                   })}
-                  <Tooltip
-                    label={isScaleLocked
-                      ? 'Scale is held still — only the values move'
-                      : 'Hold the scale still so only the values move'}
-                    placement="bottom"
-                  >
-                    <Box pl={2} ml={1} borderLeft="1px solid" borderColor="whiteAlpha.300">
-                      <Checkbox
-                        size="sm"
-                        colorScheme="cyan"
-                        isChecked={isScaleLocked}
-                        onChange={(e) => saveScaleLock(e.target.checked)}
-                      >
-                        <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
-                      </Checkbox>
-                    </Box>
-                  </Tooltip>
                 </HStack>
               </Box>
             )}
@@ -389,6 +349,10 @@ function FlatDial({
             )}
 
             <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+              {/* The visible title is the pane's, beside the scenario labels.
+                  This is what a screen reader reads, so the chart still says
+                  what it is without depending on its neighbour. */}
+              <title>{attribute}{unit ? ` (${unit})` : ''}</title>
               <rect width={width} height={height} fill="#1a202c" />
 
               <defs>
@@ -399,22 +363,9 @@ function FlatDial({
                 </linearGradient>
               </defs>
 
-              {/* The factor being shown. Always drawn: without it a belt is an
-                  unlabelled coloured bar, and in a grid there is nothing else
-                  saying which of six factors a pane is for. */}
-              {attribute && (
-                <text
-                  x={barX}
-                  y={titleY}
-                  textAnchor="start"
-                  fill="#f7fafc"
-                  fontSize={titleFont}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="700"
-                >
-                  {attribute}{unit ? ` (${unit})` : ''}
-                </text>
-              )}
+              {/* The factor title is drawn by the pane, alongside the two
+                  scenario labels, so that the three read as one header rather
+                  than overlapping each other. */}
 
               {/* The belt. */}
               <rect
