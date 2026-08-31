@@ -114,3 +114,43 @@ describe('the widget control cluster', () => {
     expect(screen.queryByRole('checkbox', { name: /lock scale/i })).toBeNull();
   });
 });
+
+describe('the target marker', () => {
+  const renderWith = (targetValue: number | undefined) => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial
+          visible
+          attribute="Grass cover fraction"
+          min={0}
+          max={1}
+          referenceValue={0.52}
+          currentValue={0.31}
+          targetValue={targetValue}
+        />
+      </ChakraProvider>,
+    );
+    // The buckle: a green-stroked rect on the band. Width distinguishes it from
+    // the legend's swatch, which is the same colour but a fixed 12px.
+    return Array.from(document.querySelectorAll('rect'))
+      .filter((r) => (r.getAttribute('stroke') || '').toLowerCase() === '#4caf50'
+        && Number(r.getAttribute('width')) > 20).length;
+  };
+
+  it('draws the target where it sits on the current value', () => {
+    // Reported: after "reset to current" the buckle vanished instead of landing
+    // on the blue line. A target set to current is a target, not the absence of
+    // one — Target State starts equal to Current State and diverges only where
+    // you make it.
+    expect(renderWith(0.31)).toBeGreaterThan(0);
+  });
+
+  it('draws the target where it differs from current', () => {
+    expect(renderWith(0.47)).toBeGreaterThan(0);
+  });
+
+  it('draws no target when the site has no ideal for the factor', () => {
+    expect(renderWith(undefined)).toBe(0);
+  });
+});

@@ -413,7 +413,7 @@ function ViewPane({
         if (dialCatchmentData) {
           currentValue = dialCatchmentData.currentValue;
           referenceValue = siteIndicators?.reference?.[attribute] ?? dialCatchmentData.referenceValue;
-          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          targetValue = siteIndicators?.ideal?.[attribute];
           // The site's actual spread across its catchments, which is what "Site
           // range" means — and, unlike a pad around the plotted values, does not
           // move when a target moves. The pad is kept only as a fallback for a
@@ -437,7 +437,7 @@ function ViewPane({
           // layout, unlike the mapStatistics.siteStats fallback below.
           referenceValue = siteIndicators?.reference?.[attribute];
           currentValue = siteIndicators?.current?.[attribute];
-          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          targetValue = siteIndicators?.ideal?.[attribute];
           const values = [referenceValue, currentValue, targetValue]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
@@ -453,31 +453,27 @@ function ViewPane({
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (mins.length > 0) min = Math.min(...mins);
           if (maxs.length > 0) max = Math.max(...maxs);
-          targetValue = referenceValue;
         }
         break;
       case 'extent':
         if (dialRangeValues) {
           referenceValue = dialRangeValues.referenceValue;
           currentValue = dialRangeValues.currentValue;
-          targetValue = siteIndicators?.ideal?.[attribute] ?? referenceValue;
+          targetValue = siteIndicators?.ideal?.[attribute];
         }
         if (allowMapStatisticsFallback && mapStatistics?.leftStats && mapStatistics?.rightStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
-          if (targetValue === undefined) targetValue = referenceValue;
           min = Math.min(mapStatistics.leftStats.min, mapStatistics.rightStats.min);
           max = Math.max(mapStatistics.leftStats.max, mapStatistics.rightStats.max);
         } else if (allowMapStatisticsFallback && mapStatistics?.leftStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.leftStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.leftStats.mean;
-          if (targetValue === undefined) targetValue = referenceValue;
           min = mapStatistics.leftStats.min;
           max = mapStatistics.leftStats.max;
         } else if (allowMapStatisticsFallback && mapStatistics?.rightStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.rightStats.mean;
           if (currentValue === undefined) currentValue = mapStatistics.rightStats.mean;
-          if (targetValue === undefined) targetValue = referenceValue;
           min = mapStatistics.rightStats.min;
           max = mapStatistics.rightStats.max;
         } else {
@@ -493,12 +489,10 @@ function ViewPane({
         if (dialRangeValues) {
           referenceValue = dialRangeValues.referenceValue;
           currentValue = dialRangeValues.currentValue;
-          targetValue = referenceValue;
         }
         if (allowMapStatisticsFallback && mapStatistics?.fullStats) {
           if (referenceValue === undefined) referenceValue = mapStatistics.fullStats.left?.mean;
           if (currentValue === undefined) currentValue = mapStatistics.fullStats.right?.mean;
-          if (targetValue === undefined) targetValue = referenceValue;
           const mins = [mapStatistics.fullStats.left?.min, mapStatistics.fullStats.right?.min]
             .filter((v): v is number => typeof v === 'number' && !isNaN(v));
           const maxs = [mapStatistics.fullStats.left?.max, mapStatistics.fullStats.right?.max]
@@ -512,7 +506,6 @@ function ViewPane({
           const rightMean = mapStatistics.rightStats?.mean;
           if (referenceValue === undefined && leftMean !== undefined) referenceValue = leftMean;
           if (currentValue === undefined && rightMean !== undefined) currentValue = rightMean;
-          if (targetValue === undefined) targetValue = referenceValue;
         } else {
           const values = [referenceValue, currentValue].filter((v): v is number => typeof v === 'number' && !isNaN(v));
           if (values.length > 0) {
@@ -562,7 +555,6 @@ function ViewPane({
       if (leftMean !== undefined) referenceValue = leftMean;
       if (rightMean !== undefined) currentValue = rightMean;
       // Target mirrors reference value in explore mode
-      targetValue = referenceValue;
     }
 
     // The scale is pinned by something that does not move while you edit.
@@ -622,19 +614,8 @@ function ViewPane({
     // a percentage, whatever this site happens to span.
     ({ min, max } = capRange({ min, max }, attributeTargetRanges[attribute]));
 
-    // Only expose target when it actually differs from current — prevents showing a
-    // spurious target marker for factors the user never changed (target now starts
-    // as a copy of the current state, not reference).
-    // Compare both values from siteIndicators (same source) to avoid false positives
-    // from minor AOI-weighting differences between dialCatchmentData and siteIndicators.
-    const siteIdeal = siteIndicators?.ideal?.[attribute];
-    const siteCurrentForTarget = siteIndicators?.current?.[attribute];
-    const targetChanged = typeof siteIdeal === 'number' && typeof siteCurrentForTarget === 'number'
-      ? siteIdeal !== siteCurrentForTarget
-      : (typeof targetValue === 'number' && typeof currentValue === 'number' && targetValue !== currentValue);
-
     return {
-      min, max, referenceValue, currentValue, targetValue, targetChanged,
+      min, max, referenceValue, currentValue, targetValue,
       // The workings, for the chart details panel. Kept rather than recomputed
       // there: half these numbers are intermediate states of this function and
       // could not be reproduced from outside it without repeating it.
@@ -855,7 +836,16 @@ function ViewPane({
         visible={isDialView && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
-        targetValue={targetHasBeenUpdated && (dialData?.targetChanged ?? false) ? dialData?.targetValue : undefined}
+        // Always drawn, whenever the site has an ideal for this factor.
+        //
+        // It used to be hidden unless the ideal differed from current, which
+        // conflated two different things: a target nobody has set, and a target
+        // deliberately set *to* current. Reset to current produces the second
+        // and looked like the first — the buckle vanished instead of landing on
+        // the blue line. Target State starts equal to Current State and diverges
+        // only where you make it, so a target sitting on current is the truth
+        // about a site, not an absence of one.
+        targetValue={dialData?.targetValue}
         min={dialMin}
         max={dialMax}
         attribute={dialAttributeLabel}
