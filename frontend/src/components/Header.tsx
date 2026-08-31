@@ -17,7 +17,7 @@ import {
   Button,
   useDisclosure,
 } from '@chakra-ui/react';
-import { FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload, FiSettings } from 'react-icons/fi';
+import { FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiTable, FiDownload, FiSettings } from 'react-icons/fi';
 import { clearBrowserAppCache } from '../types';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -204,7 +204,12 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
                   <Tooltip label="Site indicators">
                     <IconButton
                       aria-label="Indicators"
-                      icon={<FiBarChart2 />}
+                      // The same table glyph the Table view mode uses, because
+                      // that is what the page is: every indicator listed with
+                      // its reference, current and target. A bar chart suggested
+                      // a chart view, which is a different thing and already has
+                      // its own control.
+                      icon={<FiTable />}
                       onClick={() => onNavigate('indicators')}
                       variant={currentPage === 'indicators' ? 'solid' : 'ghost'}
                       colorScheme="brand"
