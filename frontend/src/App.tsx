@@ -1290,7 +1290,6 @@ function App() {
             onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}
             rangeMode={rangeMode}
-            onRangeModeChange={setRangeMode}
             mapStatistics={mapStatistics}
             chartGroups={chartGroups}
             chartAxisLabelFilters={chartAxisLabelFilters}

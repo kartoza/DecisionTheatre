@@ -18,10 +18,8 @@
  * arrows from a common hub, which made an aspiration look like a measurement.
  */
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
-import type { RangeMode } from '../types';
 import {
   SCENARIO_COLORS,
   bandGradientStops,
@@ -30,12 +28,6 @@ import {
   normalize,
   tickValues,
 } from '../lib/dialScale';
-
-const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
-  { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
-  { id: 'extent', label: 'Extent', icon: <FiSquare size={14} />, description: 'Visible map area' },
-  { id: 'site', label: 'Site', icon: <FiTarget size={14} />, description: 'Site catchments' },
-];
 
 export interface FlatDialProps {
   visible: boolean;
@@ -46,9 +38,6 @@ export interface FlatDialProps {
   max: number;
   attribute?: string;
   unit?: string;
-  rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
-  isSiteAvailable?: boolean;
   compact?: boolean;
   denseLayout?: boolean;
   paneCount?: number;
@@ -65,9 +54,6 @@ function FlatDial({
   max: inputMax,
   attribute = '',
   unit = '',
-  rangeMode = 'domain',
-  onRangeModeChange,
-  isSiteAvailable = true,
   compact = false,
   // Accepted for interface parity with DialChart, which uses it to trade label
   // room against arc radius. A flat band has no radius to trade, and its labels
@@ -312,35 +298,10 @@ function FlatDial({
             exit={{ opacity: 0, y: 8, transition: { duration: 0.25 } }}
             style={{ width: '100%', height: '100%', position: 'relative' }}
           >
-            {(
-              <Box position="absolute" top={4} right={4} zIndex={10} bg="blackAlpha.600" borderRadius="xl" p={1} backdropFilter="blur(8px)">
-                <HStack spacing={1}>
-                  {onRangeModeChange && RANGE_MODES.map((mode) => {
-                    const isActive = rangeMode === mode.id;
-                    const isDisabled = mode.id === 'site' && !isSiteAvailable;
-                    return (
-                      <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : mode.description} placement="bottom">
-                        <Button
-                          size="sm"
-                          leftIcon={mode.icon as React.ReactElement}
-                          onClick={() => !isDisabled && onRangeModeChange(mode.id)}
-                          variant="ghost"
-                          bg={isActive ? 'cyan.500' : 'transparent'}
-                          color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
-                          _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
-                          fontSize="xs"
-                          fontWeight={isActive ? '600' : '400'}
-                          px={3}
-                          cursor={isDisabled ? 'not-allowed' : 'pointer'}
-                        >
-                          {mode.label}
-                        </Button>
-                      </Tooltip>
-                    );
-                  })}
-                </HStack>
-              </Box>
-            )}
+            {/* The Full / Extent / Site cluster was here. The header carries
+                the same control in every layout, and this copy only ever
+                appeared in single-pane view — so the one place it existed was
+                the one place it was a duplicate. */}
 
             {isLoading && (
               <Box position="absolute" inset={0} display="flex" alignItems="center" justifyContent="center" zIndex={5}>

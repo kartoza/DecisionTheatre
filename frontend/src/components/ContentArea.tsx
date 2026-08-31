@@ -54,7 +54,6 @@ interface ContentAreaProps {
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroups?: (string | null)[];
   chartAxisLabelFilters?: (string | null)[];
@@ -169,7 +168,6 @@ function ContentArea({
   onSwiperPositionChange,
   siteIndicators,
   rangeMode,
-  onRangeModeChange,
   mapStatistics,
   chartGroups,
   chartAxisLabelFilters,
@@ -584,7 +582,6 @@ function ContentArea({
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
                   rangeMode={rangeMode}
-                  onRangeModeChange={onRangeModeChange}
                   mapStatistics={mapStatistics}
                   chartGroup={chartGroups?.[i] ?? null}
                   mapExtent={mapExtent}
@@ -641,7 +638,6 @@ function ContentArea({
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}
             rangeMode={rangeMode}
-            onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
             chartGroup={chartGroups?.[visibleIndices[0]] ?? null}
             chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}

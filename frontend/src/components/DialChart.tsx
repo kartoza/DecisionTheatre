@@ -1,8 +1,6 @@
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
-import type { RangeMode } from '../types';
 import {
   SCENARIO_COLORS,
   bandGradientStops,
@@ -11,12 +9,6 @@ import {
 } from '../lib/dialScale';
 
 // Range mode config
-const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
-  { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
-  { id: 'extent', label: 'Extent', icon: <FiSquare size={14} />, description: 'Visible map area' },
-  { id: 'site', label: 'Site', icon: <FiTarget size={14} />, description: 'Site catchments' },
-];
-
 // Base padding for the dial in single-pane mode.
 const BASE_PADDING = { top: 100, right: 100, bottom: 160, left: 100 };
 
@@ -46,9 +38,6 @@ interface DialChartProps {
   max: number;
   attribute?: string;
   unit?: string;
-  rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
-  isSiteAvailable?: boolean;
   compact?: boolean;
   denseLayout?: boolean;
   paneCount?: number;
@@ -65,9 +54,6 @@ function DialChart({
   max: inputMax,
   attribute = '',
   unit = '',
-  rangeMode = 'domain',
-  onRangeModeChange,
-  isSiteAvailable = true,
   compact = false,
   denseLayout = false,
   paneCount = 1,
@@ -565,47 +551,10 @@ function DialChart({
             style={{ width: '100%', height: '100%', position: 'relative' }}
           >
             {/* Range mode toggle - positioned inside chart area */}
-            {(
-              <Box
-                position="absolute"
-                top={4}
-                right={4}
-                zIndex={10}
-                bg="blackAlpha.600"
-                borderRadius="xl"
-                p={1}
-                backdropFilter="blur(8px)"
-              >
-                <HStack spacing={1}>
-                  {onRangeModeChange && RANGE_MODES.map((mode) => {
-                    const isActive = rangeMode === mode.id;
-                    const isDisabled = mode.id === 'site' && !isSiteAvailable;
-                    return (
-                      <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : mode.description} placement="bottom">
-                        <Button
-                          size="sm"
-                          leftIcon={mode.icon as React.ReactElement}
-                          onClick={() => !isDisabled && onRangeModeChange(mode.id)}
-                          variant="ghost"
-                          bg={isActive ? 'cyan.500' : 'transparent'}
-                          color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
-                          _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
-                          fontSize="xs"
-                          fontWeight={isActive ? '600' : '400'}
-                          px={3}
-                          cursor={isDisabled ? 'not-allowed' : 'pointer'}
-                        >
-                          {mode.label}
-                        </Button>
-                      </Tooltip>
-                    );
-                  })}
-                  {/* The same control the flat band carries. The hold itself is
-                      applied in ViewPane, so it has always reached the arc — it
-                      just had no way to be switched on from here. */}
-                </HStack>
-              </Box>
-            )}
+            {/* The Full / Extent / Site cluster was here. The header carries
+                the same control in every layout, and this copy only ever
+                appeared in single-pane view — so the one place it existed was
+                the one place it was a duplicate. */}
 
             <svg
               width={width}

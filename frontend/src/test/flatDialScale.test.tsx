@@ -56,7 +56,6 @@ function renderArc(targetValue: number) {
         referenceValue={365.4}
         currentValue={836.3}
         targetValue={targetValue}
-        onRangeModeChange={() => {}}
       />
     </ChakraProvider>,
   );
@@ -93,7 +92,7 @@ describe('the widget control cluster', () => {
     cleanup();
     render(
       <ChakraProvider theme={theme}>
-        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
+        <FlatDial visible min={0} max={100} currentValue={50} />
       </ChakraProvider>,
     );
   };

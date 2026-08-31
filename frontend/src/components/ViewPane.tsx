@@ -70,7 +70,6 @@ interface ViewPaneProps {
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroup?: string | null;
   chartAxisLabelFilter?: string | null;
@@ -144,7 +143,6 @@ function ViewPane({
   onSwiperPositionChange,
   siteIndicators,
   rangeMode = 'domain',
-  onRangeModeChange,
   mapStatistics,
   chartGroup,
   chartAxisLabelFilter,
@@ -850,9 +848,6 @@ function ViewPane({
         max={dialMax}
         attribute={dialAttributeLabel}
         unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
-        rangeMode={rangeMode}
-        onRangeModeChange={isQuad ? undefined : onRangeModeChange}
-        isSiteAvailable={!!siteId}
         compact={compact}
         denseLayout={denseDialLayout}
         paneCount={paneCount}
