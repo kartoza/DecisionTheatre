@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Flat chart view** — a horizontal band as an alternative to the arc dial,
+  chosen from the top bar next to Dial. Reference and current are drawn as
+  vertical lines through the band, the target as a buckle around it: two are
+  readings, one is a setting, so they are not three colours of the same shape.
+
+- **Chart details side panel**, opened by a pane's info button. Shows how the
+  scale was arrived at — every candidate range, the metadata bounds, each step,
+  and which source each value came from. Anything not loaded says so rather than
+  showing a plausible number. "Show calculations" swaps it for the target
+  arithmetic that used to be a modal.
+
+- **Reset to reference** and **Reset to current** in the target editor,
+  confirmed in the panel rather than in a popup.
+
+- The three right-hand panels are resizable from their edge and share one
+  remembered width.
+
+### Changed
+
+- **A declared metadata bound is now the scale**, not a limit on it. Percent
+  burned draws 0–100 because it is a percentage, not 45–97.5 because that is
+  what one site happens to span. Where no bound is declared — 387 of 504
+  columns — the range mode's own minima and maxima serve instead.
+
+- **The target no longer stretches the axis.** Three separate places were
+  widening the scale to fit it, which moved every other marker while the reading
+  it stood for had not changed.
+
+- Site range mode uses the site's actual spread across its catchments rather
+  than a 10% pad around the three plotted values.
+
+- One header for every view mode — scenario, factor, scenario — so cycling
+  map, flat, dial and table changes what is drawn in the pane and not the frame
+  around it. Table widgets are titled by their factor.
+
+- Site area and catchment count are stated once in the header instead of once
+  per table pane. The factor configuration opens in the side panel rather than
+  as a modal over the grid.
+
+- Removed as duplicates of controls the header already carries: the Zone Range
+  panel, the range buttons on each dial, the per-widget shape toggle and help
+  button, the scale lock, the Hide Table button and the Tiles badge.
+
+### Fixed
+
+- Dials no longer flicker while a target moves. Every value change replayed the
+  reveal animation, which drives opacity across the whole widget.
+
+- A dial whose own values did not change is no longer redrawn — one of sixty
+  SVGs during a live drag, rather than all of them.
+
+- The target marker is drawn even when it sits on the current value, so a reset
+  to current lands on the line instead of vanishing.
+
+- Dials no longer read N/A for every value in grid view.
+
+- A reset lands exactly on the scenario it names. It went through the cascading
+  edit path and only covered editable keys, so it landed near the scenario
+  rather than on it.
+
+- The factor panel's close button works. It was shown only on mobile and had no
+  click handler at all.
+
+
 - **Live update in the target editor, and an end to the redraw after every
   change.** Moving a slider used to disable every other slider, drop a spinner
   over the whole form, and re-enable them a moment later. Focus moved, the
