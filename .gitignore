@@ -87,3 +87,10 @@ issue-*.md
 
 # Screenshots shared during development, not part of the source
 screenshots-gitignored/
+
+# Benchmark run history (scripts/dtbench.py). Machine-local by design: a
+# measurement is only comparable against others taken on the same hardware, so
+# a shared database would invite comparing a laptop against the server and
+# reading the difference as a regression. It also rewrites on every run, which
+# is the worst possible shape for a tracked binary.
+benchmarks/dtbench.sqlite

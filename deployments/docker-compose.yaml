@@ -18,6 +18,48 @@ services:
     # and the app falls back to the built-in basemap / unlabelled glyphs.
     environment:
       - DT_MAPTILER_API_KEY=${DT_MAPTILER_API_KEY:-}
+      # A soft memory ceiling for the Go heap, set below the container's hard
+      # limit below. Without it the runtime has no idea it is in a box: it
+      # grows the heap according to how much it has allocated, notices nothing
+      # as it approaches the cgroup limit, and the kernel OOM-kills the process
+      # mid-request. With it, the collector runs progressively harder as the
+      # heap approaches this number and the process trades CPU for staying
+      # alive — which is the trade you want, because a slow server recovers and
+      # a killed one drops every request in flight.
+      #
+      # It must stay comfortably under DT_MEMORY_LIMIT. GOMEMLIMIT governs the
+      # Go heap only; the process also holds SQLite page cache, mmap'd
+      # mbtiles, thread stacks and the allocator's unreturned spans, none of
+      # which it counts. The gap is that headroom, not slack.
+      - GOMEMLIMIT=${DT_GOMEMLIMIT:-6GiB}
+    # Sized for the documented 4-core/16 GB deployment target, leaving the rest
+    # for nginx, the page cache the GeoPackage reads depend on, and the OS.
+    # A limit is not a reservation: normal operation sits far below this, and
+    # what the limit buys is that a runaway allocation kills one container
+    # rather than pushing the host into swap and taking everything down with
+    # it.
+    mem_limit: ${DT_MEMORY_LIMIT:-8g}
+    # No swap beyond the memory limit. Swapping a server this size does not
+    # save it, it just makes every request slow enough to time out while the
+    # health check keeps answering — failure that looks like life.
+    memswap_limit: ${DT_MEMORY_LIMIT:-8g}
+    # Go 1.25 sizes GOMAXPROCS from the cgroup CPU limit rather than the host's
+    # core count, so this also sets the application's internal concurrency: the
+    # admission controller in internal/server/admission.go admits two requests
+    # per core. 4 cores gives 8 concurrent, which is what the measurements in
+    # benchmarks/ were taken at.
+    cpus: ${DT_CPU_LIMIT:-4}
+    # restart: unless-stopped only reacts to a process that exited. This is how
+    # a process that is still running but no longer answering gets noticed.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      # Generous: a cold start loads and indexes the datapack, and a health
+      # check that fails during startup would restart the container forever.
+      # start_period covers that window without weakening the steady-state check.
+      start_period: 180s
+      interval: 30s
+      timeout: 10s
+      retries: 3
     command:
       - --headless
       # Required and deliberate — see the note on CMD in Dockerfile. The
@@ -70,6 +112,10 @@ services:
   nginx:
     image: nginx:1.27-bookworm
     restart: unless-stopped
+    # Small and fixed: nginx here proxies and rate-limits, it does not cache or
+    # serve large files from disk. Capping it means a request flood cannot make
+    # the front door compete with the application for the host's memory.
+    mem_limit: ${DT_NGINX_MEMORY_LIMIT:-512m}
     depends_on:
       - app
     ports:

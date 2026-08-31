@@ -66,6 +66,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        # For the compose healthcheck. Debian slim ships neither curl nor
+        # wget, and without one docker has no way to ask whether this process
+        # is answering — only whether it has exited, which a wedged server has
+        # not.
+        curl \
         jq \
         libgtk-3-0 \
         libwebkit2gtk-4.1-0 \
