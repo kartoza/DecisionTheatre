@@ -9,6 +9,8 @@ import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, Ma
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import type { ScaleDerivation } from '../lib/dialScale';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -183,6 +185,7 @@ function ContentArea({
   fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
+  const { width: panelWidth, startResize } = usePanelWidth();
   const { details: attributeDetails } = useAttributeDetails();
   const { targetInputs } = useAttributeTargetInputs();
   const { units: attributeUnits } = useAttributeUnits();
@@ -676,7 +679,7 @@ function ContentArea({
           id="tour-target-panel"
           role="region"
           aria-label={STRINGS.targetsHeading}
-          w={{ base: '100vw', md: '440px' }}
+          w={{ base: '100vw', md: `${panelWidth}px` }}
           h="100%"
           bg="gray.800"
           color="white"
@@ -685,7 +688,9 @@ function ContentArea({
           boxShadow="-4px 0 24px rgba(0,0,0,0.35)"
           display="flex"
           flexDirection="column"
+          position="relative"
         >
+          <PanelResizeHandle onResizeStart={startResize} />
           <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
             <Box fontSize="md" fontWeight="bold" flex="1">{STRINGS.targetsHeading}</Box>
             {isSavingTargets && (

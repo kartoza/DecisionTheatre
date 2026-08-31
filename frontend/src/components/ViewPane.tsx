@@ -6,6 +6,7 @@ import {
 import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
 import { BsGrid3X3, BsGrid, BsSpeedometer2 } from 'react-icons/bs';
 import MapView from './MapView';
+import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
@@ -647,12 +648,10 @@ function ViewPane({
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
-  const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
   const showDialFactorPrompt = isQuad && (viewMode === 'dial' || viewMode === 'flat') && !comparison.attribute;
   const denseDialLayout = isQuad && paneCount > 4;
-  const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
 
   const changedInputs = useMemo(() => {
@@ -908,113 +907,28 @@ function ViewPane({
       />
 
       {/*
-        Dial and flat panes get the map's arrangement: the scenario being
-        compared on each side, and the factor between them. Previously the
-        combined "A vs B" label sat in the top-left and the factor was drawn
-        inside the chart's own SVG, so on a narrow pane the two overlapped and
-        the factor name was legible only in fragments.
+        One header for every view mode except the map, which draws its own —
+        those are tied to the swiper and hide when it docks. Same component,
+        same position, same styling, so cycling through the modes changes what
+        is drawn inside the pane and not the frame around it.
 
-        Both scenario labels shrink and ellipsise; the factor does not, because
-        it names what the pane is showing and a grid of six unlabelled charts is
-        the thing worth avoiding.
+        The table shows a single scenario (it aggregates the left one), so it
+        gets a single label rather than a comparison it is not making.
       */}
-      {isDialView && comparison.attribute && (
-        <>
-          <Box
-            position="absolute"
-            top={0}
-            left={0}
-            zIndex={6}
-            maxW="34%"
-            bg="blackAlpha.700"
-            color="gray.200"
-            px={2}
-            py={1}
-            borderRadius="0 0 10px 0"
-            borderRight="3px solid"
-            borderColor={leftInfo?.color || 'whiteAlpha.400'}
-            fontSize="2xs"
-            fontWeight="600"
-            whiteSpace="nowrap"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            backdropFilter="blur(8px)"
-            pointerEvents="none"
-          >
-            {leftInfo?.label || comparison.leftScenario}
-          </Box>
-
-          <Box
-            position="absolute"
-            top={0}
-            left="50%"
-            transform="translateX(-50%)"
-            zIndex={7}
-            maxW="60%"
-            bg="blackAlpha.800"
-            color="white"
-            px={4}
-            py={1.5}
-            borderRadius="0 0 10px 10px"
-            fontSize={compact ? 'xs' : 'sm'}
-            fontWeight="700"
-            letterSpacing="0.5px"
-            whiteSpace="nowrap"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            backdropFilter="blur(8px)"
-            pointerEvents="none"
-          >
-            {dialAttributeLabel}
-          </Box>
-
-          <Box
-            position="absolute"
-            top={0}
-            right={0}
-            zIndex={6}
-            maxW="34%"
-            bg="blackAlpha.700"
-            color="gray.200"
-            px={2}
-            py={1}
-            borderRadius="0 0 0 10px"
-            borderLeft="3px solid"
-            borderColor={rightInfo?.color || 'whiteAlpha.400'}
-            fontSize="2xs"
-            fontWeight="600"
-            whiteSpace="nowrap"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            backdropFilter="blur(8px)"
-            pointerEvents="none"
-          >
-            {rightInfo?.label || comparison.rightScenario}
-          </Box>
-        </>
+      {viewMode !== 'map' && (
+        <PaneHeader
+          compact={compact}
+          title={dialAttributeLabel}
+          leftLabel={leftInfo?.label || comparison.leftScenario}
+          leftColor={leftInfo?.color}
+          rightLabel={viewMode === 'table' ? undefined : (rightInfo?.label || comparison.rightScenario)}
+          rightColor={rightInfo?.color}
+        />
       )}
 
-      {/* Pane label (shown in quad mode except dial view) */}
-      {compact && !isDialView && !hidePaneLabel && (
-        <Box
-          position="absolute"
-          top={2}
-          left={2}
-          zIndex={5}
-          bg="blackAlpha.700"
-          color="white"
-          px={3}
-          py={1}
-          borderRadius="md"
-          fontSize="xs"
-          fontWeight="600"
-          letterSpacing="0.5px"
-          backdropFilter="blur(8px)"
-          pointerEvents="none"
-        >
-          {paneLabel}
-        </Box>
-      )}
+      {/* The combined "A vs B" label that used to sit in the top-left is gone:
+          PaneHeader above says the same thing in the same place as the map,
+          split into the two scenarios it was joining. */}
 
       {/* Per-pane toolbar */}
       <HStack
@@ -1053,25 +967,30 @@ function ViewPane({
         })}
 
         {/* Layout toggle — context-dependent */}
+          {/* Outside the layout branch: it used to sit in the quad-only arm, so
+              a single pane had no way to open the panel at all. Nor is it gated
+              on a target existing any more — the panel explains the scale as
+              well as the target arithmetic, and the scale is worth asking about
+              either way. */}
+          {comparison.attribute && onOpenChartDetails && (
+            <Tooltip label="Explain this chart" placement="top">
+              <IconButton
+                aria-label="Explain this chart"
+                icon={<FiInfo />}
+                onClick={() => onOpenChartDetails(paneIndex, dialDerivation, calculationDetails)}
+                variant="ghost"
+                // White like the rest of the cluster. It was cyan, which read
+                // as a different kind of control among plain white siblings.
+                color="white"
+                _hover={{ bg: 'whiteAlpha.300' }}
+                size={btnSize}
+                borderRadius="md"
+              />
+            </Tooltip>
+          )}
+
         {isQuad ? (
           <>
-            {/* No longer gated on a target having been set: the panel now
-                explains the scale as well as the target arithmetic, and the
-                scale is worth asking about whether or not a target exists. */}
-            {comparison.attribute && onOpenChartDetails && (
-              <Tooltip label="Explain this chart" placement="top">
-                <IconButton
-                  aria-label="Explain this chart"
-                  icon={<FiInfo />}
-                  onClick={() => onOpenChartDetails(paneIndex, dialDerivation, calculationDetails)}
-                  variant="ghost"
-                  color="cyan.300"
-                  _hover={{ bg: 'whiteAlpha.300' }}
-                  size={btnSize}
-                  borderRadius="md"
-                />
-              </Tooltip>
-            )}
             <Tooltip label="Focus this pane" placement="top">
               <IconButton
                 aria-label="Focus pane"

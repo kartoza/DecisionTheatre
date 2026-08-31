@@ -18,12 +18,13 @@ import {
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
 
 interface ControlPanelProps {
   isOpen: boolean;
@@ -744,47 +745,9 @@ function ControlPanel({
   const combinedDomainRange: { min: number; max: number } | null = mapStatistics?.domainRange
     ? { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max }
     : null;
-  const [panelWidth, setPanelWidth] = useState(440);
-  const [isResizing, setIsResizing] = useState(false);
-  const resizeOriginX = useRef(0);
-  const resizeOriginWidth = useRef(0);
-  const minPanelWidth = 320;
-  const maxPanelWidth = 720;
+  const { width: panelWidth, startResize } = usePanelWidth();
 
-  useEffect(() => {
-    if (!isResizing) return;
 
-    const handleMouseMove = (event: MouseEvent) => {
-      const delta = resizeOriginX.current - event.clientX;
-      const nextWidth = Math.min(
-        maxPanelWidth,
-        Math.max(minPanelWidth, resizeOriginWidth.current + delta)
-      );
-      setPanelWidth(nextWidth);
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizing]);
-
-  const handleResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
-    resizeOriginX.current = event.clientX;
-    resizeOriginWidth.current = panelWidth;
-    setIsResizing(true);
-  };
 
   // The pane number identifies the card the factor belongs to, so it sits on
   // that card rather than on the panel heading. Defined once: the chart view
@@ -1187,18 +1150,7 @@ function ControlPanel({
         pt="70px" // Header height offset
         position="relative"
       >
-        <Box
-          display={{ base: 'none', md: 'block' }}
-          position="absolute"
-          left={0}
-          top={0}
-          bottom={0}
-          width="6px"
-          cursor="col-resize"
-          zIndex={2}
-          onMouseDown={handleResizeStart}
-          _hover={{ bg: 'blackAlpha.200' }}
-        />
+        <PanelResizeHandle onResizeStart={startResize} />
         {/*
           Collapse. Shown at every width, and wired: this was a mobile-only
           affordance with no onClick at all, so on a desktop there was no way to

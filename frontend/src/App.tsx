@@ -42,11 +42,13 @@ import {
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
 import type { CalculationDetailsProps } from './components/CalculationDetails';
+import { usePanelWidth } from './lib/panelWidth';
 import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
 function App() {
   const toast = useToast();
+  const { width: panelWidth } = usePanelWidth();
   const { details: attributeDetails, loading: attributeDetailsLoading } = useAttributeDetails();
   const { variableTypes, loading: variableTypesLoading } = useAttributeVariableTypes();
   const { userInputs, loading: userInputsLoading } = useAttributeUserInputs();
@@ -1248,11 +1250,11 @@ function App() {
         <Box
           flex={1}
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-          mr={isIndicatorOpen
-            ? { base: 0, md: '400px', lg: '440px' }
-            : (isTargetModalOpen || chartDetails !== null)
-              ? { base: 0, md: '440px' }
-              : 0}
+          // One slot, one width — so the content gives up the same strip
+          // whichever panel is in it, and follows the edge as it is dragged.
+          mr={(isIndicatorOpen || isTargetModalOpen || chartDetails !== null)
+            ? { base: 0, md: `${panelWidth}px` }
+            : 0}
           position="relative"
         >
           <ContentArea

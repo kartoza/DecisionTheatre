@@ -25,6 +25,8 @@ import { SCENARIO_COLORS, formatValue } from '../lib/dialScale';
 import type { ScaleDerivation } from '../lib/dialScale';
 import CalculationDetails from './CalculationDetails';
 import type { CalculationDetailsProps } from './CalculationDetails';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
 
 const STRINGS = {
   heading: 'Chart details',
@@ -124,6 +126,7 @@ function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartD
   // Two views, one panel. The scale is what you meet; the calculations are a
   // step further in, and replace the content rather than opening a second
   // surface over the chart they describe.
+  const { width: panelWidth, startResize } = usePanelWidth();
   const [view, setView] = useState<'scale' | 'calculations'>('scale');
   // A new chart starts at the scale again — the calculations you were reading
   // were about the old one.
@@ -164,7 +167,7 @@ function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartD
         id="tour-chart-details-panel"
         role="region"
         aria-label={STRINGS.heading}
-        w={{ base: '100vw', md: '440px' }}
+        w={{ base: '100vw', md: `${panelWidth}px` }}
         h="100%"
         bg="gray.800"
         color="white"
@@ -173,7 +176,9 @@ function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartD
         boxShadow="-4px 0 24px rgba(0,0,0,0.35)"
         display="flex"
         flexDirection="column"
+        position="relative"
       >
+        <PanelResizeHandle onResizeStart={startResize} />
         <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
           {view === 'calculations' && (
             <IconButton

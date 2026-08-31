@@ -1,9 +1,8 @@
 import { useMemo, useEffect, useState } from 'react';
-import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner, Button } from '@chakra-ui/react';
+import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner, Button } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
-import { colors } from '../styles/colors';
 
 interface AggregateTableProps {
   visible: boolean;
@@ -196,41 +195,22 @@ function AggregateTable({
             <Box px={6} pt={6} pb={4} flexShrink={0}>
               {/* Header */}
               <VStack spacing={4} align="stretch" mb={6}>
-                <HStack justify="space-between" align="center">
-                  {/*
-                    The factor is the title. Six panes each headed "Site
-                    Aggregate Calculation" over "Area-weighted average for
-                    selected factor" said the same thing six times and left the
-                    one thing that differs — which factor — to a row further
-                    down. That row is gone with it.
-                  */}
-                  <VStack align="start" spacing={0}>
-                    <Text fontSize="2xl" fontWeight="bold" color="white">
-                      {attributeLabel}
-                    </Text>
-                  </VStack>
-                  <HStack spacing={3}>
-                    <Badge
-                      bg={scenario === 'reference' ? colors.orange : scenario === 'future' ? colors.brightGreen : colors.blue}
-                      color={colors.dark}
-                      fontSize="md"
-                      px={4}
-                      py={2}
-                      borderRadius="full"
-                    >
-                      {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
-                    </Badge>
-                    <Button
-                      size="sm"
-                      colorScheme="cyan"
-                      variant={isTableVisible ? 'outline' : 'solid'}
-                      onClick={() => setIsTableVisible((prev) => !prev)}
-                    >
-                      {isTableVisible ? 'Hide Table' : 'Show Table'}
-                    </Button>
-                  </HStack>
+                {/*
+                  The factor title and the scenario badge that used to head this
+                  widget are now drawn by the pane, in the same place and style
+                  as every other view mode — see PaneHeader. What is left here
+                  is the control that belongs to the table itself.
+                */}
+                <HStack justify="flex-end" align="center">
+                  <Button
+                    size="sm"
+                    colorScheme="cyan"
+                    variant={isTableVisible ? 'outline' : 'solid'}
+                    onClick={() => setIsTableVisible((prev) => !prev)}
+                  >
+                    {isTableVisible ? 'Hide Table' : 'Show Table'}
+                  </Button>
                 </HStack>
-
               </VStack>
 
               {/* Summary cards */}
