@@ -17,6 +17,7 @@ import (
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/httputil"
+	"github.com/kartoza/decision-theatre/internal/safego"
 	"github.com/kartoza/decision-theatre/internal/sites"
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
@@ -74,12 +75,12 @@ func NewHandler(
 	if gpkgStore != nil {
 		h.metaCache.AddColumnAliases(gpkgStore.GetColumns())
 	}
-	go func() {
+	safego.Run("load-lookup-tables", func() {
 		lt := LoadLookupTables(cfg.DataDir)
 		h.lookupsMu.Lock()
 		h.lookups = lt
 		h.lookupsMu.Unlock()
-	}()
+	})
 	return h
 }
 
@@ -1192,13 +1193,13 @@ func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[perf] handleCreateSite step=deferCatchmentDetails site_id=%s catchments=%d", created.ID, len(catchmentIDs))
 		done := make(chan struct{})
 		h.pendingCatchments.Store(created.ID, done)
-		go func() {
+		safego.Run("populate-site-catchments", func() {
 			defer func() {
 				h.pendingCatchments.Delete(created.ID)
 				close(done)
 			}()
 			h.populateSiteCatchmentDetailsDeferred(created.ID, catchmentIDs, geometry)
-		}()
+		})
 	}
 
 	respondJSON(w, http.StatusCreated, created)
@@ -1720,7 +1721,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 
 	h.pendingExtractions.Store(id, struct{}{})
-	go func() {
+	safego.Run("extract-site-indicators", func() {
 		defer h.pendingExtractions.Delete(id)
 		// Deliberately context.Background(): this handler responds 202 and
 		// returns immediately, so the request context is already cancelled by
@@ -1730,7 +1731,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 		if err := h.doSiteExtraction(context.Background(), id); err != nil {
 			log.Printf("Async extraction failed for site %s: %v", id, err)
 		}
-	}()
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
