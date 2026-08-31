@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures under concurrency, which the previous tool deliberately did not, and
   its report distinguishes a server that sheds load from one that queues.
 
+### Removed
+
+- **The Go benchmark tool** (`internal/bench`, `cmd/dtbench` — about 12,000
+  lines), replaced by `scripts/dtbench.py`. The scenario list and the
+  response-size guard were carried over; what went is the branded HTML and PDF
+  report generation. `make bench`, `bench-report` and `bench-list` now run the
+  Python tool, and `bench-quick` skips the load phase. `bench-sweep`, which
+  built each revision in a range and measured it, has no replacement.
+
 ### Fixed
 
 - **A panic in background work no longer kills the process.** An unrecovered

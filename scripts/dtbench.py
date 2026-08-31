@@ -624,24 +624,38 @@ USABLE_P95_MS = 3000.0
 def _verdict(loads: list[sqlite3.Row]) -> None:
     """Judge the server, not just its health check.
 
-    A first version of this looked only at the health probe and reported
-    "responsive" for a server whose real work had gone to 18.5 seconds at p95
-    with zero errors. Health was fine because health is free; the map was
-    unusable. Zero errors was not good news either — it meant every request was
-    being queued rather than refused, so the queue absorbed the overload and
-    handed it back as latency.
+    This has been wrong twice, in opposite directions, and both mistakes are
+    worth keeping written down because both are easy to make again.
 
-    A server under more load than it can serve has two honest options: refuse
-    quickly, or serve slowly. Refusing quickly is the better one, because the
-    client learns immediately and can back off. So errors are not automatically
-    a failure here, and their absence is not automatically a pass.
+    The first version looked only at the health probe and reported "stayed
+    responsive" for a server whose real work had reached 18.5 s at p95. Health
+    was fine because health is free. It says nothing about whether real work is
+    getting done, and a server can answer it in 2 ms while being unusable.
+
+    The second version fixed that and then read every slow-with-no-errors
+    result as unbounded queueing. That is right under overload and nonsense
+    below it: with one client there is no queue to be in, so a slow response
+    just means the endpoint is slow. It duly accused a server of queueing at a
+    concurrency of one.
+
+    So the question is not "is it slow" but "does load make it slower". A
+    server that queues hands overload back as latency, and its p95 climbs in
+    step with the number of clients. A server that is merely slow has a flat
+    p95: the work costs what it costs, and adding clients does not change it.
+    Telling those apart needs at least two load levels, and honesty about the
+    fact when there is only one.
     """
     worst = max(loads, key=lambda l: l["p95"])
+    lightest = min(loads, key=lambda l: l["concurrency"])
+    heaviest = max(loads, key=lambda l: l["concurrency"])
+
     health_failed = any(l["health_errors"] for l in loads)
     health_slow = any(l["health_p95"] > 1000 for l in loads)
     work_slow = worst["p95"] > USABLE_P95_MS
     sheds = any(l["errors"] for l in loads)
 
+    # Health first: if the cheapest possible request is failing or slow, what
+    # the expensive ones did is beside the point.
     if health_failed:
         print("  VERDICT: the server stopped answering. It was down for everyone.")
         return
@@ -649,17 +663,63 @@ def _verdict(loads: list[sqlite3.Row]) -> None:
         print("  VERDICT: even the health check degraded past a second. "
               "Cheap requests were queued behind expensive ones.")
         return
-    if work_slow and not sheds:
-        print(f"  VERDICT: the server queued instead of shedding. Health stayed "
-              f"fast, but real work reached {worst['p95'] / 1000:.1f} s at p95 "
-              f"with {worst['concurrency']} concurrent and no request was ever "
+
+    # How much did latency grow as clients were added? This is the measurement
+    # that separates queueing from slowness, and it needs two points to exist.
+    single_level = lightest["concurrency"] == heaviest["concurrency"]
+    if not single_level and lightest["p95"] > 0:
+        latency_growth = heaviest["p95"] / lightest["p95"]
+        load_growth = heaviest["concurrency"] / lightest["concurrency"]
+        # Queueing is latency rising roughly in proportion to the load. Half of
+        # proportional is the threshold: a perfectly bounded server holds at
+        # 1.0, a perfectly unbounded one tracks the load exactly, and anything
+        # climbing at even half that rate has no ceiling worth the name.
+        queues = latency_growth > max(2.0, load_growth * 0.5)
+    else:
+        latency_growth = 1.0
+        queues = False
+
+    if single_level:
+        # One load level cannot answer the question. Say what was measured and
+        # decline to draw the conclusion, rather than guessing at it.
+        if work_slow:
+            print(f"  VERDICT: work took {worst['p95'] / 1000:.1f} s at p95 with "
+                  f"{worst['concurrency']} concurrent. Health stayed fast.")
+            print("           Only one load level was measured, so this cannot "
+                  "tell a slow endpoint from a queue. Run more than one "
+                  "concurrency to find out.")
+        else:
+            print(f"  VERDICT: the server served everything offered within "
+                  f"{worst['p95']:.0f} ms at p95, at {worst['concurrency']} "
+                  f"concurrent. Only one load level was measured.")
+        return
+
+    if queues and not sheds:
+        print(f"  VERDICT: the server queued instead of shedding. Latency grew "
+              f"{latency_growth:.1f}x between {lightest['concurrency']} and "
+              f"{heaviest['concurrency']} concurrent clients, reaching "
+              f"{heaviest['p95'] / 1000:.1f} s at p95, and no request was ever "
               f"refused.")
         print("           Unbounded queueing turns overload into latency. A "
               "refused request tells the client to back off; a slow one does not.")
         return
-    if work_slow and sheds:
-        print(f"  VERDICT: the server shed load, but what it did serve was slow "
-              f"({worst['p95'] / 1000:.1f} s at p95).")
+    if queues and sheds:
+        print(f"  VERDICT: the server shed some load but still queued behind it "
+              f"— latency grew {latency_growth:.1f}x up to "
+              f"{heaviest['p95'] / 1000:.1f} s at p95. The limit is too "
+              f"generous for what this hardware can actually serve.")
+        return
+    if work_slow:
+        # Flat latency under rising load. The limit is doing its job; the work
+        # underneath it is expensive. This is a real finding and a different
+        # one, and it points at the handler rather than at the concurrency.
+        print(f"  VERDICT: load did not make it worse — latency held at "
+              f"{latency_growth:.1f}x from {lightest['concurrency']} to "
+              f"{heaviest['concurrency']} concurrent"
+              f"{', refusing the excess' if sheds else ''}.")
+        print(f"           But the work itself is slow: {worst['p95'] / 1000:.1f} s "
+              f"at p95. That is the cost of the request, not of the load, so "
+              f"look at the handler rather than the limits.")
         return
     if sheds:
         print("  VERDICT: the server shed excess load and stayed fast for what it "
@@ -667,7 +727,6 @@ def _verdict(loads: list[sqlite3.Row]) -> None:
         return
     print(f"  VERDICT: the server served everything offered within "
           f"{worst['p95']:.0f} ms at p95. It was not saturated by this test.")
-    return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
