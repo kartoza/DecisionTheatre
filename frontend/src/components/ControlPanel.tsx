@@ -15,13 +15,8 @@ import {
   Button,
   ButtonGroup,
   Spacer,
-  Modal,
-  ModalOverlay,
-  ModalContent,
-  ModalCloseButton,
-  ModalBody,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
@@ -32,9 +27,6 @@ import { colors } from '../styles/colors';
 
 interface ControlPanelProps {
   isOpen: boolean;
-  /** Render as a centered Modal dialog instead of the slide-out side panel — used to
-   * let grid/quad view edit a single pane's factor without leaving the grid layout. */
-  asModal?: boolean;
   onClose?: () => void;
   comparison: ComparisonState;
   onLeftChange: (scenario: Scenario) => void;
@@ -427,8 +419,6 @@ function ScenarioSelector({
 
 function ControlPanel({
   isOpen,
-  asModal = false,
-  onClose,
   comparison,
   onLeftChange,
   onRightChange,
@@ -446,7 +436,6 @@ function ControlPanel({
   colorScaleType,
   onColorScaleTypeChange,
   rangeMode = 'domain',
-  onRangeModeChange,
   chartGroup,
   onChartGroupChange,
   chartAxisLabelFilter,
@@ -744,7 +733,6 @@ function ControlPanel({
 
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
   const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
-  const zoneCatchmentCount = leftZoneStats?.count ?? rightZoneStats?.count ?? null;
 
   // The color scale is stretched to whichever zone is selected (Full/Extent/Site):
   // 'Full' uses the attribute's global domain across every catchment, while
@@ -842,58 +830,10 @@ function ControlPanel({
 
           <Divider />
 
-          {!asModal && viewMode !== 'dial' && onRangeModeChange && (
-            <Box>
-              <HStack justify="space-between" align="center" mb={2}>
-                <Heading size="sm">
-                  Zone Range
-                </Heading>
-                {/* The count belongs to the zone, not to either scenario — both
-                    always reported the same number. */}
-                {zoneCatchmentCount !== null && (
-                  <Text fontSize="xs" color="gray.500">
-                    ({zoneCatchmentCount} catchments)
-                  </Text>
-                )}
-              </HStack>
-              <ButtonGroup size="xs" isAttached variant="outline" width="100%">
-                <Button
-                  flex="1"
-                  leftIcon={<FiGlobe size={12} />}
-                  onClick={() => onRangeModeChange('domain')}
-                  variant={rangeMode === 'domain' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'domain' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'domain' ? colors.dark: undefined}
-                >
-                  Full
-                </Button>
-                <Button
-                  flex="1"
-                  leftIcon={<FiSquare size={12} />}
-                  onClick={() => onRangeModeChange('extent')}
-                  variant={rangeMode === 'extent' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'extent' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'extent' ? colors.dark: undefined}
-                >
-                  Extent
-                </Button>
-                <Button
-                  flex="1"
-                  leftIcon={<FiTarget size={12} />}
-                  onClick={() => onRangeModeChange('site')}
-                  variant={rangeMode === 'site' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'site' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'site' ? colors.dark: undefined}
-                  isDisabled={!!isExploreMode}
-                >
-                  Site
-                </Button>
-              </ButtonGroup>
-            </Box>
-          )}
+          {/* The Zone Range control (Full / Extent / Site) was here. It is the
+              same control the header already carries in its range group, and
+              two copies of one setting is one too many. The catchment count
+              it also showed is now in the header beside the site area. */}
 
           {/* Parent Group selector — chart view only */}
           {viewMode === 'chart' && (
@@ -1220,20 +1160,6 @@ function ControlPanel({
           {/* Info footer intentionally hidden */}
     </VStack>
   );
-
-  if (asModal) {
-    return (
-      <Modal isOpen={isOpen} onClose={() => onClose?.()} size="xl" scrollBehavior="inside" isCentered>
-        <ModalOverlay />
-        <ModalContent bg={bgColor} maxH="85vh">
-          <ModalCloseButton zIndex={1} />
-          <ModalBody p={0} pt={10} pb={2}>
-            {panelContent}
-          </ModalBody>
-        </ModalContent>
-      </Modal>
-    );
-  }
 
   return (
     <Slide

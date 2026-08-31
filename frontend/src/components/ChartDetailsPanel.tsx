@@ -18,11 +18,13 @@
  * Anything not loaded is reported as not loaded. A diagnostic that fills in a
  * plausible number is worse than one that admits it does not know.
  */
-import { Box, HStack, IconButton, Slide, VStack } from '@chakra-ui/react';
-import { FiChevronRight } from 'react-icons/fi';
+import { Box, Button, HStack, IconButton, Slide, VStack } from '@chakra-ui/react';
+import { FiArrowLeft, FiChevronRight } from 'react-icons/fi';
 import { useEffect, useState } from 'react';
 import { SCENARIO_COLORS, formatValue } from '../lib/dialScale';
 import type { ScaleDerivation } from '../lib/dialScale';
+import CalculationDetails from './CalculationDetails';
+import type { CalculationDetailsProps } from './CalculationDetails';
 
 const STRINGS = {
   heading: 'Chart details',
@@ -49,6 +51,11 @@ const STRINGS = {
   notLoaded: 'not loaded',
   none: 'none declared',
   zeroCentred: 'Scale centred on zero (dial_0_middle)',
+  showCalculations: 'Show calculations',
+  backToScale: 'Back to scale',
+  calculationsHeading: 'Calculations',
+  noCalculations: 'No calculations to show for this factor.',
+  fellBack: 'Values fell back to the site indicators — the active range mode had none.',
 } as const;
 
 function Range({ range }: { range: { min: number; max: number } | null }) {
@@ -110,9 +117,18 @@ export interface ChartDetailsPanelProps {
   isOpen: boolean;
   onClose: () => void;
   derivation: ScaleDerivation | null;
+  /** The target arithmetic, shown behind "Show calculations". */
+  calculations: CalculationDetailsProps | null;
 }
 
-function ChartDetailsPanel({ isOpen, onClose, derivation }: ChartDetailsPanelProps) {
+function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartDetailsPanelProps) {
+  // Two views, one panel. The scale is what you meet; the calculations are a
+  // step further in, and replace the content rather than opening a second
+  // surface over the chart they describe.
+  const [view, setView] = useState<'scale' | 'calculations'>('scale');
+  // A new chart starts at the scale again — the calculations you were reading
+  // were about the old one.
+  useEffect(() => { setView('scale'); }, [derivation?.attribute]);
   // The header is content-sized rather than a fixed height, so it is measured —
   // the same reason the target editor measures it.
   const [headerOffset, setHeaderOffset] = useState(0);
@@ -160,7 +176,18 @@ function ChartDetailsPanel({ isOpen, onClose, derivation }: ChartDetailsPanelPro
         flexDirection="column"
       >
         <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
-          <Box fontSize="md" fontWeight="bold" flex="1">{STRINGS.heading}</Box>
+          {view === 'calculations' && (
+            <IconButton
+              aria-label={STRINGS.backToScale}
+              icon={<FiArrowLeft />}
+              size="sm"
+              variant="ghost"
+              onClick={() => setView('scale')}
+            />
+          )}
+          <Box fontSize="md" fontWeight="bold" flex="1">
+            {view === 'calculations' ? STRINGS.calculationsHeading : STRINGS.heading}
+          </Box>
           <IconButton
             aria-label={STRINGS.close}
             icon={<FiChevronRight />}
@@ -170,7 +197,15 @@ function ChartDetailsPanel({ isOpen, onClose, derivation }: ChartDetailsPanelPro
           />
         </HStack>
 
-        {!derivation ? (
+        {view === 'calculations' ? (
+          <Box px={4} pb={4} flex="1" overflowY="auto">
+            {calculations ? (
+              <CalculationDetails {...calculations} />
+            ) : (
+              <Box fontSize="sm" color="gray.400">{STRINGS.noCalculations}</Box>
+            )}
+          </Box>
+        ) : !derivation ? (
           <Box px={4} py={3} fontSize="sm" color="gray.400">{STRINGS.nothing}</Box>
         ) : (
           <Box px={2} pb={4} flex="1" overflowY="auto">
@@ -248,6 +283,22 @@ function ChartDetailsPanel({ isOpen, onClose, derivation }: ChartDetailsPanelPro
                 })}
               </Section>
             </VStack>
+
+            {/* A step further in, replacing this content rather than opening a
+                second surface over the chart it describes. */}
+            {calculations && (
+              <Box pt={5} px={2}>
+                <Button
+                  size="sm"
+                  width="100%"
+                  variant="outline"
+                  colorScheme="cyan"
+                  onClick={() => setView('calculations')}
+                >
+                  {STRINGS.showCalculations}
+                </Button>
+              </Box>
+            )}
           </Box>
         )}
       </Box>

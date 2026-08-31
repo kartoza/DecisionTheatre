@@ -41,6 +41,7 @@ import {
   shouldPromptResumeSession,
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
+import type { CalculationDetailsProps } from './components/CalculationDetails';
 import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
 
@@ -65,11 +66,6 @@ function App() {
     const mode = loadLayoutMode();
     return mode === 'single' ? loadFocusedPane() : null;
   });
-  // True when the control panel was opened from grid view via the per-pane
-  // "Configure factor" button — renders it as a centered Modal instead of the
-  // slide-out side panel, and is scoped to indicatorPaneIndex without switching
-  // layoutMode away from 'quad'.
-  const [isGridControlModal, setIsGridControlModal] = useState(false);
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
   // If this is a brand-new tab (not a same-tab refresh) and there's saved
@@ -396,7 +392,6 @@ function App() {
       // The three right-hand panels dock into the same slot, so opening one
       // dismisses the others rather than stacking on the same pixels.
       setIndicatorPaneIndex(null);
-      setIsGridControlModal(false);
       setChartDetails(null);
       onOpenTargetModal();
     }
@@ -406,15 +401,22 @@ function App() {
   // was handed when it opened. The derivation is stored rather than recomputed
   // here, because half of it is intermediate state of ViewPane's dial
   // calculation that cannot be reproduced from outside it.
-  const [chartDetails, setChartDetails] = useState<{ paneIndex: number; derivation: ScaleDerivation | null } | null>(null);
+  const [chartDetails, setChartDetails] = useState<{
+    paneIndex: number;
+    derivation: ScaleDerivation | null;
+    calculations: CalculationDetailsProps | null;
+  } | null>(null);
 
-  const handleOpenChartDetails = useCallback((paneIndex: number, derivation: ScaleDerivation | null) => {
+  const handleOpenChartDetails = useCallback((
+    paneIndex: number,
+    derivation: ScaleDerivation | null,
+    calculations: CalculationDetailsProps | null,
+  ) => {
     // All three right-hand panels share one slot, so opening this closes the
     // others rather than stacking on the same pixels.
     setIndicatorPaneIndex(null);
-    setIsGridControlModal(false);
     onCloseTargetModal();
-    setChartDetails({ paneIndex, derivation });
+    setChartDetails({ paneIndex, derivation, calculations });
   }, [onCloseTargetModal]);
 
   // The other direction of the same rule. The control panel is opened from a
@@ -581,26 +583,22 @@ function App() {
     setFocusedPane(paneIndex);
     setLayoutMode('single');
     setIndicatorPaneIndex(paneIndex);
-    setIsGridControlModal(false);
   }, []);
 
   // Switch to quad mode and hide filter panel
   const handleGoQuad = useCallback(() => {
     setLayoutMode('quad');
     setIndicatorPaneIndex(null);
-    setIsGridControlModal(false);
     setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
   }, [focusedPane]);
 
   // Open the control panel as a modal, scoped to one pane, while staying in grid view.
   const handleOpenGridControlPanel = useCallback((paneIndex: number) => {
     setIndicatorPaneIndex(paneIndex);
-    setIsGridControlModal(true);
   }, []);
 
   const handleCloseGridControlPanel = useCallback(() => {
     setIndicatorPaneIndex(null);
-    setIsGridControlModal(false);
   }, []);
 
   // Listen for demo event to reset to single pane map view.
@@ -1024,14 +1022,9 @@ function App() {
     setMapRefreshSeq((seq) => seq + 1);
   }, [currentSiteId, currentSite]);
 
-  // Only treat the panel as the grid-view modal while actually in quad layout —
-  // guards against isGridControlModal staying stale true if some other flow
-  // (e.g. a demo tour reset) forces layoutMode back to 'single' without going
-  // through handleFocusPane/handleGoQuad/handleCloseGridControlPanel.
-  const isGridControlPanelActive = isGridControlModal && layoutMode === 'quad';
-  // Excludes the grid-view control panel modal — that one overlays the grid without
-  // shrinking it, unlike the slide-out panel used in single pane mode.
-  const isIndicatorOpen = indicatorPaneIndex !== null && !isGridControlPanelActive;
+  // The control panel is the same slide-out in every layout now, so there is no
+  // longer a grid-only modal variant to exclude.
+  const isIndicatorOpen = indicatorPaneIndex !== null;
 
   // Show setup guide when tiles aren't loaded
   if (info && !info.tiles_loaded) {
@@ -1207,6 +1200,16 @@ function App() {
         onNavigate={handleNavigate}
         currentPage={currentPage}
         siteTitle={currentSite?.title}
+        // The site's own area and catchment count, stated once here instead of
+        // once per table pane. indicators.totalAreaKm2 is the extracted total;
+        // site.area is the boundary's own area, used when indicators have not
+        // been extracted yet.
+        siteAreaKm2={currentSite?.indicators?.totalAreaKm2 ?? currentSite?.area ?? null}
+        siteCatchmentCount={
+          currentSite?.indicators?.catchmentCount
+          ?? currentSite?.catchmentIds?.length
+          ?? null
+        }
         onEditBoundary={currentSite && viewModes[focusedPane] === 'map' ? handleToggleBoundaryEdit : undefined}
         isBoundaryEditMode={isBoundaryEditMode}
         onToggleTargetModal={handleToggleTargetModal}
@@ -1306,12 +1309,12 @@ function App() {
           isOpen={chartDetails !== null}
           onClose={() => setChartDetails(null)}
           derivation={chartDetails?.derivation ?? null}
+          calculations={chartDetails?.calculations ?? null}
         />
 
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
-          asModal={isGridControlPanelActive}
           onClose={handleCloseGridControlPanel}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}

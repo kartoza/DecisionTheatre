@@ -5,7 +5,7 @@ import {
 } from '@chakra-ui/react';
 import {
   FiActivity, FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
-  FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
+  FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
 } from 'react-icons/fi';
 import { colors } from '../styles/colors';
 import type { RangeMode, ViewMode } from '../types';
@@ -38,6 +38,7 @@ const STRINGS = {
   rangeGroupLabel: 'Colour range',
   map: 'Map',
   chart: 'Chart',
+  flat: 'Flat',
   dial: 'Dial',
   table: 'Table',
   rangeFull: 'Full',
@@ -77,6 +78,7 @@ function zoomToSite() {
 const VIEW_MODES: { id: ViewMode; label: string; icon: React.ReactElement }[] = [
   { id: 'map', label: STRINGS.map, icon: <FiMap /> },
   { id: 'chart', label: STRINGS.chart, icon: <FiBarChart2 /> },
+  { id: 'flat', label: STRINGS.flat, icon: <FiMinus /> },
   { id: 'dial', label: STRINGS.dial, icon: <FiActivity /> },
   { id: 'table', label: STRINGS.table, icon: <FiTable /> },
 ];

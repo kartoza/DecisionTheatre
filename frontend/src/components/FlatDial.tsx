@@ -30,7 +30,7 @@ import {
   normalize,
   tickValues,
 } from '../lib/dialScale';
-import { saveDialShape, saveScaleLock } from '../lib/dialPreferences';
+import { saveScaleLock } from '../lib/dialPreferences';
 
 const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
   { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
@@ -57,8 +57,6 @@ export interface FlatDialProps {
   zeroCentered?: boolean;
   /** Whether the scale is being held still while values move. */
   isScaleLocked?: boolean;
-  /** Open the details panel explaining how this chart's numbers were reached. */
-  onOpenChartDetails?: () => void;
 }
 
 function FlatDial({
@@ -82,7 +80,6 @@ function FlatDial({
   isLoading = false,
   zeroCentered = false,
   isScaleLocked = false,
-  onOpenChartDetails,
 }: FlatDialProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 300 });
@@ -364,24 +361,6 @@ function FlatDial({
                       </Tooltip>
                     );
                   })}
-                  <Tooltip label="Show as a dial" placement="bottom">
-                    <Button
-                      size="sm"
-                      aria-label="Show as a dial"
-                      onClick={() => saveDialShape('arc')}
-                      variant="ghost"
-                      color="gray.300"
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      fontSize="xs"
-                      px={2}
-                      ml={1}
-                      borderLeft={onRangeModeChange ? "1px solid" : undefined}
-                      borderColor="whiteAlpha.300"
-                      borderRadius={0}
-                    >
-                      Dial
-                    </Button>
-                  </Tooltip>
                   <Tooltip
                     label={isScaleLocked
                       ? 'Scale is held still — only the values move'
@@ -398,25 +377,6 @@ function FlatDial({
                         <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
                       </Checkbox>
                     </Box>
-                  </Tooltip>
-                  <Tooltip label="Explain this chart's numbers" placement="bottom">
-                    <Button
-                      size="sm"
-                      aria-label="Explain this chart's numbers"
-                      onClick={() => onOpenChartDetails?.()}
-                      variant="ghost"
-                      color="gray.300"
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      fontSize="sm"
-                      fontWeight={700}
-                      px={2}
-                      ml={1}
-                      borderLeft="1px solid"
-                      borderColor="whiteAlpha.300"
-                      borderRadius={0}
-                    >
-                      ?
-                    </Button>
                   </Tooltip>
                 </HStack>
               </Box>

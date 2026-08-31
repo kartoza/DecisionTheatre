@@ -130,15 +130,37 @@ describe('a locked arc', () => {
   });
 });
 
-describe('the shape toggle label', () => {
-  it('calls the arc a dial, which is what it is called everywhere else', () => {
+describe('the widget control cluster', () => {
+  it('carries no shape toggle — the shape is a view mode in the header', () => {
+    // Six panes each carrying a Dial/Flat button was six copies of one global
+    // choice. It is picked once now, from the same cluster as the other views.
     cleanup();
     render(
       <ChakraProvider theme={theme}>
         <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
       </ChakraProvider>,
     );
-    expect(screen.getByRole('button', { name: /show as a dial/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /arc/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /show as a dial/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /flat band/i })).toBeNull();
+  });
+
+  it('carries no help button — the pane\'s own info icon opens the panel', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
+      </ChakraProvider>,
+    );
+    expect(screen.queryByRole('button', { name: /explain this chart/i })).toBeNull();
+  });
+
+  it('keeps the lock, which is per-chart rather than global', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial visible min={0} max={100} currentValue={50} onRangeModeChange={() => {}} />
+      </ChakraProvider>,
+    );
+    expect(screen.getByRole('checkbox', { name: /lock scale/i })).toBeInTheDocument();
   });
 });

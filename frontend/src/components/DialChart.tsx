@@ -3,7 +3,7 @@ import { Box, Checkbox, HStack, Button, Spinner, Tooltip } from '@chakra-ui/reac
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
 import type { RangeMode } from '../types';
-import { saveDialShape, saveScaleLock } from '../lib/dialPreferences';
+import { saveScaleLock } from '../lib/dialPreferences';
 import {
   SCENARIO_COLORS,
   bandGradientStops,
@@ -57,8 +57,6 @@ interface DialChartProps {
   zeroCentered?: boolean;
   /** Whether the scale is being held still while values move. */
   isScaleLocked?: boolean;
-  /** Open the details panel explaining how this chart's numbers were reached. */
-  onOpenChartDetails?: () => void;
 }
 
 function DialChart({
@@ -79,7 +77,6 @@ function DialChart({
   isLoading = false,
   zeroCentered = false,
   isScaleLocked = false,
-  onOpenChartDetails,
 }: DialChartProps) {
   const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -624,24 +621,6 @@ function DialChart({
                       </Tooltip>
                     );
                   })}
-                  <Tooltip label="Show as a flat band" placement="bottom">
-                    <Button
-                      size="sm"
-                      aria-label="Show as a flat band"
-                      onClick={() => saveDialShape('flat')}
-                      variant="ghost"
-                      color="gray.300"
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      fontSize="xs"
-                      px={2}
-                      ml={1}
-                      borderLeft={onRangeModeChange ? "1px solid" : undefined}
-                      borderColor="whiteAlpha.300"
-                      borderRadius={0}
-                    >
-                      Flat
-                    </Button>
-                  </Tooltip>
                   {/* The same control the flat band carries. The hold itself is
                       applied in ViewPane, so it has always reached the arc — it
                       just had no way to be switched on from here. */}
@@ -661,25 +640,6 @@ function DialChart({
                         <Box fontSize="xs" color="gray.300" pr={1}>Lock scale</Box>
                       </Checkbox>
                     </Box>
-                  </Tooltip>
-                  <Tooltip label="Explain this chart's numbers" placement="bottom">
-                    <Button
-                      size="sm"
-                      aria-label="Explain this chart's numbers"
-                      onClick={() => onOpenChartDetails?.()}
-                      variant="ghost"
-                      color="gray.300"
-                      _hover={{ bg: 'whiteAlpha.200' }}
-                      fontSize="sm"
-                      fontWeight={700}
-                      px={2}
-                      ml={1}
-                      borderLeft="1px solid"
-                      borderColor="whiteAlpha.300"
-                      borderRadius={0}
-                    >
-                      ?
-                    </Button>
                   </Tooltip>
                 </HStack>
               </Box>

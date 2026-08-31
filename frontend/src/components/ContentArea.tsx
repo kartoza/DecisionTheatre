@@ -9,6 +9,7 @@ import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, Ma
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import type { ScaleDerivation } from '../lib/dialScale';
+import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
@@ -20,7 +21,11 @@ interface ContentAreaProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
-  onOpenChartDetails?: (paneIndex: number, derivation: ScaleDerivation | null) => void;
+  onOpenChartDetails?: (
+    paneIndex: number,
+    derivation: ScaleDerivation | null,
+    calculations: CalculationDetailsProps | null,
+  ) => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;

@@ -3,7 +3,6 @@ import {
   Flex,
   IconButton,
   Spacer,
-  Badge,
   HStack,
   Text,
   useColorModeValue,
@@ -18,8 +17,7 @@ import {
   Button,
   useDisclosure,
 } from '@chakra-ui/react';
-import { FiLayers, FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload, FiSettings } from 'react-icons/fi';
-import { useServerInfo } from '../hooks/useApi';
+import { FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiBarChart2, FiDownload, FiSettings } from 'react-icons/fi';
 import { clearBrowserAppCache } from '../types';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -29,12 +27,27 @@ import { colors } from '../styles/colors';
 import GridControls from './GridControls';
 import type { RangeMode, ViewMode } from '../types';
 
+/** Compact area for the header, where there is no room for six digits. */
+function formatArea(km2: number): string {
+  if (!Number.isFinite(km2)) return '—';
+  if (km2 >= 1000) return `${(km2 / 1000).toFixed(1)}K`;
+  if (km2 >= 100) return km2.toFixed(0);
+  return km2.toFixed(1);
+}
+
 interface HeaderProps {
   onToggleDocs: () => void;
   isDocsOpen: boolean;
   onNavigate?: (page: AppPage) => void;
   currentPage?: AppPage;
   siteTitle?: string | null;
+  /**
+   * Facts about the open site, shown once here rather than repeated in every
+   * pane. The area is the site's own total — not any factor's valid area, which
+   * is a smaller and per-factor number and stays with the factor.
+   */
+  siteAreaKm2?: number | null;
+  siteCatchmentCount?: number | null;
   onEditBoundary?: () => void;
   isBoundaryEditMode?: boolean;
   onToggleTargetModal?: () => void;
@@ -66,8 +79,7 @@ interface HeaderProps {
   };
 }
 
-function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, onEditBoundary, isBoundaryEditMode, gridControls }: HeaderProps) {
-  const { info } = useServerInfo();
+function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, siteAreaKm2, siteCatchmentCount, onEditBoundary, isBoundaryEditMode, gridControls }: HeaderProps) {
   const isBrowser = getAppRuntime() === 'browser';
   const bgColor = useColorModeValue('white', colors.darkGray);
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -205,22 +217,36 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
           </HStack>
         )}
 
-        {/* Status indicators - only show on map page */}
-        {currentPage === 'map' && (
-          <HStack spacing={1} display={{ base: 'none', md: 'flex' }}>
-            <Tooltip label={info?.tiles_loaded ? 'Tiles loaded' : 'No tiles'}>
-              <Badge
-                colorScheme={info?.tiles_loaded ? 'green' : 'gray'}
-                variant="subtle"
-                display="flex"
-                alignItems="center"
-                gap={1}
-                px={2}
-              >
-                <FiLayers size={12} />
-                <Text fontSize="xs">Tiles</Text>
-              </Badge>
-            </Tooltip>
+        {/*
+          Facts about the open site. Every table pane used to carry its own copy
+          of both, so a six-pane grid stated the same area and the same catchment
+          count six times over. They belong to the site, so they are stated once.
+
+          The Tiles badge that used to sit here is gone: it reported a condition
+          the application already refuses to start without.
+        */}
+        {currentPage === 'map' && (siteAreaKm2 != null || siteCatchmentCount != null) && (
+          <HStack spacing={3} display={{ base: 'none', md: 'flex' }} pr={1}>
+            {siteAreaKm2 != null && (
+              <Tooltip label="Total area of the open site">
+                <HStack spacing={1} color="gray.400">
+                  <Text fontSize="xs" fontWeight="600" color="gray.200">
+                    {formatArea(siteAreaKm2)}
+                  </Text>
+                  <Text fontSize="xs">km²</Text>
+                </HStack>
+              </Tooltip>
+            )}
+            {siteCatchmentCount != null && (
+              <Tooltip label="Catchments in the site boundary">
+                <HStack spacing={1} color="gray.400">
+                  <Text fontSize="xs" fontWeight="600" color="gray.200">
+                    {siteCatchmentCount.toLocaleString()}
+                  </Text>
+                  <Text fontSize="xs">{siteCatchmentCount === 1 ? 'catchment' : 'catchments'}</Text>
+                </HStack>
+              </Tooltip>
+            )}
           </HStack>
         )}
 

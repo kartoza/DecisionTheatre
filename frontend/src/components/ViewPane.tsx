@@ -1,27 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Button, Divider, Flex, HStack, IconButton,
-  Modal, ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay,
-  Spinner, Table, Tbody, Td, Text, Th, Thead, Tooltip, Tr, VStack,
+  Box, Flex, HStack, IconButton, Spinner, Text, Tooltip,
   useColorModeValue,
 } from '@chakra-ui/react';
-import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
+import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiActivity, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
 import { BsGrid3X3, BsGrid } from 'react-icons/bs';
 import MapView from './MapView';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { loadDialShape, onDialShapeChange, loadScaleLock, onScaleLockChange } from '../lib/dialPreferences';
-import type { DialShape } from '../lib/dialPreferences';
+import { loadScaleLock, onScaleLockChange } from '../lib/dialPreferences';
 import { attributeSpread, capRange, resolveHeldRange } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
 import type { HeldRange, ScaleDerivation } from '../lib/dialScale';
+import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
-import { COLUMN_FORMULAS, getTriggeredWorkflows } from '../constants/calculationFormulas';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
 interface ViewPaneProps {
@@ -40,7 +37,11 @@ interface ViewPaneProps {
    * show. Passed at the moment of opening rather than held in App, so the panel
    * cannot show a stale account of a chart that has since changed.
    */
-  onOpenChartDetails?: (paneIndex: number, derivation: ScaleDerivation | null) => void;
+  onOpenChartDetails?: (
+    paneIndex: number,
+    derivation: ScaleDerivation | null,
+    calculations: CalculationDetailsProps | null,
+  ) => void;
   canRemove?: boolean;
   onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
@@ -100,7 +101,8 @@ const MAP_RELEASE_DELAY_MS = 15_000;
 // Icons and labels for each view mode
 const VIEW_MODE_CONFIG: Record<ViewMode, { icon: React.ReactElement; label: string; nextLabel: string }> = {
   map: { icon: <FiMap />, label: 'Map', nextLabel: 'Show line chart' },
-  chart: { icon: <FiBarChart2 />, label: 'Chart', nextLabel: 'Show dial gauge' },
+  chart: { icon: <FiBarChart2 />, label: 'Chart', nextLabel: 'Show flat band' },
+  flat: { icon: <FiMinus />, label: 'Flat', nextLabel: 'Show dial gauge' },
   dial: { icon: <FiActivity />, label: 'Dial', nextLabel: 'Show aggregate table' },
   table: { icon: <FiTable />, label: 'Table', nextLabel: 'Show map' },
 };
@@ -160,7 +162,6 @@ function ViewPane({
   const { units: attributeUnits } = useAttributeUnits();
   const { dial0Middle: attributeDial0Middle, loading: dial0MiddleLoading } = useAttributeDial0Middle();
   const { targetRanges: attributeTargetRanges, loading: targetRangesLoading } = useAttributeTargetRanges();
-  const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
 
   // Mount MapView only while the pane is showing a map, plus a grace period.
   // A pane that has never been in map mode never pays for map initialization
@@ -203,8 +204,11 @@ function ViewPane({
   // the same props; only the drawing differs, so the choice is a swap of the
   // component and nothing else. Global rather than per pane — the point of
   // having two is comparing them, and six panes disagreeing would not help.
-  const [dialShape, setDialShape] = useState<DialShape>(loadDialShape);
-  useEffect(() => onDialShapeChange(setDialShape), []);
+
+  // The shape is the view mode. It used to be a stored preference toggled on
+  // each widget, which meant six identical toggles for one global choice; it is
+  // now picked once from the header, beside the other views.
+  const isDialView = viewMode === 'dial' || viewMode === 'flat';
 
   // Whether the dial's scale holds still while its values move. Applied here
   // rather than inside either dial, because this is where min/max is derived —
@@ -232,7 +236,7 @@ function ViewPane({
   const siteCatchmentCount = siteIndicators?.catchmentCount;
 
   useEffect(() => {
-    if (viewMode !== 'dial' || !siteId || !comparison.attribute) {
+    if (!isDialView || !siteId || !comparison.attribute) {
       setDialCatchmentData(null);
       setDialCatchmentLoading(false);
       return;
@@ -284,7 +288,7 @@ function ViewPane({
       });
 
     return () => { cancelled = true; };
-  }, [comparison.attribute, siteId, viewMode, siteExtractedAt, siteCatchmentCount]);
+  }, [comparison.attribute, siteId, isDialView, siteExtractedAt, siteCatchmentCount]);
 
   /**
    * The bbox this pane's aggregates are scoped to, as a string, or '' when the
@@ -310,7 +314,7 @@ function ViewPane({
   }, [rangeMode, mapExtent]);
 
   useEffect(() => {
-    if (viewMode !== 'dial' || !comparison.attribute) {
+    if (!isDialView || !comparison.attribute) {
       setDialRangeValues(null);
       setDialRangeLoading(false);
       return;
@@ -375,7 +379,7 @@ function ViewPane({
 
     return () => { cancelled = true; abort.abort(); };
   }, [
-    viewMode,
+    isDialView,
     rangeMode,
     comparison.attribute,
     comparison.leftScenario,
@@ -534,6 +538,27 @@ function ViewPane({
     ({ min, max } = capRange({ min, max }, attributeTargetRanges[attribute]));
     const afterCap = { min, max };
 
+    // Site indicators as the last resort for the values.
+    //
+    // Extent mode needs a map extent to aggregate over, and Full mode needs the
+    // domain statistics; in a grid neither is available, because
+    // allowMapStatisticsFallback is false there and the shared mapStatistics
+    // describes the focused pane rather than this one's factor. The result was
+    // every belt reading Reference N/A, Current N/A, Target N/A with no markers
+    // at all — a dial showing nothing because of how its *scale* was chosen.
+    //
+    // The site's own indicators are keyed by factor, so they are correct for any
+    // pane whatever it is showing. Values only: the scale still comes from the
+    // mode that was asked for.
+    const usedSiteIndicatorFallback =
+      siteIndicators != null &&
+      (referenceValue === undefined || currentValue === undefined);
+    if (usedSiteIndicatorFallback) {
+      if (referenceValue === undefined) referenceValue = siteIndicators?.reference?.[attribute];
+      if (currentValue === undefined) currentValue = siteIndicators?.current?.[attribute];
+      if (targetValue === undefined) targetValue = siteIndicators?.ideal?.[attribute];
+    }
+
     // Fallback when statistics are unavailable.
     if (allowMapStatisticsFallback && !siteIndicators && !dialCatchmentData && mapStatistics) {
       const leftMean = mapStatistics.leftStats?.mean;
@@ -613,6 +638,7 @@ function ViewPane({
       // could not be reproduced from outside it without repeating it.
       beforeCap, afterCap, afterValues,
       zeroCentred: Boolean(attributeDial0Middle[attribute]),
+      usedSiteIndicatorFallback,
     };
   // useMemo has a missing dependency: 'dialCatchmentLoading'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
@@ -623,7 +649,7 @@ function ViewPane({
   const paneLabel = `${leftInfo?.label || ''} vs ${rightInfo?.label || ''}`;
 
   const isQuad = layoutMode === 'quad';
-  const showDialFactorPrompt = isQuad && viewMode === 'dial' && !comparison.attribute;
+  const showDialFactorPrompt = isQuad && (viewMode === 'dial' || viewMode === 'flat') && !comparison.attribute;
   const denseDialLayout = isQuad && paneCount > 4;
   const hidePaneLabel = isQuad && (viewMode === 'map' || viewMode === 'chart' || viewMode === 'table');
   const btnSize = compact ? 'xs' : 'sm';
@@ -643,19 +669,7 @@ function ViewPane({
       .filter((x): x is { key: string; ref: number; ideal: number; delta: number } => x !== null);
   }, [editableTargetKeys, siteIndicators]);
 
-  const triggeredWorkflows = useMemo(
-    () => getTriggeredWorkflows(changedInputs.map((x) => x.key)),
-    [changedInputs],
-  );
 
-  const fv = (n: number) => {
-    if (!Number.isFinite(n)) return '—';
-    if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-    if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(2) + 'K';
-    if (Math.abs(n) < 0.01 && n !== 0) return n.toFixed(6);
-    if (Math.abs(n) < 10) return n.toFixed(3);
-    return n.toFixed(1);
-  };
 
   /**
    * What each range mode would give, whether or not it is the active one.
@@ -682,7 +696,19 @@ function ViewPane({
     };
   }, [mapStatistics, dialCatchmentData]);
 
-  const DialComponent = dialShape === 'flat' ? FlatDial : DialChart;
+  /**
+   * What the calculations view of the details panel needs.
+   *
+   * Assembled here because these are ViewPane's own inputs; the panel renders
+   * it for whichever pane asked, and holds none of it itself.
+   */
+  const calculationDetails = useMemo(() => (
+    comparison.attribute
+      ? { attribute: comparison.attribute, siteIndicators, attributeDetails, changedInputs }
+      : null
+  ), [comparison.attribute, siteIndicators, attributeDetails, changedInputs]);
+
+  const DialComponent = viewMode === 'flat' ? FlatDial : DialChart;
 
   // The scale actually drawn against. Unlocked, it is whatever dialData just
   // derived. Locked, it is whatever was held when the lock was taken — so
@@ -854,14 +880,13 @@ function ViewPane({
 
       {/* Dial Chart layer */}
       <DialComponent
-        visible={viewMode === 'dial' && !showDialFactorPrompt}
+        visible={isDialView && !showDialFactorPrompt}
         referenceValue={dialData?.referenceValue}
         currentValue={dialData?.currentValue}
         targetValue={targetHasBeenUpdated && (dialData?.targetChanged ?? false) ? dialData?.targetValue : undefined}
         min={dialMin}
         max={dialMax}
         isScaleLocked={isScaleLocked}
-        onOpenChartDetails={onOpenChartDetails ? () => onOpenChartDetails(paneIndex, dialDerivation) : undefined}
         attribute={dialAttributeLabel}
         unit={comparison.attribute ? (attributeUnits[comparison.attribute] ?? '') : ''}
         rangeMode={rangeMode}
@@ -971,12 +996,15 @@ function ViewPane({
         {/* Layout toggle — context-dependent */}
         {isQuad ? (
           <>
-            {targetHasBeenUpdated && comparison.attribute && (
-              <Tooltip label="View calculation details" placement="top">
+            {/* No longer gated on a target having been set: the panel now
+                explains the scale as well as the target arithmetic, and the
+                scale is worth asking about whether or not a target exists. */}
+            {comparison.attribute && onOpenChartDetails && (
+              <Tooltip label="Explain this chart" placement="top">
                 <IconButton
-                  aria-label="Calculation details"
+                  aria-label="Explain this chart"
                   icon={<FiInfo />}
-                  onClick={() => setIsCalcModalOpen(true)}
+                  onClick={() => onOpenChartDetails(paneIndex, dialDerivation, calculationDetails)}
                   variant="ghost"
                   color="cyan.300"
                   _hover={{ bg: 'whiteAlpha.300' }}
@@ -1057,234 +1085,10 @@ function ViewPane({
       </HStack>
 
       {/* Calculation details modal */}
-      <Modal isOpen={isCalcModalOpen} onClose={() => setIsCalcModalOpen(false)} size="lg" scrollBehavior="inside">
-        <ModalOverlay />
-        <ModalContent bg="gray.800" color="white">
-          <ModalHeader pb={2}>
-            <Text fontSize="md" fontWeight="700">Calculation Details</Text>
-            {comparison.attribute && (
-              <VStack align="start" spacing={0} mt={1}>
-                <Text fontSize="sm" color="gray.200" fontWeight="600">
-                  {attributeDetails[comparison.attribute] ?? comparison.attribute}
-                </Text>
-                <Text fontSize="xs" color="gray.400" fontFamily="mono">{comparison.attribute}</Text>
-              </VStack>
-            )}
-          </ModalHeader>
-          <ModalCloseButton />
-          <ModalBody>
-            <VStack align="stretch" spacing={5}>
-
-              {/* ── 1. Scenario values ── */}
-              {comparison.attribute && (() => {
-                const attr = comparison.attribute;
-                const refVal  = siteIndicators?.reference?.[attr];
-                const curVal  = siteIndicators?.current?.[attr];
-                const idealVal = siteIndicators?.ideal?.[attr];
-                const ref   = typeof refVal  === 'number' && Number.isFinite(refVal)  ? refVal  : null;
-                const cur   = typeof curVal  === 'number' && Number.isFinite(curVal)  ? curVal  : null;
-                const ideal = typeof idealVal === 'number' && Number.isFinite(idealVal) ? idealVal : null;
-                const delta = ref !== null && ideal !== null ? ideal - ref : null;
-                const pct   = delta !== null && ref !== null && ref !== 0
-                  ? (delta / Math.abs(ref)) * 100 : null;
-                const isDirectInput = changedInputs.some((x) => x.key === attr);
-                return (
-                  <Box>
-                    <Text fontSize="xs" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
-                      Values
-                    </Text>
-                    <Table size="sm" variant="simple">
-                      <Thead>
-                        <Tr>
-                          <Th color="gray.400" borderColor="gray.600" fontSize="xs">Scenario</Th>
-                          <Th color="gray.400" borderColor="gray.600" fontSize="xs" isNumeric>Value</Th>
-                        </Tr>
-                      </Thead>
-                      <Tbody>
-                        <Tr>
-                          <Td borderColor="gray.700" fontSize="sm">Reference (baseline)</Td>
-                          <Td borderColor="gray.700" fontSize="sm" isNumeric fontFamily="mono">{ref !== null ? fv(ref) : '—'}</Td>
-                        </Tr>
-                        <Tr>
-                          <Td borderColor="gray.700" fontSize="sm">Current state</Td>
-                          <Td borderColor="gray.700" fontSize="sm" isNumeric fontFamily="mono">{cur !== null ? fv(cur) : '—'}</Td>
-                        </Tr>
-                        <Tr>
-                          <Td borderColor="gray.700" fontSize="sm" fontWeight="600" color="cyan.300">
-                            Target {isDirectInput ? '(set by you)' : '(calculated)'}
-                          </Td>
-                          <Td borderColor="gray.700" fontSize="sm" isNumeric fontFamily="mono" fontWeight="600" color="cyan.300">
-                            {ideal !== null ? fv(ideal) : '—'}
-                          </Td>
-                        </Tr>
-                        {delta !== null && (
-                          <Tr>
-                            <Td borderColor="gray.700" fontSize="sm" color="gray.400">Change from reference</Td>
-                            <Td borderColor="gray.700" fontSize="sm" isNumeric fontFamily="mono"
-                              color={delta > 0 ? 'green.300' : delta < 0 ? 'red.300' : 'gray.400'}>
-                              {delta >= 0 ? '+' : ''}{fv(delta)}
-                              {pct !== null && (
-                                <Text as="span" fontSize="xs" ml={1} opacity={0.75}>
-                                  ({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)
-                                </Text>
-                              )}
-                            </Td>
-                          </Tr>
-                        )}
-                      </Tbody>
-                    </Table>
-                  </Box>
-                );
-              })()}
-
-              <Divider borderColor="gray.600" />
-
-              {/* ── 2. Formula for this factor ── */}
-              {comparison.attribute && (() => {
-                const formula = COLUMN_FORMULAS[comparison.attribute];
-                const isDirectInput = changedInputs.some((x) => x.key === comparison.attribute);
-                if (!formula && !isDirectInput) return null;
-                return (
-                  <Box>
-                    <Text fontSize="xs" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.08em" mb={3}>
-                      How This Factor Is Calculated
-                    </Text>
-                    {isDirectInput && !formula && (
-                      <Text fontSize="sm" color="gray.300">
-                        This factor was <Text as="span" color="cyan.300" fontWeight="600">set directly by you</Text>. It is a user-controlled input — no formula is applied to derive it.
-                      </Text>
-                    )}
-                    {formula && (
-                      <VStack align="stretch" spacing={3}>
-                        <Box bg="gray.750" border="1px" borderColor="gray.600" borderRadius="md" p={3}>
-                          <Text fontSize="xs" color="gray.400" mb={1} fontWeight="600">Formula</Text>
-                          <Text
-                            fontSize="xs"
-                            fontFamily="mono"
-                            color="green.200"
-                            whiteSpace="pre-wrap"
-                            lineHeight="tall"
-                          >
-                            {formula.formula}
-                          </Text>
-                        </Box>
-                        <Box>
-                          <Text fontSize="xs" color="gray.400" mb={1} fontWeight="600">Explanation</Text>
-                          <Text fontSize="sm" color="gray.200" lineHeight="tall">
-                            {formula.explanation}
-                          </Text>
-                        </Box>
-                        <Text fontSize="xs" color="gray.500">
-                          Workflow: <Text as="span" color="gray.400" fontStyle="italic">{formula.workflow}</Text>
-                        </Text>
-                      </VStack>
-                    )}
-                  </Box>
-                );
-              })()}
-
-              <Divider borderColor="gray.600" />
-
-              {/* ── 3. Changed inputs ── */}
-              <Box>
-                <Text fontSize="xs" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
-                  Changed Target Inputs
-                </Text>
-                {changedInputs.length === 0 ? (
-                  <Text fontSize="sm" color="gray.500">No input factors were modified.</Text>
-                ) : (
-                  <Table size="sm" variant="simple">
-                    <Thead>
-                      <Tr>
-                        <Th color="gray.400" borderColor="gray.600" fontSize="xs">Factor</Th>
-                        <Th color="gray.400" borderColor="gray.600" fontSize="xs" isNumeric>Reference</Th>
-                        <Th color="gray.400" borderColor="gray.600" fontSize="xs" isNumeric>Target</Th>
-                        <Th color="gray.400" borderColor="gray.600" fontSize="xs" isNumeric>Change</Th>
-                      </Tr>
-                    </Thead>
-                    <Tbody>
-                      {changedInputs.map(({ key, ref, ideal, delta }) => (
-                        <Tr key={key}>
-                          <Td borderColor="gray.700" maxW="180px">
-                            <Text fontSize="xs" fontWeight="600" noOfLines={1}>{attributeDetails[key] ?? key}</Text>
-                            <Text fontSize="xs" color="gray.500" fontFamily="mono">{key}</Text>
-                          </Td>
-                          <Td borderColor="gray.700" fontSize="xs" isNumeric fontFamily="mono">{fv(ref)}</Td>
-                          <Td borderColor="gray.700" fontSize="xs" isNumeric fontFamily="mono" color="cyan.300">{fv(ideal)}</Td>
-                          <Td borderColor="gray.700" fontSize="xs" isNumeric fontFamily="mono"
-                            color={delta > 0 ? 'green.300' : 'red.300'}>
-                            {delta >= 0 ? '+' : ''}{fv(delta)}
-                          </Td>
-                        </Tr>
-                      ))}
-                    </Tbody>
-                  </Table>
-                )}
-              </Box>
-
-              {/* ── 4. Calculation chain ── */}
-              {triggeredWorkflows.length > 0 && (
-                <>
-                  <Divider borderColor="gray.600" />
-                  <Box>
-                    <Text fontSize="xs" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.08em" mb={3}>
-                      Calculation Chain
-                    </Text>
-                    <VStack align="stretch" spacing={4}>
-                      {triggeredWorkflows.map((wf, wi) => (
-                        <Box key={wi} borderLeft="3px solid" borderColor="cyan.700" pl={3}>
-                          <Text fontSize="sm" fontWeight="700" color="cyan.200" mb={1}>
-                            {wi + 1}. {wf.name}
-                          </Text>
-                          <Text fontSize="xs" color="gray.400" mb={2} fontStyle="italic">
-                            {wf.trigger}
-                          </Text>
-                          <VStack align="stretch" spacing={1} mb={2}>
-                            {wf.steps.map((step, si) => (
-                              <HStack key={si} align="start" spacing={2}>
-                                <Text fontSize="xs" color="cyan.600" mt="1px" flexShrink={0}>›</Text>
-                                <Text
-                                  fontSize="xs"
-                                  fontFamily={step.startsWith(' ') || step.includes('=') ? 'mono' : undefined}
-                                  color={step.startsWith(' ') ? 'gray.400' : 'gray.200'}
-                                  whiteSpace="pre-wrap"
-                                >
-                                  {step}
-                                </Text>
-                              </HStack>
-                            ))}
-                          </VStack>
-                          <HStack flexWrap="wrap" gap={1}>
-                            <Text fontSize="xs" color="gray.500">Outputs:</Text>
-                            {wf.outputs.map((out) => (
-                              <Text
-                                key={out}
-                                fontSize="xs"
-                                fontFamily="mono"
-                                bg={out === comparison.attribute ? 'cyan.800' : 'gray.700'}
-                                color={out === comparison.attribute ? 'cyan.200' : 'gray.300'}
-                                px={1.5}
-                                py={0.5}
-                                borderRadius="sm"
-                              >
-                                {out}
-                              </Text>
-                            ))}
-                          </HStack>
-                        </Box>
-                      ))}
-                    </VStack>
-                  </Box>
-                </>
-              )}
-
-            </VStack>
-          </ModalBody>
-          <ModalFooter>
-            <Button size="sm" colorScheme="cyan" onClick={() => setIsCalcModalOpen(false)}>Close</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      {/* The Calculation Details modal was here. It is now a view of the
+          chart details side panel: a calculation you want to check against
+          the chart is not something to read with the chart covered up. Its
+          body moved to CalculationDetails, unchanged. */}
     </Box>
   );
 }
