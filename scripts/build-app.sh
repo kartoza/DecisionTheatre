@@ -12,12 +12,13 @@ cd "$PROJECT_ROOT"
 
 # Version comes from scripts/version.sh so every build path agrees
 VERSION=$("$SCRIPT_DIR/version.sh")
+COMMIT=$("$SCRIPT_DIR/commit.sh")
 
 # Check if webkit2gtk-4.0 already exists
 if pkg-config --exists webkit2gtk-4.0 2>/dev/null; then
     echo "==> Using system webkit2gtk-4.0"
     mkdir -p bin
-    CGO_ENABLED=1 go build -ldflags "-s -w -X main.version=$VERSION" -o bin/decision-theatre .
+    CGO_ENABLED=1 go build -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT" -o bin/decision-theatre .
     exit 0
 fi
 
@@ -54,4 +55,4 @@ export PKG_CONFIG_PATH_FOR_TARGET="$COMPAT_DIR/pkgconfig:${PKG_CONFIG_PATH_FOR_T
 export CGO_LDFLAGS="-L$COMPAT_DIR/lib ${CGO_LDFLAGS:-}"
 
 mkdir -p bin
-CGO_ENABLED=1 go build -ldflags "-s -w -X main.version=$VERSION" -o bin/decision-theatre .
+CGO_ENABLED=1 go build -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT" -o bin/decision-theatre .

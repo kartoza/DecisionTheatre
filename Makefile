@@ -20,7 +20,8 @@
 
 BINARY_NAME := decision-theatre
 VERSION ?= $(shell ./scripts/version.sh)
-LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
+COMMIT ?= $(shell ./scripts/commit.sh)
+LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 
 BIN_DIR := bin
 COVERAGE_FILE := coverage.out
@@ -34,7 +35,7 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
-.PHONY: bench bench-quick bench-report bench-list
+.PHONY: benchmark benchmark-quick benchmark-report benchmark-list benchmark-regressions
 .PHONY: container
 .PHONY: fmt fmt-check lint vet check deps
 .PHONY: check-shell check-nix check-secrets check-drift
@@ -155,44 +156,42 @@ test-all: test test-frontend test-scripts
 # Benchmarking
 # ============================
 
-## bench: Measure and stress the running server, and save the result.
+## benchmark: Measure the running server, and open the report.
 ##
-## Needs a server: start one with `dt run` first. Every run is recorded in
-## benchmarks/dtbench.sqlite and compared against the whole history, so the
-## question "is this slower than it used to be" is answered against every
-## measurement taken rather than one nominated baseline.
+## Needs a server: start one with `dt run` first. Records the run in
+## benchmarks/dtbench.sqlite along with the commit the server was built from,
+## compares it against the whole history, writes a PDF and opens it.
 ##
-## The run ends by saturating the server on purpose, so do not point it at a
-## production instance during working hours.
+## The load phase saturates the server on purpose, so use benchmark-quick
+## against anything anyone is using.
 ##
-## DT_BENCH_TARGET overrides the address, DT_BENCH_LABEL the label:
-##   make bench DT_BENCH_LABEL=before
-bench:
-	@python3 scripts/dtbench.py run \
-		--target $(or $(DT_BENCH_TARGET),http://127.0.0.1:8080) \
-		$(if $(DT_BENCH_LABEL),--label $(DT_BENCH_LABEL),)
+##   make benchmark DT_BENCH_LABEL=before
+##   make benchmark DT_BENCH_TARGET=https://your-instance
+benchmark:
+	@./scripts/benchmark.sh
 
-## bench-quick: Measure without the load phase.
-##
-## The probe and latency phases only. Seconds rather than minutes, and safe to
-## run against something someone else is using.
-bench-quick:
-	@python3 scripts/dtbench.py run \
-		--target $(or $(DT_BENCH_TARGET),http://127.0.0.1:8080) \
-		--concurrency 1 --duration 1 \
-		$(if $(DT_BENCH_LABEL),--label $(DT_BENCH_LABEL),)
+## benchmark-quick: Measure without the load phase. Seconds, not minutes.
+benchmark-quick:
+	@./scripts/benchmark.sh --quick
 
-## bench-report: Print the comparison for a recorded run.
+## benchmark-report: Rebuild and open the report for the most recent run.
 ##
-## Defaults to the most recent. DT_BENCH_RUN selects another by id, as listed
-## by `make bench-list`.
-bench-report:
-	@python3 scripts/dtbench.py report \
+## DT_BENCH_RUN selects another by id, as listed by `make benchmark-list`.
+benchmark-report:
+	@python3 scripts/dtbench.py report --pdf --open \
 		$(if $(DT_BENCH_RUN),--run $(DT_BENCH_RUN),)
 
-## bench-list: Show the recorded benchmark runs.
-bench-list:
+## benchmark-list: Show the recorded benchmark runs.
+benchmark-list:
 	@python3 scripts/dtbench.py list
+
+## benchmark-regressions: Find where in the history a measurement changed level.
+##
+## Searches the recorded runs for step changes and names the commit each one
+## first appeared in — a bisect over measurements already taken, rather than
+## rebuilding every revision to find the same answer.
+benchmark-regressions:
+	@python3 scripts/dtbench.py regressions
 
 # ============================
 # Code quality

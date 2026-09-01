@@ -42,14 +42,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures under concurrency, which the previous tool deliberately did not, and
   its report distinguishes a server that sheds load from one that queues.
 
+- **`dt benchmark`**, with `make benchmark` and `nix run .#benchmark` beside it,
+  the same three doors as everything else in the project. It measures, records,
+  compares, writes a PDF and opens it. `benchmark-quick` skips the load phase,
+  `benchmark-list` shows what has been measured and `benchmark-regressions`
+  searches the history.
+
+- **The commit is recorded with every benchmark run**, taken from the server's
+  own `/api/info` rather than from the local checkout — point the tool at
+  production and those are different, and recording the local one would attach
+  a plausible sha to somebody else's numbers. `/api/info` now reports `commit`,
+  stamped at link time by `scripts/commit.sh` on the ordinary build paths and
+  from `self.rev` under nix. An unstamped build reports `unknown` and the tool
+  records that as-is.
+
+- **`dt benchmark-regressions`**, which finds where in the recorded history a
+  measurement moved to a new level and stayed there, and names the commit it
+  first appeared in. This is the bisect, run over measurements already taken
+  rather than by rebuilding each revision. It reports steps found across
+  several unrelated endpoints at once separately and without a commit, because
+  that pattern is the machine rather than the code.
+
+- **A PDF report**, drawn by `scripts/dtbench_pdf.py` — a few hundred lines of
+  standard library that writes the PDF format directly, so the benchmark keeps
+  its most useful property of running on a server with nothing installed. Four
+  pages: what was measured and the verdict, every endpoint against its history,
+  trend charts labelled by commit, and the step changes.
+
+- **Remote targets skip the load phase** unless `--stress-remote` is passed.
+  The obvious thing to type is the production URL, and the load phase saturates
+  the server on purpose.
+
 ### Removed
 
 - **The Go benchmark tool** (`internal/bench`, `cmd/dtbench` — about 12,000
   lines), replaced by `scripts/dtbench.py`. The scenario list and the
   response-size guard were carried over; what went is the branded HTML and PDF
-  report generation. `make bench`, `bench-report` and `bench-list` now run the
-  Python tool, and `bench-quick` skips the load phase. `bench-sweep`, which
-  built each revision in a range and measured it, has no replacement.
+  report generation. `bench-sweep`, which built each revision in a range and
+  measured it, has no direct replacement — `benchmark-regressions` answers the
+  question it was usually asked, from runs already recorded.
 
 ### Fixed
 

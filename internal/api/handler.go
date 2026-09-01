@@ -406,6 +406,7 @@ func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 	info := map[string]interface{}{
 		"version":                  h.cfg.Version,
+		"commit":                   h.cfg.Commit,
 		"tiles_loaded":             h.tileStore != nil,
 		"geo_loaded":               h.gpkgStore != nil,
 		"satellite_style_url":      "/api/satellite-style.json",

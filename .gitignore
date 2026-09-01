@@ -64,6 +64,12 @@ issue-metadata-mismatch.md
 node_modules
 docs/assets/diagrams/generated/
 docs/hooks/__pycache__/
+
+# Anywhere else Python leaves bytecode. scripts/ has its own now that the
+# benchmark tool lives there, and naming each directory as it appears is how
+# one eventually gets committed.
+__pycache__/
+*.pyc
 site/
 # Stray data content (see data-readme.md)
 data-old/
@@ -94,3 +100,8 @@ screenshots-gitignored/
 # reading the difference as a regression. It also rewrites on every run, which
 # is the worst possible shape for a tracked binary.
 benchmarks/dtbench.sqlite
+
+# Generated benchmark reports. Rebuilt from the database on demand with
+# `dt benchmark-report`, so the PDF is an output rather than a record — the
+# runs table is the record, and that is already ignored above.
+benchmarks/reports/

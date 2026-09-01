@@ -59,10 +59,11 @@ COMMANDS=(
     "TEST|dt test-all|All three suites"
     "TEST|nix flake check|Every check, in a sandbox"
 
-    "MEASURE|dt bench|Measure and stress the server; compare against every prior run"
-    "MEASURE|dt bench-quick|The same without the load phase; seconds, not minutes"
-    "MEASURE|dt bench-report|Print the comparison for a recorded run"
-    "MEASURE|dt bench-list|What has been measured so far"
+    "MEASURE|dt benchmark|Measure the server, compare against every prior run, open the PDF"
+    "MEASURE|dt benchmark-quick|The same without the load phase; seconds, not minutes"
+    "MEASURE|dt benchmark-report|Rebuild and open the report for a recorded run"
+    "MEASURE|dt benchmark-list|What has been measured so far"
+    "MEASURE|dt benchmark-regressions|Where in the history a measurement changed, and which commit"
 
     "DIAGNOSE|dt run --diag|Report what the desktop window resolved its layout to"
     "DIAGNOSE|dt doctor|Is this checkout healthy? Reports; changes nothing"
