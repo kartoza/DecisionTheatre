@@ -29,6 +29,12 @@ import PanelResizeHandle from './PanelResizeHandle';
 interface ControlPanelProps {
   isOpen: boolean;
   onClose?: () => void;
+  /**
+   * Single pane's control panel is the only way to reach its factor/scenario
+   * controls — there's no per-pane "Configure factor" button to reopen it the
+   * way grid view has one for each pane — so it isn't collapsible there.
+   */
+  canCollapse?: boolean;
   comparison: ComparisonState;
   onLeftChange: (scenario: Scenario) => void;
   onRightChange: (scenario: Scenario) => void;
@@ -421,6 +427,7 @@ function ScenarioSelector({
 function ControlPanel({
   isOpen,
   onClose,
+  canCollapse = true,
   comparison,
   onLeftChange,
   onRightChange,
@@ -622,15 +629,19 @@ function ControlPanel({
     }
   }, [groupingVariableOptions, chartGroup, chartAxisLabelFilter, onChartAxisLabelFilterChange]);
 
+  // The flat dial is the same indicator, drawn as a band instead of a gauge,
+  // so it shares the dial's control-panel behavior rather than the chart's.
+  const isDialView = viewMode === 'dial' || viewMode === 'flat';
+
   const factorOptions = useMemo(() => {
-    const useGraphable = viewMode === 'chart' || viewMode === 'dial';
+    const useGraphable = viewMode === 'chart' || isDialView;
     const isAggregateTableView = viewMode === 'table';
     const filterMap = useGraphable ? canGraph : canMap;
     const filtered = Object.keys(filterMap).length > 0
       ? columns.filter((col) => {
           if (isAggregateTableView) return true;
           if (!filterMap[col]) return false;
-          if (viewMode === 'dial') {
+          if (isDialView) {
             const chartType = (chartTypes[col] || '').toLowerCase();
             if (!chartType.includes('dial')) return false;
           }
@@ -648,7 +659,7 @@ function ControlPanel({
       label: attributeDetails[col] || col,
       sublabel: attributeDetails[col] ? col : undefined,
     }));
-  }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails, axisLabels]);
+  }, [viewMode, isDialView, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails, axisLabels]);
 
   const allGraphableFactorOptions = useMemo(
     () => columns
@@ -747,7 +758,20 @@ function ControlPanel({
     : null;
   const { width: panelWidth, startResize } = usePanelWidth();
 
-
+  // The application header is content-sized, not a fixed height, so the
+  // docked panel measures it instead of repeating a magic number that goes
+  // stale the moment the header's contents change — same approach as the
+  // chart-details and target-editor panels that share this slot.
+  const [headerOffset, setHeaderOffset] = useState(0);
+  useEffect(() => {
+    const header = document.querySelector('header');
+    if (!header) return;
+    const apply = () => setHeaderOffset(header.getBoundingClientRect().height);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
 
   // The pane number identifies the card the factor belongs to, so it sits on
   // that card rather than on the panel heading. Defined once: the chart view
@@ -1041,7 +1065,7 @@ function ControlPanel({
             </Box>
           )}
 
-          {viewMode !== 'dial' && !hideScenarioSelectors && (
+          {!isDialView && !hideScenarioSelectors && (
             <>
               {/* Scenario 1 (Left) */}
               <ScenarioSelector
@@ -1067,7 +1091,7 @@ function ControlPanel({
           )}
 
           {/* Legend */}
-          {comparison.attribute && viewMode !== 'dial' && !hideColorScale && (
+          {comparison.attribute && !isDialView && !hideColorScale && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
@@ -1132,9 +1156,9 @@ function ControlPanel({
       style={{
         zIndex: 15,
         position: 'fixed',
-        top: 0,
+        top: headerOffset,
         right: 0,
-        height: '100%',
+        height: `calc(100% - ${headerOffset}px)`,
         width: 'auto',
       }}
     >
@@ -1147,27 +1171,33 @@ function ControlPanel({
         borderColor={borderColor}
         overflowY="auto"
         boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
-        pt="70px" // Header height offset
+        pt="48px"
         position="relative"
       >
         <PanelResizeHandle onResizeStart={startResize} />
         {/*
-          Collapse. Shown at every width, and wired: this was a mobile-only
-          affordance with no onClick at all, so on a desktop there was no way to
-          put the panel away and on a phone the one button offered did nothing.
-          The other two right-hand panels have carried a working one all along.
+          Collapse, in the same corner as the chart-details and target-editor
+          panels that share this slot. It used to sit at top:2 of a box padded
+          for a hardcoded 70px header, which put it visually underneath the
+          real (content-sized) header rather than below it — invisible and
+          unclickable in grid view's "Configure factor" panel. The panel now
+          docks below the measured header instead, so the button sits in the
+          clear. Single pane has no equivalent button to reopen it, so it's
+          omitted there rather than left as a dead end.
         */}
-        <Box position="absolute" top={2} right={2} zIndex={3}>
-          <Tooltip label="Collapse panel" placement="left">
-            <IconButton
-              aria-label="Collapse panel"
-              icon={<FiChevronRight />}
-              size="sm"
-              variant="ghost"
-              onClick={() => onClose?.()}
-            />
-          </Tooltip>
-        </Box>
+        {canCollapse && (
+          <Box position="absolute" top={2} right={2} zIndex={3}>
+            <Tooltip label="Collapse panel" placement="left">
+              <IconButton
+                aria-label="Collapse panel"
+                icon={<FiChevronRight />}
+                size="sm"
+                variant="ghost"
+                onClick={() => onClose?.()}
+              />
+            </Tooltip>
+          </Box>
+        )}
 
         {panelContent}
       </Box>

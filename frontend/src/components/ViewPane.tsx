@@ -898,15 +898,18 @@ function ViewPane({
         is drawn inside the pane and not the frame around it.
 
         The table shows a single scenario (it aggregates the left one), so it
-        gets a single label rather than a comparison it is not making.
+        gets a single label rather than a comparison it is not making. The
+        chart draws its own Reference/Current/Target legend, and the flat dial
+        labels its REF/NOW markers directly on the band, so for both the
+        corner labels would just repeat what is already on the chart.
       */}
       {viewMode !== 'map' && (
         <PaneHeader
           compact={compact}
           title={dialAttributeLabel}
-          leftLabel={leftInfo?.label || comparison.leftScenario}
+          leftLabel={viewMode === 'chart' || viewMode === 'flat' ? undefined : (leftInfo?.label || comparison.leftScenario)}
           leftColor={leftInfo?.color}
-          rightLabel={viewMode === 'table' ? undefined : (rightInfo?.label || comparison.rightScenario)}
+          rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' ? undefined : (rightInfo?.label || comparison.rightScenario)}
           rightColor={rightInfo?.color}
         />
       )}
