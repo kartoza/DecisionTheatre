@@ -53,11 +53,12 @@ type Props = ComponentProps<typeof ContentArea>;
 function indicators(
   catchmentCount: number,
   values: Record<string, number> = { [COLUMN]: 0.08 },
+  ideal?: Record<string, number>,
 ): SiteIndicators {
   return {
     reference: Object.fromEntries(Object.keys(values).map((k) => [k, 0.5])),
     current: { ...values },
-    ideal: { ...values },
+    ideal: { ...(ideal ?? values) },
     extractedAt: '2026-08-29T00:00:00Z',
     catchmentCount,
     totalAreaKm2: 120,
@@ -66,6 +67,7 @@ function indicators(
 
 function renderPanel(overrides: Partial<Props> = {}) {
   const onSiteIndicatorsChange = vi.fn(async (_indicators: SiteIndicators) => {});
+  const onResetTargets = vi.fn(async (_scenario: 'reference' | 'current') => {});
   const props: Props = {
     mode: 'single',
     paneStates: DEFAULT_PANE_STATES,
@@ -80,6 +82,7 @@ function renderPanel(overrides: Partial<Props> = {}) {
     isTargetModalOpen: true,
     onCloseTargetModal: vi.fn(),
     onSiteIndicatorsChange,
+    onResetTargets,
     siteIndicators: indicators(5),
     ...overrides,
   };
@@ -88,7 +91,7 @@ function renderPanel(overrides: Partial<Props> = {}) {
       <ContentArea {...props} />
     </ChakraProvider>,
   );
-  return { onSiteIndicatorsChange, props };
+  return { onSiteIndicatorsChange, onResetTargets, props };
 }
 
 /**
@@ -206,5 +209,58 @@ describe('the live update checkbox', () => {
     // that does not match the machine or the network, and being asked to
     // overrule it again on every reload would defeat that.
     expect(loadLiveUpdatePreference()).toBe(false);
+  });
+});
+
+describe('resetting the target set', () => {
+  const resetButton = (name: RegExp) => screen.getByRole('button', { name });
+
+  it('offers a reset to each observed scenario', () => {
+    renderPanel();
+    expect(resetButton(/reset to reference/i)).toBeInTheDocument();
+    expect(resetButton(/reset to current/i)).toBeInTheDocument();
+  });
+
+  it('asks before discarding target work, in the panel rather than a dialog', () => {
+    const { onResetTargets } = renderPanel();
+    fireEvent.click(resetButton(/reset to reference/i));
+
+    // Nothing has happened yet — the first click only poses the question.
+    expect(onResetTargets).not.toHaveBeenCalled();
+    expect(screen.getByText(/Set every target to the reference\?/)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does nothing when the confirmation is declined', () => {
+    const { onResetTargets } = renderPanel();
+    fireEvent.click(resetButton(/reset to reference/i));
+    fireEvent.click(resetButton(/cancel/i));
+
+    expect(onResetTargets).not.toHaveBeenCalled();
+    expect(resetButton(/reset to reference/i)).toBeInTheDocument();
+  });
+
+  it('asks for the scenario the user picked, once confirmed', () => {
+    const { onResetTargets } = renderPanel();
+    fireEvent.click(resetButton(/reset to reference/i));
+    fireEvent.click(resetButton(/^reset$/i));
+    expect(onResetTargets).toHaveBeenCalledWith('reference');
+  });
+
+  it('asks for current when that is the button pressed', () => {
+    const { onResetTargets } = renderPanel();
+    fireEvent.click(resetButton(/reset to current/i));
+    fireEvent.click(resetButton(/^reset$/i));
+    expect(onResetTargets).toHaveBeenCalledWith('current');
+  });
+
+  it('does not route a reset through the cascading edit path', () => {
+    // A reset that cascaded would recompute derived values from the primary
+    // inputs and land near the scenario rather than on it — which is what made
+    // the target marker miss the current one.
+    const { onSiteIndicatorsChange } = renderPanel();
+    fireEvent.click(resetButton(/reset to current/i));
+    fireEvent.click(resetButton(/^reset$/i));
+    expect(onSiteIndicatorsChange).not.toHaveBeenCalled();
   });
 });

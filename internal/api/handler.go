@@ -2049,7 +2049,32 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// handleResetIdealIndicators resets ideal values to match current values
+// ResetIdealRequest is the body of a target reset.
+//
+// Scenario is optional and defaults to the historical behaviour, so the
+// Indicators page — which has always sent no body at all — still means "reset
+// to current".
+//
+// There is deliberately no runtime:"browser" branch here, unlike the indicators
+// PATCH. This route is desktop-only on purpose: in browser runtime the client
+// does the same work locally, because sending the user's site to the server is
+// exactly what this application does not do.
+type ResetIdealRequest struct {
+	// "current" (default) or "reference": which observed scenario the targets
+	// are pointed at.
+	Scenario string `json:"scenario"`
+}
+
+// handleResetIdealIndicators points every target at one of the observed
+// scenarios.
+//
+// Deliberately not a cascade. The indicators PATCH recomputes derived values
+// from whichever primary inputs changed, which is right for an edit and wrong
+// for a reset: `current` was produced by extraction, not by the cascade
+// formulas, so recomputing it would land near current rather than on it. A
+// reset writes the scenario through unchanged, for every key rather than only
+// the editable ones, so the target genuinely coincides with what it was reset
+// to.
 func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Request) {
 	if h.siteStore == nil {
 		respondError(w, http.StatusInternalServerError, "site store not initialized")
@@ -2057,6 +2082,12 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	}
 
 	id := mux.Vars(r)["id"]
+
+	// An absent or unparseable body is not an error: the original caller sent
+	// none, and its meaning is the default.
+	var req ResetIdealRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	site, err := h.siteStore.Get(id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
@@ -2068,27 +2099,29 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Reset ideal to current values (falling back to reference for any key
-	// with no current value) — the target's baseline is the current state.
-	site.Indicators.Ideal = make(map[string]float64)
-	for key, value := range site.Indicators.Reference {
-		site.Indicators.Ideal[key] = value
+	// Reference is the floor in both cases, so a key the chosen scenario has no
+	// value for still lands somewhere meaningful rather than vanishing from the
+	// ideal map. For a reference reset that floor is the whole answer.
+	resetTo := func(reference, chosen map[string]float64) map[string]float64 {
+		ideal := make(map[string]float64, len(reference))
+		for key, value := range reference {
+			ideal[key] = value
+		}
+		if req.Scenario != "reference" {
+			for key, value := range chosen {
+				ideal[key] = value
+			}
+		}
+		return ideal
 	}
-	for key, value := range site.Indicators.Current {
-		site.Indicators.Ideal[key] = value
-	}
+
+	site.Indicators.Ideal = resetTo(site.Indicators.Reference, site.Indicators.Current)
 	site.Indicators.Warnings = nil
 
-	// Reset each catchment's ideal to its current values (same fallback).
+	// The per-catchment ideals go with it. Leaving them behind would leave the
+	// map and the aggregate table disagreeing with the dial about the target.
 	for i := range site.Catchments {
-		ideal := make(map[string]float64, len(site.Catchments[i].Reference))
-		for k, v := range site.Catchments[i].Reference {
-			ideal[k] = v
-		}
-		for k, v := range site.Catchments[i].Current {
-			ideal[k] = v
-		}
-		site.Catchments[i].Ideal = ideal
+		site.Catchments[i].Ideal = resetTo(site.Catchments[i].Reference, site.Catchments[i].Current)
 	}
 
 	updated, err := h.siteStore.Update(id, site)

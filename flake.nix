@@ -16,7 +16,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "2.7.0";
+        version = "2.8.0";
 
         # MkDocs environment for requirements documentation
         mkdocsEnv = pkgs.python3.withPackages (
@@ -181,7 +181,7 @@
           # when its output path changes, and the path embeds the version. The
           # 0.2.0 output was already in the store, so nothing revalidated it until
           # the bump to 0.3.0 forced a rebuild.
-          vendorHash = "sha256-LjBgQc1+ZgCer2aSug9kxSwumsGlp/owVgrUATnqPo8=";
+          vendorHash = "sha256-YI/2YNvzczYymZKZZEvgAKFn4RjxJbKPUZeXkne/6AI=";
 
           # The local replace directive (./internal/webview_go) needs the
           # source present during the go-modules download phase.

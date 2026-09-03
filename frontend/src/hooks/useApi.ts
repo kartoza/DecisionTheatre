@@ -914,6 +914,88 @@ export async function patchSite(
   return response.json();
 }
 
+/**
+ * The ideal map for a reset: reference as the floor, overlaid with the chosen
+ * scenario.
+ *
+ * Reference is the floor in both cases so a key the chosen scenario has no
+ * value for still lands somewhere meaningful, rather than dropping out of the
+ * ideal map and taking the dial's target marker with it.
+ *
+ * Mirrors what the desktop endpoint does server-side. It is written twice
+ * because the two runtimes genuinely cannot share code — but they must not
+ * disagree, so a change to either belongs in both.
+ */
+function idealForReset(
+  reference: Record<string, number> | undefined,
+  current: Record<string, number> | undefined,
+  scenario: 'reference' | 'current',
+): Record<string, number> {
+  const ideal: Record<string, number> = { ...(reference ?? {}) };
+  if (scenario !== 'reference') {
+    for (const [key, value] of Object.entries(current ?? {})) ideal[key] = value;
+  }
+  return ideal;
+}
+
+/**
+ * Point every target at one of the observed scenarios.
+ *
+ * Deliberately not a wholesale PATCH: the indicators PATCH cascades,
+ * recomputing derived values from whichever primary inputs changed. That is
+ * right for an edit and wrong for a reset — `current` came from extraction, not
+ * from the cascade formulas, so a cascaded reset lands *near* current instead
+ * of on it and the target marker visibly misses the current one. A reset writes
+ * the scenario through unchanged, for every key rather than only the editable
+ * ones.
+ *
+ * Browser runtime does the work locally rather than calling the desktop-only
+ * endpoint. That is the architecture, not a workaround: the user's sites are
+ * not sent to the server.
+ */
+export async function resetSiteIdeal(
+  id: string,
+  scenario: 'reference' | 'current',
+  site?: Site,
+): Promise<Site> {
+  const isLocal = site?.source === 'walkthrough' || isBrowserRuntime();
+
+  if (isLocal) {
+    const local = loadLocalSite(id) ?? site;
+    const indicators = local?.indicators;
+    if (!local || !indicators) throw new Error('site has no indicators to reset');
+
+    const nextIndicators = {
+      ...indicators,
+      ideal: idealForReset(indicators.reference, indicators.current, scenario),
+      warnings: [],
+    };
+
+    // The per-catchment ideals go with it, or the map and the aggregate table
+    // would disagree with the dial about where the target is.
+    const catchments = await getSiteCatchments(id).catch(() => null);
+    if (catchments && catchments.length > 0) {
+      cacheCatchments(id, catchments.map((c) => ({
+        ...c,
+        ideal: idealForReset(c.reference, c.current, scenario),
+      })));
+    }
+
+    return updateSite(id, { indicators: nextIndicators });
+  }
+
+  const response = await fetch(`${API_BASE}/sites/${id}/indicators/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset target values: ${response.statusText}`);
+  }
+  _catchmentsCache.delete(id);
+  return await response.json() as Site;
+}
+
 export async function patchSiteIndicators(
   id: string,
   indicators: Site['indicators'],

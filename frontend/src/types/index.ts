@@ -55,7 +55,15 @@ export type ColorScaleType = 'linear' | 'logistic' | 'logarithmic';
 export type LayoutMode = 'single' | 'quad';
 
 /** View mode for each pane: map choropleth, line chart, dial gauge, or aggregate table */
-export type ViewMode = 'map' | 'chart' | 'dial' | 'table';
+/**
+ * What a pane draws.
+ *
+ * `flat` and `dial` are two renderings of the same scale — a horizontal band
+ * and an arc gauge. They are separate view modes rather than a shape toggle on
+ * one, because that is how the user picks them: once for the grid, from the
+ * same cluster as the other views, not per widget.
+ */
+export type ViewMode = 'map' | 'chart' | 'flat' | 'dial' | 'table';
 
 /** Range mode for dial chart min/max values */
 export type RangeMode = 'domain' | 'extent' | 'site';

@@ -1,9 +1,8 @@
 import { useMemo, useEffect, useState } from 'react';
-import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Badge, Spinner, Button } from '@chakra-ui/react';
+import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
 import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
-import { colors } from '../styles/colors';
 
 interface AggregateTableProps {
   visible: boolean;
@@ -36,15 +35,9 @@ function AggregateTable({
 }: AggregateTableProps) {
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
-  const [isTableVisible, setIsTableVisible] = useState(true);
   const { details: attributeDetails } = useAttributeDetails();
 
   const attributeLabel = attributeDetails[attribute] ?? attribute;
-
-  // Show the table by default whenever the panel opens; reset when it closes.
-  useEffect(() => {
-    setIsTableVisible(visible);
-  }, [visible]);
 
   // Fetch catchment data when panel is visible and siteId is available.
   useEffect(() => {
@@ -152,6 +145,24 @@ function AggregateTable({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [catchments, attribute, scenario]);
 
+  /**
+   * How much of the site this factor actually reaches.
+   *
+   * Valid area counts only the catchments where the factor has a value, so a
+   * factor with gaps covers less of the site than one without — 742 km² of a
+   * 1,400 km² site, say. That difference is a data-quality signal and would be
+   * invisible if the number were shown bare next to a site total in the header
+   * that does not match it.
+   */
+  const coverageNote = useMemo(() => {
+    const siteTotal = siteIndicators?.totalAreaKm2;
+    const valid = calculations.hasData ? calculations.totalArea : siteTotal;
+    if (typeof siteTotal !== 'number' || typeof valid !== 'number' || siteTotal <= 0) return 'km²';
+    // Within a rounding hair of the whole site: no gap worth reporting.
+    if (Math.abs(siteTotal - valid) / siteTotal < 0.005) return 'km² — whole site';
+    return `km² of ${formatNumber(siteTotal, 1)} (${Math.round((valid / siteTotal) * 100)}%)`;
+  }, [calculations, siteIndicators]);
+
   return (
     <Box
       position="absolute"
@@ -174,61 +185,16 @@ function AggregateTable({
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
             style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}
           >
-            {/* Header + summary cards — scrolls together with the table below. */}
-            <Box px={6} pt={6} pb={4} flexShrink={0}>
-              {/* Header */}
-              <VStack spacing={4} align="stretch" mb={6}>
-                <HStack justify="space-between" align="center">
-                  <VStack align="start" spacing={1}>
-                    <Text fontSize="2xl" fontWeight="bold" color="white">
-                      Site Aggregate Calculation
-                    </Text>
-                    <Text fontSize="md" color="gray.400">
-                      Area-weighted average for selected factor
-                    </Text>
-                  </VStack>
-                  <HStack spacing={3}>
-                    <Badge
-                      bg={scenario === 'reference' ? colors.orange : scenario === 'future' ? colors.brightGreen : colors.blue}
-                      color={colors.dark}
-                      fontSize="md"
-                      px={4}
-                      py={2}
-                      borderRadius="full"
-                    >
-                      {scenario === 'reference' ? 'Reference' : scenario === 'future' ? 'Target' : 'Current'}
-                    </Badge>
-                    <Button
-                      size="sm"
-                      colorScheme="cyan"
-                      variant={isTableVisible ? 'outline' : 'solid'}
-                      onClick={() => setIsTableVisible((prev) => !prev)}
-                    >
-                      {isTableVisible ? 'Hide Table' : 'Show Table'}
-                    </Button>
-                  </HStack>
-                </HStack>
+            {/*
+              Summary cards, then the table — they scroll together.
 
-                {/* Factor being calculated */}
-                <Box
-                  bg="whiteAlpha.100"
-                  borderRadius="lg"
-                  p={4}
-                  border="1px solid"
-                  borderColor="whiteAlpha.200"
-                >
-                  <HStack justify="space-between">
-                    <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                      Selected Factor
-                    </Text>
-                    <Text color="cyan.300" fontSize="lg" fontWeight="bold">
-                      {attributeLabel}
-                    </Text>
-                  </HStack>
-                </Box>
-              </VStack>
-
-              {/* Summary cards */}
+              The header that used to sit above them is gone entirely: its title
+              and scenario badge are drawn by the pane now (see PaneHeader), and
+              its Hide Table button hid the thing this view exists to show. The
+              top padding leaves room for the pane's own title chip, which
+              overhangs the top edge.
+            */}
+            <Box px={6} pt={12} pb={4} flexShrink={0}>
               <HStack spacing={4} justify="center">
                 {/* Total Area */}
                 <Box
@@ -240,15 +206,23 @@ function AggregateTable({
                   flex={1}
                   maxW="300px"
                 >
+                  {/*
+                    Kept, unlike the catchment count beside it, because it is
+                    NOT a site fact: valid area counts only catchments where
+                    this factor has a value, so a factor with gaps covers less
+                    of the site than one without. It is also the denominator of
+                    the average above. The site's own total is in the header;
+                    what this says is how much of it this factor reaches.
+                  */}
                   <VStack spacing={2}>
                     <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                      Total Valid Area
+                      Valid Area
                     </Text>
                     <Text color="white" fontSize="3xl" fontWeight="bold">
                       {formatNumber(calculations.hasData ? calculations.totalArea : (siteIndicators?.totalAreaKm2 ?? 0), 1)}
                     </Text>
                     <Text color="gray.500" fontSize="sm">
-                      km²
+                      {coverageNote}
                     </Text>
                   </VStack>
                 </Box>
@@ -282,50 +256,14 @@ function AggregateTable({
                   </VStack>
                 </Box>
 
-                {/* Catchment Count */}
-                <Box
-                  bg="whiteAlpha.100"
-                  borderRadius="xl"
-                  p={6}
-                  border="1px solid"
-                  borderColor="whiteAlpha.200"
-                  flex={1}
-                  maxW="300px"
-                >
-                  <VStack spacing={2}>
-                    <Text color="gray.400" fontSize="sm" fontWeight="600" textTransform="uppercase">
-                      Catchments
-                    </Text>
-                    <Text color="white" fontSize="3xl" fontWeight="bold">
-                      {calculations.hasData ? calculations.rows.length : (siteIndicators?.catchmentCount ?? 0)}
-                    </Text>
-                    <Text color="gray.500" fontSize="sm">
-                      in site boundary
-                    </Text>
-                  </VStack>
-                </Box>
+                {/* The catchment count was here. It is a site fact, identical in
+                    every pane, and is now stated once in the header. */}
               </HStack>
             </Box>
 
             {/* Table section — height comes from content; the outer pane scrolls, not this box. */}
             <Box px={6} pb={6}>
-              {!isTableVisible ? (
-                <Box
-                  bg="whiteAlpha.50"
-                  borderRadius="xl"
-                  border="1px solid"
-                  borderColor="whiteAlpha.200"
-                  p={10}
-                  textAlign="center"
-                >
-                  <Text color="gray.400" fontSize="lg" mb={2}>
-                    Aggregate table hidden
-                  </Text>
-                  <Text color="gray.500" fontSize="sm">
-                    Use the Show Table button to view the full calculation breakdown
-                  </Text>
-                </Box>
-              ) : loading ? (
+              {loading ? (
                 <Box
                   bg="whiteAlpha.50"
                   borderRadius="xl"

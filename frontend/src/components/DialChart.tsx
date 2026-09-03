@@ -1,76 +1,14 @@
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Box, HStack, Button, Spinner, Tooltip } from '@chakra-ui/react';
+import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
-import type { RangeMode } from '../types';
-
-// Scenario colors from the design system
-const SCENARIO_COLORS = {
-  reference: '#e65100',  // Orange
-  current: '#2bb0ed',    // Blue
-  future: '#4caf50',     // Green
-};
-
-// Dynamic gradient stops for the arc: green zone for reference, yellow-red outside
-// Center the green zone on the reference value by default
-function getArcGradientStops(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08) {
-  // greenWidth: fraction of total (e.g. 0.1 = 10% of range)
-  if (referenceValue === undefined || isNaN(referenceValue)) {
-    // fallback: all yellow-red
-    return [
-      { offset: 0, color: '#ffdc00' }, // yellow
-      { offset: 0.5, color: '#ff851b' },
-      { offset: 1, color: '#e8003f' },
-    ];
-  }
-  const range = max - min;
-  if (range <= 0) {
-    return [
-      { offset: 0, color: '#2ecc40' },
-      { offset: 1, color: '#2ecc40' },
-    ];
-  }
-  // Center green zone on referenceValue
-  let refNorm = (referenceValue - min) / range;
-  refNorm = Math.max(0, Math.min(1, refNorm));
-  const halfGreen = greenWidth / 2;
-  const greenStart = Math.max(0, refNorm - halfGreen);
-  const greenEnd = Math.min(1, refNorm + halfGreen);
-  // Add intermediate stops for a smoother fade
-  const fadeWidth = Math.max(0.01, greenWidth * 0.5);
-  const fadeStart = Math.max(0, greenStart - fadeWidth);
-  const fadeEnd = Math.min(1, greenEnd + fadeWidth);
-  return [
-    { offset: 0, color: '#ff4136' }, // red
-    { offset: fadeStart, color: '#ffdc00' }, // yellow
-    { offset: greenStart, color: '#b6e86f' }, // yellow-green
-    { offset: (greenStart + greenEnd) / 2, color: '#2ecc40' }, // green center
-    { offset: greenEnd, color: '#b6e86f' }, // yellow-green
-    { offset: fadeEnd, color: '#ffdc00' }, // yellow
-    { offset: 1, color: '#e8003f' }, // red
-  ];
-}
-
-// Compute the normalized center (0..1) of the green zone so arrows can align
-function computeGreenCenter(min: number, max: number, referenceValue?: number, greenWidth = 0.1, _greenBias = 0.08): number | null {
-  if (referenceValue === undefined || isNaN(referenceValue)) return null;
-  const range = max - min;
-  if (range <= 0) return 0.5;
-  let refNorm = (referenceValue - min) / range;
-  refNorm = Math.max(0, Math.min(1, refNorm));
-  const halfGreen = greenWidth / 2;
-  const greenStart = Math.max(0, refNorm - halfGreen);
-  const greenEnd = Math.min(1, refNorm + halfGreen);
-  return (greenStart + greenEnd) / 2;
-}
+import {
+  SCENARIO_COLORS,
+  bandGradientStops,
+  formatValue,
+  greenZoneCenter,
+} from '../lib/dialScale';
 
 // Range mode config
-const RANGE_MODES: { id: RangeMode; label: string; icon: React.ReactNode; description: string }[] = [
-  { id: 'domain', label: 'Full', icon: <FiGlobe size={14} />, description: 'Entire dataset' },
-  { id: 'extent', label: 'Extent', icon: <FiSquare size={14} />, description: 'Visible map area' },
-  { id: 'site', label: 'Site', icon: <FiTarget size={14} />, description: 'Site catchments' },
-];
-
 // Base padding for the dial in single-pane mode.
 const BASE_PADDING = { top: 100, right: 100, bottom: 160, left: 100 };
 
@@ -79,15 +17,6 @@ function easeOutBack(t: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
-
-// Format a number for display
-function formatValue(value: number): string {
-  if (Math.abs(value) >= 1000000) return (value / 1000000).toFixed(1) + 'M';
-  if (Math.abs(value) >= 1000) return (value / 1000).toFixed(1) + 'K';
-  if (Math.abs(value) < 0.01 && value !== 0) return value.toExponential(1);
-  if (Math.abs(value) < 10) return value.toFixed(2);
-  return value.toFixed(1);
 }
 
 // Convert a value to an angle on the dial
@@ -109,9 +38,6 @@ interface DialChartProps {
   max: number;
   attribute?: string;
   unit?: string;
-  rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
-  isSiteAvailable?: boolean;
   compact?: boolean;
   denseLayout?: boolean;
   paneCount?: number;
@@ -128,36 +54,21 @@ function DialChart({
   max: inputMax,
   attribute = '',
   unit = '',
-  rangeMode = 'domain',
-  onRangeModeChange,
-  isSiteAvailable = true,
   compact = false,
   denseLayout = false,
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
 }: DialChartProps) {
-  const veryDenseLayout = compact && paneCount > 5;
   const isQuadCompactLayout = compact && paneCount >= 4;
-  // Determine minimum for the dial. Prefer the provided input min, but never
-  // assume 0 if any of the values go negative — expand the minimum to include
-  // negative current/reference/target values so the needle and ticks render correctly.
-  let min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
-  // Ensure we include zero unless input explicitly larger; then allow negatives
-  min = Math.min(min, 0);
-  const negativeCandidates = [currentValue, referenceValue, targetValue].filter(
-    (v): v is number => typeof v === 'number' && !isNaN(v) && v < min
-  );
-  if (negativeCandidates.length > 0) {
-    min = Math.min(min, ...negativeCandidates);
-  }
-  // Adjust max if current or target is above 100
-  let max = inputMax;
-  if ((currentValue !== undefined && currentValue > 100) || (targetValue !== undefined && targetValue > 100)) {
-    max = Math.max(inputMax, currentValue ?? -Infinity, targetValue ?? -Infinity);
-    // Optionally add a small buffer
-    max = Math.ceil(max * 1.05);
-  }
+  // The range handed down is the range — see the same note in FlatDial. It is
+  // fixed upstream by the metadata bound, or failing that by the range mode's
+  // own minima and maxima, and widening it here to fit the plotted values would
+  // undo that: the target is one of those values, so following it moved the
+  // axis and slid every other marker.
+  const min = typeof _inputMin === 'number' && !isNaN(_inputMin) ? _inputMin : 0;
+  const max = inputMax;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [needleProgress, setNeedleProgress] = useState(0);
@@ -513,13 +424,13 @@ function DialChart({
 
   const gradientId = 'dial-gradient-main';
   const arcGradientStops = useMemo(
-    () => getArcGradientStops(min, max, referenceValue, 0.12, 0.08),
+    () => bandGradientStops(min, max, referenceValue, 0.12),
     [min, max, referenceValue]
   );
 
   // Normalized center of the green zone (0..1) so needles can be aligned visually
   const greenCenter = useMemo(
-    () => computeGreenCenter(min, max, referenceValue, 0.12, 0.08),
+    () => greenZoneCenter(min, max, referenceValue, 0.12),
     [min, max, referenceValue]
   );
 
@@ -640,44 +551,10 @@ function DialChart({
             style={{ width: '100%', height: '100%', position: 'relative' }}
           >
             {/* Range mode toggle - positioned inside chart area */}
-            {onRangeModeChange && (
-              <Box
-                position="absolute"
-                top={4}
-                right={4}
-                zIndex={10}
-                bg="blackAlpha.600"
-                borderRadius="xl"
-                p={1}
-                backdropFilter="blur(8px)"
-              >
-                <HStack spacing={1}>
-                  {RANGE_MODES.map((mode) => {
-                    const isActive = rangeMode === mode.id;
-                    const isDisabled = mode.id === 'site' && !isSiteAvailable;
-                    return (
-                      <Tooltip key={mode.id} label={isDisabled ? 'No site selected' : mode.description} placement="bottom">
-                        <Button
-                          size="sm"
-                          leftIcon={mode.icon as React.ReactElement}
-                          onClick={() => !isDisabled && onRangeModeChange(mode.id)}
-                          variant="ghost"
-                          bg={isActive ? 'cyan.500' : 'transparent'}
-                          color={isActive ? 'white' : isDisabled ? 'gray.600' : 'gray.300'}
-                          _hover={{ bg: isDisabled ? 'transparent' : isActive ? 'cyan.400' : 'whiteAlpha.200' }}
-                          fontSize="xs"
-                          fontWeight={isActive ? '600' : '400'}
-                          px={3}
-                          cursor={isDisabled ? 'not-allowed' : 'pointer'}
-                        >
-                          {mode.label}
-                        </Button>
-                      </Tooltip>
-                    );
-                  })}
-                </HStack>
-              </Box>
-            )}
+            {/* The Full / Extent / Site cluster was here. The header carries
+                the same control in every layout, and this copy only ever
+                appeared in single-pane view — so the one place it existed was
+                the one place it was a duplicate. */}
 
             <svg
               width={width}
@@ -685,6 +562,10 @@ function DialChart({
               viewBox={`0 0 ${width} ${height}`}
               style={{ display: 'block' }}
             >
+              {/* The visible title is the pane's, beside the scenario labels.
+                  This is what a screen reader reads. */}
+              <title>{attribute}{unit ? ` (${unit})` : ''}</title>
+
               {/* Background */}
               <rect width={width} height={height} fill="#1a202c" />
 
@@ -880,21 +761,8 @@ function DialChart({
 
               
 
-              {/* Attribute label */}
-              {attribute && (
-                <text
-                  x={padding.left}
-                  y={veryDenseLayout ? 24 : 50}
-                  textAnchor="start"
-                  fill="#f7fafc"
-                  fontSize={veryDenseLayout ? 15 : 20}
-                  fontFamily="Inter, system-ui, sans-serif"
-                  fontWeight="700"
-                  opacity={arcOpacity}
-                >
-                  {attribute}{unit ? ` (${unit})` : ''}
-                </text>
-              )}
+              {/* The factor title is drawn by the pane now, beside the two
+                  scenario labels. */}
 
               {/* Legend */}
               <g opacity={needleOpacity}>

@@ -1,4 +1,4 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { FiChevronRight } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
@@ -8,6 +8,10 @@ import { DEFAULT_PANE_STATES } from '../types';
 import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
+import type { ScaleDerivation } from '../lib/dialScale';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
+import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
@@ -19,6 +23,11 @@ interface ContentAreaProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
+  onOpenChartDetails?: (
+    paneIndex: number,
+    derivation: ScaleDerivation | null,
+    calculations: CalculationDetailsProps | null,
+  ) => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
@@ -45,13 +54,18 @@ interface ContentAreaProps {
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
   rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroups?: (string | null)[];
   chartAxisLabelFilters?: (string | null)[];
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
   onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  /**
+   * Point every target at an observed scenario. Separate from
+   * onSiteIndicatorsChange because a reset must not cascade — see
+   * resetSiteIdeal in hooks/useApi.
+   */
+  onResetTargets?: (scenario: 'reference' | 'current') => Promise<void> | void;
   // For target panel control from parent
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
@@ -98,6 +112,16 @@ const STRINGS = {
   liveUpdateHintOff:
     'Charts and sliders recalculate once you let go of a slider. Best on large sites.',
   recalculating: 'Recalculating…',
+  resetToReference: 'Reset to reference',
+  resetToCurrent: 'Reset to current',
+  resetToReferenceHint: 'Set every target to the ecological reference value',
+  resetToCurrentHint: 'Set every target back to the current state, clearing all targets',
+  resetConfirmReference: 'Set every target to the reference?',
+  resetConfirmCurrent: 'Set every target back to current?',
+  resetConfirmBody: 'This replaces the targets you have set.',
+  resetConfirm: 'Reset',
+  resetCancel: 'Cancel',
+  resetUnavailable: 'No values to reset to',
   invalidTargetTitle: 'Invalid target value',
   invalidTargetBody: (label: string) => `Please enter a valid number for ${label}.`,
   updateFailed: 'Failed to update target values',
@@ -120,6 +144,7 @@ function ContentArea({
   onFocusPane,
   onGoQuad,
   onOpenControlPanel,
+  onOpenChartDetails,
   onRemovePane,
   onIdentify,
   identifyResult,
@@ -143,13 +168,13 @@ function ContentArea({
   onSwiperPositionChange,
   siteIndicators,
   rangeMode,
-  onRangeModeChange,
   mapStatistics,
   chartGroups,
   chartAxisLabelFilters,
   chartGraphModes,
   mapExtent,
   onSiteIndicatorsChange,
+  onResetTargets,
   isTargetModalOpen,
   onCloseTargetModal,
   refreshKey,
@@ -158,6 +183,7 @@ function ContentArea({
   fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
+  const { width: panelWidth, startResize } = usePanelWidth();
   const { details: attributeDetails } = useAttributeDetails();
   const { targetInputs } = useAttributeTargetInputs();
   const { units: attributeUnits } = useAttributeUnits();
@@ -167,6 +193,10 @@ function ContentArea({
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+  // Which reset is awaiting confirmation, or null. A reset discards target work
+  // and cannot be undone, so it is confirmed — but in place rather than in a
+  // dialog, so the panel the user is working in is where the question appears.
+  const [pendingReset, setPendingReset] = useState<'reference' | 'current' | null>(null);
 
   // --- Live update -------------------------------------------------------
   //
@@ -413,6 +443,34 @@ function ContentArea({
     }
   };
 
+  /**
+   * Point every editable target at one of the observed scenarios.
+   *
+   * Both buttons go through the same path a slider does — set the drafts, mark
+   * the keys as touched, schedule a recalculation — so a reset cascades exactly
+   * as a manual edit would and cannot land the site in a state the sliders
+   * could not have produced.
+   *
+   * Resetting to current is the "clear my targets" case: with ideal equal to
+   * current there is no divergence, so the dials stop showing a target at all.
+   */
+  const resetTargetsTo = (scenario: 'reference' | 'current') => {
+    if (!onResetTargets) return;
+    // Every editable slider is untouched again: the reset has replaced the
+    // targets wholesale, so nothing the user did before it is still pending.
+    touchedTargetKeysRef.current = new Set();
+    setIsSavingTargets(true);
+    void (async () => {
+      try {
+        await onResetTargets(scenario);
+      } catch {
+        toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
+      } finally {
+        setIsSavingTargets(false);
+      }
+    })();
+  };
+
   // The scheduler is created once and reaches the current render's
   // `runRecalculation` through a ref, so a request chained after an await
   // still sees the latest props rather than the ones captured when the drag
@@ -501,6 +559,7 @@ function ContentArea({
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   onOpenControlPanel={onOpenControlPanel}
+                  onOpenChartDetails={onOpenChartDetails}
                   canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
@@ -523,7 +582,6 @@ function ContentArea({
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
                   rangeMode={rangeMode}
-                  onRangeModeChange={onRangeModeChange}
                   mapStatistics={mapStatistics}
                   chartGroup={chartGroups?.[i] ?? null}
                   mapExtent={mapExtent}
@@ -556,6 +614,7 @@ function ContentArea({
             onViewModeChange={onViewModeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
+            onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
             onMapExtentChange={onMapExtentChange}
@@ -579,7 +638,6 @@ function ContentArea({
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}
             rangeMode={rangeMode}
-            onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
             chartGroup={chartGroups?.[visibleIndices[0]] ?? null}
             chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}
@@ -617,7 +675,7 @@ function ContentArea({
           id="tour-target-panel"
           role="region"
           aria-label={STRINGS.targetsHeading}
-          w={{ base: '100vw', md: '440px' }}
+          w={{ base: '100vw', md: `${panelWidth}px` }}
           h="100%"
           bg="gray.800"
           color="white"
@@ -626,7 +684,9 @@ function ContentArea({
           boxShadow="-4px 0 24px rgba(0,0,0,0.35)"
           display="flex"
           flexDirection="column"
+          position="relative"
         >
+          <PanelResizeHandle onResizeStart={startResize} />
           <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
             <Box fontSize="md" fontWeight="bold" flex="1">{STRINGS.targetsHeading}</Box>
             {isSavingTargets && (
@@ -661,6 +721,67 @@ function ContentArea({
                 </Checkbox>
               </Box>
             </Tooltip>
+          </Box>
+
+          {/*
+            Reset the whole target set to one of the observed scenarios.
+            Confirmed in place rather than in a dialog: this discards target
+            work and cannot be undone, and the question belongs in the panel
+            the user is already working in.
+          */}
+          <Box px={4} pb={3}>
+            {pendingReset === null ? (
+              <HStack spacing={2}>
+                <Tooltip label={STRINGS.resetToReferenceHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="orange"
+                    isDisabled={!onResetTargets || !siteIndicators?.reference}
+                    onClick={() => setPendingReset('reference')}
+                  >
+                    {STRINGS.resetToReference}
+                  </Button>
+                </Tooltip>
+                <Tooltip label={STRINGS.resetToCurrentHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="cyan"
+                    isDisabled={!onResetTargets || !siteIndicators?.current}
+                    onClick={() => setPendingReset('current')}
+                  >
+                    {STRINGS.resetToCurrent}
+                  </Button>
+                </Tooltip>
+              </HStack>
+            ) : (
+              <Box bg="whiteAlpha.100" borderRadius="md" p={3}>
+                <Box fontSize="sm" color="gray.100" fontWeight="600">
+                  {pendingReset === 'reference'
+                    ? STRINGS.resetConfirmReference
+                    : STRINGS.resetConfirmCurrent}
+                </Box>
+                <Box fontSize="xs" color="gray.400" mt={1} mb={2}>
+                  {STRINGS.resetConfirmBody}
+                </Box>
+                <HStack spacing={2}>
+                  <Button
+                    size="xs"
+                    colorScheme={pendingReset === 'reference' ? 'orange' : 'cyan'}
+                    onClick={() => {
+                      resetTargetsTo(pendingReset);
+                      setPendingReset(null);
+                    }}
+                  >
+                    {STRINGS.resetConfirm}
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setPendingReset(null)}>
+                    {STRINGS.resetCancel}
+                  </Button>
+                </HStack>
+              </Box>
+            )}
           </Box>
 
           <Box px={4} pb={4} flex="1" overflowY="auto">

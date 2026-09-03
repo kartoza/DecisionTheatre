@@ -15,27 +15,26 @@ import {
   Button,
   ButtonGroup,
   Spacer,
-  Modal,
-  ModalOverlay,
-  ModalContent,
-  ModalCloseButton,
-  ModalBody,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiMapPin, FiGlobe, FiSquare, FiTarget } from 'react-icons/fi';
+import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
 
 interface ControlPanelProps {
   isOpen: boolean;
-  /** Render as a centered Modal dialog instead of the slide-out side panel — used to
-   * let grid/quad view edit a single pane's factor without leaving the grid layout. */
-  asModal?: boolean;
   onClose?: () => void;
+  /**
+   * Single pane's control panel is the only way to reach its factor/scenario
+   * controls — there's no per-pane "Configure factor" button to reopen it the
+   * way grid view has one for each pane — so it isn't collapsible there.
+   */
+  canCollapse?: boolean;
   comparison: ComparisonState;
   onLeftChange: (scenario: Scenario) => void;
   onRightChange: (scenario: Scenario) => void;
@@ -427,8 +426,8 @@ function ScenarioSelector({
 
 function ControlPanel({
   isOpen,
-  asModal = false,
   onClose,
+  canCollapse = true,
   comparison,
   onLeftChange,
   onRightChange,
@@ -446,7 +445,6 @@ function ControlPanel({
   colorScaleType,
   onColorScaleTypeChange,
   rangeMode = 'domain',
-  onRangeModeChange,
   chartGroup,
   onChartGroupChange,
   chartAxisLabelFilter,
@@ -631,15 +629,19 @@ function ControlPanel({
     }
   }, [groupingVariableOptions, chartGroup, chartAxisLabelFilter, onChartAxisLabelFilterChange]);
 
+  // The flat dial is the same indicator, drawn as a band instead of a gauge,
+  // so it shares the dial's control-panel behavior rather than the chart's.
+  const isDialView = viewMode === 'dial' || viewMode === 'flat';
+
   const factorOptions = useMemo(() => {
-    const useGraphable = viewMode === 'chart' || viewMode === 'dial';
+    const useGraphable = viewMode === 'chart' || isDialView;
     const isAggregateTableView = viewMode === 'table';
     const filterMap = useGraphable ? canGraph : canMap;
     const filtered = Object.keys(filterMap).length > 0
       ? columns.filter((col) => {
           if (isAggregateTableView) return true;
           if (!filterMap[col]) return false;
-          if (viewMode === 'dial') {
+          if (isDialView) {
             const chartType = (chartTypes[col] || '').toLowerCase();
             if (!chartType.includes('dial')) return false;
           }
@@ -657,7 +659,7 @@ function ControlPanel({
       label: attributeDetails[col] || col,
       sublabel: attributeDetails[col] ? col : undefined,
     }));
-  }, [viewMode, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails, axisLabels]);
+  }, [viewMode, isDialView, canGraph, canMap, chartTypes, columns, chartGroup, chartAxisLabelFilter, groupingVariables, variableTypes, attributeDetails, axisLabels]);
 
   const allGraphableFactorOptions = useMemo(
     () => columns
@@ -744,7 +746,6 @@ function ControlPanel({
 
   const leftZoneStats = applySiteIndicatorOverrides(leftZoneStatsRaw, comparison.leftScenario);
   const rightZoneStats = applySiteIndicatorOverrides(rightZoneStatsRaw, comparison.rightScenario);
-  const zoneCatchmentCount = leftZoneStats?.count ?? rightZoneStats?.count ?? null;
 
   // The color scale is stretched to whichever zone is selected (Full/Extent/Site):
   // 'Full' uses the attribute's global domain across every catchment, while
@@ -755,47 +756,22 @@ function ControlPanel({
   const combinedDomainRange: { min: number; max: number } | null = mapStatistics?.domainRange
     ? { min: mapStatistics.domainRange.min, max: mapStatistics.domainRange.max }
     : null;
-  const [panelWidth, setPanelWidth] = useState(440);
-  const [isResizing, setIsResizing] = useState(false);
-  const resizeOriginX = useRef(0);
-  const resizeOriginWidth = useRef(0);
-  const minPanelWidth = 320;
-  const maxPanelWidth = 720;
+  const { width: panelWidth, startResize } = usePanelWidth();
 
+  // The application header is content-sized, not a fixed height, so the
+  // docked panel measures it instead of repeating a magic number that goes
+  // stale the moment the header's contents change — same approach as the
+  // chart-details and target-editor panels that share this slot.
+  const [headerOffset, setHeaderOffset] = useState(0);
   useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const delta = resizeOriginX.current - event.clientX;
-      const nextWidth = Math.min(
-        maxPanelWidth,
-        Math.max(minPanelWidth, resizeOriginWidth.current + delta)
-      );
-      setPanelWidth(nextWidth);
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizing]);
-
-  const handleResizeStart = (event: ReactMouseEvent<HTMLDivElement>) => {
-    resizeOriginX.current = event.clientX;
-    resizeOriginWidth.current = panelWidth;
-    setIsResizing(true);
-  };
+    const header = document.querySelector('header');
+    if (!header) return;
+    const apply = () => setHeaderOffset(header.getBoundingClientRect().height);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
 
   // The pane number identifies the card the factor belongs to, so it sits on
   // that card rather than on the panel heading. Defined once: the chart view
@@ -842,58 +818,10 @@ function ControlPanel({
 
           <Divider />
 
-          {!asModal && viewMode !== 'dial' && onRangeModeChange && (
-            <Box>
-              <HStack justify="space-between" align="center" mb={2}>
-                <Heading size="sm">
-                  Zone Range
-                </Heading>
-                {/* The count belongs to the zone, not to either scenario — both
-                    always reported the same number. */}
-                {zoneCatchmentCount !== null && (
-                  <Text fontSize="xs" color="gray.500">
-                    ({zoneCatchmentCount} catchments)
-                  </Text>
-                )}
-              </HStack>
-              <ButtonGroup size="xs" isAttached variant="outline" width="100%">
-                <Button
-                  flex="1"
-                  leftIcon={<FiGlobe size={12} />}
-                  onClick={() => onRangeModeChange('domain')}
-                  variant={rangeMode === 'domain' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'domain' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'domain' ? colors.dark: undefined}
-                >
-                  Full
-                </Button>
-                <Button
-                  flex="1"
-                  leftIcon={<FiSquare size={12} />}
-                  onClick={() => onRangeModeChange('extent')}
-                  variant={rangeMode === 'extent' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'extent' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'extent' ? colors.dark: undefined}
-                >
-                  Extent
-                </Button>
-                <Button
-                  flex="1"
-                  leftIcon={<FiTarget size={12} />}
-                  onClick={() => onRangeModeChange('site')}
-                  variant={rangeMode === 'site' ? 'solid' : 'outline'}
-                  colorScheme="gray"
-                  bg={rangeMode === 'site' ? colors.pastelLightBlue : undefined}
-                  color={rangeMode === 'site' ? colors.dark: undefined}
-                  isDisabled={!!isExploreMode}
-                >
-                  Site
-                </Button>
-              </ButtonGroup>
-            </Box>
-          )}
+          {/* The Zone Range control (Full / Extent / Site) was here. It is the
+              same control the header already carries in its range group, and
+              two copies of one setting is one too many. The catchment count
+              it also showed is now in the header beside the site area. */}
 
           {/* Parent Group selector — chart view only */}
           {viewMode === 'chart' && (
@@ -1137,7 +1065,7 @@ function ControlPanel({
             </Box>
           )}
 
-          {viewMode !== 'dial' && !hideScenarioSelectors && (
+          {!isDialView && !hideScenarioSelectors && (
             <>
               {/* Scenario 1 (Left) */}
               <ScenarioSelector
@@ -1163,7 +1091,7 @@ function ControlPanel({
           )}
 
           {/* Legend */}
-          {comparison.attribute && viewMode !== 'dial' && !hideColorScale && (
+          {comparison.attribute && !isDialView && !hideColorScale && (
             <Box>
               <HStack justify="space-between" align="center" mb={2}>
                 <Text fontSize="xs" fontWeight="600" color="gray.500">
@@ -1221,20 +1149,6 @@ function ControlPanel({
     </VStack>
   );
 
-  if (asModal) {
-    return (
-      <Modal isOpen={isOpen} onClose={() => onClose?.()} size="xl" scrollBehavior="inside" isCentered>
-        <ModalOverlay />
-        <ModalContent bg={bgColor} maxH="85vh">
-          <ModalCloseButton zIndex={1} />
-          <ModalBody p={0} pt={10} pb={2}>
-            {panelContent}
-          </ModalBody>
-        </ModalContent>
-      </Modal>
-    );
-  }
-
   return (
     <Slide
       direction="right"
@@ -1242,9 +1156,9 @@ function ControlPanel({
       style={{
         zIndex: 15,
         position: 'fixed',
-        top: 0,
+        top: headerOffset,
         right: 0,
-        height: '100%',
+        height: `calc(100% - ${headerOffset}px)`,
         width: 'auto',
       }}
     >
@@ -1257,30 +1171,33 @@ function ControlPanel({
         borderColor={borderColor}
         overflowY="auto"
         boxShadow="-4px 0 24px rgba(0,0,0,0.15)"
-        pt="70px" // Header height offset
+        pt="48px"
         position="relative"
       >
-        <Box
-          display={{ base: 'none', md: 'block' }}
-          position="absolute"
-          left={0}
-          top={0}
-          bottom={0}
-          width="6px"
-          cursor="col-resize"
-          zIndex={2}
-          onMouseDown={handleResizeStart}
-          _hover={{ bg: 'blackAlpha.200' }}
-        />
-        {/* Close hint for mobile */}
-        <Box display={{ base: 'block', md: 'none' }} p={2} textAlign="right">
-          <IconButton
-            aria-label="Close panel"
-            icon={<FiChevronRight />}
-            size="sm"
-            variant="ghost"
-          />
-        </Box>
+        <PanelResizeHandle onResizeStart={startResize} />
+        {/*
+          Collapse, in the same corner as the chart-details and target-editor
+          panels that share this slot. It used to sit at top:2 of a box padded
+          for a hardcoded 70px header, which put it visually underneath the
+          real (content-sized) header rather than below it — invisible and
+          unclickable in grid view's "Configure factor" panel. The panel now
+          docks below the measured header instead, so the button sits in the
+          clear. Single pane has no equivalent button to reopen it, so it's
+          omitted there rather than left as a dead end.
+        */}
+        {canCollapse && (
+          <Box position="absolute" top={2} right={2} zIndex={3}>
+            <Tooltip label="Collapse panel" placement="left">
+              <IconButton
+                aria-label="Collapse panel"
+                icon={<FiChevronRight />}
+                size="sm"
+                variant="ghost"
+                onClick={() => onClose?.()}
+              />
+            </Tooltip>
+          </Box>
+        )}
 
         {panelContent}
       </Box>

@@ -3483,10 +3483,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     const rightContainer = container.querySelector('#map-right') as HTMLDivElement | null;
     if (!leftContainer || !rightContainer) return;
 
-    const updateSizes = () => {
-      // The compare map is read from the ref on each call rather than captured:
-      // this effect outlives several compare-mode toggles, and a container
-      // resize has to reach whichever instance exists at that moment.
+    // The compare map is read from the ref on each call rather than captured:
+    // this effect outlives several compare-mode toggles, and a container
+    // resize has to reach whichever instance exists at that moment.
+    const applySizes = () => {
       const rightMap = rightMapRef.current;
       const parentWidth = container.offsetWidth;
       const rightClipWidth = rightClipContainer.offsetWidth;
@@ -3495,7 +3495,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightContainer.style.left = `${-(parentWidth - rightClipWidth)}px`;
       leftMap.resize();
       rightMap?.resize();
+    };
 
+    // Re-fitting the camera to bounds (which can force a setZoom) is not
+    // resize — it's a separate, heavier correction that only needs to run
+    // once a resize has settled. Running it on every ResizeObserver tick of
+    // an animated container (e.g. the control panel's 300ms collapse
+    // transition) recomputed the fit-to-bounds zoom on every frame and
+    // snapped the camera to it each time, which read as the map flickering.
+    const applyBoundsClamp = () => {
+      const rightMap = rightMapRef.current;
       const bounds = viewportBoundsRef.current;
       if (bounds) {
         applyZoomOutClipToBounds(leftMap, bounds);
@@ -3507,26 +3516,38 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       }
     };
 
-    const scheduleResize = () => {
-      if (resizeFrameRef.current !== null) return;
-      resizeFrameRef.current = requestAnimationFrame(() => {
-        resizeFrameRef.current = null;
-        updateSizes();
-      });
+    const updateSizes = () => {
+      applySizes();
+      applyBoundsClamp();
     };
 
-    scheduleResize();
+    let settleTimer: number | null = null;
+
+    const scheduleResize = () => {
+      if (resizeFrameRef.current === null) {
+        resizeFrameRef.current = requestAnimationFrame(() => {
+          resizeFrameRef.current = null;
+          applySizes();
+        });
+      }
+
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        applyBoundsClamp();
+      }, 200);
+    };
+
+    updateSizes();
 
     const observer = new ResizeObserver(() => {
       scheduleResize();
     });
     observer.observe(container);
 
-    const transitionTimer = window.setTimeout(updateSizes, 650);
-
     return () => {
       observer.disconnect();
-      window.clearTimeout(transitionTimer);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
