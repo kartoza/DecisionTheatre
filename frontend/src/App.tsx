@@ -389,7 +389,7 @@ function App() {
   const { isOpen: isTargetModalOpen, onOpen: onOpenTargetModal, onClose: onCloseTargetModal } = useDisclosure();
   const handleToggleTargetModal = () => {
     if (isTargetModalOpen) {
-      onCloseTargetModal();
+      handleCloseTargetModal();
     } else {
       // The three right-hand panels dock into the same slot, so opening one
       // dismisses the others rather than stacking on the same pixels.
@@ -420,6 +420,25 @@ function App() {
     onCloseTargetModal();
     setChartDetails({ paneIndex, derivation, calculations });
   }, [onCloseTargetModal]);
+
+  // In single-pane view the control panel is expected to always be showing
+  // for the focused pane, so closing chart details (which displaced it) must
+  // bring it back rather than leaving the slot empty.
+  const handleCloseChartDetails = useCallback(() => {
+    setChartDetails(null);
+    if (layoutMode === 'single') {
+      setIndicatorPaneIndex(focusedPane);
+    }
+  }, [layoutMode, focusedPane]);
+
+  // Same rule for the target editor: closing it in single-pane view must
+  // bring the control panel back rather than leaving the slot empty.
+  const handleCloseTargetModal = useCallback(() => {
+    onCloseTargetModal();
+    if (layoutMode === 'single') {
+      setIndicatorPaneIndex(focusedPane);
+    }
+  }, [onCloseTargetModal, layoutMode, focusedPane]);
 
   // The other direction of the same rule. The control panel is opened from a
   // dozen places — pane clicks, focus changes, the guided tours — so closing
@@ -1298,7 +1317,7 @@ function App() {
             onSiteIndicatorsChange={handleSiteIndicatorsChange}
             onResetTargets={handleResetTargets}
             isTargetModalOpen={isTargetModalOpen}
-            onCloseTargetModal={onCloseTargetModal}
+            onCloseTargetModal={handleCloseTargetModal}
             refreshKey={mapRefreshSeq}
             quadColumns={quadColumns}
             onQuadColumnsChange={setQuadColumns}
@@ -1308,7 +1327,7 @@ function App() {
 
         <ChartDetailsPanel
           isOpen={chartDetails !== null}
-          onClose={() => setChartDetails(null)}
+          onClose={handleCloseChartDetails}
           derivation={chartDetails?.derivation ?? null}
           calculations={chartDetails?.calculations ?? null}
         />
@@ -1317,6 +1336,7 @@ function App() {
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
+          canCollapse={layoutMode !== 'single'}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
