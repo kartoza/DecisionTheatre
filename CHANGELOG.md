@@ -9,6 +9,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Load shedding.** The server now runs a bounded number of API requests at
+  once — two per CPU core — queues a short burst behind that, and refuses
+  anything further with `503` and a `Retry-After` header. Before this it
+  accepted everything and queued it, so overload came back as latency rather
+  than as an error: measured on four cores, 64 concurrent clients saw a 95th
+  percentile of 60 seconds with not one request refused. It is now 5.3 seconds,
+  and response time no longer tracks the load. `/api/health` and the site's own
+  assets are never refused. See `docs/administrator-guide/capacity-and-overload.md`.
+
+- **Rate limiting** in `deployments/nginx.conf`: 10 requests a second to `/api`
+  with bursts of 20, 100 a second for tiles, and 24 connections per client.
+  Over the limit gets `429`. Shedding made the server cheap to refuse, which
+  raised the request rate rather than lowering it — 1.1/s to 60/s at 64
+  clients — so the rate that reaches the application needs bounding too.
+
+- **`robots.txt`**, which the site did not have. The SPA fallback was answering
+  `/robots.txt` with a page of HTML — a `200` containing no directives, which a
+  crawler reads as permission to crawl everything. It now disallows `/api`,
+  `/tiles` and `/data`, where there is nothing for a crawler anyway, and leaves
+  the pages and docs open. nginx additionally closes the connection on declared
+  AI and SEO crawlers requesting `/api`.
+
+- **Memory limits for the container**, with `GOMEMLIMIT` set below the cgroup
+  ceiling so the collector works harder instead of the process being OOM-killed
+  mid-request, and swap disabled so overload cannot degrade into something
+  slower than a timeout while still answering health checks.
+
+- **`scripts/dtbench.py`**, a standard-library Python benchmark and stress tool
+  that points at any running instance, records every run to SQLite, and
+  compares against the whole history rather than a nominated baseline. It
+  measures under concurrency, which the previous tool deliberately did not, and
+  its report distinguishes a server that sheds load from one that queues.
+
+- **`dt benchmark`**, with `make benchmark` and `nix run .#benchmark` beside it,
+  the same three doors as everything else in the project. It measures, records,
+  compares, writes a PDF and opens it. `benchmark-quick` skips the load phase,
+  `benchmark-list` shows what has been measured and `benchmark-regressions`
+  searches the history.
+
+- **The commit is recorded with every benchmark run**, taken from the server's
+  own `/api/info` rather than from the local checkout — point the tool at
+  production and those are different, and recording the local one would attach
+  a plausible sha to somebody else's numbers. `/api/info` now reports `commit`,
+  stamped at link time by `scripts/commit.sh` on the ordinary build paths and
+  from `self.rev` under nix. An unstamped build reports `unknown` and the tool
+  records that as-is.
+
+- **`dt benchmark-regressions`**, which finds where in the recorded history a
+  measurement moved to a new level and stayed there, and names the commit it
+  first appeared in. This is the bisect, run over measurements already taken
+  rather than by rebuilding each revision. It reports steps found across
+  several unrelated endpoints at once separately and without a commit, because
+  that pattern is the machine rather than the code.
+
+- **A PDF report**, drawn by `scripts/dtbench_pdf.py` — a few hundred lines of
+  standard library that writes the PDF format directly, so the benchmark keeps
+  its most useful property of running on a server with nothing installed. Four
+  pages: what was measured and the verdict, every endpoint against its history,
+  trend charts labelled by commit, and the step changes.
+
+- **Remote targets skip the load phase** unless `--stress-remote` is passed.
+  The obvious thing to type is the production URL, and the load phase saturates
+  the server on purpose.
+
+### Removed
+
+- **The Go benchmark tool** (`internal/bench`, `cmd/dtbench` — about 12,000
+  lines), replaced by `scripts/dtbench.py`. The scenario list and the
+  response-size guard were carried over; what went is the branded HTML and PDF
+  report generation. `bench-sweep`, which built each revision in a range and
+  measured it, has no direct replacement — `benchmark-regressions` answers the
+  question it was usually asked, from runs already recorded.
+
+### Fixed
+
+- **A panic in background work no longer kills the process.** An unrecovered
+  panic in any goroutine takes the whole program with it. `net/http` recovers
+  panics inside a handler, so a bad request cost one connection — but four
+  background goroutines had no such protection, and two of them are started by
+  ordinary requests: creating a site, and extracting its indicators. A
+  malformed site was a way to stop the container without sending any load at
+  all. Background work now runs through `internal/safego`.
+
+- **`/api/precalculate/full` computes once for everyone** instead of once per
+  concurrent caller. It checked a cache and then computed outside the lock, so
+  every request arriving during the 26-second cold computation started its own
+  copy of it. One page load opening four panes ran the same full-dataset
+  aggregation four times, and pointing anything at that endpoint turned one
+  request into as many full-dataset scans as it could open connections.
+
+- **Proxy timeouts cut from 300 seconds** to 90 for `/api` and 120 elsewhere.
+  Nothing here legitimately takes five minutes, and the old value meant a
+  connection to an upstream that had stopped responding was held for that long.
+  These bound the gap between reads, not the total, so streaming downloads are
+  unaffected.
+
+### Added
+
 - **Flat chart view** — a horizontal band as an alternative to the arc dial,
   chosen from the top bar next to Dial. Reference and current are drawn as
   vertical lines through the band, the target as a buckle around it: two are

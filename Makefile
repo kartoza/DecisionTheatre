@@ -20,7 +20,8 @@
 
 BINARY_NAME := decision-theatre
 VERSION ?= $(shell ./scripts/version.sh)
-LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
+COMMIT ?= $(shell ./scripts/commit.sh)
+LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 
 BIN_DIR := bin
 COVERAGE_FILE := coverage.out
@@ -34,7 +35,7 @@ GOLINT := golangci-lint
 .PHONY: all app build build-backend build-frontend clean
 .PHONY: run serve dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
-.PHONY: bench bench-report bench-list bench-sweep
+.PHONY: benchmark benchmark-quick benchmark-report benchmark-list benchmark-regressions
 .PHONY: container
 .PHONY: fmt fmt-check lint vet check deps
 .PHONY: check-shell check-nix check-secrets check-drift
@@ -155,42 +156,42 @@ test-all: test test-frontend test-scripts
 # Benchmarking
 # ============================
 
-## bench: Measure the running server and save the result.
+## benchmark: Measure the running server, and open the report.
 ##
-## Needs a server: start one with `dt run` first. The result is JSON under
-## benchmarks/results/, kept, because a comparison against last month is only
-## possible if last month's file is still there.
+## Needs a server: start one with `dt run` first. Records the run in
+## benchmarks/dtbench.sqlite along with the commit the server was built from,
+## compares it against the whole history, writes a PDF and opens it.
 ##
-## DT_BENCH_TARGET overrides the address, DT_BENCH_LABEL the label:
-##   make bench DT_BENCH_LABEL=before
-bench:
-	@$(GO) run ./cmd/dtbench run \
-		--target $(or $(DT_BENCH_TARGET),http://127.0.0.1:8080) \
-		$(if $(DT_BENCH_LABEL),--label $(DT_BENCH_LABEL),)
+## The load phase saturates the server on purpose, so use benchmark-quick
+## against anything anyone is using.
+##
+##   make benchmark DT_BENCH_LABEL=before
+##   make benchmark DT_BENCH_TARGET=https://your-instance
+benchmark:
+	@./scripts/benchmark.sh
 
-## bench-report: Compare the two most recent runs and open the report.
-##
-## With no arguments it takes the two most recent runs and names which ones it
-## chose. DT_BENCH_BASELINE and DT_BENCH_CURRENT accept a label, a filename, or
-## a position such as last-3.
-bench-report:
-	@$(GO) run ./cmd/dtbench report --pdf --open \
-		$(if $(DT_BENCH_BASELINE),--baseline $(DT_BENCH_BASELINE),) \
-		$(if $(DT_BENCH_CURRENT),--current $(DT_BENCH_CURRENT),)
+## benchmark-quick: Measure without the load phase. Seconds, not minutes.
+benchmark-quick:
+	@./scripts/benchmark.sh --quick
 
-## bench-list: Show the stored benchmark results.
-bench-list:
-	@$(GO) run ./cmd/dtbench list
-
-## bench-sweep: Build each revision in a range, measure it, save the results.
+## benchmark-report: Rebuild and open the report for the most recent run.
 ##
-## Slow — every revision is a full build — so it lists what it would do and
-## stops unless DT_BENCH_FROM is set:
-##   make bench-sweep DT_BENCH_FROM=v0.4.0
-bench-sweep:
-	@$(GO) run ./cmd/dtbench sweep \
-		$(if $(DT_BENCH_FROM),--from $(DT_BENCH_FROM),--dry-run) \
-		$(if $(DT_BENCH_TO),--to $(DT_BENCH_TO),)
+## DT_BENCH_RUN selects another by id, as listed by `make benchmark-list`.
+benchmark-report:
+	@python3 scripts/dtbench.py report --pdf --open \
+		$(if $(DT_BENCH_RUN),--run $(DT_BENCH_RUN),)
+
+## benchmark-list: Show the recorded benchmark runs.
+benchmark-list:
+	@python3 scripts/dtbench.py list
+
+## benchmark-regressions: Find where in the history a measurement changed level.
+##
+## Searches the recorded runs for step changes and names the commit each one
+## first appeared in — a bisect over measurements already taken, rather than
+## rebuilding every revision to find the same answer.
+benchmark-regressions:
+	@python3 scripts/dtbench.py regressions
 
 # ============================
 # Code quality

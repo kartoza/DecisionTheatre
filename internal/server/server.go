@@ -244,6 +244,11 @@ func (s *Server) buildRouter() *mux.Router {
 			"no such endpoint: "+r.Method+" "+r.URL.Path)
 	})
 
+	// Crawler rules. Registered before the SPA fallback, which would otherwise
+	// answer /robots.txt with a page of HTML — a 200 with no directives in it,
+	// which a crawler reads as permission to crawl everything. See robots.go.
+	router.HandleFunc("/robots.txt", handleRobots).Methods("GET")
+
 	// Static frontend files (embedded)
 	staticContent, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -368,6 +373,10 @@ func (s *Server) Start() error {
 
 // rootHandler wraps the router in the middleware every request passes through.
 //
+// Outermost first: admission control, then the body limit, then compression,
+// then the live router. Admission leads because refusing has to be cheaper
+// than serving, or shedding just moves the overload rather than relieving it.
+//
 // Compression is applied in server mode only. Desktop mode reaches the server
 // exclusively over loopback — it binds 127.0.0.1 and opens its own WebView onto
 // it — where there is no bandwidth to save, so compressing the full-Africa
@@ -384,7 +393,10 @@ func (s *Server) rootHandler() http.Handler {
 	if !s.cfg.DesktopMode {
 		handler = compressResponses(handler)
 	}
-	return limitRequestBody(handler)
+	// Admission control is outermost so that a refused request costs a status
+	// line and nothing else: no body read, no compression, no routing. The
+	// whole value of shedding is that saying no is cheap.
+	return admitRequests(limitRequestBody(handler))
 }
 
 // newHTTPServer builds the main listener's configuration.
