@@ -231,11 +231,15 @@ func TestInvalidateForcesARecompute(t *testing.T) {
 func TestPointerValuesWork(t *testing.T) {
 	// The real use is sharedResult[*FullDomainData]; the zero value of a
 	// pointer is nil, which must not be mistaken for "not computed yet".
-	type payload struct{ n int }
+	type payload struct{}
 	var s sharedResult[*payload]
 	var computations atomic.Int64
 
-	compute := func() (*payload, error) { computations.Add(1); return nil, nil }
+	compute := func() (*payload, error) {
+		computations.Add(1)
+		//nolint:nilnil // the test verifies a nil *payload is itself the cached value, not an absence of one
+		return nil, nil
+	}
 	for i := 0; i < 3; i++ {
 		v, err := s.Get(context.Background(), "test", compute)
 		if err != nil || v != nil {

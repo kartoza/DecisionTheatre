@@ -223,6 +223,8 @@ func respondOverloaded(w http.ResponseWriter, r *http.Request) {
 	// front of a server that recovered seconds later.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	fmt.Fprintf(w, `{"error":"server at capacity, retry in %ds"}`+"\n", retryAfterSeconds)
+	if _, err := fmt.Fprintf(w, `{"error":"server at capacity, retry in %ds"}`+"\n", retryAfterSeconds); err != nil {
+		log.Printf("[admission] failed to write refusal body: %v", err)
+	}
 	log.Printf("[admission] shed %s %s", r.Method, r.URL.Path)
 }
