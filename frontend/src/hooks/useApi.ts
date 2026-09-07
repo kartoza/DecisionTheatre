@@ -173,179 +173,106 @@ export function useExecutablesInfo() {
   return { executablesInfo, loading };
 }
 
-export function useColumns() {
-  const [columns, setColumns] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+// Every /api/columns and /api/metadata/* endpoint returns a small map that is
+// static for the session — metadata.csv doesn't change without a server
+// restart. Grid view mounts up to 12 MapView/ViewPane/ChartView instances at
+// once, and each of these hooks used to fetch independently per mounted
+// component: 12 uncoordinated requests to the exact same URL, with no retry if
+// one of them failed. A pane whose own copy of that fetch failed (e.g. the
+// desktop runtime's embedded server fielding a dozen near-simultaneous
+// duplicates of itself) was left with that hook's empty default forever — for
+// useAttributeColors specifically, an empty color map is indistinguishable
+// from "no metadata color defined for this attribute", so the choropleth layer
+// fell back to the rainbow default (buildFillColorExpression in
+// choroplethPaint.ts) instead of the palette metadata.csv defines, on one
+// random pane, depending on which of the 12 duplicate requests happened not to
+// land.
+//
+// One promise per URL, shared by every caller and retried (not cached as
+// failure) on error, removes both the duplication and that failure mode.
+const _metadataPromises = new Map<string, Promise<unknown>>();
+
+function fetchMetadataOnce<T>(url: string): Promise<T> {
+  const cached = _metadataPromises.get(url) as Promise<T> | undefined;
+  if (cached) return cached;
+  const promise = fetchJSON<T>(url).catch((err) => {
+    _metadataPromises.delete(url);
+    throw err;
+  });
+  _metadataPromises.set(url, promise);
+  return promise;
+}
+
+function useMetadata<T>(path: string, empty: T): { data: T; loading: boolean } {
+  const url = `${API_BASE}${path}`;
+  const [state, setState] = useState<{ data: T; loading: boolean }>({ data: empty, loading: true });
 
   useEffect(() => {
-    fetchJSON<string[]>(`${API_BASE}/columns`)
-      .then((cols) => {
-        setColumns(cols || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+    fetchMetadataOnce<T>(url)
+      .then((data) => { if (!cancelled) setState({ data: data ?? empty, loading: false }); })
+      .catch(() => { if (!cancelled) setState({ data: empty, loading: false }); });
+    return () => { cancelled = true; };
+    // `empty` is a fallback value, not part of the request identity — a new
+    // literal per render must not re-run the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
 
+  return state;
+}
+
+export function useColumns() {
+  const { data: columns, loading } = useMetadata<string[]>('/columns', []);
   return { columns, loading };
 }
 
 export function useAttributeColors() {
-  const [colors, setColors] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/colors`)
-      .then((data) => {
-        setColors(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: colors, loading } = useMetadata<Record<string, string>>('/metadata/colors', {});
   return { colors, loading };
 }
 
 export function useAttributeDetails() {
-  const [details, setDetails] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/details`)
-      .then((data) => {
-        setDetails(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: details, loading } = useMetadata<Record<string, string>>('/metadata/details', {});
   return { details, loading };
 }
 
 export function useAttributeOrder() {
-  const [order, setOrder] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, number>>(`${API_BASE}/metadata/order`)
-      .then((data) => {
-        setOrder(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: order, loading } = useMetadata<Record<string, number>>('/metadata/order', {});
   return { order, loading };
 }
 
 export function useAttributeVariableTypes() {
-  const [variableTypes, setVariableTypes] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/variabletypes`)
-      .then((data) => {
-        setVariableTypes(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: variableTypes, loading } = useMetadata<Record<string, string>>('/metadata/variabletypes', {});
   return { variableTypes, loading };
 }
 
 export function useAttributeUserInputs() {
-  const [userInputs, setUserInputs] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/inputs`)
-      .then((data) => {
-        setUserInputs(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: userInputs, loading } = useMetadata<Record<string, boolean>>('/metadata/inputs', {});
   return { userInputs, loading };
 }
 
 export function useAttributeTargetInputs() {
-  const [targetInputs, setTargetInputs] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/targetinputs`)
-      .then((data) => {
-        setTargetInputs(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: targetInputs, loading } = useMetadata<Record<string, boolean>>('/metadata/targetinputs', {});
   return { targetInputs, loading };
 }
 
 export function useAttributeCanMap() {
-  const [canMap, setCanMap] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/canmap`)
-      .then((data) => {
-        setCanMap(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: canMap, loading } = useMetadata<Record<string, boolean>>('/metadata/canmap', {});
   return { canMap, loading };
 }
 
 export function useAttributeAxisLabels() {
-  const [axisLabels, setAxisLabels] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/axislabels`)
-      .then((data) => {
-        setAxisLabels(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: axisLabels, loading } = useMetadata<Record<string, string>>('/metadata/axislabels', {});
   return { axisLabels, loading };
 }
 
 export function useAttributeXAxisLabels() {
-  const [xAxisLabels, setXAxisLabels] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/xaxislabels`)
-      .then((data) => {
-        setXAxisLabels(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: xAxisLabels, loading } = useMetadata<Record<string, string>>('/metadata/xaxislabels', {});
   return { xAxisLabels, loading };
 }
 
 export function useAttributeUnits() {
-  const [units, setUnits] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/units`)
-      .then((data) => {
-        setUnits(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: units, loading } = useMetadata<Record<string, string>>('/metadata/units', {});
   return { units, loading };
 }
 
@@ -355,114 +282,37 @@ export interface TargetRange {
 }
 
 export function useAttributeTargetRanges() {
-  const [targetRanges, setTargetRanges] = useState<Record<string, TargetRange>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, TargetRange>>(`${API_BASE}/metadata/targetranges`)
-      .then((data) => {
-        setTargetRanges(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: targetRanges, loading } = useMetadata<Record<string, TargetRange>>('/metadata/targetranges', {});
   return { targetRanges, loading };
 }
 
 export function useAttributeCanGraph() {
-  const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/cangraph`)
-      .then((data) => {
-        setCanGraph(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: canGraph, loading } = useMetadata<Record<string, boolean>>('/metadata/cangraph', {});
   return { canGraph, loading };
 }
 
 export function useAttributeDial0Middle() {
-  const [dial0Middle, setDial0Middle] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/dial0middle`)
-      .then((data) => {
-        setDial0Middle(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: dial0Middle, loading } = useMetadata<Record<string, boolean>>('/metadata/dial0middle', {});
   return { dial0Middle, loading };
 }
 
 export function useAttributeIgnoreXGrouping() {
-  const [ignoreXGrouping, setIgnoreXGrouping] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/ignorexgrouping`)
-      .then((data) => {
-        setIgnoreXGrouping(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: ignoreXGrouping, loading } = useMetadata<Record<string, boolean>>('/metadata/ignorexgrouping', {});
   return { ignoreXGrouping, loading };
 }
 
 export function useAttributeChartTypes() {
-  const [chartTypes, setChartTypes] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/charttypes`)
-      .then((data) => {
-        setChartTypes(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: chartTypes, loading } = useMetadata<Record<string, string>>('/metadata/charttypes', {});
   return { chartTypes, loading };
 }
 
 export function useAttributeGroupingVariables() {
-  const [groupingVariables, setGroupingVariables] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvariables`)
-      .then((data) => {
-        setGroupingVariables(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: groupingVariables, loading } = useMetadata<Record<string, string>>('/metadata/groupingvariables', {});
   return { groupingVariables, loading };
 }
 
 export function useAttributeGroupingValues() {
-  const [groupingValues, setGroupingValues] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvalues`)
-      .then((data) => {
-        setGroupingValues(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: groupingValues, loading } = useMetadata<Record<string, string>>('/metadata/groupingvalues', {});
   return { groupingValues, loading };
 }
 
