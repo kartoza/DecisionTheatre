@@ -135,6 +135,29 @@ function formatVariableType(value: string): string {
     .join(' ');
 }
 
+// The step-derived precision below (1 or 2 decimals) is tuned for a single
+// reserve's numbers, but a slider's range is fixed for the attribute — the
+// same 0–50/km² range a small reserve fills out is also what a whole-Africa
+// site uses, where a rare species' density averaged over the entire
+// continent can be three orders of magnitude smaller (e.g. 0.00025/km² for
+// Black Rhino) than in a reserve where it is actually found. Rounded to the
+// step's precision that reads as "0.0" — indistinguishable from a species
+// that is not there at all, even though the value driving the slider is
+// correct. Falling back to enough decimals for ~2 significant figures only
+// for values small enough that the step-derived precision would erase them
+// keeps ordinary reserve-scale numbers unchanged.
+function formatTargetValue(numVal: number, step: number): string {
+  if (numVal % 1 === 0) return String(numVal);
+
+  const stepPrecision = step < 0.1 ? 2 : 1;
+  const magnitude = Math.abs(numVal);
+  if (magnitude > 0 && magnitude < 0.5 * 10 ** -stepPrecision) {
+    const significantDecimals = Math.min(6, Math.ceil(-Math.log10(magnitude)) + 1);
+    return numVal.toFixed(Math.max(stepPrecision, significantDecimals));
+  }
+  return numVal.toFixed(stepPrecision);
+}
+
 function ContentArea({
   mode,
   paneStates,
@@ -824,7 +847,7 @@ function ContentArea({
                                 <Box fontSize="xs" color="gray.500" fontWeight="normal" mt={0.5}>{key}</Box>
                               </FormLabel>
                               <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
-                                {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
+                                {formatTargetValue(numVal, step)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
                               </Box>
                             </HStack>
                             <Slider

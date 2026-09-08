@@ -5,6 +5,7 @@ import {
   clearSessionSites,
   loadLocalSites,
   loadDemoSiteForTour,
+  listSites,
 } from '../hooks/useApi';
 import { AFRICA_SITE_ID, SHAI_HILLS_SITE_ID } from '../constants/walkthroughSites';
 import type { Site } from '../types';
@@ -130,6 +131,51 @@ describe('session-scoped demo sites', () => {
 
     expect(site?.title).toBe('Mine');
   });
+
+  // Since-removed code used to write the whole walkthrough site into dt-sites
+  // "so it is available for the rest of the session". A profile that ran a
+  // tour under that old code — possibly mid-edit, so ideal never equalled
+  // current — still carries that entry today, because nothing ever cleans it
+  // up. It must not be able to shadow a fresh reset forever.
+  it('ignores a stale walkthrough entry left in dt-sites by old code', async () => {
+    const stale = {
+      ...walkthroughJSON(),
+      indicators: { current: { NPP_gm2: 400 }, ideal: { NPP_gm2: 12345 } },
+    } as unknown as Site;
+    window.localStorage.setItem(SITE_KEY, JSON.stringify([stale]));
+
+    const site = await getSite(AFRICA_SITE_ID);
+
+    // Not the stale ideal captured from years ago — the fresh file (or a
+    // session override, if one had been set).
+    expect(site?.indicators?.ideal).not.toEqual({ NPP_gm2: 12345 });
+    expect(site?.indicators?.ideal).toEqual({ NPP_gm2: 999 });
+  });
+
+  it('resets to current on tour start even with a stale dt-sites entry present', async () => {
+    const stale = {
+      ...walkthroughJSON(),
+      indicators: { current: { NPP_gm2: 400 }, ideal: { NPP_gm2: 12345 } },
+    } as unknown as Site;
+    window.localStorage.setItem(SITE_KEY, JSON.stringify([stale]));
+
+    const site = await loadDemoSiteForTour(AFRICA_SITE_ID);
+
+    expect(site.indicators?.ideal).toEqual({ NPP_gm2: 400 });
+  });
+
+  it('lists the fresh walkthrough entry rather than a stale dt-sites copy', async () => {
+    const stale = {
+      ...walkthroughJSON(),
+      indicators: { current: { NPP_gm2: 400 }, ideal: { NPP_gm2: 12345 } },
+    } as unknown as Site;
+    window.localStorage.setItem(SITE_KEY, JSON.stringify([stale]));
+
+    const sites = await listSites();
+    const africa = sites.find((s) => s.id === AFRICA_SITE_ID);
+
+    expect(africa?.indicators?.ideal).toEqual({ NPP_gm2: 999 });
+  });
 });
 
 // The tour's own load path — the thing that actually blew the quota. It used to
@@ -185,5 +231,71 @@ describe('loadDemoSiteForTour', () => {
     await expect(loadDemoSiteForTour(SHAI_HILLS_SITE_ID)).rejects.toThrow(
       /Walkthrough site data not found/,
     );
+  });
+});
+
+// The standalone desktop app runs in webview runtime (window.__DECISION_THEATRE_WEBVIEW__
+// is set before any page script runs — see main.go). A walkthrough site is a static
+// asset under /data/walkthroughs/ in every runtime; the backend's site store has
+// never heard of one and GET /api/sites/{id} 404s for it exactly as it does in
+// browser runtime. getSite's webview branch used to do nothing but that fetch, so a
+// tour starting on the desktop app got a 404 -> null -> "Walkthrough site data not
+// found" instead of the reset-to-current site, and silently left whatever was
+// already open on screen in place.
+describe('webview runtime', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearSessionSites();
+    window.__DECISION_THEATRE_WEBVIEW__ = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes(`/api/sites/${AFRICA_SITE_ID}`)) {
+          return new Response('not found', { status: 404 });
+        }
+        if (url.includes(`/data/walkthroughs/${AFRICA_SITE_ID}.json`)) {
+          return new Response(JSON.stringify(walkthroughJSON()), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearSessionSites();
+    window.localStorage.clear();
+    delete window.__DECISION_THEATRE_WEBVIEW__;
+  });
+
+  it('falls back to the static walkthrough file when the site store 404s', async () => {
+    const site = await getSite(AFRICA_SITE_ID);
+
+    expect(site).not.toBeNull();
+    expect(site?.id).toBe(AFRICA_SITE_ID);
+  });
+
+  it('prefers a session override over the static file', async () => {
+    setSessionSite({
+      ...walkthroughJSON(),
+      indicators: { current: { NPP_gm2: 400 }, ideal: { NPP_gm2: 400 } },
+    } as unknown as Site);
+
+    const site = await getSite(AFRICA_SITE_ID);
+
+    expect(site?.indicators?.ideal).toEqual({ NPP_gm2: 400 });
+  });
+
+  it('resets ideal targets to current when starting a tour, same as browser runtime', async () => {
+    const site = await loadDemoSiteForTour(AFRICA_SITE_ID);
+
+    expect(site.indicators?.ideal).toEqual({ NPP_gm2: 400 });
+
+    const later = await getSite(AFRICA_SITE_ID);
+    expect(later?.indicators?.ideal).toEqual({ NPP_gm2: 400 });
   });
 });

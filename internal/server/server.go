@@ -221,6 +221,24 @@ func (s *Server) buildRouter() *mux.Router {
 	router.PathPrefix("/data/demo/").Handler(
 		http.StripPrefix("/data/demo/", http.FileServer(dataDirFS{srv: s, sub: "demo"})))
 
+	// Serve the area-weighted whisker-bound CSVs from the data directory root.
+	// These back ChartView's box-plot whisker fallback for any site the backend
+	// has no record of — walkthrough demo sites, always, since they are static
+	// assets rather than site-store records — so /sites/{id}/whiskers 404s and
+	// the frontend falls back to fetching these directly and computing bounds
+	// itself. Before this route existed the fetch fell through to the SPA
+	// handler and got index.html back with a 200, which parsed as zero rows:
+	// every box plot in every demo tour silently collapsed to a flat line.
+	// Named explicitly, not PathPrefix'd, because nothing else at the data
+	// root is meant to be downloadable this way.
+	whiskerCSVHandler := http.StripPrefix("/data/", newCompressedStatic(dataDirFS{srv: s, sub: ""}))
+	for _, name := range []string{
+		"current_upper.csv", "current_lower.csv",
+		"reference_upper.csv", "reference_lower.csv",
+	} {
+		router.Handle("/data/"+name, whiskerCSVHandler).Methods("GET")
+	}
+
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
 	if err != nil {

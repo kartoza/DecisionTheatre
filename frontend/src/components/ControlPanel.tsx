@@ -618,9 +618,26 @@ function ControlPanel({
   }, [viewMode, chartGroup, chartAxisLabelFilter, columns, canGraph, variableTypes, groupingVariables, chartTypes, axisLabels]);
 
   useEffect(() => {
-    if (chartAxisLabelFilter && !groupingVariableOptions.some((option) => option.value === chartAxisLabelFilter)) {
-      onChartAxisLabelFilterChange?.(null);
+    if (!chartAxisLabelFilter) return;
+    if (groupingVariableOptions.some((option) => option.value === chartAxisLabelFilter)) return;
+
+    // A caller outside this component — a demo tour's auto-ui-event, or pane
+    // state restored from an older save — may only know the bare grouping
+    // variable name (e.g. "Functional group"), not the group\x01axisLabel
+    // encoding this component switches to once that name spans more than one
+    // axis label (see encodeGroupingOption). Upgrade to the matching encoded
+    // option rather than silently discarding the selection, which otherwise
+    // left the chart ungrouped — collapsing every box plot to a flat line —
+    // with no indication why.
+    const upgraded = groupingVariableOptions.find(
+      (option) => decodeGroupingFilter(option.value).group === chartAxisLabelFilter,
+    );
+    if (upgraded) {
+      onChartAxisLabelFilterChange?.(upgraded.value);
+      return;
     }
+
+    onChartAxisLabelFilterChange?.(null);
   }, [chartAxisLabelFilter, groupingVariableOptions, onChartAxisLabelFilterChange]);
 
   useEffect(() => {

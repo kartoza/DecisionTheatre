@@ -14,10 +14,9 @@ import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { FiActivity, FiBarChart2, FiHelpCircle, FiMap, FiMapPin, FiX } from 'react-icons/fi';
 import { colors } from '../styles/colors';
 import { usePaneChromeForced } from '../hooks/usePaneChromeForced';
-import { createSite, listSites } from '../hooks/useApi';
+import { createSite, listSites, resetSiteIdeal } from '../hooks/useApi';
 import { getAppRuntime } from '../types/runtime';
 import type { Site } from '../types';
-import tourViewModesImg from '../assets/tour-view-modes.png';
 
 const TOUR_SEEN_KEY = 'dt-tour-seen';
 const DEFINE_BOUNDARY_STEP = 3;
@@ -85,7 +84,6 @@ const STEPS: TourStep[] = [
       'Use these buttons to switch the pane between Map, Chart, Dial, and Table. In grid-view mode all four views are shown at once.',
     targetId: 'tour-view-modes',
     navigateTo: 'explore',
-    image: tourViewModesImg,
   },
   {
     icon: <FiHelpCircle size={28} />,
@@ -117,6 +115,21 @@ function geoBBox(geometry: GeoJSON.Geometry): { minX: number; minY: number; maxX
 
 const MotionBox = motion(Box);
 
+// A closed Chakra Slide/Collapse panel (e.g. the control panel a step targets
+// while also switching to quad-dial mode, which closes it) stays mounted and
+// is merely translated out of the viewport rather than unmounted — so
+// getBoundingClientRect still returns a real rect, sitting just past whichever
+// edge it was pushed off. Spotlighting that rect drew a bare ring hugging the
+// screen edge with nothing inside it. Treating an off-viewport rect as "no
+// target" is the general fix: any element pushed fully outside the visible
+// area is not something a spotlight should ever point at.
+function visibleRect(element: Element): DOMRect | null {
+  const rect = element.getBoundingClientRect();
+  const onScreen = rect.right > 0 && rect.left < window.innerWidth
+    && rect.bottom > 0 && rect.top < window.innerHeight;
+  return onScreen ? rect : null;
+}
+
 function useSpotlightRect(targetId: string | undefined) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -127,7 +140,7 @@ function useSpotlightRect(targetId: string | undefined) {
 
     const update = () => {
       const el = document.getElementById(targetId);
-      setRect(el ? el.getBoundingClientRect() : null);
+      setRect(el ? visibleRect(el) : null);
     };
 
     // Poll briefly on step change to wait for navigation/animation to settle
@@ -245,6 +258,21 @@ export default function TourGuide() {
         const sites = await listSites();
         const baseline = siteCountAtBoundaryStepRef.current;
         const siteWasCreated = baseline !== null && sites.length > baseline;
+        const existingDemoSite = sites.find(
+          (s) => s.title === 'Munywana' && s.creationMethod === 'shapefile'
+        );
+        if (existingDemoSite) {
+          // Discard any target edits left over from a previous run of the
+          // tour (or from the user poking at the panel afterwards), so the
+          // tour always starts with targets matching the current state.
+          const resetSite = await resetSiteIdeal(existingDemoSite.id, 'current', existingDemoSite)
+            .catch(() => existingDemoSite);
+          window.dispatchEvent(new CustomEvent('dt:tour-open-site', { detail: resetSite }));
+          window.dispatchEvent(new Event('dt:demo-single-map-view'));
+          await new Promise<void>(r => setTimeout(r, 600));
+          goToStep(currentStep + 1);
+          return;
+        }
         if (!siteWasCreated) {
           setDemoStatus({ message: 'Fetching demo shapefile…', pct: 15 });
 
@@ -280,6 +308,7 @@ export default function TourGuide() {
 
           setDemoStatus({ message: 'Opening on map…', pct: 95 });
           window.dispatchEvent(new CustomEvent('dt:tour-open-site', { detail: site }));
+          window.dispatchEvent(new Event('dt:demo-single-map-view'));
           await new Promise<void>(r => setTimeout(r, 600));
 
           setDemoStatus(null);
