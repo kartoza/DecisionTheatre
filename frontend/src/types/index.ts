@@ -79,12 +79,12 @@ const STORAGE_FOCUSED_KEY = 'dt-focused-pane';
 const STORAGE_QUAD_COLUMNS_KEY = 'dt-quad-columns';
 
 export const DEFAULT_PANE_STATES: PaneStates = [
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'lowTC_prop' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'AGBwd_Mgha' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'percBurned' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'CH4_both_kg_km2' },
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'SOC_Mgha_0_30' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'deltaSOC_Mgha' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'herbs_tot_kgkm2' },
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'NPP_gm2' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'NPP_gm2.1' },
 ];
 
 export function loadPaneStates(): PaneStates {

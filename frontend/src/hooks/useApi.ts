@@ -565,11 +565,14 @@ export async function listSites(): Promise<Site[]> {
     loadWalkthroughSites(),
   ]);
 
-  // A walkthrough already persisted into the real site list (e.g. the browser
-  // ran its tour before, resetting ideal targets along the way) takes
-  // precedence over the freshly-fetched static copy.
-  const realSiteIds = new Set(realSites.map((site) => site.id));
-  const merged = [...realSites, ...walkthroughSites.filter((site) => !realSiteIds.has(site.id))];
+  // A walkthrough id is never a real, persisted site — even if since-removed
+  // code once wrote one into dt-sites (see the note on getSite's browser
+  // branch) — so the freshly-fetched static copy always wins for a known demo
+  // id, rather than whatever was captured, possibly mid-edit, the last time
+  // that stale write happened.
+  const walkthroughIds = new Set(WALKTHROUGH_SITE_IDS as readonly string[]);
+  const realSitesExcludingWalkthroughs = realSites.filter((site) => !walkthroughIds.has(site.id));
+  const merged = [...realSitesExcludingWalkthroughs, ...walkthroughSites];
   return sortSitesByCreatedAtDesc(merged);
 }
 
@@ -610,28 +613,40 @@ export async function getSite(id: string): Promise<Site | null> {
 
   const promise = (async (): Promise<Site | null> => {
     if (isBrowserRuntime()) {
+      // A known demo id is resolved from the session override or the static
+      // walkthrough JSON only — never from dt-sites — checked before touching
+      // localStorage at all. Old, since-removed code used to write the whole
+      // walkthrough site into dt-sites "so it is available for the rest of the
+      // session"; a profile that still carries one of those entries would
+      // otherwise have it win here forever, silently shadowing every future
+      // tour's reset-to-current with whatever was captured — possibly
+      // mid-edit — the last time that write happened.
+      if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
+        const session = _sessionSites.get(id);
+        if (session) return session;
+        return loadWalkthroughSite(id);
+      }
+
       const sites = loadLocalSites();
       const stored = sites.find((site) => site.id === id);
       if (stored) return stored;
-
-      // A session override, then the static walkthrough JSON. Without these a
-      // demo site resolved only because starting its tour had written the whole
-      // thing into localStorage; that write is gone, so look here instead of
-      // returning null and breaking the tour.
-      const session = _sessionSites.get(id);
-      if (session) return session;
-
-      // Only for a known demo id — fetching /data/walkthroughs/{id}.json for a
-      // real site id would just be a 404 on every lookup of a deleted site.
-      if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
-        return loadWalkthroughSite(id);
-      }
       return null;
     }
     const response = await fetch(`${API_BASE}/sites/${id}`);
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`Failed to fetch site: ${response.statusText}`);
-    return response.json();
+    if (response.ok) return response.json();
+    if (response.status !== 404) throw new Error(`Failed to fetch site: ${response.statusText}`);
+
+    // Walkthrough demo sites are static assets under /data/walkthroughs/, not
+    // records in the site store, in webview runtime exactly as in the
+    // browser — so /api/sites/{id} 404s for them here the same way it would
+    // there. A session override (e.g. a tour's reset-to-current on start)
+    // wins over the static file; fall back to the file itself otherwise.
+    const session = _sessionSites.get(id);
+    if (session) return session;
+    if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
+      return loadWalkthroughSite(id);
+    }
+    return null;
   })();
 
   // Evict on error so next caller retries cleanly.
@@ -808,10 +823,11 @@ export async function resetSiteIdeal(
   scenario: 'reference' | 'current',
   site?: Site,
 ): Promise<Site> {
-  const isLocal = site?.source === 'walkthrough' || isBrowserRuntime();
+  const isWalkthrough = site?.source === 'walkthrough';
+  const isLocal = isWalkthrough || isBrowserRuntime();
 
   if (isLocal) {
-    const local = loadLocalSite(id) ?? site;
+    const local = (isWalkthrough ? site : loadLocalSite(id)) ?? site;
     const indicators = local?.indicators;
     if (!local || !indicators) throw new Error('site has no indicators to reset');
 
@@ -829,6 +845,17 @@ export async function resetSiteIdeal(
         ...c,
         ideal: idealForReset(c.reference, c.current, scenario),
       })));
+    }
+
+    // Walkthrough demo sites were never created through the site store, so
+    // updateSite's desktop-runtime PUT 404s for them — same reason
+    // patchSiteIndicators never persists walkthrough edits either. Record the
+    // reset in the session-site map instead of writing it through, so every
+    // later getSite lookup (other panes, the indicators page) sees it too.
+    if (isWalkthrough) {
+      const updated: Site = { ...local, indicators: nextIndicators };
+      setSessionSite(updated);
+      return updated;
     }
 
     return updateSite(id, { indicators: nextIndicators });
@@ -1181,52 +1208,81 @@ function hasWhiskerData(bounds: WhiskerBoundsResponse | null | undefined): boole
     || Object.keys(bounds.currentLower || {}).length > 0;
 }
 
-async function loadWhiskerCSVFile(filename: string): Promise<Record<string, Record<string, number>>> {
+// Every whisker CSV is one row per catchment across the whole datapack —
+// 147,837 of them for Africa, ~177 MB each. Parsing a file like that into a
+// Record keyed by every catchment id, the way this used to work, holds the
+// entire file in memory as a JS object; asking for that four times at once
+// (one per file) crashed the tab outright the one time this path actually
+// ran end to end (it silently 404'd before the backend route below existed,
+// which is how the crash went unnoticed). Both parsers below stream the file
+// line by line and keep only what the caller asked for — a handful of named
+// rows, or a running per-column sum/count — so peak memory stays proportional
+// to what is wanted, not to the file on disk.
+function parseWhiskerCSVHeader(headerLine: string): { headers: string[]; catchIdIndex: number } {
+  const headers = headerLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+  return { headers, catchIdIndex: headers.findIndex((h) => h.toLowerCase() === 'catchid') };
+}
+
+function parseWhiskerCSVRow(
+  line: string,
+  headers: string[],
+  catchIdIndex: number,
+): { catchId: string; row: Record<string, number> } | null {
+  const values = line.split(',');
+  if (values.length !== headers.length) return null;
+
+  const rawId = values[catchIdIndex].trim().replace(/^"|"$/g, '');
+  const catchId = normalizeCatchmentId(rawId);
+  if (!catchId || catchId.toUpperCase() === 'NA') return null;
+
+  const row: Record<string, number> = {};
+  for (let j = 0; j < headers.length; j += 1) {
+    if (j === catchIdIndex) continue;
+    const rawVal = values[j].trim().replace(/^"|"$/g, '');
+    if (!rawVal || rawVal.toUpperCase() === 'NA') continue;
+    const num = Number(rawVal);
+    if (Number.isFinite(num)) row[headers[j]] = num;
+  }
+  return { catchId, row };
+}
+
+// Keeps full rows, but only for a known, bounded set of catchment ids — a
+// real site's own catchments, never more than a few hundred even for a large
+// one — so retained memory is proportional to the site, not the datapack.
+async function loadWhiskerCSVFileFiltered(
+  filename: string,
+  wantedIds: Set<string>,
+): Promise<Record<string, Record<string, number>>> {
   try {
     const response = await fetch(`/data/${filename}`);
     if (!response.ok) return {};
 
     const text = await response.text();
-    const lines = text.trim().split('\n');
+    const lines = text.split('\n');
     if (lines.length < 2) return {};
 
-    const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-    const catchIdIndex = headers.findIndex((h) => h.toLowerCase() === 'catchid');
+    const { headers, catchIdIndex } = parseWhiskerCSVHeader(lines[0]);
     if (catchIdIndex === -1) return {};
 
     const data: Record<string, Record<string, number>> = {};
-
     for (let i = 1; i < lines.length; i += 1) {
-      const values = lines[i].split(',');
-      if (values.length !== headers.length) continue;
-
-      const rawId = values[catchIdIndex].trim().replace(/^"|"$/g, '');
-      const catchId = normalizeCatchmentId(rawId);
-      if (!catchId || catchId.toUpperCase() === 'NA') continue;
-
-      const row: Record<string, number> = {};
-      for (let j = 0; j < headers.length; j += 1) {
-        if (j === catchIdIndex) continue;
-        const rawVal = values[j].trim().replace(/^"|"$/g, '');
-        if (!rawVal || rawVal.toUpperCase() === 'NA') continue;
-        const num = Number(rawVal);
-        if (Number.isFinite(num)) row[headers[j]] = num;
-      }
-      data[catchId] = row;
+      const line = lines[i];
+      if (!line) continue;
+      const parsed = parseWhiskerCSVRow(line, headers, catchIdIndex);
+      if (parsed && wantedIds.has(parsed.catchId)) data[parsed.catchId] = parsed.row;
     }
-
     return data;
   } catch {
     return {};
   }
 }
 
-async function loadWhiskerCSVData(): Promise<WhiskerCSVData | null> {
+async function loadWhiskerCSVDataFiltered(wantedIds: Set<string>): Promise<WhiskerCSVData | null> {
   const [currentUpper, currentLower, referenceUpper, referenceLower] = await Promise.all([
-    loadWhiskerCSVFile('current_upper.csv'),
-    loadWhiskerCSVFile('current_lower.csv'),
-    loadWhiskerCSVFile('reference_upper.csv'),
-    loadWhiskerCSVFile('reference_lower.csv'),
+    loadWhiskerCSVFileFiltered('current_upper.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('current_lower.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('reference_upper.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('reference_lower.csv', wantedIds),
   ]);
 
   const hasAny = Object.keys(currentUpper).length > 0
@@ -1236,6 +1292,42 @@ async function loadWhiskerCSVData(): Promise<WhiskerCSVData | null> {
 
   if (!hasAny) return null;
   return { currentUpper, currentLower, referenceUpper, referenceLower };
+}
+
+// Accumulates a running per-column sum/count as each line is read, without
+// ever holding a row — or the parsed id it belongs to — past that line's own
+// iteration. Output size is bounded by column count (~500), not row count
+// (147,837 for Africa), regardless of how large the file being scanned is.
+async function loadWhiskerCSVFileAggregate(
+  filename: string,
+): Promise<{ sums: Record<string, number>; counts: Record<string, number> }> {
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  try {
+    const response = await fetch(`/data/${filename}`);
+    if (!response.ok) return { sums, counts };
+
+    const text = await response.text();
+    const lines = text.split('\n');
+    if (lines.length < 2) return { sums, counts };
+
+    const { headers, catchIdIndex } = parseWhiskerCSVHeader(lines[0]);
+    if (catchIdIndex === -1) return { sums, counts };
+
+    for (let i = 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line) continue;
+      const parsed = parseWhiskerCSVRow(line, headers, catchIdIndex);
+      if (!parsed) continue;
+      for (const [col, val] of Object.entries(parsed.row)) {
+        sums[col] = (sums[col] ?? 0) + val;
+        counts[col] = (counts[col] ?? 0) + 1;
+      }
+    }
+    return { sums, counts };
+  } catch {
+    return { sums, counts };
+  }
 }
 
 function computeWhiskerBoundsFromCSV(
@@ -1287,6 +1379,43 @@ function computeWhiskerBoundsFromCSV(
   };
 }
 
+// Unweighted fallback for a site with no per-catchment breakdown to weight
+// by — the Africa walkthrough covers all 147,837 catchments continent-wide,
+// too many to embed in its document or fetch (getSiteCatchments always fails
+// for it: it isn't a real, persisted site either), so there is nothing
+// computeWhiskerBoundsFromCSV can area-weight against. Without this, every
+// box plot collapsed to its single point value — a degenerate box with
+// zero-width quartiles rendered as a flat line. A simple mean across every
+// row is a coarser stand-in for the area-weighted figure a real site gets,
+// but it is a real distribution rather than one point repeated five times —
+// and, via loadWhiskerCSVFileAggregate, computed without ever holding the
+// 147,837 rows it is averaging over.
+async function computeWhiskerBoundsAggregate(): Promise<WhiskerBoundsResponse | null> {
+  const [currentUpper, currentLower, referenceUpper, referenceLower] = await Promise.all([
+    loadWhiskerCSVFileAggregate('current_upper.csv'),
+    loadWhiskerCSVFileAggregate('current_lower.csv'),
+    loadWhiskerCSVFileAggregate('reference_upper.csv'),
+    loadWhiskerCSVFileAggregate('reference_lower.csv'),
+  ]);
+
+  const mean = (agg: { sums: Record<string, number>; counts: Record<string, number> }): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [col, sum] of Object.entries(agg.sums)) {
+      const n = agg.counts[col] ?? 0;
+      if (n > 0) out[col] = sum / n;
+    }
+    return out;
+  };
+
+  const bounds: WhiskerBoundsResponse = {
+    referenceUpper: mean(referenceUpper),
+    referenceLower: mean(referenceLower),
+    currentUpper: mean(currentUpper),
+    currentLower: mean(currentLower),
+  };
+  return hasWhiskerData(bounds) ? bounds : null;
+}
+
 // Module-level cache for whisker bounds, keyed by siteId. ComputeWhiskerBounds
 // on the backend is a full-table scan-and-join across 4 scenario tables for
 // every catchment in the site (several seconds for a large site), and the
@@ -1328,11 +1457,18 @@ export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBound
 async function fetchSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
   const csvFallback = async (): Promise<WhiskerBoundsResponse | null> => {
     const catchments = await getSiteCatchments(siteId).catch(() => []);
-    if (!Array.isArray(catchments) || catchments.length === 0) return null;
-    const csvData = await loadWhiskerCSVData();
-    if (!csvData) return null;
-    const computed = computeWhiskerBoundsFromCSV(catchments, csvData);
-    return hasWhiskerData(computed) ? computed : null;
+
+    if (Array.isArray(catchments) && catchments.length > 0) {
+      const wantedIds = new Set(catchments.map((c) => normalizeCatchmentId(c.id)));
+      const csvData = await loadWhiskerCSVDataFiltered(wantedIds);
+      if (csvData) {
+        const computed = computeWhiskerBoundsFromCSV(catchments, csvData);
+        if (hasWhiskerData(computed)) return computed;
+      }
+    }
+
+    // No per-catchment breakdown to weight by (see computeWhiskerBoundsAggregate).
+    return computeWhiskerBoundsAggregate();
   };
 
   if (isBrowserRuntime()) {

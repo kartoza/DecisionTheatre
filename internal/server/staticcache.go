@@ -88,6 +88,17 @@ func newCompressedStatic(fsys http.FileSystem) *compressedStatic {
 }
 
 func (c *compressedStatic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Force revalidation on every load rather than letting the client cache
+	// heuristically. With no Cache-Control at all, a browser or webview that
+	// only ever sees Last-Modified is free to assume the response stays fresh
+	// for as long as it likes and skip asking again — which is indistinguishable
+	// from a permanently stale copy once a walkthrough document is regenerated
+	// in place (as happens when its data is re-extracted) without the URL
+	// itself changing. ServeContent below still answers a conditional GET with
+	// 304 when the file is unchanged, so this costs a round trip, not the
+	// compression win the type exists for.
+	w.Header().Set("Cache-Control", "no-cache")
+
 	// Anything this does not positively recognise goes to http.FileServer, which
 	// is the behaviour being replaced. That is the safe direction: a miss costs
 	// the compression we were already paying, while a wrong hit serves bad bytes.

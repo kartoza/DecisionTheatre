@@ -623,10 +623,19 @@ function App() {
   }, []);
 
   // Listen for demo event to reset to single pane map view.
+  //
+  // Resets every pane's view mode, not just index 0, and refocuses pane 0:
+  // a quad-dial tour step (dt:demo-go-quad-dial) lets the user click into any
+  // pane, which calls handleFocusPane and can leave focusedPane pointing at a
+  // non-zero index whose view mode is still 'dial'. Single-pane mode renders
+  // viewModes[focusedPane], so resetting only index 0 left that pane showing
+  // its old dial when the next tour step (or the next tour entirely) expected
+  // the map.
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
-      setViewModes((prev) => prev.map((_, i) => (i === 0 ? 'map' : prev[i])));
+      setFocusedPane(0);
+      setViewModes((prev) => prev.map(() => 'map'));
       setSwiperPosition(50);
     };
     window.addEventListener('dt:demo-single-map-view', handler);

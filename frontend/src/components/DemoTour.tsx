@@ -44,6 +44,21 @@ export interface DemoTourProps {
 
 const MotionBox = motion(Box);
 
+// A closed Chakra Slide/Collapse panel (e.g. the control panel a step targets
+// while also switching to quad-dial mode, which closes it) stays mounted and
+// is merely translated out of the viewport rather than unmounted — so
+// getBoundingClientRect still returns a real rect, sitting just past whichever
+// edge it was pushed off. Spotlighting that rect drew a bare ring hugging the
+// screen edge with nothing inside it. Treating an off-viewport rect as "no
+// target" is the general fix: any element pushed fully outside the visible
+// area is not something a spotlight should ever point at.
+function visibleRect(element: Element): DOMRect | null {
+  const rect = element.getBoundingClientRect();
+  const onScreen = rect.right > 0 && rect.left < window.innerWidth
+    && rect.bottom > 0 && rect.top < window.innerHeight;
+  return onScreen ? rect : null;
+}
+
 function useSpotlightRect(targetId: string | undefined) {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -54,7 +69,7 @@ function useSpotlightRect(targetId: string | undefined) {
 
     const update = () => {
       const element = document.getElementById(targetId);
-      setRect(element ? element.getBoundingClientRect() : null);
+      setRect(element ? visibleRect(element) : null);
     };
 
     let pollCount = 0;
