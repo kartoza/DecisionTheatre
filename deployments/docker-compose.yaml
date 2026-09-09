@@ -52,7 +52,12 @@ services:
     # restart: unless-stopped only reacts to a process that exited. This is how
     # a process that is still running but no longer answering gets noticed.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      # decision-theatre healthcheck rather than curl: the release image is
+      # built from the Nix flake, which carries only this binary's own
+      # runtime closure and no HTTP client. Using the app's own subcommand
+      # means one healthcheck command works against both that image and the
+      # one this Dockerfile builds.
+      test: ["CMD", "decision-theatre", "healthcheck", "--port", "8080"]
       # Generous: a cold start loads and indexes the datapack, and a health
       # check that fails during startup would restart the container forever.
       # start_period covers that window without weakening the steady-state check.

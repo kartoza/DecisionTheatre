@@ -343,6 +343,12 @@
               # volume at /root/.config/decision-theatre expecting exactly this.
               "HOME=/root"
               "TZ=UTC"
+              # Entrypoint above uses the binary's absolute store path, which
+              # needs no PATH. Docker's HEALTHCHECK does not: it names the
+              # binary by argv[0] ("decision-theatre healthcheck"), resolved
+              # against PATH the same way a shell would, so the store path
+              # must be on it for that lookup to succeed.
+              "PATH=${decision-theatre}/bin"
             ];
           };
 
