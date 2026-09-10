@@ -33,6 +33,9 @@
     "react-plotly.js": "^2.6.0",
     "shpjs": "^6.2.0"
   },
+  "overrides": {
+    "maplibre-gl": "^6.4.1"
+  },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
