@@ -1,9 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiPlus, FiMinus, FiTrash2 } from 'react-icons/fi';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
+import type { ExpressionSpecification, FilterSpecification, SourceSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import '../lib/maplibreWorker';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
@@ -89,14 +91,14 @@ interface MapViewProps {
 // Module-level style cache: fetch style.json exactly once across all MapView instances.
 // In grid view this cuts 8 identical HTTP requests down to 1.
 // _cachedStyle holds the resolved object so staggered panes can use it synchronously.
-let _cachedStyle: maplibregl.StyleSpecification | null = null;
-let _stylePromise: Promise<maplibregl.StyleSpecification> | null = null;
+let _cachedStyle: StyleSpecification | null = null;
+let _stylePromise: Promise<StyleSpecification> | null = null;
 function warmStyleCache(url: string): void {
   if (_stylePromise) return;
   _stylePromise = fetch(url)
     .then(r => {
       if (!r.ok) throw new Error(`style.json: ${r.status} ${r.statusText}`);
-      return r.json() as Promise<maplibregl.StyleSpecification>;
+      return r.json() as Promise<StyleSpecification>;
     })
     .then(s => { _cachedStyle = s; return s; })
     .catch(err => {
@@ -105,7 +107,7 @@ function warmStyleCache(url: string): void {
       throw err;
     });
 }
-function getStyleForMap(url: string): string | maplibregl.StyleSpecification {
+function getStyleForMap(url: string): string | StyleSpecification {
   // If the resolved style is already in memory (i.e. a prior pane already fetched it),
   // pass the object directly so MapLibre skips the HTTP request entirely.
   return _cachedStyle ?? url;
@@ -440,7 +442,7 @@ function filterDatasetByCatchmentIds(data: ChoroplethData | null, catchmentIds: 
 }
 
 function extractBoundaryGeometryFromStyleSource(
-  source: maplibregl.SourceSpecification | undefined,
+  source: SourceSpecification | undefined,
 ): GeoJSON.Geometry | null {
   if (!source || source.type !== 'geojson') return null;
 
@@ -859,7 +861,7 @@ function setCatchmentOutlinesSoftness(map: maplibregl.Map, soften: boolean) {
   if (!catchmentsOutlineOpacityRef.has(map)) return;
   const originalOpacity = catchmentsOutlineOpacityRef.get(map);
   if (originalOpacity !== undefined) {
-    map.setPaintProperty(CATCHMENTS_OUTLINES_LAYER_ID, 'line-opacity', originalOpacity as maplibregl.ExpressionSpecification | number);
+    map.setPaintProperty(CATCHMENTS_OUTLINES_LAYER_ID, 'line-opacity', originalOpacity as ExpressionSpecification | number);
   }
   catchmentsOutlineOpacityRef.delete(map);
 }
@@ -1301,7 +1303,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (siteId && (!siteCatchmentIds || siteCatchmentIds.size === 0)) {
         const liveBoundarySource = leftMap.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
-          serialize?: () => maplibregl.SourceSpecification;
+          serialize?: () => SourceSpecification;
         }) | undefined;
 
         const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
@@ -1331,7 +1333,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
       if (siteId) {
         const liveBoundarySource = leftMap.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
-          serialize?: () => maplibregl.SourceSpecification;
+          serialize?: () => SourceSpecification;
         }) | undefined;
 
         const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
@@ -1693,7 +1695,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       });
 
       const liveBoundarySource = leftMapRef.current?.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
-        serialize?: () => maplibregl.SourceSpecification;
+        serialize?: () => SourceSpecification;
       }) | undefined;
       const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
       const boundaryGeometry =
@@ -1763,7 +1765,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
 
         const explicitCatchmentIds = new Set(catchmentIds);
         const liveBoundarySource = leftMapRef.current?.getSource(SITE_BOUNDARY_SOURCE) as (maplibregl.GeoJSONSource & {
-          serialize?: () => maplibregl.SourceSpecification;
+          serialize?: () => SourceSpecification;
         }) | undefined;
         const serializedBoundarySource = liveBoundarySource?.serialize ? liveBoundarySource.serialize() : undefined;
         const boundaryGeometry =
@@ -3799,7 +3801,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         ? { 'source-layer': CATCHMENT_TILE_SOURCE_LAYER }
         : {};
       const catchmentIdNum = parseInt(catchmentId, 10);
-      const idFilter: maplibregl.FilterSpecification =
+      const idFilter: FilterSpecification =
         ['==', ['to-number', ['get', CATCHMENT_ID_PROP]], catchmentIdNum];
 
       // Add outer glow layer (neon blue)
