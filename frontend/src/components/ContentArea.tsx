@@ -53,6 +53,10 @@ interface ContentAreaProps {
   onSwiperPositionChange?: (position: number) => void;
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
+  // Raw catchment count from the site itself, used to size the live-update
+  // default before indicator extraction has finished and siteIndicators is
+  // still null (extraction runs in the background after site creation).
+  siteCatchmentCount?: number;
   rangeMode?: RangeMode;
   mapStatistics?: MapStatistics | null;
   chartGroups?: (string | null)[];
@@ -190,6 +194,7 @@ function ContentArea({
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
+  siteCatchmentCount,
   rangeMode,
   mapStatistics,
   chartGroups,
@@ -230,8 +235,11 @@ function ContentArea({
   // The count the recalculation actually iterates over, straight off the
   // extraction that produced these indicators — the same number the backend
   // rescores on every edit, which is what makes it the right one to size the
-  // default by.
-  const catchmentCount = siteIndicators?.catchmentCount ?? 0;
+  // default by. Extraction runs in the background after site creation, so
+  // siteIndicators can still be null when this panel first mounts; falling
+  // back to the site's raw catchment count keeps the default correct for a
+  // large site in that window instead of defaulting to live update on.
+  const catchmentCount = siteIndicators?.catchmentCount ?? siteCatchmentCount ?? 0;
   const isLiveUpdate = resolveLiveUpdate(catchmentCount, storedLiveUpdate);
 
   const handleLiveUpdateChange = useCallback((enabled: boolean) => {
