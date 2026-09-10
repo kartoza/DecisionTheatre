@@ -285,6 +285,11 @@ export default function IndicatorEditorPage({
 
   const extractionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Which target-state warnings a toast has already been shown for, so a
+  // save that still has the same active warning as the previous one doesn't
+  // toast it again. See showTargetWarningsPopup.
+  const activeTargetWarningsRef = useRef<Set<string>>(new Set());
+
   // Clean up any in-flight poll when the component unmounts or site changes.
   useEffect(() => {
     return () => {
@@ -294,6 +299,8 @@ export default function IndicatorEditorPage({
       }
     };
   }, [site.id]);
+
+  useEffect(() => { activeTargetWarningsRef.current = new Set(); }, [site.id]);
 
   const extractIndicators = useCallback(() => {
     if (autoExtractionInProgress) {
@@ -493,7 +500,7 @@ export default function IndicatorEditorPage({
           setHasChanges(false);
 
           const warnings = savedSite?.indicators?.warnings ?? [];
-          showTargetWarningsPopup(warnings, toast);
+          activeTargetWarningsRef.current = showTargetWarningsPopup(warnings, toast, activeTargetWarningsRef.current);
 
           toast({
             title: 'Changes saved',

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Flex, HStack, IconButton, Spinner, Text, Tooltip,
   useColorModeValue,
@@ -227,60 +227,104 @@ function ViewPane({
   const siteExtractedAt = siteIndicators?.extractedAt;
   const siteCatchmentCount = siteIndicators?.catchmentCount;
 
+  // Tracks the dependencies that mean "the user navigated somewhere new" —
+  // as opposed to siteIndicators alone changing, which means a target
+  // recalculation refetched this pane's data in the background. Only the
+  // former should show the loading overlay: the target editor's own
+  // "Recalculating" indicator already covers the latter, and blocking every
+  // pane with a spinner on every step of a live-update drag was the point
+  // being fixed here.
+  const dialFetchNavRef = useRef<{ attribute: string; siteId: string; isDialView: boolean } | null>(null);
+
   useEffect(() => {
     if (!isDialView || !siteId || !comparison.attribute) {
       setDialCatchmentData(null);
       setDialCatchmentLoading(false);
+      dialFetchNavRef.current = null;
       return;
     }
 
-    let cancelled = false;
-    setDialCatchmentLoading(true);
+    const nav = { attribute: comparison.attribute, siteId, isDialView };
+    const isNavigation =
+      dialFetchNavRef.current === null ||
+      dialFetchNavRef.current.attribute !== nav.attribute ||
+      dialFetchNavRef.current.siteId !== nav.siteId ||
+      dialFetchNavRef.current.isDialView !== nav.isDialView;
+    dialFetchNavRef.current = nav;
 
-    // A remembered spread gives the dial a scale to draw against straight away,
-    // rather than a placeholder until the catchments land. The values still
-    // come from the fetch below; only the axis is answered early.
-    const cachedSpread = loadSiteRange(
-      siteId,
-      siteRangeFingerprint(siteExtractedAt, siteCatchmentCount),
-      comparison.attribute,
-    );
-    if (cachedSpread) {
-      setDialCatchmentData((prev) => (prev ? { ...prev, spread: cachedSpread } : { spread: cachedSpread }));
+    let cancelled = false;
+    if (isNavigation) setDialCatchmentLoading(true);
+
+    const runFetch = () => {
+      // A remembered spread gives the dial a scale to draw against straight
+      // away, rather than a placeholder until the catchments land. The
+      // values still come from the fetch below; only the axis is answered
+      // early.
+      const cachedSpread = loadSiteRange(
+        siteId,
+        siteRangeFingerprint(siteExtractedAt, siteCatchmentCount),
+        comparison.attribute,
+      );
+      if (cachedSpread) {
+        setDialCatchmentData((prev) => (prev ? { ...prev, spread: cachedSpread } : { spread: cachedSpread }));
+      }
+
+      getSiteCatchments(siteId)
+        .then((catchments) => {
+          if (cancelled || !catchments || catchments.length === 0) {
+            if (!cancelled) setDialCatchmentLoading(false);
+            return;
+          }
+
+          const referenceValue = computeAOIWeightedAttributeValue(catchments, 'reference', comparison.attribute);
+          const currentValue = computeAOIWeightedAttributeValue(catchments, 'current', comparison.attribute);
+          const spread = attributeSpread(catchments, comparison.attribute);
+          // Keep the conclusion, not the payload it came from. Two numbers
+          // survive the reload; the catchments do not need to.
+          if (spread && siteId) {
+            saveSiteRange(siteId, siteRangeFingerprint(siteExtractedAt, siteCatchmentCount), comparison.attribute, spread);
+          }
+
+          if (referenceValue === undefined && currentValue === undefined) {
+            if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
+            return;
+          }
+
+          if (!cancelled) {
+            setDialCatchmentData({ referenceValue, currentValue, spread });
+            setDialCatchmentLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
+        });
+    };
+
+    // A live-update drag can fire many recalculations within a second or
+    // two; fetching this pane's catchments on every single one piled extra
+    // GET requests on top of the PATCH requests themselves, right when the
+    // backend's admission control (internal/server/admission.go) is most
+    // likely to be under pressure and shedding work. Real navigation — a
+    // new attribute, a new site — stays immediate; only a background
+    // refresh triggered by siteIndicators changing is debounced, so a burst
+    // of edits costs one fetch once things settle rather than one per step.
+    let debounceId: ReturnType<typeof setTimeout> | undefined;
+    if (isNavigation) {
+      runFetch();
+    } else {
+      debounceId = setTimeout(runFetch, 400);
     }
 
-    getSiteCatchments(siteId)
-      .then((catchments) => {
-        if (cancelled || !catchments || catchments.length === 0) {
-          if (!cancelled) setDialCatchmentLoading(false);
-          return;
-        }
-
-        const referenceValue = computeAOIWeightedAttributeValue(catchments, 'reference', comparison.attribute);
-        const currentValue = computeAOIWeightedAttributeValue(catchments, 'current', comparison.attribute);
-        const spread = attributeSpread(catchments, comparison.attribute);
-        // Keep the conclusion, not the payload it came from. Two numbers
-        // survive the reload; the catchments do not need to.
-        if (spread && siteId) {
-          saveSiteRange(siteId, siteRangeFingerprint(siteExtractedAt, siteCatchmentCount), comparison.attribute, spread);
-        }
-
-        if (referenceValue === undefined && currentValue === undefined) {
-          if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
-          return;
-        }
-
-        if (!cancelled) {
-          setDialCatchmentData({ referenceValue, currentValue, spread });
-          setDialCatchmentLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) { setDialCatchmentData(null); setDialCatchmentLoading(false); }
-      });
-
-    return () => { cancelled = true; };
-  }, [comparison.attribute, siteId, isDialView, siteExtractedAt, siteCatchmentCount]);
+    return () => {
+      cancelled = true;
+      if (debounceId !== undefined) clearTimeout(debounceId);
+    };
+    // siteIndicators is included so a target-editor recalculation (live
+    // update or not) refetches this pane's catchment values — without it,
+    // editing a factor back down left currentValue pinned at whatever it
+    // was the last time the pane's attribute or extraction changed, even
+    // though the underlying data had already returned to baseline.
+  }, [comparison.attribute, siteId, isDialView, siteExtractedAt, siteCatchmentCount, siteIndicators]);
 
   /**
    * The bbox this pane's aggregates are scoped to, as a string, or '' when the
@@ -899,17 +943,18 @@ function ViewPane({
 
         The table shows a single scenario (it aggregates the left one), so it
         gets a single label rather than a comparison it is not making. The
-        chart draws its own Reference/Current/Target legend, and the flat dial
-        labels its REF/NOW markers directly on the band, so for both the
-        corner labels would just repeat what is already on the chart.
+        chart draws its own Reference/Current/Target legend, the gauge dial
+        draws that same legend along its bottom edge, and the flat dial
+        labels its REF/NOW markers directly on the band — so for all three
+        the corner labels would just repeat what is already on the chart.
       */}
       {viewMode !== 'map' && (
         <PaneHeader
           compact={compact}
           title={dialAttributeLabel}
-          leftLabel={viewMode === 'chart' || viewMode === 'flat' ? undefined : (leftInfo?.label || comparison.leftScenario)}
+          leftLabel={viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (leftInfo?.label || comparison.leftScenario)}
           leftColor={leftInfo?.color}
-          rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' ? undefined : (rightInfo?.label || comparison.rightScenario)}
+          rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (rightInfo?.label || comparison.rightScenario)}
           rightColor={rightInfo?.color}
         />
       )}

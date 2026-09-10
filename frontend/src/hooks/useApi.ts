@@ -102,6 +102,34 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return response.json();
 }
 
+/**
+ * Retries a request the server sheds for being at capacity (503 with
+ * Retry-After — see internal/server/admission.go's deliberate load
+ * shedding). A burst of quick live-update edits can be enough to get one
+ * PATCH shed; without a retry that just throws, and for the indicators
+ * endpoint the caller's response is to roll the edit back as though it had
+ * never happened — the slider then sits on a stale value that nothing ever
+ * corrects, because nothing tries again. Honors the server's own
+ * Retry-After rather than guessing a backoff.
+ */
+async function fetchWithAdmissionRetry(
+  input: string,
+  init: RequestInit,
+  maxRetries = 2,
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(input, init);
+    if (response.status !== 503 || attempt >= maxRetries) {
+      return response;
+    }
+    const retryAfterSeconds = Number(response.headers.get('Retry-After'));
+    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? retryAfterSeconds * 1000
+      : 500 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 // How often to re-fetch /api/info after the first load. Version/data-loaded
 // status never changes at runtime, but satellite_quota_exceeded can flip mid
 // session — this is what lets a map that is actively showing satellite
@@ -886,7 +914,7 @@ export async function patchSiteIndicators(
   // it from data/sites/, and the result is never persisted to disk.
   if (site?.source === 'walkthrough') {
     const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
-    const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+    const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -913,43 +941,52 @@ export async function patchSiteIndicators(
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(id);
     if (localSite) {
-      try {
-        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
-        const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            runtime: 'browser',
-            site: siteWithoutThumbnail,
-            ideal: indicators?.ideal,
-            idealLower: indicators?.idealLower,
-            idealUpper: indicators?.idealUpper,
-            reference: indicators?.reference,
-            referenceLower: indicators?.referenceLower,
-            referenceUpper: indicators?.referenceUpper,
-            current: indicators?.current,
-            currentLower: indicators?.currentLower,
-            currentUpper: indicators?.currentUpper,
-          }),
-        });
-        if (response.ok) {
-          const updatedSite = await response.json() as SiteWithCatchments;
-          if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
-            // Cache the fresh breakdown. This used to persist it and then
-            // invalidate a separate in-memory cache; both are now the same
-            // cache, so deleting here would discard what was just fetched.
-            cacheCatchments(id, updatedSite.catchments);
-          }
-          return updateSite(id, { indicators: updatedSite.indicators });
-        }
-      } catch {
-        // Fall through to local-only update
+      const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
+      const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runtime: 'browser',
+          site: siteWithoutThumbnail,
+          ideal: indicators?.ideal,
+          idealLower: indicators?.idealLower,
+          idealUpper: indicators?.idealUpper,
+          reference: indicators?.reference,
+          referenceLower: indicators?.referenceLower,
+          referenceUpper: indicators?.referenceUpper,
+          current: indicators?.current,
+          currentLower: indicators?.currentLower,
+          currentUpper: indicators?.currentUpper,
+        }),
+      });
+      // A silent fall-through to a local-only save used to live here: on any
+      // fetch failure or non-2xx response, it persisted `indicators` — the
+      // caller's un-cascaded guess, where only the just-edited key is right
+      // and every derived total (herbivore biomass, methane, ...) still
+      // holds its pre-edit value — as if it were the server's recalculated
+      // answer, and resolved successfully instead of rejecting. The caller
+      // (App.tsx's handleSiteIndicatorsChange) treated that resolution as a
+      // real cascade and adopted it into site state, so a single dropped
+      // request during a live-update drag could leave a factor's slider at
+      // its new value while everything it feeds into stayed stuck at the
+      // old one, permanently. Throwing here lets the caller's existing
+      // catch-and-roll-back handle it instead.
+      if (!response.ok) {
+        throw new Error(`Failed to update site indicators: ${response.statusText}`);
       }
+      const updatedSite = await response.json() as SiteWithCatchments;
+      if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
+        // Cache the fresh breakdown. This used to persist it and then
+        // invalidate a separate in-memory cache; both are now the same
+        // cache, so deleting here would discard what was just fetched.
+        cacheCatchments(id, updatedSite.catchments);
+      }
+      return updateSite(id, { indicators: updatedSite.indicators });
     }
     return updateSite(id, { indicators });
   }
 
-  const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+  const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

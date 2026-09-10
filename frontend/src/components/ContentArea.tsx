@@ -63,7 +63,15 @@ interface ContentAreaProps {
   chartAxisLabelFilters?: (string | null)[];
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
-  onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  // Returns the server-confirmed indicators on success. runRecalculation
+  // needs this returned value, not just the resolved promise: React applies
+  // the resulting siteIndicators prop update asynchronously, but the
+  // scheduler drains its next queued request synchronously the instant this
+  // promise resolves, with no guarantee a re-render has happened in
+  // between. Building that next request from a siteIndicatorsRef that's
+  // still one response behind sends an untouched-but-cascaded field's
+  // stale value — see runRecalculation.
+  onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<SiteIndicators | void> | void;
   /**
    * Point every target at an observed scenario. Separate from
    * onSiteIndicatorsChange because a reset must not cascade — see
@@ -379,14 +387,32 @@ function ContentArea({
 
     const nextDrafts = computeTargetDrafts();
     // Mid-drag, a live recalculation's cascade must not yank the thumb out
-    // from under the pointer, so the dragged slider keeps the user's value
-    // and everything else takes the freshly calculated one.
+    // from under the pointer, so the dragged slider keeps the user's value.
+    //
+    // More than that: while the scheduler still has a request in flight or
+    // queued (isSavingTargets), this response can be answering an
+    // *intermediate* value from earlier in the drag, not the one the user
+    // has since moved on to (including after release, once
+    // draggingTargetKeyRef has already gone back to null). Adopting it
+    // anyway made every touched slider spring back to that stale reading
+    // for a moment before the real, final response arrived and snapped it
+    // forward again — visible as a slider that "gets stuck" or leaps
+    // backward on its own. So every touched key keeps its current
+    // on-screen value until the scheduler fully settles; only then is the
+    // response guaranteed to be the answer to what's actually on screen.
     const draggingKey = draggingTargetKeyRef.current;
-    setTargetDraftValues((prev) =>
-      draggingKey != null && prev[draggingKey] !== undefined
+    setTargetDraftValues((prev) => {
+      if (isSavingTargets) {
+        const merged = { ...nextDrafts };
+        for (const key of touchedTargetKeysRef.current) {
+          if (prev[key] !== undefined) merged[key] = prev[key];
+        }
+        return merged;
+      }
+      return draggingKey != null && prev[draggingKey] !== undefined
         ? { ...nextDrafts, [draggingKey]: prev[draggingKey] }
-        : nextDrafts
-    );
+        : nextDrafts;
+    });
 
     if (!targetPanelWasOpenRef.current) {
       // Only snapshot the "opened at" values on the initial open — this
@@ -399,7 +425,7 @@ function ContentArea({
     }
     targetPanelWasOpenRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTargetModalOpen, siteIndicators]);
+  }, [isTargetModalOpen, siteIndicators, isSavingTargets]);
 
 
   // The application header is content-sized — logos plus padding — not a fixed
@@ -468,7 +494,17 @@ function ContentArea({
     if (!hasChanges) return;
 
     try {
-      await onSiteIndicatorsChange({ ...indicators, ideal: nextIdeal });
+      const confirmed = await onSiteIndicatorsChange({ ...indicators, ideal: nextIdeal });
+      // Sync synchronously, not through the siteIndicators prop: the
+      // scheduler drains its next queued payload the instant this promise
+      // resolves, before React necessarily re-renders with the new prop.
+      // Without this, that next call reads siteIndicatorsRef.current still
+      // one response behind and rebuilds its own ideal snapshot from
+      // it — sending an untouched-but-server-cascaded field's stale value
+      // (e.g. highTC_prop after only lowTC_prop was edited) back to a
+      // backend that reads any change in that field as a direct edit of
+      // it, overwriting what was actually touched.
+      if (confirmed) siteIndicatorsRef.current = confirmed;
     } catch {
       toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
     }

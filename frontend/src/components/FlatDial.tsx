@@ -110,11 +110,17 @@ function FlatDial({
   const fontLegend = veryDense ? 10 : compact ? 12 : 14;
   const tickLen = compact ? 7 : 10;
 
-  // The band, its marker labels, its ticks and its legend are one block, and
-  // the block is centred. Pinning the band itself to a fraction of the height
-  // instead leaves the whole thing riding high with dead space underneath,
-  // which wastes the vertical room the flat shape was chosen to save.
-  const markerOverhang = barH * (compact ? 0.62 : 0.7);
+  // The buckle grips the band with a frame this tall (see `buckle` below,
+  // which derives its own `h`/`outer` from the same formulas). The
+  // reference/current bisectors need to clear that whole frame — including
+  // its dark backing stroke — by a visible margin, or a reading that lands
+  // near the target is fully swallowed by the buckle sitting on top of it
+  // (it draws last), which is exactly the moment it matters most to still
+  // tell the two apart. The old overhang (barH * 0.7) was shorter than the
+  // buckle's own half-height even before accounting for its stroke, so the
+  // buckle could hide a coincident bisector completely.
+  const buckleHalfExtent = (barH * (compact ? 2.2 : 2.3)) / 2 + ((compact ? 3 : 4) + 3) / 2;
+  const markerOverhang = buckleHalfExtent - barH / 2 + (compact ? 6 : 8);
   const aboveBand = markerOverhang + (veryDense ? 6 : fontTick + (compact ? 8 : 12));
   const ticksH = 4 + tickLen + fontTick + 4;
   const legendGap = veryDense ? 18 : compact ? 26 : 40;
@@ -168,9 +174,8 @@ function FlatDial({
   ) => {
     if (value === undefined || isNaN(value)) return null;
     const x = xFor(value);
-    const overhang = barH * (compact ? 0.62 : 0.7);
-    const top = barTop - overhang;
-    const bottom = barBottom + overhang;
+    const top = barTop - markerOverhang;
+    const bottom = barBottom + markerOverhang;
     return (
       <g>
         {/* Dark backing so the line stays readable over the yellow band. */}

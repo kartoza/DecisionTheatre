@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
@@ -39,36 +39,74 @@ function AggregateTable({
 
   const attributeLabel = attributeDetails[attribute] ?? attribute;
 
+  // Tracks visible/siteId/siteGeometry — the dependencies that mean "the
+  // table was just opened or pointed at a new site", as opposed to
+  // siteIndicators alone changing, which means a target recalculation
+  // refetched this data in the background. Only the former should show the
+  // loading spinner: the target editor's own "Recalculating" indicator
+  // already covers the latter.
+  const catchmentFetchNavRef = useRef<{ visible: boolean; siteId: string; siteGeometry: GeoJSON.Geometry | null | undefined } | null>(null);
+
   // Fetch catchment data when panel is visible and siteId is available.
+  // Also refetches whenever siteIndicators changes: a target-editor
+  // recalculation (live update or not) rewrites the site's and catchments'
+  // Ideal maps server-side, and without siteIndicators here this table kept
+  // showing whatever it had cached at the last visibility toggle — including
+  // a stale, elevated "future" average after a factor was edited back down.
   useEffect(() => {
     if (!visible || !siteId) {
       return;
     }
 
-    let cancelled = false;
-    setLoading(true);
+    const nav = { visible, siteId, siteGeometry };
+    const isNavigation =
+      catchmentFetchNavRef.current === null ||
+      catchmentFetchNavRef.current.visible !== nav.visible ||
+      catchmentFetchNavRef.current.siteId !== nav.siteId ||
+      catchmentFetchNavRef.current.siteGeometry !== nav.siteGeometry;
+    catchmentFetchNavRef.current = nav;
 
-    getSiteCatchments(siteId)
-      .then((data) => {
-        if (!cancelled) {
-          setCatchments(data || []);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setCatchments([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
+    let cancelled = false;
+    if (isNavigation) setLoading(true);
+
+    const runFetch = () => {
+      getSiteCatchments(siteId)
+        .then((data) => {
+          if (!cancelled) {
+            setCatchments(data || []);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setCatchments([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+          }
+        });
+    };
+
+    // See the matching comment in ViewPane.tsx: a live-update drag can fire
+    // many recalculations in quick succession, and fetching on every one
+    // piled extra GET requests on top of the PATCH requests themselves,
+    // right when the backend's admission control is most likely to be
+    // under pressure. Real navigation (opening the panel, a new site) stays
+    // immediate; only a background refresh triggered by siteIndicators
+    // changing is debounced.
+    let debounceId: ReturnType<typeof setTimeout> | undefined;
+    if (isNavigation) {
+      runFetch();
+    } else {
+      debounceId = setTimeout(runFetch, 400);
+    }
 
     return () => {
       cancelled = true;
+      if (debounceId !== undefined) clearTimeout(debounceId);
     };
-  }, [visible, siteId, siteGeometry]);
+  }, [visible, siteId, siteGeometry, siteIndicators]);
 
   // Calculate all derived values from catchment data.
   // Step 1: For each catchment, compute how much of its area is inside the site.
