@@ -6,21 +6,33 @@ const targetWarningMessages: Record<string, string> = {
   [WARNING_NPP_GM2]: 'Herbivore consumption is higher than available biomass',
 };
 
-export function showTargetWarningsPopup(warnings: string[] | undefined, toast: ToastFn): void {
-  if (!warnings || warnings.length === 0) {
-    return;
-  }
+/**
+ * Shows a toast for each warning key that is newly active.
+ *
+ * `previouslyActive` is the set returned by the prior call (e.g. kept in a
+ * ref by the caller). Live-update recalculation calls this once per PATCH
+ * response, and a warning condition (e.g. grazing demand exceeding
+ * available biomass) commonly stays true across many consecutive steps of
+ * the same drag — most visibly while decreasing a factor back down, since
+ * the condition doesn't clear until the value crosses the threshold.
+ * Without this, every one of those responses re-toasted the same warning,
+ * stacking duplicates. Comparing against what was already shown means a
+ * warning fires once when it starts, stays silent while it persists, and
+ * can fire again only after it has cleared and reoccurs.
+ *
+ * Returns the new active set so the caller can pass it back in next time.
+ */
+export function showTargetWarningsPopup(
+  warnings: string[] | undefined,
+  toast: ToastFn,
+  previouslyActive?: ReadonlySet<string>,
+): Set<string> {
+  const active = new Set(warnings ?? []);
 
-  const popupMessages = warnings
-    .map((warning) => targetWarningMessages[warning])
-    .filter((message): message is string => Boolean(message));
-
-  if (popupMessages.length === 0) {
-    return;
-  }
-
-  const uniqueMessages = Array.from(new Set(popupMessages));
-  for (const message of uniqueMessages) {
+  for (const warning of active) {
+    if (previouslyActive?.has(warning)) continue;
+    const message = targetWarningMessages[warning];
+    if (!message) continue;
     toast({
       title: 'Warning',
       description: message,
@@ -30,6 +42,8 @@ export function showTargetWarningsPopup(warnings: string[] | undefined, toast: T
       position: 'top',
     });
   }
+
+  return active;
 }
 
 // Below this fraction of the app's known indicators resolving a reference-period

@@ -1017,8 +1017,28 @@ function App() {
     }
   }, [currentSiteId]);
 
+  // Which target-state warnings (e.g. "grazing demand exceeds available
+  // biomass") are currently showing a toast for, so showTargetWarningsPopup
+  // can tell a still-active warning from a newly-triggered one and only
+  // toast the latter — a live-update drag calls this once per PATCH
+  // response, and the condition commonly stays true across many consecutive
+  // steps of the same drag.
+  const activeTargetWarningsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { activeTargetWarningsRef.current = new Set(); }, [currentSiteId]);
+
   const handleSiteIndicatorsChange = useCallback(async (indicators: Site['indicators']) => {
     if (!currentSiteId || !indicators) return;
+
+    // Applied optimistically so the touched slider doesn't wait on a round
+    // trip, but `indicators` here is the client's un-cascaded guess — only
+    // the edited key is right, every derived total (herbivore biomass,
+    // methane, ...) still holds its pre-edit value until the server answers.
+    // A request that fails or is coalesced away must not leave that guess
+    // standing in as if it were the real, recalculated state — hence the
+    // rollback in catch below, restoring exactly what was current before
+    // this call so a dropped request degrades to "nothing happened" rather
+    // than "the edited factor changed but nothing it feeds into did".
+    const previousSite = currentSite;
 
     setCurrentSite((prev) => {
       if (!prev || prev.id !== currentSiteId) return prev;
@@ -1035,9 +1055,14 @@ function App() {
       setMapRefreshSeq(s => s + 1);
 
       const warnings = updatedSite.indicators?.warnings ?? [];
-      showTargetWarningsPopup(warnings, toast);
+      activeTargetWarningsRef.current = showTargetWarningsPopup(warnings, toast, activeTargetWarningsRef.current);
+      return updatedSite.indicators;
     } catch (err) {
       console.error('Failed to update site indicators:', err);
+      setCurrentSite((prev) => {
+        if (!prev || prev.id !== currentSiteId || !previousSite) return prev;
+        return { ...prev, indicators: previousSite.indicators };
+      });
       throw err;
     }
   }, [currentSiteId, currentSite, toast]);
