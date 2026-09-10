@@ -16,7 +16,9 @@ import {
   useToast,
 } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
+import type { LayerSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
+import '../lib/maplibreWorker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FiCheck, FiGlobe, FiMapPin, FiRotateCcw, FiSearch, FiSquare, FiTrash2 } from 'react-icons/fi';
 import type { SiteCreationMethod, BoundingBox } from '../types';
@@ -87,21 +89,21 @@ const SATELLITE_ID_PREFIX = 'satellite-';
 // not fill/background: a translucent land-cover fill would just muddy the
 // imagery, which is the same reasoning already applied a few lines below to
 // the base style's own layers.
-function isHybridLayerWorthShowing(layer: maplibregl.LayerSpecification): boolean {
+function isHybridLayerWorthShowing(layer: LayerSpecification): boolean {
   return layer.type === 'raster' || layer.type === 'line' || layer.type === 'symbol';
 }
 
 // Fetched once per session and reused by every toggle and every map instance,
 // mirroring MapView.tsx's warmStyleCache for the vector basemap.
-let _cachedSatelliteStyle: maplibregl.StyleSpecification | null = null;
-let _satelliteStylePromise: Promise<maplibregl.StyleSpecification> | null = null;
-function loadSatelliteStyle(): Promise<maplibregl.StyleSpecification> {
+let _cachedSatelliteStyle: StyleSpecification | null = null;
+let _satelliteStylePromise: Promise<StyleSpecification> | null = null;
+function loadSatelliteStyle(): Promise<StyleSpecification> {
   if (_cachedSatelliteStyle) return Promise.resolve(_cachedSatelliteStyle);
   if (!_satelliteStylePromise) {
     _satelliteStylePromise = fetch(satelliteStyleUrl())
       .then((r) => {
         if (!r.ok) throw new Error(`satellite style: ${r.status} ${r.statusText}`);
-        return r.json() as Promise<maplibregl.StyleSpecification>;
+        return r.json() as Promise<StyleSpecification>;
       })
       .then((style) => {
         _cachedSatelliteStyle = style;
@@ -150,7 +152,7 @@ async function addHybridBasemapLayers(
       ...layer,
       id: prefixedId,
       ...('source' in layer && layer.source ? { source: SATELLITE_ID_PREFIX + layer.source } : {}),
-    } as maplibregl.LayerSpecification;
+    } as LayerSpecification;
     map.addLayer(prefixedLayer, beforeLayerId);
     layerIds.push(prefixedId);
   }
@@ -394,7 +396,8 @@ function SiteCreationMap({
       center: initialExtent?.center || [22.977, 1.258],
       zoom: initialExtent?.zoom || 4,
       attributionControl: false,
-      preserveDrawingBuffer: true, // Required for canvas thumbnail capture
+      // Required for canvas thumbnail capture
+      canvasContextAttributes: { preserveDrawingBuffer: true },
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -768,14 +771,16 @@ function SiteCreationMap({
       map.on('mousedown', handleMouseDown);
       map.on('mousemove', handleMouseMove);
       map.on('mouseup', handleMouseUp);
-      map.on('mouseleave', handleMouseLeave);
+      // mouseleave only fires when scoped to a layer; mouseout is the
+      // canvas-wide equivalent this box-selection cancel needs.
+      map.on('mouseout', handleMouseLeave);
 
       return () => {
         map.off('click', handleClick);
         map.off('mousedown', handleMouseDown);
         map.off('mousemove', handleMouseMove);
         map.off('mouseup', handleMouseUp);
-        map.off('mouseleave', handleMouseLeave);
+        map.off('mouseout', handleMouseLeave);
         if (!map.dragPan.isEnabled()) {
           map.dragPan.enable();
         }

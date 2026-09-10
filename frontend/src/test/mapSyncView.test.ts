@@ -10,7 +10,7 @@
  * remembers it.
  */
 import { describe, it, expect } from 'vitest';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
 
 /** Minimal stand-in for the handful of methods the registry touches. */

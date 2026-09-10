@@ -112,7 +112,7 @@ class FakeLngLatBounds {
 
 vi.mock('maplibre-gl', () => {
   class NavigationControl {}
-  const api = { Map: FakeMap, NavigationControl, LngLatBounds: FakeLngLatBounds };
+  const api = { Map: FakeMap, NavigationControl, LngLatBounds: FakeLngLatBounds, setWorkerUrl: () => {} };
   return { ...api, default: api };
 });
 

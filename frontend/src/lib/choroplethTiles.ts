@@ -1,4 +1,5 @@
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
+import type { VectorSourceSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { CHOROPLETH_VALUE_STATE_KEY } from './choroplethPaint';
 
 /**
@@ -120,7 +121,7 @@ export function resetCatchmentTilesetCache(): void {
  * re-request it once per map instance, and minzoom bounds tile requests to the
  * range that actually contains catchments.
  */
-export function catchmentTileSourceSpec(tileset: CatchmentTileset): maplibregl.VectorSourceSpecification {
+export function catchmentTileSourceSpec(tileset: CatchmentTileset): VectorSourceSpecification {
   return {
     type: 'vector',
     tiles: tileset.tiles,

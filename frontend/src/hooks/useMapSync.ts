@@ -3,7 +3,7 @@
  * All MapView instances register their MapLibre maps here.
  * When any map moves, all others are updated to match.
  */
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 
 type MapEntry = {
   map: maplibregl.Map;

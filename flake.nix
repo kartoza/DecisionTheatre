@@ -129,7 +129,7 @@
           # frontend/package-lock.json, so ANY change to that file — including
           # the version field — changes this hash. Recompute with:
           #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
-          npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
+          npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -343,6 +343,12 @@
               # volume at /root/.config/decision-theatre expecting exactly this.
               "HOME=/root"
               "TZ=UTC"
+              # Entrypoint above uses the binary's absolute store path, which
+              # needs no PATH. Docker's HEALTHCHECK does not: it names the
+              # binary by argv[0] ("decision-theatre healthcheck"), resolved
+              # against PATH the same way a shell would, so the store path
+              # must be on it for that lookup to succeed.
+              "PATH=${decision-theatre}/bin"
             ];
           };
 
@@ -548,7 +554,7 @@
             inherit version;
             src = ./frontend;
             # Same source as the frontend package, so the same hash.
-            npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
+            npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
             buildPhase = ''
               npm test
             '';
