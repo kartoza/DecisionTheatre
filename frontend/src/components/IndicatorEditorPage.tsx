@@ -731,6 +731,28 @@ export default function IndicatorEditorPage({
       .sort((a, b) => a.groupName.localeCompare(b.groupName));
   }, [availableIndicatorKeys, attributeDetails, variableTypes]);
 
+  // Shared by the table and the dropdown so both agree on which indicators
+  // actually have data for this site - otherwise the dropdown can offer a
+  // factor that then renders zero rows in the table.
+  const hasIndicatorData = useCallback((key: string) => {
+    if (!localIndicators) return false;
+    const refVal = localIndicators.reference?.[key] ?? null;
+    const curVal = localIndicators.current?.[key] ?? null;
+    const isEditable = userInputs[key] === true;
+    if (refVal === null && curVal === null) return false;
+    if (refVal === 0 && curVal === 0 && !isEditable) return false;
+    return true;
+  }, [localIndicators, userInputs]);
+
+  const dropdownIndicatorGroups = useMemo(() => {
+    return indicatorGroups
+      .map(group => ({
+        groupName: group.groupName,
+        entries: group.entries.filter(entry => hasIndicatorData(entry.key)),
+      }))
+      .filter(group => group.entries.length > 0);
+  }, [indicatorGroups, hasIndicatorData]);
+
   const groupedIndicatorRows = useMemo(() => {
     if (!localIndicators) return [] as { groupName: string; rows: IndicatorRow[] }[];
 
@@ -739,11 +761,7 @@ export default function IndicatorEditorPage({
         const rows = group.entries
           .filter(entry => {
             if (selectedIndicatorKey && entry.key !== selectedIndicatorKey) return false;
-            const refVal = localIndicators.reference?.[entry.key] ?? null;
-            const curVal = localIndicators.current?.[entry.key] ?? null;
-            const isEditable = userInputs[entry.key] === true;
-            if (refVal === null && curVal === null) return false;
-            if (refVal === 0 && curVal === 0 && !isEditable) return false;
+            if (!hasIndicatorData(entry.key)) return false;
             if (!searchFilter) return true;
             const displayLabel = (attributeDetails[entry.key] ?? getIndicatorLabel(entry.key)).toLowerCase();
             return displayLabel.includes(searchFilter.toLowerCase())
@@ -774,9 +792,7 @@ export default function IndicatorEditorPage({
       .filter(group => group.rows.length > 0);
 
     return groups;
-  // useMemo has a missing dependency: 'userInputs'
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [attributeDetails, indicatorGroups, localIndicators, searchFilter, selectedIndicatorKey]);
+  }, [attributeDetails, hasIndicatorData, indicatorGroups, localIndicators, searchFilter, selectedIndicatorKey]);
 
   const totalIndicatorRows = useMemo(
     () => groupedIndicatorRows.reduce((sum, group) => sum + group.rows.length, 0),
@@ -963,7 +979,7 @@ export default function IndicatorEditorPage({
                 color="gray.100"
               >
                 <option value="">All indicators</option>
-                {indicatorGroups.map(group => (
+                {dropdownIndicatorGroups.map(group => (
                   <optgroup key={group.groupName} label={group.groupName}>
                     {group.entries.map(entry => (
                       <option key={entry.key} value={entry.key}>

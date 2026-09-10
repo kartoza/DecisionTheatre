@@ -17,6 +17,7 @@ import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
+import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
 import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
@@ -594,6 +595,10 @@ function App() {
   // Handle site created (or updated)
   const handleSiteCreated = useCallback((site: Site) => {
     setEditSite(null); // Clear edit state
+    // A live-update choice made for a previous site is not a statement about
+    // this one, so a freshly created site should get the catchment-count
+    // default rather than inherit whatever was last toggled elsewhere.
+    clearLiveUpdatePreference();
     startBackgroundIndicatorExtraction(site);
     handleOpenSite(site);
     setViewModes((prev) => prev.map((m, i) => (i === 0 ? 'map' : m)));
@@ -1317,6 +1322,7 @@ function App() {
             swiperPosition={swiperPosition}
             onSwiperPositionChange={setSwiperPosition}
             siteIndicators={currentSite?.indicators}
+            siteCatchmentCount={currentSite?.catchmentIds?.length}
             rangeMode={rangeMode}
             mapStatistics={mapStatistics}
             chartGroups={chartGroups}
