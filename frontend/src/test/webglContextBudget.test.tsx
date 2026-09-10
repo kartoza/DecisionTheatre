@@ -134,7 +134,7 @@ class FakeMap {
 
 vi.mock('maplibre-gl', () => {
   class NavigationControl {}
-  const api = { Map: FakeMap, NavigationControl };
+  const api = { Map: FakeMap, NavigationControl, setWorkerUrl: () => {} };
   return { ...api, default: api };
 });
 

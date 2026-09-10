@@ -1,8 +1,43 @@
-import { defineConfig } from 'vite';
+import { copyFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const require = createRequire(import.meta.url);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// MapLibre's worker script (imported via `?url` in src/lib/maplibreWorker.ts,
+// so Vite gives it a real, content-hashed URL instead of the broken
+// self-located one — see that file) itself imports a second file,
+// `maplibre-gl-shared.mjs`, by a bare relative path baked into MapLibre's own
+// build output. Vite's `?url` only copies the one file that was asked for, so
+// without this the worker's own import 404s — and, because this app's SPA
+// fallback route serves index.html for anything unmatched, that 404 is
+// invisible: the worker just silently fails to start, and every vector tile
+// source (choropleth, site boundaries, the vector basemap) goes dark with no
+// console error.
+//
+// Copied unhashed to the exact filename MapLibre's relative import expects,
+// next to wherever Vite puts the (hashed) worker file — both live in
+// `assets/`, so a plain sibling filename is enough for it to resolve.
+function mapLibreWorkerSharedChunk(): Plugin {
+  return {
+    name: 'maplibre-worker-shared-chunk',
+    apply: 'build',
+    closeBundle() {
+      const maplibreDist = dirname(require.resolve('maplibre-gl/package.json')) + '/dist';
+      copyFileSync(
+        join(maplibreDist, 'maplibre-gl-shared.mjs'),
+        join(__dirname, 'dist/assets/maplibre-gl-shared.mjs'),
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), mapLibreWorkerSharedChunk()],
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
