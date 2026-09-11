@@ -934,8 +934,17 @@ export async function patchSiteIndicators(
     if (!response.ok) {
       throw new Error(`Failed to update site indicators: ${response.statusText}`);
     }
-    _catchmentsCache.delete(id);
-    return response.json();
+    const updatedSite = await response.json() as SiteWithCatchments;
+    if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
+      // Cache the fresh breakdown instead of deleting the cache entry: a
+      // walkthrough site has no backend record to refetch it from, so a bare
+      // delete here leaves getSiteCatchments permanently returning [] for
+      // the rest of the session — every dial's "current" marker then freezes
+      // at whatever it last computed, silently drifting from the target
+      // markers that keep reading the fresh siteIndicators.ideal directly.
+      cacheCatchments(id, updatedSite.catchments);
+    }
+    return updatedSite;
   }
 
   if (isBrowserRuntime()) {
