@@ -1264,6 +1264,16 @@ function hasWhiskerData(bounds: WhiskerBoundsResponse | null | undefined): boole
 // line by line and keep only what the caller asked for — a handful of named
 // rows, or a running per-column sum/count — so peak memory stays proportional
 // to what is wanted, not to the file on disk.
+// Hands control back to the browser between chunks of row parsing below, so a
+// 147,837-row file doesn't run as one uninterruptible synchronous block — that
+// was blocking the main thread for the several seconds it took to parse
+// Africa's whisker CSVs, freezing the tab on the first chart-view load.
+const WHISKER_ROWS_PER_YIELD = 2000;
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function parseWhiskerCSVHeader(headerLine: string): { headers: string[]; catchIdIndex: number } {
   const headers = headerLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
   return { headers, catchIdIndex: headers.findIndex((h) => h.toLowerCase() === 'catchid') };
@@ -1316,6 +1326,7 @@ async function loadWhiskerCSVFileFiltered(
       if (!line) continue;
       const parsed = parseWhiskerCSVRow(line, headers, catchIdIndex);
       if (parsed && wantedIds.has(parsed.catchId)) data[parsed.catchId] = parsed.row;
+      if (i % WHISKER_ROWS_PER_YIELD === 0) await yieldToMain();
     }
     return data;
   } catch {
@@ -1369,6 +1380,7 @@ async function loadWhiskerCSVFileAggregate(
         sums[col] = (sums[col] ?? 0) + val;
         counts[col] = (counts[col] ?? 0) + 1;
       }
+      if (i % WHISKER_ROWS_PER_YIELD === 0) await yieldToMain();
     }
     return { sums, counts };
   } catch {

@@ -70,7 +70,7 @@ const DEMO_STEPS: DemoStep[] = [
       'Land management decisions never happen in isolation. Over the decades, maximising livestock numbers in an ecosystem has produced undesirable consequences elsewhere. Click the dial button for a multi-panel view of how the current herbivore regime has altered ecosystem functioning.',
     targetId: 'tour-view-modes',
     navigateTo: 'map',
-    autoUiEvent: 'dt:demo-go-quad-dial-africa',
+    autoUiEvent: 'dt:demo-go-quad-flat-africa',
   },
   {
     icon: <FiActivity size={28} />,
