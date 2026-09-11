@@ -795,6 +795,32 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial-africa', handler);
   }, []);
 
+  // Same 6-pane, 3-column layout as dt:demo-go-quad-dial-africa above, but as
+  // flat dials (bands rather than gauges) — for the AfricaDemoTour's
+  // "Ecosystem-Scale Consequences" step, which shares its pane set with the
+  // "Intervention" step but wants the flat presentation instead.
+  useEffect(() => {
+    const handler = () => {
+      const base = { leftScenario: 'reference' as const, rightScenario: 'current' as const };
+      const demoPanes: PaneStates = [
+        { ...base, attribute: 'herbs_tot_kgkm2' },
+        { ...base, attribute: 'herbs_totGRAZING_kgkm2' },
+        { ...base, attribute: 'percBurned' },
+        { ...base, attribute: 'CH4_both_kg_km2' },
+        { ...base, attribute: 'NPP_gm2' },
+        { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
+      ];
+      setLayoutMode('quad');
+      setQuadColumns(3);
+      setIndicatorPaneIndex(null);
+      setPaneStates(demoPanes);
+      setViewModes(demoPanes.map(() => 'flat'));
+      setRangeMode('site');
+    };
+    window.addEventListener('dt:demo-go-quad-flat-africa', handler);
+    return () => window.removeEventListener('dt:demo-go-quad-flat-africa', handler);
+  }, []);
+
   // Listen for demo event to swap the NPP dial for change-in-SOC, for the
   // AfricaDemoTour "ecosystem-scale consequences" step.
   useEffect(() => {
