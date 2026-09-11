@@ -526,6 +526,13 @@ function ContentArea({
     // Every editable slider is untouched again: the reset has replaced the
     // targets wholesale, so nothing the user did before it is still pending.
     touchedTargetKeysRef.current = new Set();
+    // A slider whose drag ended without cleanly firing onChangeEnd (seen with
+    // keyboard-driven changes) leaves this pointing at a key forever. The
+    // resync effect below then treats that key as still mid-drag and keeps
+    // its pre-reset value instead of adopting the reset one — the one slider
+    // out of the whole set that silently stays stale. A reset replaces every
+    // target wholesale, so there is no drag left to protect.
+    draggingTargetKeyRef.current = null;
     setIsSavingTargets(true);
     void (async () => {
       try {

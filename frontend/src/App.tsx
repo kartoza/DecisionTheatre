@@ -671,6 +671,31 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
   }, []);
 
+  // Listen for demo event to switch to a 6-pane, 3-column flat-dial layout —
+  // the Malawi case study's default factors — for the ViphyaDemoTour's
+  // "Exploring Interventions" tour step.
+  useEffect(() => {
+    const handler = () => {
+      const base = { leftScenario: 'reference' as const, rightScenario: 'current' as const };
+      const demoPanes: PaneStates = [
+        { ...base, attribute: 'AGBwd_Mgha' },
+        { ...base, attribute: 'percBurned' },
+        { ...base, attribute: 'CH4_both_kg_km2' },
+        { ...base, attribute: 'deltaSOC_Mgha' },
+        { ...base, attribute: 'herbs_tot_kgkm2' },
+        { ...base, attribute: 'NPP_gm2.1' },
+      ];
+      setLayoutMode('quad');
+      setQuadColumns(3);
+      setIndicatorPaneIndex(null);
+      setPaneStates(demoPanes);
+      setViewModes(demoPanes.map(() => 'flat'));
+      setRangeMode('site');
+    };
+    window.addEventListener('dt:demo-go-quad-flat', handler);
+    return () => window.removeEventListener('dt:demo-go-quad-flat', handler);
+  }, []);
+
   // Listen for demo event to switch to single-pane chart view with "Mean tree
   // cover %" as the individual factor, grouped by tree biomass class, for the
   // MunywanaDemoTour's "Tree Biomass Distribution" step.
