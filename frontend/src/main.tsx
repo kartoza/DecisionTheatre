@@ -10,6 +10,7 @@ import ViphyaDemoTour from './components/ViphyaDemoTour';
 import AfricaDemoTour from './components/AfricaDemoTour';
 import ErrorBoundary from './components/ErrorBoundary';
 import { theme } from './styles/theme';
+import { installSlowNetworkMonitor } from './lib/slowNetworkMonitor';
 
 // Self-hosted typefaces. Imported here rather than linked from index.html so
 // Vite fingerprints and bundles them, and so no build or launch reaches out to
@@ -50,6 +51,8 @@ if (import.meta.env.DEV) {
     banner('Unhandled promise rejection', String(event.reason?.stack ?? event.reason), 'darkred');
   });
 }
+
+installSlowNetworkMonitor();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
