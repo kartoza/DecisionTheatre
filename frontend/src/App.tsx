@@ -46,6 +46,7 @@ import type { CalculationDetailsProps } from './components/CalculationDetails';
 import { usePanelWidth } from './lib/panelWidth';
 import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
+import { onSlowNetwork } from './lib/slowNetworkMonitor';
 
 function App() {
   const toast = useToast();
@@ -169,6 +170,30 @@ function App() {
         duration: null,
         isClosable: true,
       });
+    });
+  }, [toast]);
+  // A slow response to the server used to be indistinguishable from a frozen
+  // app. slowNetworkMonitor collapses however many requests are concurrently
+  // slow into a single true/false signal, so this just shows or closes one
+  // fixed-id toast rather than risking a stack of duplicates.
+  useEffect(() => {
+    const SLOW_NETWORK_TOAST_ID = 'slow-network';
+    return onSlowNetwork((slow) => {
+      if (slow) {
+        if (!toast.isActive(SLOW_NETWORK_TOAST_ID)) {
+          toast({
+            id: SLOW_NETWORK_TOAST_ID,
+            title: 'Slow connection',
+            description: 'The server is taking longer than usual to respond.',
+            status: 'warning',
+            duration: null,
+            isClosable: true,
+            position: 'top',
+          });
+        }
+      } else {
+        toast.close(SLOW_NETWORK_TOAST_ID);
+      }
     });
   }, [toast]);
   const { data: fullDomainData } = useFullDomainPrecalculated();
