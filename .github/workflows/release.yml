@@ -124,6 +124,14 @@ jobs:
 
       # --- Build frontend (all platforms) ---
       - name: Build frontend
+        env:
+          # Not built via the flake here, so no --impure dance needed — this
+          # step just needs the repository variable set directly. See the
+          # container build steps for the rest of this story: frontend/.env is
+          # gitignored and so never reaches CI, and Vite inlines this env var
+          # into the bundle at build time, so it must be exported before `npm
+          # run build`, not left for the app to read later.
+          VITE_FEEDBACK_FORM_URL: ${{ vars.VITE_FEEDBACK_FORM_URL }}
         run: |
           cd frontend
           npm ci
@@ -707,8 +715,12 @@ jobs:
 
       - name: Build the image from the flake
         id: build
+        env:
+          # See the equivalent step in ci.yml for why --impure and this
+          # repository variable are both required.
+          VITE_FEEDBACK_FORM_URL: ${{ vars.VITE_FEEDBACK_FORM_URL }}
         run: |
-          nix build .#container --print-build-logs
+          nix build .#container --print-build-logs --impure
           docker load < result
           tag="$(nix eval --raw .#container.imageTag)"
           name="$(nix eval --raw .#container.imageName)"

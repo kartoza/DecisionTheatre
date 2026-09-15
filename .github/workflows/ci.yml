@@ -424,8 +424,19 @@ jobs:
 
       - name: Build the image from the flake
         id: build
+        env:
+          # Threaded through as VITE_FEEDBACK_FORM_URL is not itself secret,
+          # but frontend/.env is gitignored (see .gitignore) and so never
+          # reaches this runner. --impure is required: flakes evaluate purely
+          # by default, and flake.nix reads this via builtins.getEnv, which
+          # silently returns "" without it. Set the
+          # VITE_FEEDBACK_FORM_URL repository variable (Settings > Secrets and
+          # variables > Actions > Variables) to populate it; left unset, the
+          # image builds fine with the feedback link simply hidden, same as a
+          # blank frontend/.env locally.
+          VITE_FEEDBACK_FORM_URL: ${{ vars.VITE_FEEDBACK_FORM_URL }}
         run: |
-          nix build .#container --print-build-logs
+          nix build .#container --print-build-logs --impure
           tag="$(nix eval --raw .#container.imageTag)"
           name="$(nix eval --raw .#container.imageName)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

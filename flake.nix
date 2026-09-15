@@ -115,6 +115,16 @@
           '';
         };
 
+        # VITE_FEEDBACK_FORM_URL is a Vite build-time env var (see
+        # frontend/.env.example): Vite inlines it into the bundle at `npm run
+        # build`, so it must be present here, not just in a deployment's
+        # frontend/.env — that file is gitignored (see .gitignore) and never
+        # exists in this sandboxed build. Flakes evaluate purely by default, so
+        # builtins.getEnv silently reads as "" unless the build is invoked with
+        # --impure; that's what lets a plain `nix build` stay reproducible
+        # while CI opts in to threading the value through.
+        feedbackFormUrl = builtins.getEnv "VITE_FEEDBACK_FORM_URL";
+
         # =====================================================
         # Frontend: built via buildNpmPackage
         # All npm dependencies are fetched into the nix store
@@ -133,6 +143,7 @@
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
+            export VITE_FEEDBACK_FORM_URL="${feedbackFormUrl}"
             npm run build
           '';
 
