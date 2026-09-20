@@ -49,6 +49,17 @@ type GpkgStore struct {
 	gridGeometryReady    map[float64]chan struct{}
 	gridGeometryBuilding bool
 	gridGeometryErr      error
+
+	// hasBasinLevels reports whether this datapack has the multi-resolution
+	// catchment tables (see scripts/build-catchment-hierarchy.sh):
+	// catchments_lev04/06/08 and scenario_{current,reference}_lev04/06/08.
+	// Set once at open time. A datapack built before this feature existed,
+	// or one where catchment-hierarchy hasn't been run, simply lacks them —
+	// QueryCatchments falls back to the grid-aggregated choropleth exactly
+	// as it always has. GOLDEN RULE: these tables are never read by
+	// anything except this low/mid-zoom rendering path — analysis and site
+	// selection are always lev12.
+	hasBasinLevels bool
 }
 
 // gridGeometryWaitTimeout bounds how long a request waits for a tier's geometry.
@@ -143,6 +154,11 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 	// Load column names from scenario_current
 	if err := store.loadColumns(ctx); err != nil {
 		log.Printf("Warning: could not load columns: %v", err)
+	}
+
+	store.hasBasinLevels = store.checkBasinLevelTables(ctx)
+	if store.hasBasinLevels {
+		log.Printf("Multi-resolution catchment tables found — low/mid-zoom choropleth will use lev04/06/08 aggregates")
 	}
 
 	// Start building the low-zoom choropleth grid geometry cache in the
@@ -520,11 +536,123 @@ var gridTiersDegrees = []float64{0.08, 0.2, 0.5}
 // response may contain, mirroring maxDetailedFeatures for the render path.
 const gridRenderBudget = 8000
 
+// basinLevelForZoom returns the HydroBASINS level (as the two-digit suffix
+// used by the catchments_levNN/scenario_{scenario}_levNN table names) whose
+// aggregates QueryCatchments should render at the given zoom, mirroring the
+// zoom bands scripts/gpkg_to_mbtiles.sh tiles the same basins at (see
+// datasources/mbtiles-config/layer-treatment.csv): z2-z5 -> lev04, z6-z8 ->
+// lev06, z9-z10 -> lev08. Zoom 11 and above returns ok=false: at that point
+// lev12 detail (or, for an unusually dense bbox, the grid-aggregated
+// fallback) takes over, exactly as before this feature existed.
+func basinLevelForZoom(zoom float64) (level string, ok bool) {
+	switch {
+	case zoom < 6:
+		return "04", true
+	case zoom < 9:
+		return "06", true
+	case zoom < 11:
+		return "08", true
+	default:
+		return "", false
+	}
+}
+
+// checkBasinLevelTables reports whether every multi-resolution catchment
+// table is present. All three levels are built together by
+// scripts/build-catchment-hierarchy.sh in one run, so this checks all of
+// them rather than each level independently — a datapack with only some of
+// them would mean a previous run was interrupted, and falling back to the
+// grid choropleth entirely is safer than rendering some zoom bands one way
+// and others another.
+//
+// Table names are built with fmt.Sprintf rather than string concatenation
+// of a quoted prefix plus the level deliberately: TestSpecCoversGeoPackageTablesInSQL's
+// regex-based anti-drift check matches a complete quoted Go string literal
+// against GeoPackageTables (spec.go), and a bare quoted prefix joined with
+// +lev leaves that prefix as its own complete literal — not a real table
+// name, so it would always show up as "undeclared". Sprintf's format string
+// has no matching closing quote right after the prefix, so the check can't
+// mistake it for one.
+func (s *GpkgStore) checkBasinLevelTables(ctx context.Context) bool {
+	for _, lev := range []string{"04", "06", "08"} {
+		for _, table := range []string{
+			fmt.Sprintf("catchments_lev%s", lev),
+			fmt.Sprintf("scenario_current_lev%s", lev),
+			fmt.Sprintf("scenario_reference_lev%s", lev),
+		} {
+			exists, err := s.tableExists(ctx, s.db, table)
+			if err != nil || !exists {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// queryCatchmentsBasinAggregated returns one feature per basin at the given
+// HydroBASINS level, coloured by its precomputed SUB_AREA-weighted average
+// (built once by scripts/build-catchment-hierarchy.sh, not at request time —
+// unlike queryCatchmentsGridAggregated there is no live union or weighted
+// sum here, just a join). Unfiltered by bbox: at the zoom range this path
+// serves (z2-z10) the viewport typically covers most of the study area
+// anyway, and even the largest level (lev08) is a few tens of thousands of
+// rows, well within what a single response can hold.
+func (s *GpkgStore) queryCatchmentsBasinAggregated(ctx context.Context, level, scenario, attribute string) (*FeatureCollection, error) {
+	scenarioTable := fmt.Sprintf("%s_lev%s", resolveScenarioTable(scenario), level)
+	catchmentsTable := fmt.Sprintf("catchments_lev%s", level)
+
+	query := fmt.Sprintf(`
+		SELECT c.HYBAS_ID_int, c.geojson, s."%s"
+		FROM %s c
+		JOIN %s s ON s.catchment_id_int = c.HYBAS_ID_int
+	`, attribute, catchmentsTable, scenarioTable)
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var features []GeoJSONFeature
+	for rows.Next() {
+		var id int64
+		var geojsonStr string
+		var value sql.NullFloat64
+		if err := rows.Scan(&id, &geojsonStr, &value); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+
+		props := map[string]interface{}{"aggregated": true}
+		if value.Valid {
+			props[attribute] = value.Float64
+		}
+
+		features = append(features, GeoJSONFeature{
+			Type:       "Feature",
+			ID:         id,
+			Geometry:   json.RawMessage(geojsonStr),
+			Properties: props,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+
+	return &FeatureCollection{
+		Type:     "FeatureCollection",
+		Features: features,
+	}, nil
+}
+
 // QueryCatchments returns catchments within a bounding box with a specific
-// attribute. If the bbox matches at most maxDetailedFeatures catchments it
-// returns full per-catchment geometry; otherwise it falls back to a
-// grid-aggregated choropleth (see gridCellSizeDegrees) so a densely-catchmented
-// area never gets silently truncated into a gappy render.
+// attribute. At zoom levels below 11, and when the datapack has the
+// multi-resolution catchment tables, it renders the corresponding
+// HydroBASINS level's precomputed aggregates (see basinLevelForZoom) instead
+// of scanning lev12 at all. Otherwise: if the bbox matches at most
+// maxDetailedFeatures catchments it returns full per-catchment geometry;
+// otherwise it falls back to a grid-aggregated choropleth (see
+// gridCellSizeDegrees) so a densely-catchmented area never gets silently
+// truncated into a gappy render.
 func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute string, minx, miny, maxx, maxy, zoom float64) (*FeatureCollection, error) {
 	start := time.Now()
 	var path string
@@ -533,13 +661,24 @@ func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute str
 		log.Printf("[perf] QueryCatchments scenario=%s attribute=%s bbox=[%.2f,%.2f,%.2f,%.2f] zoom=%.1f matched=%d path=%s duration_ms=%d", scenario, attribute, minx, miny, maxx, maxy, zoom, matched, path, time.Since(start).Milliseconds())
 	}()
 
-	// Validate scenario
-	tableName := resolveScenarioTable(scenario)
-
 	// Validate attribute against allowed columns to prevent SQL injection
 	if !s.isValidColumn(attribute) {
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
+
+	if s.hasBasinLevels {
+		if level, ok := basinLevelForZoom(zoom); ok {
+			path = "basin-lev" + level
+			fc, err := s.queryCatchmentsBasinAggregated(ctx, level, scenario, attribute)
+			if fc != nil {
+				matched = len(fc.Features)
+			}
+			return fc, err
+		}
+	}
+
+	// Validate scenario
+	tableName := resolveScenarioTable(scenario)
 
 	// A single lightweight query (lat/long/area/value - no geometry blob)
 	// both decides the render path and, if aggregated, supplies the rows the

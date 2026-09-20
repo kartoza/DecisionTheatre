@@ -188,3 +188,49 @@ func TestRealDatapackDetailResponseSize(t *testing.T) {
 			time.Since(encodeStart).Round(time.Millisecond), float64(len(body))/float64(count)/1024)
 	}
 }
+
+// TestRealDatapackBasinAggregatedChoropleth exercises QueryCatchments at a
+// zoom in each of the three basin-level tiers against a real datapack built
+// by scripts/build-catchment-hierarchy.sh, confirming it takes the
+// basin-aggregated path (not the grid fallback) and returns exactly the
+// number of basins at that level -- catchments_lev04/06/08's own row counts,
+// not something filtered or truncated.
+func TestRealDatapackBasinAggregatedChoropleth(t *testing.T) {
+	s := realDatapackStore(t)
+	ctx := context.Background()
+
+	if !s.hasBasinLevels {
+		t.Skip("this datapack has no multi-resolution catchment tables — run scripts/build-catchment-hierarchy.sh")
+	}
+
+	attribute := s.GetColumns()[0]
+
+	for _, tc := range []struct {
+		zoom  float64
+		level string
+	}{
+		{3, "04"},
+		{7, "06"},
+		{9.5, "08"},
+	} {
+		var want int
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM catchments_lev"+tc.level).Scan(&want); err != nil {
+			t.Fatalf("counting catchments_lev%s: %v", tc.level, err)
+		}
+
+		fc, err := s.QueryCatchments(ctx, "current", attribute, -180, -90, 180, 90, tc.zoom)
+		if err != nil {
+			t.Fatalf("zoom=%v: QueryCatchments: %v", tc.zoom, err)
+		}
+		if len(fc.Features) != want {
+			t.Errorf("zoom=%v (lev%s): got %d features, want %d (catchments_lev%s row count)",
+				tc.zoom, tc.level, len(fc.Features), want, tc.level)
+		}
+		for _, f := range fc.Features {
+			if len(f.Geometry) == 0 {
+				t.Errorf("zoom=%v: feature %d has empty geometry", tc.zoom, f.ID)
+				break
+			}
+		}
+	}
+}
