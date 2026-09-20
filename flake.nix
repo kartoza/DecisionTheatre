@@ -418,20 +418,22 @@
         mkScriptTool =
           { name
           , script
+          , dir ? "scripts"
           , runtimeInputs ? [ ]
           ,
           }:
           pkgs.writeShellApplication {
             inherit name runtimeInputs;
-            # The scripts source their siblings from scripts/, so they run from
-            # the checkout rather than a store copy. That is deliberate: a copy
-            # in the store would go stale against the tree being checked.
+            # The scripts source their siblings from their own directory, so
+            # they run from the checkout rather than a store copy. That is
+            # deliberate: a copy in the store would go stale against the tree
+            # being checked.
             text = ''
-              if [ ! -x "./scripts/${script}" ]; then
-                echo "${name}: run this from the project root (./scripts/${script} not found)" >&2
+              if [ ! -x "./${dir}/${script}" ]; then
+                echo "${name}: run this from the project root (./${dir}/${script} not found)" >&2
                 exit 2
               fi
-              exec "./scripts/${script}" "$@"
+              exec "./${dir}/${script}" "$@"
             '';
           };
 
@@ -459,6 +461,53 @@
           ];
         };
 
+        mbtiles = mkScriptTool {
+          name = "mbtiles";
+          script = "gpkg_to_mbtiles.sh";
+          runtimeInputs = with pkgs; [
+            gdal
+            sqlite
+            tippecanoe
+            nano
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ libreoffice ];
+        };
+
+        # A testbed for eyeballing context.mbtiles rendered with the real
+        # style: runs mbtileserver plus scripts/mbtiles_proxy.py (which puts
+        # both the tile service and the preview page behind one origin —
+        # see that file for why). Prompts to build the tiles via `make
+        # mbtiles` if they don't exist yet.
+        mbtiles-server = mkScriptTool {
+          name = "mbtiles-server";
+          script = "mbtiles-server.sh";
+          runtimeInputs = with pkgs; [
+            mbtileserver
+            python3
+            jq
+            curl
+            gnumake
+            gdal
+            sqlite
+            tippecanoe
+            nano
+          ];
+        };
+
+        # Enumerates the layers, zoom ranges and fields in an mbtiles file
+        # from its metadata, then spot-checks real tile content against
+        # that via scripts/mvt_layers.py (a small hand-rolled MVT decoder —
+        # tippecanoe-decode doesn't understand the deduplicated map+images
+        # schema tile-join produces, see that file for the full story).
+        mbtiles-check = mkScriptTool {
+          name = "mbtiles-check";
+          script = "mbtiles-check.sh";
+          runtimeInputs = with pkgs; [
+            sqlite
+            jq
+            python3
+          ];
+        };
+
       in
       {
         # =====================================================
@@ -475,6 +524,9 @@
             pack-data
             doctor
             check-flake
+            mbtiles
+            mbtiles-server
+            mbtiles-check
             container
             ;
           default = decision-theatre;
@@ -617,6 +669,12 @@
               tippecanoe
               sqlite
               gdal
+              mbtileserver
+
+              # Guaranteed-available fallback editor: gpkg_to_mbtiles.sh
+              # opens layer-treatment.csv in $VISUAL/$EDITOR, falling back
+              # to nano if neither is set.
+              nano
 
               # Documentation
               mkdocsEnv
@@ -651,6 +709,13 @@
 
               # Windows cross-compilation
               pkgs.pkgsCross.mingwW64.stdenv.cc
+
+              # Spreadsheet UI for editing layer-treatment.csv (see
+              # gpkg_to_mbtiles.sh) — proper columns, sortable, and
+              # boolean-column dropdowns beat a raw CSV in a text editor.
+              # Linux-only; the script falls back to $VISUAL/$EDITOR/nano
+              # on platforms where this isn't available.
+              libreoffice
             ];
 
           # The whole environment — Go paths, shortcuts, the `dt` command table —
@@ -723,6 +788,24 @@
         apps.doctor = {
           type = "app";
           program = "${doctor}/bin/doctor";
+        };
+
+        # nix run .#mbtiles -- [input1.gpkg input2.gpkg ...] [--fix-geometry]
+        apps.mbtiles = {
+          type = "app";
+          program = "${mbtiles}/bin/mbtiles";
+        };
+
+        # nix run .#mbtiles-server -- [--port N] [--yes]
+        apps.mbtiles-server = {
+          type = "app";
+          program = "${mbtiles-server}/bin/mbtiles-server";
+        };
+
+        # nix run .#mbtiles-check -- [FILE] [--layer NAME] [--samples N]
+        apps.mbtiles-check = {
+          type = "app";
+          program = "${mbtiles-check}/bin/mbtiles-check";
         };
 
         # nix run .#check-flake -- [--check|--verify]

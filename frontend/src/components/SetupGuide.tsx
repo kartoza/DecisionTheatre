@@ -304,8 +304,7 @@ function SetupGuide({ info, onBack }: SetupGuideProps) {
 nix develop
 
 # Convert GeoPackage to MBTiles
-cd resources/mbtiles
-./gpkg_to_mbtiles.sh UoW_layers.gpkg
+./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg
 
 # Then restart the application
 nix run`}</Code>
@@ -328,7 +327,7 @@ nix run`}</Code>
   manifest.json             <- pack metadata
   data/
     mbtiles/
-      africa.mbtiles        <- vector tile data (required)
+      context.mbtiles       <- vector tile data (required)
       style.json            <- MapBox style (required)
     datapack.gpkg           <- scenario data (optional)`}</Code>
           </Box>

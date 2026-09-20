@@ -121,7 +121,9 @@ func New(cfg config.Config) (*Server, error) {
 	// already in RAM when the first map renders. The webview takes a second or
 	// two to start, giving the goroutine a head-start on loading Africa z0-5.
 	if tileStore := s.data().tiles; tileStore != nil {
-		go tileStore.WarmCache("africa",
+		go tileStore.WarmCache("context",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		go tileStore.WarmCache("catchments",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 	}
 
@@ -194,6 +196,7 @@ func (s *Server) buildRouter() *mux.Router {
 	// Style and TileJSON endpoints
 	router.HandleFunc("/data/style.json", s.handleStyleJSON).Methods("GET")
 	router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
+	router.HandleFunc("/data/catchments-tiles.json", s.handleCatchmentsTileJSON).Methods("GET")
 
 	// Glyph proxy: serves MapLibre font glyphs locally after fetching from CDN once.
 	// Eliminates repeated external HTTPS requests from each map instance in grid view.
@@ -264,7 +267,7 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	name := vars["name"]
 
 	// Reject a malformed coordinate rather than letting it default to zero:
-	// Sscanf leaves the target untouched on failure, so /tiles/africa/a/b/c.pbf
+	// Sscanf leaves the target untouched on failure, so /tiles/context/a/b/c.pbf
 	// was silently served as tile 0/0/0.
 	z, err := strconv.Atoi(vars["z"])
 	if err != nil {
@@ -464,11 +467,18 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 
-		// Rewrite tile sources to point to our local TileJSON endpoint.
+		// Rewrite tile sources to point to our local TileJSON endpoints. Most
+		// sources are the combined "context" tileset; catchments_lev12 ships
+		// as its own tileset (see handleCatchmentsTileJSON) so MapLibre can
+		// overzoom it independently past its own, lower, real maxzoom.
 		if sources, ok := style["sources"].(map[string]interface{}); ok {
 			for name, src := range sources {
 				if srcMap, ok := src.(map[string]interface{}); ok {
-					srcMap["url"] = base + "/data/tiles.json"
+					if name == "Catchments" {
+						srcMap["url"] = base + "/data/catchments-tiles.json"
+					} else {
+						srcMap["url"] = base + "/data/tiles.json"
+					}
 					sources[name] = srcMap
 				}
 			}
@@ -501,11 +511,17 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(styleBytes)
 }
 
-// handleTileJSON serves TileJSON metadata. It returns multiple tile URL variants
-// (localhost ↔ 127.0.0.1 plus aux ports) so the browser treats them as separate
-// origins and opens independent HTTP/1.1 connection pools (6 each), maximising
-// parallel tile loading in grid view.
-func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
+// writeTileJSON serves TileJSON metadata for the named tileset. It returns
+// multiple tile URL variants (localhost ↔ 127.0.0.1 plus aux ports) so the
+// browser treats them as separate origins and opens independent HTTP/1.1
+// connection pools (6 each), maximising parallel tile loading in grid view.
+//
+// minzoom/maxzoom here are the tileset's own, real, tiled range — not
+// necessarily the deepest zoom the app ever displays it at. Declaring the
+// true (lower) maxzoom for a tileset like "catchments" is what makes
+// MapLibre overzoom it (reuse and rescale the deepest real tile) instead of
+// requesting tiles that were never generated.
+func (s *Server) writeTileJSON(w http.ResponseWriter, r *http.Request, name string, minzoom, maxzoom int) {
 	base := baseURL(r)
 
 	// Derive the alternate hostname: localhost ↔ 127.0.0.1.
@@ -517,29 +533,29 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
 	}
 
-	tileURLs := []string{base + "/tiles/africa/{z}/{x}/{y}.pbf"}
+	tileURLs := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf"}
 	if altBase != base {
-		tileURLs = append(tileURLs, altBase+"/tiles/africa/{z}/{x}/{y}.pbf")
+		tileURLs = append(tileURLs, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf")
 	}
 	// Aux ports each provide an independent 6-connection HTTP/1.1 pool.
 	for _, p := range s.auxPorts {
-		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/africa/{z}/{x}/{y}.pbf", p))
+		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf", p, name))
 	}
 
 	tileJSON := map[string]interface{}{
 		"tilejson": "2.2.0",
-		"name":     "africa",
+		"name":     name,
 		"scheme":   "xyz",
 		"tiles":    tileURLs,
-		"minzoom":  2,
-		"maxzoom":  15,
+		"minzoom":  minzoom,
+		"maxzoom":  maxzoom,
 		"bounds":   []float64{-17.546539, -34.837477, 63.500977, 37.352693},
 		"center":   []float64{22.977, 1.258, 4},
 	}
 
 	// Add vector_layers from mbtiles metadata if available
 	if tileStore := s.data().tiles; tileStore != nil {
-		meta, err := tileStore.GetMetadata("africa")
+		meta, err := tileStore.GetMetadata(name)
 		if err == nil && meta.JSON != "" {
 			var metaJSON map[string]interface{}
 			if json.Unmarshal([]byte(meta.JSON), &metaJSON) == nil {
@@ -556,6 +572,24 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	// and, in a Vite dev setup, fetched cross-origin.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_ = json.NewEncoder(w).Encode(tileJSON)
+}
+
+// handleTileJSON serves the combined "context" tileset (everything except
+// catchments_lev12, which ships separately — see handleCatchmentsTileJSON).
+func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
+	s.writeTileJSON(w, r, "context", 2, 15)
+}
+
+// handleCatchmentsTileJSON serves the standalone catchments tileset. Its
+// real maxzoom (12) is deliberately lower than the app's navigable zoom
+// range (up to 15): scripts/gpkg_to_mbtiles.sh stops tiling once
+// the geometry is fully unsimplified (no more detail to reveal at deeper
+// zooms), and MapLibre overzooms this source for anything past z12 —
+// exactly what per-source overzoom is for, which the combined "context"
+// tileset can't offer per-layer since one TileJSON maxzoom covers every
+// layer bundled into it.
+func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
+	s.writeTileJSON(w, r, "catchments", 8, 12)
 }
 
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for

@@ -62,7 +62,7 @@ func TestExpectedContentTypeInference(t *testing.T) {
 		{"/api/health", "application/json"},
 		{"/api/choropleth", "application/json"},
 		{"/data/tiles.json", "application/json"},
-		{"/tiles/africa/8/145/151.pbf", "application/x-protobuf"},
+		{"/tiles/context/8/145/151.pbf", "application/x-protobuf"},
 	} {
 		if got := (Scenario{Path: c.path}).expectedContentType(); got != c.want {
 			t.Errorf("%s: expected %q, got %q", c.path, c.want, got)

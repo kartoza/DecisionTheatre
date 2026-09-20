@@ -88,6 +88,11 @@ COMMANDS=(
 
     "DATA|dt fetch-data FOLDER=..|Download source CSVs from a Google Drive folder"
     "DATA|dt geopackage|Build data/datapack.gpkg from the source CSVs"
+    "DATA|dt mbtiles|Build every tileset (africa + catchments) from source GeoPackages"
+    "DATA|dt mbtiles-context|Build only the combined context.mbtiles tileset"
+    "DATA|dt mbtiles-catchments|Build only catchments.mbtiles"
+    "DATA|dt mbtiles-server|Browse context.mbtiles in a real style, in your browser"
+    "DATA|dt mbtiles-check|Layers, zoom ranges and fields in an mbtiles file"
     "DATA|dt pack-data|Check the data, then build a distributable .zip"
     "DATA|dt pack-data --force|Build the pack even when the check fails"
     "DATA|dt list-datapack|Contents and checksum of the last pack built"

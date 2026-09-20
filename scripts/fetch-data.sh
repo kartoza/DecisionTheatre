@@ -16,7 +16,10 @@
 #   Downloads all files from the given Drive folder (and any subfolders)
 #   into <data-dir>, preserving the folder structure. Every file is
 #   re-downloaded and overwritten unconditionally, without checking
-#   whether the remote copy has changed.
+#   whether the remote copy has changed. Build inputs the Drive folder
+#   mixes in alongside shipped content (catchments.gpkg, the scenario
+#   CSVs, R scripts/) are then moved into datasources/ so <data-dir>
+#   ends up holding only what the data pack actually ships.
 #
 # Requirements:
 #   rclone — https://rclone.org/install/
@@ -67,6 +70,7 @@ FOLDER_ARG="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="${2:-$REPO_ROOT/data}"
+SOURCE_DIR="$REPO_ROOT/datasources"
 
 # ── Extract folder ID from URL or bare ID ─────────────────────────────────────
 
@@ -169,6 +173,43 @@ download_csvs() {
     echo
 }
 
+# ── Sort build inputs out of the data pack ─────────────────────────────────────
+
+# The Drive folder mirrors the old flat data/ layout, where build inputs and
+# shipped content sat side by side. Route the build inputs it's likely to
+# contain into datasources/ so a re-run of this script can't undo the
+# data/ vs datasources/ separation. Anything not matched here (datapack.gpkg,
+# metadata.csv, the lookup CSVs, mbtiles/, walkthroughs/, demo/) is shipped
+# content and stays in DATA_DIR untouched.
+sort_build_inputs() {
+    local moved=false
+
+    if [[ -f "$DATA_DIR/catchments.gpkg" ]]; then
+        mkdir -p "$SOURCE_DIR/catchments"
+        mv "$DATA_DIR/catchments.gpkg" "$SOURCE_DIR/catchments/catchments.gpkg"
+        moved=true
+    fi
+
+    local f
+    for f in current.csv current_lower.csv current_upper.csv \
+             reference.csv reference_lower.csv reference_upper.csv; do
+        if [[ -f "$DATA_DIR/$f" ]]; then
+            mkdir -p "$SOURCE_DIR/scenarios"
+            mv "$DATA_DIR/$f" "$SOURCE_DIR/scenarios/$f"
+            moved=true
+        fi
+    done
+
+    if [[ -d "$DATA_DIR/R scripts" ]]; then
+        mkdir -p "$SOURCE_DIR/r-analysis"
+        mv "$DATA_DIR/R scripts"/* "$SOURCE_DIR/r-analysis/" 2>/dev/null || true
+        rmdir "$DATA_DIR/R scripts" 2>/dev/null || true
+        moved=true
+    fi
+
+    [[ "$moved" == true ]] && info "Moved build inputs from ${DATA_DIR} into ${SOURCE_DIR}"
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -199,4 +240,5 @@ print_summary() {
 check_rclone
 check_remote
 download_csvs
+sort_build_inputs
 print_summary

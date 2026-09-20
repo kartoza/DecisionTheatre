@@ -90,11 +90,11 @@ func TestRouteMatchingHandlesPlaceholders(t *testing.T) {
 		{"/api/catchment/{id}", "/api/catchments/bounds", false},
 		{"/api/catchments/bounds", "/api/catchments/bounds", true},
 		{"/api/choropleth", "/api/choropleth?zoom=4&scenario=current", true},
-		{"/api/tilesets/{name}/metadata", "/api/tilesets/africa/metadata", true},
-		{"/api/tilesets", "/api/tilesets/africa/metadata", false},
+		{"/api/tilesets/{name}/metadata", "/api/tilesets/context/metadata", true},
+		{"/api/tilesets", "/api/tilesets/context/metadata", false},
 		// The tile route's last segment is a placeholder with a literal suffix.
-		{"/tiles/{name}/{z}/{x}/{y}.pbf", "/tiles/africa/8/145/151.pbf", true},
-		{"/tiles/{name}/{z}/{x}/{y}.pbf", "/tiles/africa/8/145.pbf", false},
+		{"/tiles/{name}/{z}/{x}/{y}.pbf", "/tiles/context/8/145/151.pbf", true},
+		{"/tiles/{name}/{z}/{x}/{y}.pbf", "/tiles/context/8/145.pbf", false},
 		// Trailing slash means prefix, which is how PathPrefix routes register.
 		{"/data/walkthroughs/", "/data/walkthroughs/6dede7c6.json", true},
 		{"/data/walkthroughs/", "/data/tiles.json", false},

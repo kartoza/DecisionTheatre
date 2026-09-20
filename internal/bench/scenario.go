@@ -371,14 +371,14 @@ func Scenarios() []Scenario {
 			Name:     "tile-z8",
 			MinBytes: 1000,
 			Group:    "Tiles",
-			Path:     "/tiles/africa/8/145/151.pbf",
+			Path:     "/tiles/context/8/145/151.pbf",
 			Why:      "A vector tile at the zoom where catchment geometry starts being tiled.",
 		},
 		{
 			Name:     "tile-z5",
 			MinBytes: 500,
 			Group:    "Tiles",
-			Path:     "/tiles/africa/5/18/18.pbf",
+			Path:     "/tiles/context/5/18/18.pbf",
 			Why:      "A low-zoom basemap tile, served from the pre-warmed cache.",
 		},
 		{
@@ -417,7 +417,7 @@ func Scenarios() []Scenario {
 		{
 			Name:     "tileset-metadata",
 			Group:    "Tiles",
-			Path:     "/api/tilesets/africa/metadata",
+			Path:     "/api/tilesets/context/metadata",
 			MinBytes: 500,
 			Why: "The tileset's own metadata — layer names, zoom range, bounds. Read from the mbtiles metadata " +
 				"table, and on the map's critical path.",
@@ -520,7 +520,7 @@ func Scenarios() []Scenario {
 		{
 			Name:        "tile-z8-revalidate",
 			Group:       "Revalidation",
-			Path:        "/tiles/africa/8/145/151.pbf",
+			Path:        "/tiles/context/8/145/151.pbf",
 			Conditional: true,
 			Why: "A browser returning to the map already holds this tile and only needs to know it is still current. " +
 				"The tile is 35 KB and declares max-age=86400, so a 304 would replace almost all of it with headers.",

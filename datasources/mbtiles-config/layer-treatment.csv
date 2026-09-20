@@ -1,0 +1,12 @@
+layer,minzoom,simplified_end,maxzoom,generalise,visvalingam,tolerance,preserve_shared_nodes,merge_tiny_polygons,tileset
+ne_african_countries,2,9,10,true,true,1,true,false,
+ne_10m_rivers,6,14,15,true,true,1,true,false,
+ne_10m_lakes,6,9,15,true,true,1,true,false,
+ecoregions,2,7,8,true,true,1,true,false,
+catchments_lev04,2,5,5,true,true,10,true,false,catchments
+catchments_lev06,6,8,8,true,true,10,true,false,catchments
+catchments_lev08,9,10,10,true,true,10,true,false,catchments
+catchments_lev12,11,15,24,true,true,10,true,false,catchments
+ne_10m_populated_places,6,14,15,true,true,1,true,false,
+WDPA_Feb2026_Public,6,14,15,true,true,1,true,false,
+Africa_Roads_Primary-Tertiary,6,14,15,true,true,1,true,false,

@@ -43,7 +43,7 @@ GOLINT := golangci-lint
 .PHONY: docs docs-serve
 .PHONY: packages packages-linux packages-windows packages-darwin packages-flatpak packages-snap
 .PHONY: check-data validate-data pack-data datapack walkthrough-manifest
-.PHONY: geopackage list-datapack fetch-data
+.PHONY: geopackage catchment-hierarchy list-datapack fetch-data fetch-hydrobasins mbtiles mbtiles-context mbtiles-catchments mbtiles-server mbtiles-check
 .PHONY: design-export design-import design-preview
 .PHONY: release
 .PHONY: help info
@@ -415,10 +415,51 @@ fetch-data:
 	fi
 	./scripts/fetch-data.sh "$(FOLDER)"
 
-# Build datapack.gpkg from CSVs and catchment geometries
+# Download the HydroBASINS source catchments from HydroSHEDS into
+# datasources/catchments/. Skips if already present; pass ARGS="--force" to
+# re-fetch, or ARGS="<region>" for a region other than Africa.
+fetch-hydrobasins:
+	./scripts/fetch-hydrobasins.sh $(ARGS)
+
+# Build datapack.gpkg from source GeoPackage/CSVs in datasources/
 # Creates scenario tables, domain min/max tables, spatial indexes
 geopackage:
-	./scripts/build-geopackage.sh ./data
+	./scripts/build-geopackage.sh ./data ./datasources
+
+# Build the lev12 -> lev04/06/08 catchment crosswalk and aggregated
+# scenario tables used for the low/mid-zoom choropleth. Run this after
+# 'make geopackage' and 'make fetch-hydrobasins'. Additive only -- lev12
+# stays the only thing analysis ever reads.
+catchment-hierarchy:
+	./scripts/build-catchment-hierarchy.sh ./data ./datasources
+
+# Build every tileset (data/mbtiles/context.mbtiles and any layer routed to
+# its own tileset via the treatment table's "tileset" column, e.g.
+# catchments.mbtiles) from source GeoPackages in one run.
+# Defaults to the maintained sources; pass ARGS="file1.gpkg file2.gpkg [--fix-geometry]" to override.
+mbtiles:
+	./scripts/gpkg_to_mbtiles.sh $(if $(ARGS),$(ARGS),datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg)
+
+# Build (or rebuild) only the combined data/mbtiles/context.mbtiles tileset
+# -- layers already up to date in the other tileset(s) are left alone.
+mbtiles-context:
+	./scripts/gpkg_to_mbtiles.sh $(if $(ARGS),$(ARGS),datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg) --tileset context
+
+# Build (or rebuild) only data/mbtiles/catchments.mbtiles -- doesn't touch
+# context.mbtiles at all, so this is the one to run after tuning just
+# catchments_lev12's row in layer-treatment.csv.
+mbtiles-catchments:
+	./scripts/gpkg_to_mbtiles.sh $(if $(ARGS),$(ARGS),datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg) --tileset catchments
+
+# Serve context.mbtiles with the real style so you can browse it in a
+# browser. Prompts to build the tiles first if they don't exist yet.
+mbtiles-server:
+	./scripts/mbtiles-server.sh $(ARGS)
+
+# Enumerate the layers in an mbtiles file (default: data/mbtiles/context.mbtiles),
+# their zoom ranges and fields, and spot-check that each one has real tile data.
+mbtiles-check:
+	./scripts/mbtiles-check.sh $(ARGS)
 
 # Check the data directory, then package it into a distributable .zip.
 # Refuses to build the pack if the check reports errors; pass ARGS="--force"

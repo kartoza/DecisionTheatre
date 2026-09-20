@@ -42,6 +42,10 @@ site/
 requirements/site/
 # Per-machine launch settings for scripts/run-app.sh (see .dt-env.example)
 .dt-env
+# Benchmarking (benchmarks/results/ is kept, see Makefile)
+benchmarks/dtbench.sqlite
+benchmarks/reports/
+
 # Nix
 result
 .direnv/
@@ -67,9 +71,20 @@ docs/hooks/__pycache__/
 site/
 # Stray data content (see data-readme.md)
 data-old/
-data/R scripts/
 data/mbtiles/*.json
 !data/mbtiles/style.json
+
+# datasources/ — pipeline inputs, never shipped (see datasources-readme.md).
+# Config/scripts/small reference files (layer-treatment.csv, style*.json,
+# DecisionTheatre.qgz) are tracked; bulk source data is not.
+datasources/r-analysis/
+datasources/scenarios/*.csv
+datasources/catchments/*.gpkg
+datasources/catchments/hybas_af_lev01-12_v1c/
+datasources/basemap/*.gpkg
+
+# Resumable mbtiles build cache — safe to purge, expensive to regenerate.
+.cache/
 pr.sh
 pr-body.md
 issue-*.md

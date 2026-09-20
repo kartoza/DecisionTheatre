@@ -13,12 +13,12 @@ import {
 import { CHOROPLETH_VALUE_STATE_KEY } from '../lib/choroplethPaint';
 
 const TILE_URLS = [
-  'http://localhost:8080/tiles/africa/{z}/{x}/{y}.pbf',
-  'http://localhost:8081/tiles/africa/{z}/{x}/{y}.pbf',
+  'http://localhost:8080/tiles/context/{z}/{x}/{y}.pbf',
+  'http://localhost:8081/tiles/context/{z}/{x}/{y}.pbf',
 ];
 
 function tilejson(vectorLayers: unknown, tiles: unknown = TILE_URLS) {
-  return { tilejson: '2.2.0', name: 'africa', tiles, vector_layers: vectorLayers };
+  return { tilejson: '2.2.0', name: 'context', tiles, vector_layers: vectorLayers };
 }
 
 describe('resolveCatchmentTileset', () => {
