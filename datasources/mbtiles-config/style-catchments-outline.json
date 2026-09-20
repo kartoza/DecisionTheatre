@@ -426,11 +426,59 @@
       }
     },
     {
-      "id": "Catchment Outlines",
+      "id": "Catchment Outlines lev04",
+      "type": "line",
+      "source": "Catchments",
+      "source-layer": "catchments_lev04",
+      "minzoom": 2,
+      "maxzoom": 6,
+      "layout": {
+        "visibility": "visible",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "rgba(230, 60, 60, 1)",
+        "line-width": 0.75
+      }
+    },
+    {
+      "id": "Catchment Outlines lev06",
+      "type": "line",
+      "source": "Catchments",
+      "source-layer": "catchments_lev06",
+      "minzoom": 6,
+      "maxzoom": 9,
+      "layout": {
+        "visibility": "visible",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "rgba(230, 60, 60, 1)",
+        "line-width": 0.75
+      }
+    },
+    {
+      "id": "Catchment Outlines lev08",
+      "type": "line",
+      "source": "Catchments",
+      "source-layer": "catchments_lev08",
+      "minzoom": 9,
+      "maxzoom": 11,
+      "layout": {
+        "visibility": "visible",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "rgba(230, 60, 60, 1)",
+        "line-width": 0.6
+      }
+    },
+    {
+      "id": "Catchment Outlines lev12",
       "type": "line",
       "source": "Catchments",
       "source-layer": "catchments_lev12",
-      "minzoom": 8,
+      "minzoom": 11,
       "layout": {
         "visibility": "visible",
         "line-join": "round"
@@ -440,7 +488,7 @@
         "line-width": {
           "stops": [
             [
-              8,
+              11,
               0.5
             ],
             [

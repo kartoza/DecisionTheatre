@@ -215,18 +215,27 @@ Tile content is decoded by `scripts/mvt_layers.py`, a small hand-rolled MVT/prot
 
 ### Catchment Outlines Style
 
-`datasources/mbtiles-config/style-catchments-outline.json` extends `style.json` with one added layer -- a red outline drawn from `catchments_lev12`, on top of the fills but below roads/rivers/labels -- for checking catchment boundaries (e.g. edge-matching between neighbours after generalisation) without switching away from the real style. Regenerate it after editing `style.json` rather than hand-maintaining a second copy:
+`datasources/mbtiles-config/style-catchments-outline.json` extends `style.json` with a red outline per catchment level, on top of the fills but below roads/rivers/labels -- for checking catchment boundaries (e.g. edge-matching between neighbours after generalisation) without switching away from the real style. Four layers, not one: `catchments_lev04/06/08/12` each need their own, since they're separate source-layers only present at their own zoom band (see [Multi-Resolution Catchments](#multi-resolution-catchments)) -- a single layer referencing one source-layer would only ever draw at that level's zoom range. Each is zoom-gated to hand off cleanly to the next (style `maxzoom` is exclusive, so it's set to the next level's data `minzoom` + 1): lev04 z2-6, lev06 z6-9, lev08 z9-11, lev12 z11+ (unbounded, since lev12 is overzoomed past its real maxzoom of 12 rather than tiled deeper).
+
+Regenerate after editing `style.json` rather than hand-maintaining a second copy:
 
 ```bash
 jq '
   .name = "UoW Tiles + Catchment Outlines" |
+  .sources.Catchments = {"type": "vector", "url": "http://localhost:8080/data/catchments-tiles.json"} |
   .layers = (
     .layers[0:20] +
-    [{
-      "id": "Catchment Outlines", "type": "line", "source": "UoW Tiles",
-      "source-layer": "catchments_lev12", "minzoom": 8,
+    ([["04", 2, 6], ["06", 6, 9], ["08", 9, 11]] | map({
+      "id": ("Catchment Outlines lev" + .[0]), "type": "line", "source": "Catchments",
+      "source-layer": ("catchments_lev" + .[0]), "minzoom": .[1], "maxzoom": .[2],
       "layout": {"visibility": "visible", "line-join": "round"},
-      "paint": {"line-color": "rgba(230, 60, 60, 1)", "line-width": {"stops": [[8, 0.5], [12, 1], [15, 1.5]]}}
+      "paint": {"line-color": "rgba(230, 60, 60, 1)", "line-width": 0.75}
+    })) +
+    [{
+      "id": "Catchment Outlines lev12", "type": "line", "source": "Catchments",
+      "source-layer": "catchments_lev12", "minzoom": 11,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {"line-color": "rgba(230, 60, 60, 1)", "line-width": {"stops": [[11, 0.5], [12, 1], [15, 1.5]]}}
     }] +
     .layers[20:]
   )

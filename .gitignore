@@ -87,6 +87,7 @@ datasources/basemap/*.gpkg
 .cache/
 pr.sh
 pr-body.md
+pr-body-*.md
 issue-*.md
 
 # Environment files are never committed — anywhere, not just where one has
