@@ -580,16 +580,22 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	s.writeTileJSON(w, r, "context", 2, 15)
 }
 
-// handleCatchmentsTileJSON serves the standalone catchments tileset. Its
-// real maxzoom (12) is deliberately lower than the app's navigable zoom
-// range (up to 15): scripts/gpkg_to_mbtiles.sh stops tiling once
-// the geometry is fully unsimplified (no more detail to reveal at deeper
-// zooms), and MapLibre overzooms this source for anything past z12 —
+// handleCatchmentsTileJSON serves the standalone catchments tileset: real
+// tiles for lev04/06/08/12, each at its own zoom band (see
+// datasources/mbtiles-config/layer-treatment.csv and
+// internal/geodata/gpkg_store.go's basinLevelForZoom for the matching
+// choropleth bands), minzoom 2 up to lev12's real maxzoom (12) —
+// deliberately lower than the app's navigable zoom range (up to 15):
+// scripts/gpkg_to_mbtiles.sh tiles lev12 once, fully ungeneralised, with no
+// separate simplified band, and MapLibre overzooms this source for
+// anything past z12 rather than tiling it again at every deeper zoom —
 // exactly what per-source overzoom is for, which the combined "context"
 // tileset can't offer per-layer since one TileJSON maxzoom covers every
-// layer bundled into it.
+// layer bundled into it. The exact zoom cutover between levels is a
+// visual-tuning question, not a fixed constant — adjust the treatment
+// table and this call together.
 func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
-	s.writeTileJSON(w, r, "catchments", 8, 12)
+	s.writeTileJSON(w, r, "catchments", 2, 12)
 }
 
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
