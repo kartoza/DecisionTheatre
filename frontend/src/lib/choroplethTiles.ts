@@ -5,8 +5,11 @@ import { CHOROPLETH_VALUE_STATE_KEY } from './choroplethPaint';
  * The vector-tile transport for the choropleth.
  *
  * The catchment geometry is already in the tile pipeline - `gpkg_to_mbtiles.sh`
- * tiles `catchments_lev12` alongside the basemap layers - but the choropleth
- * was not using it: it fetched the same polygons as GeoJSON on every viewport
+ * tiles `catchments_lev12` as its own tileset, separate from the combined
+ * basemap tileset, so it can stop tiling once fully unsimplified and let
+ * MapLibre overzoom the rest (see internal/server/server.go's
+ * handleCatchmentsTileJSON) - but the choropleth was not using it: it fetched
+ * the same polygons as GeoJSON on every viewport
  * change, for every map instance, and paid for the parse and the tessellation
  * each time. Sourcing the geometry from tiles means MapLibre fetches and
  * tessellates each tile once and then reuses it for every subsequent pan, zoom
@@ -94,7 +97,7 @@ let _tilesetPromise: Promise<CatchmentTileset | null> | null = null;
  * Never rejects: a datapack whose tiles predate catchment tiling, or a tile
  * store that is mid-install, simply means the GeoJSON path stays in use.
  */
-export function fetchCatchmentTileset(url = '/data/tiles.json'): Promise<CatchmentTileset | null> {
+export function fetchCatchmentTileset(url = '/data/catchments-tiles.json'): Promise<CatchmentTileset | null> {
   if (!_tilesetPromise) {
     _tilesetPromise = fetch(url)
       .then((r) => (r.ok ? r.json() : null))
