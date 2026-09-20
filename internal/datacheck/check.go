@@ -92,14 +92,14 @@ func (r *Report) Extraneous() []PathInfo {
 }
 
 // PackablePaths returns the top-level entries a data pack should contain: the
-// runtime files, and nothing else. Build inputs are excluded because the
-// application never opens them and they are typically an order of magnitude
-// larger than the pack; user data is excluded because it belongs to whoever
-// installs the pack, not to whoever built it.
+// runtime files and the data-pack extras, and nothing else. Build inputs are
+// excluded because the application never opens them and they are typically an
+// order of magnitude larger than the pack; user data is excluded because it
+// belongs to whoever installs the pack, not to whoever built it.
 func (r *Report) PackablePaths() []string {
 	var out []string
 	for _, p := range r.Inventory {
-		if p.Role == RoleRuntime {
+		if p.Role == RoleRuntime || p.Role == RoleDataPackExtra {
 			out = append(out, p.Path)
 		}
 	}
@@ -531,7 +531,7 @@ func (r *Report) checkTiles() {
 			continue
 		}
 		sev := SeverityOK
-		if n != RequiredTilesetName {
+		if n != RequiredTilesetName && n != OptionalTilesetName {
 			// A tileset nothing asks for is dead weight in a pack.
 			sev = SeverityWarn
 		}

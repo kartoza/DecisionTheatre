@@ -41,11 +41,12 @@ func (s Severity) String() string {
 	}
 }
 
-// Role classifies every entry found in the data directory. The distinction
-// matters because a data directory in a developer checkout legitimately holds
-// hundreds of megabytes of source CSVs that the application never opens: those
-// are build inputs, not stray files, and a pack should exclude them rather than
-// report them as faults.
+// Role classifies every entry found in the data directory. Build inputs live
+// outside it entirely (see datasources/), so within the data directory the
+// distinction that matters is narrower: runtime content the pack ships and
+// the server reads, content the pack ships but the server never opens
+// (RoleDataPackExtra), and content that belongs to the installation rather
+// than to the pack (RoleUserData).
 type Role int
 
 const (
@@ -53,7 +54,18 @@ const (
 	RoleRuntime Role = iota
 	// RoleBuildInput is consumed by scripts/build-geopackage.sh to produce
 	// datapack.gpkg. Not needed at runtime and excluded from a data pack.
+	// No current KnownEntries use it — build inputs live in datasources/,
+	// outside the directory this checker examines, so one turning up in the
+	// data directory instead is correctly RoleExtraneous: it doesn't belong
+	// there any more. Kept as a role in case that ever stops being true.
 	RoleBuildInput
+	// RoleDataPackExtra ships inside a data pack like RoleRuntime, but is
+	// never opened by the running server — it exists for consumption
+	// outside the app (e.g. loading catchments.gpkg into QGIS for
+	// analysis). The distinction from RoleRuntime matters for anyone
+	// debugging "why does the app work with this file missing": it is
+	// meant to be optional at runtime by design, not merely tolerated.
+	RoleDataPackExtra
 	// RoleUserData is written by the application at runtime (saved sites,
 	// uploaded images). Preserved across upgrades, excluded from a pack.
 	RoleUserData
@@ -67,6 +79,8 @@ func (r Role) String() string {
 		return "runtime"
 	case RoleBuildInput:
 		return "build input"
+	case RoleDataPackExtra:
+		return "data pack extra"
 	case RoleUserData:
 		return "user data"
 	default:
@@ -164,15 +178,24 @@ var KnownEntries = []Entry{
 		Why:      "sites saved by the user; never distributed in a data pack",
 	},
 
-	// Build inputs: read by scripts/build-geopackage.sh to produce
-	// datapack.gpkg, and by nothing at runtime.
-	{Path: "catchments.gpkg", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "catchment geometries"},
-	{Path: "current.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "current scenario metrics"},
-	{Path: "current_lower.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "current scenario lower whisker bounds"},
-	{Path: "current_upper.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "current scenario upper whisker bounds"},
-	{Path: "reference.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "reference scenario metrics"},
-	{Path: "reference_lower.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "reference scenario lower whisker bounds"},
-	{Path: "reference_upper.csv", Role: RoleBuildInput, ReadBy: "scripts/build-geopackage.sh", Why: "reference scenario upper whisker bounds"},
+	// RoleDataPackExtra: shipped in the pack, like RoleRuntime, but the
+	// running server never opens it — it's for use outside the app.
+	{
+		Path:     "catchments.gpkg",
+		Role:     RoleDataPackExtra,
+		Required: false,
+		ReadBy:   "not read by the running server — a standalone copy for GIS tools",
+		Why: "catchment geometry plus its static covariates (SUB_AREA, lat/long, MAR, MAT, " +
+			"ecoregion, elevation, soil, terrain, land-use proportions), for loading directly " +
+			"into QGIS/GDAL without the multi-gigabyte datapack.gpkg. datapack.gpkg's own " +
+			"catchments_lev12 table is pruned to only the columns the server actually reads " +
+			"(HYBAS_ID, SUB_AREA, lat, long, the precomputed geojson columns) — this file is " +
+			"where the full attribute set and raw geometry live now, not duplicated in both.",
+	},
+
+	// Build inputs live in datasources/ (see scripts/build-geopackage.sh), not
+	// in the data directory this spec describes — this checker only examines
+	// what the application, and a data pack, might contain.
 }
 
 // GeoPackageTable describes one table the runtime expects inside datapack.gpkg.
@@ -239,12 +262,102 @@ var GeoPackageTables = []GeoPackageTable{
 		ReadBy:   "internal/geodata/whisker_store.go:ComputeWhiskerBounds",
 		Why:      "upper whisker bounds for the reference scenario",
 	},
+
+	// Multi-resolution catchments: viz-only, built by
+	// scripts/build-catchment-hierarchy.sh. Analysis and site selection
+	// always read catchments_lev12/scenario_current/scenario_reference
+	// above, never these — they exist purely so the choropleth can render
+	// something coarser than 147,837 polygons when zoomed out.
+	{
+		Name:     "catchment_hierarchy",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int_lev12", "HYBAS_ID_int_lev04", "HYBAS_ID_int_lev06", "HYBAS_ID_int_lev08"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "maps each lev12 catchment to its lev04/06/08 parent, built from HydroBASINS PFAF_ID prefixes",
+	},
+	{
+		Name:     "catchments_lev04",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int", "geojson"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "lev04 basin boundaries for the lowest zoom tier (z2-z5)",
+	},
+	{
+		Name:     "catchments_lev06",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int", "geojson"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "lev06 basin boundaries for the low-mid zoom tier (z6-z8)",
+	},
+	{
+		Name:     "catchments_lev08",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int", "geojson"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "lev08 basin boundaries for the mid zoom tier (z9-z10)",
+	},
+	{
+		Name:     "scenario_current_lev04",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev04",
+	},
+	{
+		Name:     "scenario_current_lev06",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev06",
+	},
+	{
+		Name:     "scenario_current_lev08",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev08",
+	},
+	{
+		Name:     "scenario_reference_lev04",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev04",
+	},
+	{
+		Name:     "scenario_reference_lev06",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev06",
+	},
+	{
+		Name:     "scenario_reference_lev08",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev08",
+	},
 }
 
 // RequiredTilesetName is the tileset the server asks for by name. It is derived
 // from the .mbtiles filename, so a file called anything else registers a
-// tileset nothing ever requests and the map renders blank.
-const RequiredTilesetName = "africa"
+// tileset nothing ever requests and the map renders blank. Named "context"
+// rather than a place name — a geographic name baked into an identifier
+// doesn't survive the tool covering somewhere else.
+const RequiredTilesetName = "context"
+
+// OptionalTilesetName is a second tileset the server knows how to serve
+// (handleCatchmentsTileJSON in internal/server/server.go) but does not
+// require. catchments_lev12 ships here, separately from the combined
+// "context" tileset, so gpkg_to_mbtiles.sh can stop tiling it once fully
+// unsimplified and let MapLibre overzoom the rest — one TileJSON's maxzoom
+// covers every layer bundled into it, so a layer that wants to do that
+// can't share a tileset with layers that tile deeper. A datapack built
+// before this split, or missing this file for any other reason, still
+// works: the choropleth's fetchCatchmentTileset falls back to its GeoJSON
+// path when this tileset is absent.
+const OptionalTilesetName = "catchments"
 
 // MetadataColumnName is the one metadata.csv column without which the whole
 // file is discarded.

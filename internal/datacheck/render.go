@@ -165,18 +165,20 @@ func (r *Report) renderInventory(out *errWriter, s style) {
 		byRole[p.Role] = append(byRole[p.Role], p)
 	}
 
-	order := []Role{RoleRuntime, RoleBuildInput, RoleUserData, RoleExtraneous}
+	order := []Role{RoleRuntime, RoleDataPackExtra, RoleBuildInput, RoleUserData, RoleExtraneous}
 	labels := map[Role]string{
-		RoleRuntime:    "READ BY THE APP",
-		RoleBuildInput: "BUILD INPUTS",
-		RoleUserData:   "USER DATA",
-		RoleExtraneous: "EXTRANEOUS",
+		RoleRuntime:       "READ BY THE APP",
+		RoleDataPackExtra: "SHIPPED, NOT READ BY THE APP",
+		RoleBuildInput:    "BUILD INPUTS",
+		RoleUserData:      "USER DATA",
+		RoleExtraneous:    "EXTRANEOUS",
 	}
 	notes := map[Role]string{
-		RoleRuntime:    "included in a data pack",
-		RoleBuildInput: "inputs to 'make geopackage'; excluded from a data pack",
-		RoleUserData:   "belongs to the installation; excluded from a data pack",
-		RoleExtraneous: "nothing reads these; excluded from a data pack",
+		RoleRuntime:       "included in a data pack",
+		RoleDataPackExtra: "included in a data pack, for use outside the app",
+		RoleBuildInput:    "inputs to 'make geopackage'; excluded from a data pack",
+		RoleUserData:      "belongs to the installation; excluded from a data pack",
+		RoleExtraneous:    "nothing reads these; excluded from a data pack",
 	}
 
 	out.printf("  %s\n", s.blue(s.bold("INVENTORY")))

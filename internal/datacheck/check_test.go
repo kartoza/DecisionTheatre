@@ -24,7 +24,7 @@ func buildFixture(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(dir, "mbtiles"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeMBTiles(t, filepath.Join(dir, "mbtiles", "africa.mbtiles"), "africa")
+	writeMBTiles(t, filepath.Join(dir, "mbtiles", "context.mbtiles"), "context")
 
 	writeFile(t, filepath.Join(dir, "metadata.csv"),
 		"ColumnName,Detailed name,Units\nNPP,Net primary productivity,gC/m2\nSOC,Soil organic carbon,Mg/ha\n")
@@ -195,8 +195,8 @@ func TestMissingOptionalTableIsOnlyAWarning(t *testing.T) {
 
 func TestWrongTilesetNameIsAnError(t *testing.T) {
 	dir := buildFixture(t)
-	old := filepath.Join(dir, "mbtiles", "africa.mbtiles")
-	renamed := filepath.Join(dir, "mbtiles", "africa-002.mbtiles")
+	old := filepath.Join(dir, "mbtiles", "context.mbtiles")
+	renamed := filepath.Join(dir, "mbtiles", "context-002.mbtiles")
 	if err := os.Rename(old, renamed); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestWrongTilesetNameIsAnError(t *testing.T) {
 	if r.OK() {
 		t.Error("a tileset the server never requests should be an error — the map renders blank")
 	}
-	if !hasFinding(r, "Map tiles", SeverityError, "africa") {
+	if !hasFinding(r, "Map tiles", SeverityError, "context") {
 		t.Error("expected an error about the tileset name")
 	}
 }
@@ -314,9 +314,8 @@ func TestExtraneousFilesAreReportedNotFatal(t *testing.T) {
 	}
 }
 
-func TestBuildInputsAreNotExtraneous(t *testing.T) {
+func TestCatchmentsGpkgIsDataPackExtraNotExtraneous(t *testing.T) {
 	dir := buildFixture(t)
-	writeFile(t, filepath.Join(dir, "current.csv"), "a,b\n1,2\n")
 	writeFile(t, filepath.Join(dir, "catchments.gpkg"), "not really a gpkg\n")
 
 	r, err := Run(dir)
@@ -324,15 +323,52 @@ func TestBuildInputsAreNotExtraneous(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, p := range r.Extraneous() {
-		if p.Path == "current.csv" || p.Path == "catchments.gpkg" {
-			t.Errorf("%q is an input to build-geopackage.sh and must not be called extraneous", p.Path)
+		if p.Path == "catchments.gpkg" {
+			t.Errorf("catchments.gpkg ships in the pack for standalone GIS use and must not be called extraneous")
 		}
+	}
+	var found bool
+	for _, p := range r.Inventory {
+		if p.Path != "catchments.gpkg" {
+			continue
+		}
+		found = true
+		if p.Role != RoleDataPackExtra {
+			t.Errorf("catchments.gpkg classified as %v, want RoleDataPackExtra", p.Role)
+		}
+	}
+	if !found {
+		t.Fatal("catchments.gpkg not found in inventory")
+	}
+}
+
+// TestStrayBuildInputCSVIsExtraneous documents an intentional behavior
+// change: build inputs (current.csv and friends) now live in datasources/,
+// never in the data directory. One turning up here anyway is not a
+// recognized, tolerated build input any more — it's exactly the kind of
+// stray file a pack should flag and exclude.
+func TestStrayBuildInputCSVIsExtraneous(t *testing.T) {
+	dir := buildFixture(t)
+	writeFile(t, filepath.Join(dir, "current.csv"), "a,b\n1,2\n")
+
+	r, err := Run(dir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var found bool
+	for _, p := range r.Extraneous() {
+		if p.Path == "current.csv" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("current.csv no longer belongs in the data directory and should be reported as extraneous")
 	}
 }
 
 func TestPackablePathsExcludeEverythingButRuntime(t *testing.T) {
 	dir := buildFixture(t)
-	writeFile(t, filepath.Join(dir, "current.csv"), "a,b\n1,2\n") // build input
+	writeFile(t, filepath.Join(dir, "current.csv"), "a,b\n1,2\n") // extraneous -- build inputs live in datasources/ now
 	writeFile(t, filepath.Join(dir, "notes.txt"), "scratch\n")    // extraneous
 	if err := os.MkdirAll(filepath.Join(dir, "sites"), 0o755); err != nil {
 		t.Fatal(err)

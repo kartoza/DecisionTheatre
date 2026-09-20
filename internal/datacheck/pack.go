@@ -140,7 +140,7 @@ func BuildPack(opts PackOptions) (*Report, *Manifest, error) {
 	}
 
 	for _, p := range report.Inventory {
-		if p.Role == RoleRuntime {
+		if p.Role == RoleRuntime || p.Role == RoleDataPackExtra {
 			continue
 		}
 		manifest.Excluded = append(manifest.Excluded, ExclusionNote{
