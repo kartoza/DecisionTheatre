@@ -41,18 +41,22 @@ Required — the application will not work without these:
 | Path | Notes |
 |---|---|
 | `datapack.gpkg` | Filename hardcoded in `internal/geodata/gpkg_store.go` |
-| `mbtiles/africa.mbtiles` | **Must be named `africa`** — the name is hardcoded in `internal/server/server.go` |
+| `mbtiles/context.mbtiles` | **Must be named `context`** — the name is hardcoded in `internal/server/server.go` |
 | `mbtiles/style.json` | Required. A fallback to the resources directory exists but is being removed — it substitutes another dataset's cartography |
 | `metadata.csv` | Keyed on `ColumnName`, matched exactly against GeoPackage columns |
 | `NPP_by_treecover.csv`, `deltaSOC_bytcc_Mgha.csv`, `herb_traits_ready.csv` | Lookup tables for ecological recalculation |
 
 Written at runtime: `sites/`, `images/`.
 Optional: `walkthroughs/`, `demo/`.
-Pipeline inputs, not read at runtime: `catchments.gpkg`, `current*.csv`, `reference*.csv`.
+Shipped, but never read by the running server: `catchments.gpkg` — standalone geometry for
+GIS use, see the Administrator Guide.
+
+Pipeline inputs live in `datasources/`, a sibling directory, not here — `data/` is exactly
+what a data pack ships.
 
 Two faults are common enough to call out here:
 
-- **A tileset not named `africa`** (e.g. `africa-002.mbtiles`) registers under that name,
+- **A tileset not named `context`** (e.g. `context-002.mbtiles`) registers under that name,
   is never requested, and the map renders blank.
 - **`metadata.csv` exported from R** may have `make.names()` dots where the GeoPackage has
   spaces (`Obligate.grazer` vs `Obligate grazer`). Affected indicators vanish from the UI

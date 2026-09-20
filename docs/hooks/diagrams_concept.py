@@ -271,7 +271,7 @@ def validation_flow(p: dict) -> str:
                 subtitle="Each group corresponds to something the Go runtime actually opens")
     groups = [
         ("GeoPackage", ["tables · join keys", "spatial index"], p["status"]["errorTint"], p["status"]["error"]),
-        ("Map tiles", ["archive readable", "tileset named africa"], p["status"]["errorTint"], p["status"]["error"]),
+        ("Map tiles", ["archive readable", "tileset named context"], p["status"]["errorTint"], p["status"]["error"]),
         ("Metadata", ["ColumnName matched", "against the data"], p["status"]["errorTint"], p["status"]["error"]),
         ("Lookups", ["three CSVs with", "their key columns"], p["amber"]["100"], p["amber"]["700"]),
         ("Directories", ["sites, images,", "walkthroughs, demo"], p["blue"]["100"], p["blue"]["700"]),
@@ -374,23 +374,45 @@ def dev_workflow(p: dict) -> str:
 
 def data_prep_pipeline(p: dict) -> str:
     d = Diagram(1000, 330, p, title="Preparing data",
-                subtitle="From source files to something the application can serve")
-    d.box(Box(30, 96, 200, 76, "Source data", ["catchments.gpkg", "current/reference CSVs"],
+                subtitle="From datasources/ to something the application can serve")
+    d.box(Box(30, 96, 200, 76, "datasources/", ["catchments/, scenarios/", "basemap/, mbtiles-config/"],
               fill=p["surface"]["cloud"], stroke=p["brand"]["grey"], mono=True))
     d.arrow(232, 134, 292, 134, label="make geopackage")
-    d.box(Box(294, 96, 200, 76, "datapack.gpkg", ["scenario tables", "domain ranges, r-tree"],
+    d.box(Box(294, 96, 200, 76, "datapack.gpkg", ["scenario tables", "geom pruned, r-tree kept"],
               fill=p["blue"]["100"], stroke=p["blue"]["700"], mono=True))
-    d.box(Box(294, 196, 200, 62, "africa.mbtiles", ["tippecanoe via", "gpkg_to_mbtiles.sh"],
+    d.box(Box(294, 196, 200, 62, "context.mbtiles", ["tippecanoe via", "gpkg_to_mbtiles.sh"],
               fill=p["blue"]["100"], stroke=p["blue"]["700"], mono=True))
     d.arrow(496, 134, 556, 150)
     d.arrow(496, 226, 556, 172)
-    d.box(Box(558, 122, 200, 76, "data/ directory", ["plus metadata.csv", "and the lookups"],
+    d.box(Box(558, 122, 200, 76, "data/ directory", ["+ catchments.gpkg, metadata.csv", "and the lookups"],
               fill=p["status"]["successTint"], stroke=p["status"]["success"], mono=True))
     d.arrow(760, 160, 820, 160, label="make datapack")
     d.box(Box(822, 122, 158, 76, "Data pack", [".zip for", "distribution"],
               fill=p["amber"]["100"], stroke=p["amber"]["700"]))
     d.label(30, 300, "Validate before shipping: nix run .#check-data — it reports missing "
                      "requirements and content that should not be in a distributed pack.",
+            size=11.5, color=p["ink"]["muted"])
+    return d.render()
+
+
+def multires_catchments(p: dict) -> str:
+    d = Diagram(1000, 400, p, title="Multi-resolution catchments",
+                subtitle="Real HydroBASINS levels replace 147,837 polygons at low zoom, not an arbitrary grid")
+    d.box(Box(30, 90, 220, 70, "HydroBASINS", ["lev04, lev06, lev08, lev12", "fetch-hydrobasins.sh"],
+              fill=p["surface"]["cloud"], stroke=p["brand"]["grey"], mono=True))
+    d.arrow(252, 125, 312, 125, label="PFAF_ID prefix")
+    d.box(Box(314, 90, 220, 70, "catchment_hierarchy", ["lev12 -> lev04/06/08", "parent crosswalk"],
+              fill=p["blue"]["100"], stroke=p["blue"]["700"], mono=True))
+    d.arrow(536, 125, 596, 125)
+    d.box(Box(598, 90, 200, 70, "scenario_*_levNN", ["SUB_AREA-weighted", "mean, built once"],
+              fill=p["blue"]["100"], stroke=p["blue"]["700"], mono=True))
+    d.arrow(698, 160, 698, 210)
+    d.box(Box(598, 212, 200, 62, "QueryCatchments", ["picks the level", "for the request zoom"],
+              fill=p["status"]["successTint"], stroke=p["status"]["success"], mono=True))
+    d.label(30, 320, "z2-z5 -> lev04 (189 basins)   z6-z8 -> lev06 (2,442)   z9-z10 -> lev08 (27,448)   "
+                     "z11+ -> lev12 detail, unchanged", size=11.5, color=p["ink"]["muted"])
+    d.label(30, 344, "GOLDEN RULE: site analysis and catchment selection always read lev12 — "
+                     "these tables exist only for this rendering path.",
             size=11.5, color=p["ink"]["muted"])
     return d.render()
 
@@ -564,4 +586,5 @@ ALL = {
     "client-server-boundary.svg": client_server_boundary,
     "dev-workflow.svg": dev_workflow,
     "data-prep-pipeline.svg": data_prep_pipeline,
+    "multires-catchments.svg": multires_catchments,
 }

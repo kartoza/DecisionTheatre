@@ -228,7 +228,7 @@ def draw_api_routes(groups: dict[str, list[tuple[str, str]]], p: dict) -> str | 
 def draw_data_requirements(items: list[tuple[str, str, str]], p: dict) -> str | None:
     if not items:
         return None
-    hard = [("datapack.gpkg", "required"), ("mbtiles/africa.mbtiles", "required")]
+    hard = [("datapack.gpkg", "required"), ("mbtiles/context.mbtiles", "required")]
     known = {i[0] for i in items}
     for name, kind in hard:
         if name.split("/")[0] not in known and name not in known:
