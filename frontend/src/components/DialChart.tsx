@@ -741,13 +741,15 @@ function DialChart({
               {/* Needles */}
               {/* Reference arrow removed as requested */}
               {/* If target equals reference, use the center of the green zone for the arrow */}
+              {/* Current draws first, target second, so the target needle is never hidden
+                  underneath the current one — matches FlatDial's buckle-drawn-last convention. */}
+              {createArrowNeedle(displayValues.currentValue, SCENARIO_COLORS.current, true)}
               {createArrowNeedle(
                 targetRenderValue,
                 SCENARIO_COLORS.future,
                 false,
                 true
               )}
-              {createArrowNeedle(displayValues.currentValue, SCENARIO_COLORS.current, true)}
 
               {/* Verification marker: final target tip position (helps confirm arrow alignment) */}
               {targetTip && (
