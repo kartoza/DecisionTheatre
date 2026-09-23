@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Belt and flat dial legends now show each value's unit**, e.g. "Current:
+  836.3 kg/ha" instead of "Current: 836.3". The `unit` prop already reached
+  both dial components but was only wired into a hidden `<title>` tooltip, so
+  indicators with different units looked directly comparable when they were
+  not.
+
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers
   panics inside a handler, so a bad request cost one connection — but four

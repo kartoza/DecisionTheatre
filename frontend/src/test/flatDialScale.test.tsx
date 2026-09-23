@@ -153,3 +153,64 @@ describe('the target marker', () => {
     expect(renderWith(undefined)).toBe(0);
   });
 });
+
+describe('units on the legend', () => {
+  it('renders the unit next to each value on the belt', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial
+          visible
+          attribute="Total Methane production"
+          unit="kg/ha"
+          min={328.9}
+          max={1200}
+          referenceValue={365.4}
+          currentValue={836.3}
+          targetValue={900}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.getByText(/Reference: 365.4 kg\/ha/)).toBeInTheDocument();
+    expect(screen.getByText(/Current: 836.3 kg\/ha/)).toBeInTheDocument();
+    expect(screen.getByText(/Target: 900.0 kg\/ha/)).toBeInTheDocument();
+  });
+
+  it('renders the unit next to each value on the arc', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <DialChart
+          visible
+          attribute="Total Methane production"
+          unit="kg/ha"
+          min={328.9}
+          max={1200}
+          referenceValue={365.4}
+          currentValue={836.3}
+          targetValue={900}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.getByText(/Reference: 365.4 kg\/ha/)).toBeInTheDocument();
+    expect(screen.getByText(/Current: 836.3 kg\/ha/)).toBeInTheDocument();
+    expect(screen.getByText(/Target: 900.0 kg\/ha/)).toBeInTheDocument();
+  });
+
+  it('shows no dangling unit when there is none to show', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial
+          visible
+          attribute="Total Methane production"
+          min={328.9}
+          max={1200}
+          referenceValue={365.4}
+          currentValue={836.3}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.getByText(/^Reference: 365.4$/)).toBeInTheDocument();
+  });
+});

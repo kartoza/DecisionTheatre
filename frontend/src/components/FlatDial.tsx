@@ -286,10 +286,13 @@ function FlatDial({
     );
   };
 
+  // Units render next to the value so indicators can be compared at a glance
+  // instead of only on hover (the accessible <title> below still carries it too).
+  const unitSuffix = unit ? ` ${unit}` : '';
   const legend: { color: string; label: string; kind: 'line' | 'buckle'; dashed?: boolean }[] = [
-    { color: SCENARIO_COLORS.reference, label: `Reference: ${referenceValue !== undefined ? formatValue(referenceValue) : 'N/A'}`, kind: 'line', dashed: true },
-    { color: SCENARIO_COLORS.current, label: `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`, kind: 'line' },
-    { color: SCENARIO_COLORS.future, label: `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`, kind: 'buckle' },
+    { color: SCENARIO_COLORS.reference, label: referenceValue !== undefined ? `Reference: ${formatValue(referenceValue)}${unitSuffix}` : 'Reference: N/A', kind: 'line', dashed: true },
+    { color: SCENARIO_COLORS.current, label: currentValue !== undefined ? `Current: ${formatValue(currentValue)}${unitSuffix}` : 'Current: N/A', kind: 'line' },
+    { color: SCENARIO_COLORS.future, label: targetValue !== undefined ? `Target: ${formatValue(targetValue)}${unitSuffix}` : 'Target: N/A', kind: 'buckle' },
   ];
   const legendY = barBottom + ticksH + legendGap;
 
