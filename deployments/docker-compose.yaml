@@ -1,3 +1,21 @@
+# Neither service had a logging driver configured, so both ran on Docker's
+# default json-file driver with no size cap: nginx logs a [warn] per proxy-
+# buffer spill and per rate-limit throttle (both deliberately logged at warn,
+# not error — see nginx.conf), and neither container had ever been recycled
+# for rotation to kick in some other way. Left alone that grows without bound
+# for the container's entire lifetime.
+#
+# One anchor, applied to both services below, rather than repeating the same
+# three lines twice and having them drift. 5m x 3 files caps each container at
+# 15 MB of log history — enough to have caught the 429 burst and buffering
+# warnings this stack has actually hit, without letting logs become a second
+# thing to worry about running out of disk for.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DT_LOG_MAX_SIZE:-5m}
+    max-file: ${DT_LOG_MAX_FILES:-3}
+
 services:
   app:
     build:
@@ -11,6 +29,7 @@ services:
     # image that is already loaded uses it as-is.
     image: ${DT_IMAGE:-decision-theatre:latest}
     restart: unless-stopped
+    logging: *default-logging
     # Not a --flag: a flag value is visible to anyone who can run `docker top`
     # or `ps` against the container, which a key should not be. Read directly
     # from the environment by internal/config.MapTilerAPIKey. Empty is a valid
@@ -117,6 +136,7 @@ services:
   nginx:
     image: nginx:1.27-bookworm
     restart: unless-stopped
+    logging: *default-logging
     # Small and fixed: nginx here proxies and rate-limits, it does not cache or
     # serve large files from disk. Capping it means a request flood cannot make
     # the front door compete with the application for the host's memory.
