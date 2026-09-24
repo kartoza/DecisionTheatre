@@ -1,5 +1,6 @@
 import { getAppRuntime } from './runtime';
 import { safeRemoveItem, safeSetItem } from '../lib/storage';
+import { SCENARIO_COLORS, pastelTint } from '../lib/dialScale';
 
 export type Scenario = 'reference' | 'current' | 'future';
 
@@ -163,24 +164,30 @@ export function saveRangeMode(mode: RangeMode): void {
 // reference/current/future colour coding, the same hues used on every dial
 // and chart" -- corner labels on the map read Reference in one colour while
 // the dial read it in another.
+//
+// These are the pre-fetch/offline fallback only: once useScenarioColors()
+// resolves (possibly overridden by the datapack's colours.json), consumers
+// retint via pastelTint(colors.<role>) instead of reading .color here, so
+// the two stay in exact agreement rather than two independently-drifting
+// approximations of the same colour.
 export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'reference',
     label: 'Ecological Reference',
     description: `Condition compared to scientifically determined optimal standards`,
-    color: '#9ecb9e',
+    color: pastelTint(SCENARIO_COLORS.reference),
   },
   {
     id: 'current',
     label: 'Current State',
     description: 'Current observed conditions',
-    color: '#8ccde1',
+    color: pastelTint(SCENARIO_COLORS.current),
   },
   {
     id: 'future',
     label: 'Target State',
     description: 'User-defined target condition with aim to achieve.',
-    color: '#eca2f7',
+    color: pastelTint(SCENARIO_COLORS.future),
   },
 ];
 

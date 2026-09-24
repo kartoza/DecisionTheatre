@@ -16,7 +16,9 @@ import {
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { SCENARIOS, type AppPage } from '../types';
+import type { AppPage } from '../types';
+import { useScenarioColors } from '../hooks/useApi';
+import { pastelTint } from '../lib/dialScale';
 import { colors } from '../styles/colors';
 
 import partnerAfricanWildlife from '../assets/partners/africanwildlifeeconomy_logo 1.png';
@@ -345,13 +347,6 @@ const dashboardAudiences: { image: string; audience: string; cta: string; event:
   },
 ];
 
-// Reuse the app's own reference/current/future colour coding (the same hues
-// used on every dial and chart) so the landing page teaches the legend
-// visitors will actually see once they open a site.
-const scenarioColors: Record<string, string> = Object.fromEntries(
-  SCENARIOS.map((s) => [s.id, s.color])
-);
-
 const gettingStartedStages: { id: string; eyebrow: string; description: string }[] = [
   {
     id: 'reference',
@@ -371,6 +366,18 @@ const gettingStartedStages: { id: string; eyebrow: string; description: string }
 ];
 
 function LandingPage({ onNavigate }: LandingPageProps) {
+  const { colors: liveScenarioColors } = useScenarioColors();
+  // Reuse the app's own reference/current/future colour coding (the same
+  // hues used on every dial and chart) so the legend teaches what visitors
+  // will actually see once they open a site -- including a datapack's
+  // colours.json override, since this reads the live values rather than a
+  // module-level snapshot of the static defaults.
+  const scenarioColors: Record<string, string> = {
+    reference: pastelTint(liveScenarioColors.reference),
+    current: pastelTint(liveScenarioColors.current),
+    future: pastelTint(liveScenarioColors.future),
+  };
+
   return (
     <Box w="100%" h="100%" overflowY="auto" bg={colors.darkGray} color="gray.900">
 

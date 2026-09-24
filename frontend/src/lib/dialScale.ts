@@ -27,6 +27,24 @@ export const SCENARIO_COLORS = {
   future: '#d946ef', // Pink/purple (target)
 } as const;
 
+/**
+ * A softened tint of a scenario colour, for use as a label/accent
+ * background rather than the saturated marker colour itself (e.g. the map's
+ * corner-label side border). Blends toward white by `amount` (0..1) so
+ * overriding the three marker colours in `colours.json` also retints these
+ * accents, rather than the accent staying on the old palette.
+ */
+export function pastelTint(hex: string, amount = 0.5): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!match) return hex;
+  const n = parseInt(match[1], 16);
+  const blend = (channel: number) => Math.round(channel + (255 - channel) * amount);
+  const r = blend((n >> 16) & 0xff);
+  const g = blend((n >> 8) & 0xff);
+  const b = blend(n & 0xff);
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** Where `value` sits in `min..max`, clamped to 0..1. */
 export function normalize(value: number, min: number, max: number): number {
   const range = max - min;

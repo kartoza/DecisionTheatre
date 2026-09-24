@@ -10,12 +10,29 @@
  * fixing the shared constant alone would not have fixed the chart view.
  */
 import { readFileSync } from 'node:fs';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { renderHook, waitFor, cleanup } from '@testing-library/react';
 import { SCENARIO_COLORS } from '../lib/dialScale';
 import { SCENARIOS } from '../types';
 
 const DIALCHART = readFileSync('src/components/DialChart.tsx', 'utf8');
 const CHARTVIEW = readFileSync('src/components/ChartView.tsx', 'utf8');
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+// useApi's metadata fetch is deduped per URL in module-level state, so a
+// fresh module (via resetModules + dynamic import) is needed per test --
+// otherwise the second test's fetch stub is never actually called, and it
+// silently observes the first test's cached response instead.
+async function renderScenarioColors() {
+  vi.resetModules();
+  const { useScenarioColors } = await import('../hooks/useApi');
+  return renderHook(() => useScenarioColors());
+}
 
 describe('SCENARIO_COLORS', () => {
   it('is green for reference, blue for current, pink for target', () => {
@@ -70,16 +87,57 @@ describe('SCENARIOS (corner-label / accent pastels)', () => {
 });
 
 describe('ChartView series colours', () => {
-  it('derives its Reference/Current/Target colours from SCENARIO_COLORS, not a second hardcoded copy', () => {
+  it('derives its Reference/Current/Target colours from useScenarioColors, not a second hardcoded copy', () => {
+    // Computed inside the component (from the live, overridable colours),
+    // not a module-level constant -- colours.json's overrides only resolve
+    // after mount, so a module-level snapshot could never reflect them.
+    expect(CHARTVIEW).toMatch(/import\s*{[^}]*useScenarioColors[^}]*}\s*from\s*'..\/hooks\/useApi'/);
     const seriesColors = CHARTVIEW.slice(
       CHARTVIEW.indexOf('const SERIES_COLORS'),
       CHARTVIEW.indexOf(';', CHARTVIEW.indexOf('const SERIES_COLORS')),
     );
-    expect(seriesColors).toContain('SCENARIO_COLORS.reference');
-    expect(seriesColors).toContain('SCENARIO_COLORS.current');
-    expect(seriesColors).toContain('SCENARIO_COLORS.future');
+    expect(seriesColors).toContain('scenarioColors.reference');
+    expect(seriesColors).toContain('scenarioColors.current');
+    expect(seriesColors).toContain('scenarioColors.future');
     // The old hardcoded values must not still be sitting there alongside it.
     expect(seriesColors).not.toContain('#e65100');
     expect(seriesColors).not.toContain('#4caf50');
+  });
+});
+
+describe('useScenarioColors', () => {
+  it('uses the server response when the datapack overrides all three colours', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ reference: '#111111', current: '#222222', target: '#333333' }),
+      { headers: { 'content-type': 'application/json' } },
+    )));
+    const { result } = await renderScenarioColors();
+    await waitFor(() => {
+      expect(result.current.colors).toEqual({ reference: '#111111', current: '#222222', future: '#333333' });
+    });
+  });
+
+  it('falls back to the client-side defaults on a network error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+    const { result } = await renderScenarioColors();
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.colors).toEqual(SCENARIO_COLORS);
+  });
+
+  it('falls back to the client-side defaults when the server response is empty', async () => {
+    // The datapack has no colours.json -- the backend's own default merge
+    // already covers this in practice, but the frontend must not crash or
+    // show a blank colour if it ever received an empty object.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      '{}',
+      { headers: { 'content-type': 'application/json' } },
+    )));
+    const { result } = await renderScenarioColors();
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.colors).toEqual(SCENARIO_COLORS);
   });
 });

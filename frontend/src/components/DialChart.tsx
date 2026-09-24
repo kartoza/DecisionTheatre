@@ -2,11 +2,11 @@ import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import {
-  SCENARIO_COLORS,
   bandGradientStops,
   formatValue,
   greenZoneCenter,
 } from '../lib/dialScale';
+import { useScenarioColors } from '../hooks/useApi';
 
 // Range mode config
 // Base padding for the dial in single-pane mode.
@@ -60,6 +60,7 @@ function DialChart({
   isLoading = false,
   zeroCentered = false,
 }: DialChartProps) {
+  const { colors: SCENARIO_COLORS } = useScenarioColors();
   const isQuadCompactLayout = compact && paneCount >= 4;
   // The range handed down is the range — see the same note in FlatDial. It is
   // fixed upstream by the metadata bound, or failing that by the range mode's

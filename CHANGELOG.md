@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scenario colours are now overridable per data pack**, via an optional
+  `colours.json` in the data directory (`{"reference": "#...", "current":
+  "#...", "target": "#..."}`). Any field left out keeps its built-in
+  default, and a missing or malformed file falls back to the defaults
+  entirely — served at `GET /scenarios/colours`, consumed by
+  `useScenarioColors()` on the frontend. See
+  `docs/administrator-guide/data-directory.md#customising-the-scenario-colours`.
+
 - **Load shedding.** The server now runs a bounded number of API requests at
   once — two per CPU core — queues a short burst behind that, and refuses
   anything further with `503` and a `Retry-After` header. Before this it
