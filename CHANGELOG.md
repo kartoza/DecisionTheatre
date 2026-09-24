@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Identify tool's results now dock into the right-hand side panel**
+  instead of a map-anchored popup that blocked whatever it was pointing at,
+  with no way to move it. Clicking a different catchment (or the site
+  boundary) while identifying replaces the panel's content in place.
+  Opening identify while another panel (indicator/target editor/chart
+  details) is already open widens the dock and shows identify results to
+  its left, rather than displacing it — each side collapses independently.
+  The identify panel's header is a fixed row above its own scrollable body
+  rather than a `position: sticky` table cell, so there's no gap above the
+  header as rows scroll underneath it (the old popup's failure mode). If
+  slot B closes while identify is still open, identify animates over to
+  take its place rather than snapping. Every docked panel's collapse
+  button is now a filled circle in the site's own orange, its chevron in
+  inverted (dark-on-orange) colours, replacing a plain `">"` that read as
+  an afterthought — including the indicator panel, which previously had no
+  collapse button at all in single-pane layout.
+
 - **Load shedding.** The server now runs a bounded number of API requests at
   once — two per CPU core — queues a short burst behind that, and refuses
   anything further with `503` and a `Retry-After` header. Before this it

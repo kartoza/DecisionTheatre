@@ -19,7 +19,8 @@
  * plausible number is worse than one that admits it does not know.
  */
 import { Box, Button, HStack, IconButton, Slide, VStack } from '@chakra-ui/react';
-import { FiArrowLeft, FiChevronRight } from 'react-icons/fi';
+import { FiArrowLeft } from 'react-icons/fi';
+import PanelCollapseButton from './PanelCollapseButton';
 import { useEffect, useState } from 'react';
 import { SCENARIO_COLORS, formatValue } from '../lib/dialScale';
 import type { ScaleDerivation } from '../lib/dialScale';
@@ -192,13 +193,7 @@ function ChartDetailsPanel({ isOpen, onClose, derivation, calculations }: ChartD
           <Box fontSize="md" fontWeight="bold" flex="1">
             {view === 'calculations' ? STRINGS.calculationsHeading : STRINGS.heading}
           </Box>
-          <IconButton
-            aria-label={STRINGS.close}
-            icon={<FiChevronRight />}
-            size="sm"
-            variant="ghost"
-            onClick={onClose}
-          />
+          <PanelCollapseButton label={STRINGS.close} onClick={onClose} />
         </HStack>
 
         {view === 'calculations' ? (

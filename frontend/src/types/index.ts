@@ -186,10 +186,37 @@ export interface MapExtent {
   bounds?: [number, number, number, number]; // [minX, minY, maxX, maxY]
 }
 
-// Identify result: scenario -> attribute -> value
+/**
+ * One row of an identify table: an attribute's value under each of the two
+ * columns being compared, plus the departure-from-reference trend used to
+ * draw the small bar next to it.
+ */
+export interface IdentifyRow {
+  label: string;
+  left: string;
+  right: string;
+  trend: 'up' | 'down' | 'neutral';
+  delta: number | null;
+  trendWidthPx: number;
+}
+
+// Catchment identify result (the "i" tool, clicked on a choropleth fill).
+// Rows are pre-computed where the click happened (MapView has the
+// comparison/attribute-label context this needs) rather than carrying the
+// raw per-scenario values for the docked panel to recompute.
 export type IdentifyResult = {
   catchmentID: string;
-  data: Record<string, Record<string, number>>;
+  leftLabel: string;
+  rightLabel: string;
+  rows: IdentifyRow[];
+} | null;
+
+// Site-boundary identify result (clicking the site outline itself, rather
+// than a catchment) -- always Reference vs Current, for the whole site.
+export type SiteIdentifyResult = {
+  leftLabel: string;
+  rightLabel: string;
+  rows: IdentifyRow[];
 } | null;
 
 export type AppPage = 'landing' | 'about' | 'partnership' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators' | 'download' | 'setup';

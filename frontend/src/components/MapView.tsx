@@ -6,7 +6,7 @@ import type { ExpressionSpecification, FilterSpecification, SourceSpecification,
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '../lib/maplibreWorker';
-import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, Scenario, IdentifyResult, IdentifyRow, SiteIdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
 import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
@@ -43,6 +43,7 @@ interface MapViewProps {
   onOpenSettings: () => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -879,7 +880,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSiteIdentify, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -985,67 +986,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       source?.setData({ type: 'Feature', properties: {}, geometry });
     }
   }, [siteGeometry]);
-  const identifyOverlayRef = useRef<HTMLDivElement | null>(null);
-  const identifyOverlayLngLatRef = useRef<[number, number] | null>(null);
-
-  const removeIdentifyOverlay = useCallback((clearIdentify: boolean) => {
-    if (identifyOverlayRef.current) {
-      identifyOverlayRef.current.remove();
-      identifyOverlayRef.current = null;
-    }
-    identifyOverlayLngLatRef.current = null;
-
-    if (clearIdentify) {
-      onIdentifyRef.current?.(null);
-    }
-  }, []);
-
-  const updateIdentifyOverlayPosition = useCallback(() => {
-    const overlay = identifyOverlayRef.current;
-    const lngLat = identifyOverlayLngLatRef.current;
-    const leftMap = leftMapRef.current;
-    const mapContainer = mapContainerRef.current;
-
-    if (!overlay || !lngLat || !leftMap || !mapContainer) return;
-
-    const projected = leftMap.project({ lng: lngLat[0], lat: lngLat[1] });
-    overlay.style.left = `${projected.x}px`;
-    overlay.style.top = `${projected.y}px`;
-
-    // Clamp the overlay so it always stays fully within the map container,
-    // even when the click point is near an edge (the overlay is centered
-    // above the point via a CSS transform, so it can otherwise overflow).
-    const margin = 8;
-    const containerWidth = mapContainer.clientWidth;
-    const containerHeight = mapContainer.clientHeight;
-    const containerRect = mapContainer.getBoundingClientRect();
-    const overlayRect = overlay.getBoundingClientRect();
-
-    const overlayLeft = overlayRect.left - containerRect.left;
-    const overlayRight = overlayRect.right - containerRect.left;
-    const overlayTop = overlayRect.top - containerRect.top;
-    const overlayBottom = overlayRect.bottom - containerRect.top;
-
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (overlayLeft < margin) {
-      offsetX = margin - overlayLeft;
-    } else if (overlayRight > containerWidth - margin) {
-      offsetX = containerWidth - margin - overlayRight;
-    }
-
-    if (overlayTop < margin) {
-      offsetY = margin - overlayTop;
-    } else if (overlayBottom > containerHeight - margin) {
-      offsetY = containerHeight - margin - overlayBottom;
-    }
-
-    if (offsetX !== 0 || offsetY !== 0) {
-      overlay.style.left = `${projected.x + offsetX}px`;
-      overlay.style.top = `${projected.y + offsetY}px`;
-    }
-  }, []);
+  // Identify results now render in the docked side panel rather than a
+  // map-anchored popup, so there is no overlay DOM to position/clamp/
+  // reproject on every map move -- see IdentifyPanel.tsx.
+  const onSiteIdentifyRef = useRef(onSiteIdentify);
+  onSiteIdentifyRef.current = onSiteIdentify;
 
   // Debounce timer for choropleth fetching
   const fetchTimerRef = useRef<number | null>(null);
@@ -2370,10 +2315,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
   }, [isIdentifyMode]);
 
   // Handle identify click via MapLibre queryRenderedFeatures
+  // Identify results are computed here (this is where comparison/attribute
+  // labels and the fetched catchment data all naturally converge) and
+  // handed up as fully-formatted rows -- the docked IdentifyPanel just
+  // renders them, it doesn't recompute trends/labels itself.
   const handleIdentifyClick = useCallback((map: maplibregl.Map, e: maplibregl.MapMouseEvent, side: 'left' | 'right') => {
-    if (!isIdentifyModeRef.current || !onIdentifyRef.current) return;
+    if (!isIdentifyModeRef.current) return;
 
-    // Check for site boundary line click first — show site indicators popup if hit
+    // Site boundary line click: whole-site Reference vs Current.
     const siteBoundaryLayers: string[] = [];
     if (map.getLayer(SITE_BOUNDARY_LINE)) siteBoundaryLayers.push(SITE_BOUNDARY_LINE);
     if (map.getLayer(SITE_BOUNDARY_OFFWHITE)) siteBoundaryLayers.push(SITE_BOUNDARY_OFFWHITE);
@@ -2388,7 +2337,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
           ...Object.keys(currentSiteIndicators.current ?? {}),
         ]);
 
-        const rows = Array.from(allKeys)
+        const rows: IdentifyRow[] = Array.from(allKeys)
           .sort()
           .map((key) => {
             const refVal = currentSiteIndicators.reference?.[key];
@@ -2403,121 +2352,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             const trendWidthPx = delta === null ? 0 : Math.max(2, trendRatio * 26);
             return {
               label: details[key] ?? key,
-              ref: formatIdentifyValue(refVal),
-              cur: formatIdentifyValue(curVal),
+              left: formatIdentifyValue(refVal),
+              right: formatIdentifyValue(curVal),
               trend,
               delta,
               trendWidthPx,
             };
           })
-          .filter((r): r is NonNullable<typeof r> => r !== null);
+          .filter((r): r is IdentifyRow => r !== null);
 
-        const popupContainer = document.createElement('div');
-        popupContainer.style.cssText = `
-          position:absolute;z-index:20;transform:translate(-50%,calc(-100% - 12px));
-          min-width:300px;max-height:340px;overflow-y:auto;
-          font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-          background:#1A202C;color:#E2E8F0;padding:8px;border-radius:8px;
-        `.trim().replace(/\n\s+/g, '');
-
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
-
-        const title = document.createElement('div');
-        title.style.cssText = 'font-weight:700;color:#F7FAFC;font-size:13px;';
-        title.textContent = 'Site Indicators';
-
-        const closeButton = document.createElement('button');
-        closeButton.type = 'button';
-        closeButton.textContent = 'x';
-        closeButton.style.cssText = 'background:transparent;border:1px solid #4A5568;color:#E2E8F0;border-radius:4px;width:22px;height:22px;cursor:pointer;line-height:18px;font-weight:700;';
-
-        header.appendChild(title);
-        header.appendChild(closeButton);
-        popupContainer.appendChild(header);
-
-        if (rows.length === 0) {
-          const empty = document.createElement('div');
-          empty.style.cssText = 'font-size:12px;color:#A0AEC0;';
-          empty.textContent = 'No indicator values available.';
-          popupContainer.appendChild(empty);
-        } else {
-          const table = document.createElement('table');
-          table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px;';
-
-          const headerRow = document.createElement('tr');
-          for (const [text, align] of [['Attribute', 'left'], ['Reference', 'right'], ['Current', 'right'], ['Departure from ref.', 'left']] as const) {
-            const th = document.createElement('th');
-            th.textContent = text;
-            th.style.cssText = `text-align:${align};padding:4px 6px;color:#CBD5E0;position:sticky;top:0;background:#1A202C;z-index:1;`;
-            headerRow.appendChild(th);
-          }
-          table.appendChild(headerRow);
-
-          for (const row of rows) {
-            const tr = document.createElement('tr');
-
-            const attrCell = document.createElement('td');
-            attrCell.textContent = row.label;
-            attrCell.style.cssText = 'padding:3px 6px;border-top:1px solid #4A5568;';
-
-            const refCell = document.createElement('td');
-            refCell.textContent = row.ref;
-            refCell.style.cssText = 'padding:3px 6px;text-align:right;border-top:1px solid #4A5568;';
-
-            const curCell = document.createElement('td');
-            curCell.textContent = row.cur;
-            curCell.style.cssText = 'padding:3px 6px;text-align:right;border-top:1px solid #4A5568;';
-
-            const trendCell = document.createElement('td');
-            trendCell.style.cssText = 'padding:3px 6px;border-top:1px solid #4A5568;min-width:72px;';
-
-            const trendChart = document.createElement('div');
-            trendChart.style.cssText = 'position:relative;width:68px;height:12px;';
-
-            const refLine = document.createElement('div');
-            refLine.style.cssText = 'position:absolute;left:50%;top:1px;bottom:1px;width:2px;transform:translateX(-1px);border-radius:9999px;background:#A0AEC0;';
-            trendChart.appendChild(refLine);
-
-            if (row.delta === null) {
-              const dot = document.createElement('div');
-              dot.style.cssText = 'position:absolute;left:50%;top:4px;width:4px;height:4px;transform:translateX(-2px);border-radius:9999px;background:#718096;';
-              trendChart.appendChild(dot);
-            } else if (row.delta === 0) {
-              const dot = document.createElement('div');
-              dot.style.cssText = 'position:absolute;left:50%;top:4px;width:4px;height:4px;transform:translateX(-2px);border-radius:9999px;background:#A0AEC0;';
-              trendChart.appendChild(dot);
-            } else {
-              const bar = document.createElement('div');
-              const leftPos = row.delta > 0 ? 'calc(50% + 1px)' : `calc(50% - ${row.trendWidthPx + 1}px)`;
-              bar.style.cssText = `position:absolute;top:5px;height:2px;width:${row.trendWidthPx}px;border-radius:9999px;background:${row.trend === 'up' ? '#FC8181' : '#63B3ED'};left:${leftPos};`;
-              trendChart.appendChild(bar);
-            }
-
-            trendCell.appendChild(trendChart);
-            tr.appendChild(attrCell);
-            tr.appendChild(refCell);
-            tr.appendChild(curCell);
-            tr.appendChild(trendCell);
-            table.appendChild(tr);
-          }
-          popupContainer.appendChild(table);
-        }
-
-        const pointer = document.createElement('div');
-        pointer.style.cssText = 'position:absolute;left:50%;bottom:-8px;width:12px;height:12px;transform:translateX(-50%) rotate(45deg);background:#1A202C;';
-        popupContainer.appendChild(pointer);
-
-        removeIdentifyOverlay(false);
-        const mapContainer = mapContainerRef.current;
-        if (!mapContainer) return;
-
-        identifyOverlayRef.current = popupContainer;
-        identifyOverlayLngLatRef.current = [e.lngLat.lng, e.lngLat.lat];
-        mapContainer.appendChild(popupContainer);
-        updateIdentifyOverlayPosition();
-
-        closeButton.onclick = () => { removeIdentifyOverlay(true); };
+        onSiteIdentifyRef.current?.({ leftLabel: 'Reference', rightLabel: 'Current', rows });
         return;
       }
     }
@@ -2560,276 +2404,61 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     fetch(`/api/catchment/${catchIdStr}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data && onIdentifyRef.current) {
-          onIdentifyRef.current({ catchmentID: catchIdStr, data });
+        if (!data || !onIdentifyRef.current) return;
 
-          const currentComparison = comparisonRef.current;
-          const leftScenario = currentComparison.leftScenario;
-          const rightScenario = currentComparison.rightScenario;
-          const leftLabel = SCENARIOS.find((entry) => entry.id === leftScenario)?.label || leftScenario;
-          const rightLabel = SCENARIOS.find((entry) => entry.id === rightScenario)?.label || rightScenario;
-          const details = attributeDetailsRef.current;
+        const currentComparison = comparisonRef.current;
+        const leftScenario = currentComparison.leftScenario;
+        const rightScenario = currentComparison.rightScenario;
+        const leftLabel = SCENARIOS.find((entry) => entry.id === leftScenario)?.label || leftScenario;
+        const rightLabel = SCENARIOS.find((entry) => entry.id === rightScenario)?.label || rightScenario;
+        const details = attributeDetailsRef.current;
 
-          const scenarioData = data as Record<string, Record<string, unknown>>;
-          const allAttributes = new Set<string>();
-          for (const values of Object.values(scenarioData)) {
-            for (const attr of Object.keys(values)) {
-              allAttributes.add(attr);
-            }
+        const scenarioData = data as Record<string, Record<string, unknown>>;
+        const allAttributes = new Set<string>();
+        for (const values of Object.values(scenarioData)) {
+          for (const attr of Object.keys(values)) {
+            allAttributes.add(attr);
           }
-
-          const rows = Array.from(allAttributes)
-            .sort()
-            .map((attr) => {
-              const leftValue = scenarioData[leftScenario]?.[attr];
-              const rightValue = scenarioData[rightScenario]?.[attr];
-
-              if (isNAValue(leftValue) || isNAValue(rightValue)) {
-                return null;
-              }
-
-              const leftNumeric = getNumericIdentifyValue(leftValue);
-              const rightNumeric = getNumericIdentifyValue(rightValue);
-              if (leftNumeric === 0 && rightNumeric === 0) {
-                return null;
-              }
-              const trend = getComparisonTrend(leftNumeric, rightNumeric);
-              const delta = leftNumeric === null || rightNumeric === null
-                ? null
-                : rightNumeric - leftNumeric;
-              const referenceMagnitude = leftNumeric === null ? 1 : Math.abs(leftNumeric) || 1;
-              const trendRatio = delta === null ? 0 : Math.min(1, Math.abs(delta) / referenceMagnitude);
-              const trendWidthPx = delta === null ? 0 : Math.max(2, trendRatio * 26);
-
-              return {
-                label: details[attr] ?? attr,
-                left: formatIdentifyValue(leftValue),
-                right: formatIdentifyValue(rightValue),
-                trend,
-                delta,
-                trendWidthPx,
-              };
-            })
-            .filter((row): row is { label: string; left: string; right: string; trend: 'up' | 'down' | 'neutral'; delta: number | null; trendWidthPx: number } => row !== null);
-
-          const popupContainer = document.createElement('div');
-          popupContainer.style.position = 'absolute';
-          popupContainer.style.zIndex = '20';
-          popupContainer.style.transform = 'translate(-50%, calc(-100% - 12px))';
-          popupContainer.style.minWidth = '280px';
-          popupContainer.style.maxHeight = '300px';
-          popupContainer.style.overflowY = 'auto';
-          popupContainer.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-          popupContainer.style.background = '#1A202C';
-          popupContainer.style.color = '#E2E8F0';
-          popupContainer.style.padding = '8px';
-          popupContainer.style.borderRadius = '8px';
-
-          const header = document.createElement('div');
-          header.style.display = 'flex';
-          header.style.alignItems = 'center';
-          header.style.justifyContent = 'space-between';
-          header.style.marginBottom = '8px';
-
-          const title = document.createElement('div');
-          title.style.fontWeight = '700';
-          title.style.color = '#F7FAFC';
-          title.textContent = `Catchment ${catchIdStr}`;
-
-          const closeButton = document.createElement('button');
-          closeButton.type = 'button';
-          closeButton.textContent = 'x';
-          closeButton.style.background = 'transparent';
-          closeButton.style.border = '1px solid #4A5568';
-          closeButton.style.color = '#E2E8F0';
-          closeButton.style.borderRadius = '4px';
-          closeButton.style.width = '22px';
-          closeButton.style.height = '22px';
-          closeButton.style.cursor = 'pointer';
-          closeButton.style.lineHeight = '18px';
-          closeButton.style.fontWeight = '700';
-
-          header.appendChild(title);
-          header.appendChild(closeButton);
-          popupContainer.appendChild(header);
-
-          const table = document.createElement('table');
-          table.style.width = '100%';
-          table.style.borderCollapse = 'collapse';
-          table.style.fontSize = '12px';
-
-          const headerRow = document.createElement('tr');
-          const attrHead = document.createElement('th');
-          attrHead.textContent = 'Attribute';
-          attrHead.style.textAlign = 'left';
-          attrHead.style.padding = '4px 6px';
-          attrHead.style.color = '#CBD5E0';
-          attrHead.style.position = 'sticky';
-          attrHead.style.top = '0';
-          attrHead.style.background = '#1A202C';
-          attrHead.style.zIndex = '1';
-
-          const leftHead = document.createElement('th');
-          leftHead.textContent = leftLabel;
-          leftHead.style.textAlign = 'right';
-          leftHead.style.padding = '4px 6px';
-          leftHead.style.color = '#CBD5E0';
-          leftHead.style.position = 'sticky';
-          leftHead.style.top = '0';
-          leftHead.style.background = '#1A202C';
-          leftHead.style.zIndex = '1';
-
-          const rightHead = document.createElement('th');
-          rightHead.textContent = rightLabel;
-          rightHead.style.textAlign = 'right';
-          rightHead.style.padding = '4px 6px';
-          rightHead.style.color = '#CBD5E0';
-          rightHead.style.position = 'sticky';
-          rightHead.style.top = '0';
-          rightHead.style.background = '#1A202C';
-          rightHead.style.zIndex = '1';
-
-          const trendHead = document.createElement('th');
-          trendHead.textContent = 'Departure from reference';
-          trendHead.style.textAlign = 'left';
-          trendHead.style.padding = '4px 6px';
-          trendHead.style.color = '#CBD5E0';
-          trendHead.style.position = 'sticky';
-          trendHead.style.top = '0';
-          trendHead.style.background = '#1A202C';
-          trendHead.style.zIndex = '1';
-
-          headerRow.appendChild(attrHead);
-          headerRow.appendChild(leftHead);
-          headerRow.appendChild(rightHead);
-          headerRow.appendChild(trendHead);
-          table.appendChild(headerRow);
-
-          for (const row of rows) {
-            const tr = document.createElement('tr');
-
-            const attrCell = document.createElement('td');
-            attrCell.textContent = row.label;
-            attrCell.style.padding = '3px 6px';
-            attrCell.style.borderTop = '1px solid #4A5568';
-
-            const leftCell = document.createElement('td');
-            leftCell.textContent = row.left;
-            leftCell.style.padding = '3px 6px';
-            leftCell.style.textAlign = 'right';
-            leftCell.style.borderTop = '1px solid #4A5568';
-
-            const rightCell = document.createElement('td');
-            rightCell.textContent = row.right;
-            rightCell.style.padding = '3px 6px';
-            rightCell.style.textAlign = 'right';
-            rightCell.style.borderTop = '1px solid #4A5568';
-
-            const trendCell = document.createElement('td');
-            trendCell.style.padding = '3px 6px';
-            trendCell.style.borderTop = '1px solid #4A5568';
-            trendCell.style.minWidth = '72px';
-
-            const trendChart = document.createElement('div');
-            trendChart.style.position = 'relative';
-            trendChart.style.width = '68px';
-            trendChart.style.height = '12px';
-
-            const referenceLine = document.createElement('div');
-            referenceLine.style.position = 'absolute';
-            referenceLine.style.left = '50%';
-            referenceLine.style.top = '1px';
-            referenceLine.style.bottom = '1px';
-            referenceLine.style.width = '2px';
-            referenceLine.style.transform = 'translateX(-1px)';
-            referenceLine.style.borderRadius = '9999px';
-            referenceLine.style.background = '#A0AEC0';
-            trendChart.appendChild(referenceLine);
-
-            if (row.delta === null) {
-              const naDot = document.createElement('div');
-              naDot.style.position = 'absolute';
-              naDot.style.left = '50%';
-              naDot.style.top = '4px';
-              naDot.style.width = '4px';
-              naDot.style.height = '4px';
-              naDot.style.transform = 'translateX(-2px)';
-              naDot.style.borderRadius = '9999px';
-              naDot.style.background = '#718096';
-              trendChart.appendChild(naDot);
-            } else if (row.delta === 0) {
-              const neutralDot = document.createElement('div');
-              neutralDot.style.position = 'absolute';
-              neutralDot.style.left = '50%';
-              neutralDot.style.top = '4px';
-              neutralDot.style.width = '4px';
-              neutralDot.style.height = '4px';
-              neutralDot.style.transform = 'translateX(-2px)';
-              neutralDot.style.borderRadius = '9999px';
-              neutralDot.style.background = '#A0AEC0';
-              trendChart.appendChild(neutralDot);
-            } else {
-              const deltaBar = document.createElement('div');
-              deltaBar.style.position = 'absolute';
-              deltaBar.style.top = '5px';
-              deltaBar.style.height = '2px';
-              deltaBar.style.width = `${row.trendWidthPx}px`;
-              deltaBar.style.borderRadius = '9999px';
-              deltaBar.style.background = row.trend === 'up' ? '#FC8181' : '#63B3ED';
-              deltaBar.style.left = row.delta > 0
-                ? 'calc(50% + 1px)'
-                : `calc(50% - ${row.trendWidthPx + 1}px)`;
-              trendChart.appendChild(deltaBar);
-            }
-
-            trendCell.appendChild(trendChart);
-
-            tr.appendChild(attrCell);
-            tr.appendChild(leftCell);
-            tr.appendChild(rightCell);
-            tr.appendChild(trendCell);
-            table.appendChild(tr);
-          }
-
-          if (rows.length === 0) {
-            const empty = document.createElement('div');
-            empty.style.fontSize = '12px';
-            empty.style.color = '#A0AEC0';
-            empty.textContent = 'No comparable values available.';
-            popupContainer.appendChild(empty);
-          } else {
-            popupContainer.appendChild(table);
-          }
-
-          const pointer = document.createElement('div');
-          pointer.style.position = 'absolute';
-          pointer.style.left = '50%';
-          pointer.style.bottom = '-8px';
-          pointer.style.width = '12px';
-          pointer.style.height = '12px';
-          pointer.style.transform = 'translateX(-50%) rotate(45deg)';
-          pointer.style.background = '#1A202C';
-          popupContainer.appendChild(pointer);
-
-          removeIdentifyOverlay(false);
-
-          const mapContainer = mapContainerRef.current;
-          if (!mapContainer) {
-            return;
-          }
-
-          identifyOverlayRef.current = popupContainer;
-          identifyOverlayLngLatRef.current = [e.lngLat.lng, e.lngLat.lat];
-          mapContainer.appendChild(popupContainer);
-          updateIdentifyOverlayPosition();
-
-          closeButton.onclick = () => {
-            removeIdentifyOverlay(true);
-          };
         }
+
+        const rows: IdentifyRow[] = Array.from(allAttributes)
+          .sort()
+          .map((attr) => {
+            const leftValue = scenarioData[leftScenario]?.[attr];
+            const rightValue = scenarioData[rightScenario]?.[attr];
+
+            if (isNAValue(leftValue) || isNAValue(rightValue)) {
+              return null;
+            }
+
+            const leftNumeric = getNumericIdentifyValue(leftValue);
+            const rightNumeric = getNumericIdentifyValue(rightValue);
+            if (leftNumeric === 0 && rightNumeric === 0) {
+              return null;
+            }
+            const trend = getComparisonTrend(leftNumeric, rightNumeric);
+            const delta = leftNumeric === null || rightNumeric === null
+              ? null
+              : rightNumeric - leftNumeric;
+            const referenceMagnitude = leftNumeric === null ? 1 : Math.abs(leftNumeric) || 1;
+            const trendRatio = delta === null ? 0 : Math.min(1, Math.abs(delta) / referenceMagnitude);
+            const trendWidthPx = delta === null ? 0 : Math.max(2, trendRatio * 26);
+
+            return {
+              label: details[attr] ?? attr,
+              left: formatIdentifyValue(leftValue),
+              right: formatIdentifyValue(rightValue),
+              trend,
+              delta,
+              trendWidthPx,
+            };
+          })
+          .filter((row): row is IdentifyRow => row !== null);
+
+        onIdentifyRef.current({ catchmentID: catchIdStr, leftLabel, rightLabel, rows });
       })
       .catch((err) => console.error('Identify error:', err));
-  }, [removeIdentifyOverlay, updateIdentifyOverlayPosition]);
+  }, []);
 
   // Initialize the two maps and the compare slider
   useEffect(() => {
@@ -3134,7 +2763,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     leftMap.on('move', () => {
       const rightMap = rightMapRef.current;
       if (rightMap) syncMaps(leftMap, rightMap);
-      updateIdentifyOverlayPosition();
     });
 
     // Identify click handlers - pass side info for correct layer querying
@@ -3371,7 +2999,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
         resizeFrameRef.current = requestAnimationFrame(() => {
           resizeFrameRef.current = null;
           updateMapSizes();
-          updateIdentifyOverlayPosition();
         });
       }
 
@@ -3397,7 +3024,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             updateMapSizes();
             leftMap.resize();
             rightMapRef.current?.resize();
-            updateIdentifyOverlayPosition();
           });
         }
       }, 80);
@@ -3434,7 +3060,6 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       ensureRightMapRef.current = null;
       destroyRightMapRef.current = null;
       destroyRightMap();
-      removeIdentifyOverlay(false);
       leftMap.remove();
       leftClipContainerRef.current = null;
       compareContainerRef.current = null;
@@ -3450,7 +3075,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
     };
   // useEffect has missing dependencies: 'onSwiperPositionChange' and 'reapplyBoundaryLayers'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
-  }, [debouncedApplyColors, handleIdentifyClick, removeIdentifyOverlay, updateIdentifyOverlayPosition]);
+  }, [debouncedApplyColors, handleIdentifyClick]);
 
   // Compare mode owns the right map's lifetime: created on entering, released
   // on leaving, so a pane that is not comparing holds one WebGL context rather
