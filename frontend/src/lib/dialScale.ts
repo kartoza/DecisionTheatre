@@ -120,8 +120,11 @@ export function formatValue(value: number): string {
  * unit.
  */
 export function composeLabelWithUnit(label: string, unit: string): string {
-  const trimmedLabel = label.trim();
-  const trimmedUnit = unit.trim();
+  // Metadata is parsed JSON with no runtime shape guarantee -- coerce rather
+  // than trust the Record<string, string> type, since a non-string value
+  // reaching here would otherwise crash the whole pane on .trim().
+  const trimmedLabel = String(label ?? '').trim();
+  const trimmedUnit = String(unit ?? '').trim();
   if (!trimmedUnit) return trimmedLabel;
   if (/\([^)]*\)\s*$/.test(trimmedLabel)) return trimmedLabel;
   const isPercentUnit = /^(percentage|percent|%)$/i.test(trimmedUnit);

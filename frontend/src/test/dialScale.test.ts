@@ -50,6 +50,19 @@ describe('composeLabelWithUnit', () => {
     // suppress an unrelated unit that happens to follow a label ending in %.
     expect(composeLabelWithUnit('Weird label %', 'kgkm-2')).toBe('Weird label % (kgkm-2)');
   });
+
+  it('does not crash when the metadata value is not actually a string', () => {
+    // Reported in CI: a test double's blanket fetch stub returned a number
+    // for /metadata/details, which crashed the whole pane on label.trim()
+    // once this composed the label directly instead of just interpolating
+    // it into JSX (which silently coerces). Nothing guarantees the real API
+    // response is Record<string, string> at runtime either -- it's parsed
+    // JSON with no shape validation -- so this coerces rather than trusts it.
+    // @ts-expect-error deliberately passing a non-string to check the guard
+    expect(composeLabelWithUnit(42, 'kgkm-2')).toBe('42 (kgkm-2)');
+    // @ts-expect-error deliberately passing undefined to check the guard
+    expect(composeLabelWithUnit(undefined, 'kgkm-2')).toBe(' (kgkm-2)');
+  });
 });
 
 describe('normalize', () => {
