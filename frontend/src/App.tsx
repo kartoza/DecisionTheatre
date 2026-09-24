@@ -425,6 +425,21 @@ function App() {
     }
   };
 
+  // Broadcast that the targets panel opened, so a guided-tour step waiting
+  // for exactly that action can advance. The tour dialog itself no longer
+  // hides while the panel is open -- editing a target and reading the tour
+  // are not mutually exclusive, and the docked panel never overlaps the
+  // tour box -- so there is no "closed" counterpart to dispatch or pair up.
+  // This used to live in ContentArea against a local ref, which lost track
+  // whenever ContentArea unmounted (a tour step that opened the panel and
+  // then navigated elsewhere, e.g. to the indicators page); tracking it
+  // here instead means it survives navigation, since App never unmounts.
+  useEffect(() => {
+    if (isTargetModalOpen) {
+      window.dispatchEvent(new Event('dt:targets-modal-opened'));
+    }
+  }, [isTargetModalOpen]);
+
   // The chart details panel: which pane it is explaining, and the account it
   // was handed when it opened. The derivation is stored rather than recomputed
   // here, because half of it is intermediate state of ViewPane's dial
