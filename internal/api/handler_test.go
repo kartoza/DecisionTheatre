@@ -41,6 +41,33 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestScenarioColoursEndpoint(t *testing.T) {
+	handler := newTestHandler()
+	r := mux.NewRouter()
+	handler.RegisterRoutes(r)
+
+	req := httptest.NewRequest("GET", "/scenarios/colours", nil)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var response ScenarioColours
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	// newTestHandler's DataDir has no colours.json, so this is the defaults
+	// path end to end -- the override path is covered directly in
+	// colours_cache_test.go.
+	if response != defaultScenarioColours {
+		t.Errorf("got %+v, want defaults %+v", response, defaultScenarioColours)
+	}
+}
+
 func TestInfoEndpoint(t *testing.T) {
 	handler := newTestHandler()
 	r := mux.NewRouter()

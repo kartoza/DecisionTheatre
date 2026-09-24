@@ -31,10 +31,10 @@
       "900": { "value": "#e65100", "type": "color" }
     },
     "scenarios": {
-      "description": "Colors for different scenario types",
-      "reference": { "value": "#e65100", "type": "color", "description": "Reference scenario (Orange)" },
+      "description": "Colors for different scenario types. Reference is green, current is blue, target (future) is pink -- distinct from the red-to-green 'good/bad' scale used for indicator values elsewhere (e.g. soil organic carbon).",
+      "reference": { "value": "#4caf50", "type": "color", "description": "Reference scenario (Green)" },
       "current": { "value": "#2bb0ed", "type": "color", "description": "Current scenario (Blue)" },
-      "future": { "value": "#4caf50", "type": "color", "description": "Future scenario (Green)" }
+      "future": { "value": "#d946ef", "type": "color", "description": "Target scenario (Pink)" }
     },
     "siteCreation": {
       "description": "Colors for site creation UI elements",

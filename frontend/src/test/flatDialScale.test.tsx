@@ -17,6 +17,7 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import FlatDial from '../components/FlatDial';
 import DialChart from '../components/DialChart';
+import { SCENARIO_COLORS } from '../lib/dialScale';
 
 /** The tick labels only: the legend carries the target, which is meant to change. */
 function axis(): string {
@@ -130,10 +131,11 @@ describe('the target marker', () => {
         />
       </ChakraProvider>,
     );
-    // The buckle: a green-stroked rect on the band. Width distinguishes it from
-    // the legend's swatch, which is the same colour but a fixed 12px.
+    // The buckle: a target-coloured stroked rect on the band. Width
+    // distinguishes it from the legend's swatch, which is the same colour
+    // but a fixed 12px.
     return Array.from(document.querySelectorAll('rect'))
-      .filter((r) => (r.getAttribute('stroke') || '').toLowerCase() === '#4caf50'
+      .filter((r) => (r.getAttribute('stroke') || '').toLowerCase() === SCENARIO_COLORS.future
         && Number(r.getAttribute('width')) > 20).length;
   };
 

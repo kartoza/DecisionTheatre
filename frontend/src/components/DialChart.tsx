@@ -2,11 +2,11 @@ import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import {
-  SCENARIO_COLORS,
   bandGradientStops,
   formatValue,
   greenZoneCenter,
 } from '../lib/dialScale';
+import { useScenarioColors } from '../hooks/useApi';
 
 // Range mode config
 // Base padding for the dial in single-pane mode.
@@ -60,6 +60,7 @@ function DialChart({
   isLoading = false,
   zeroCentered = false,
 }: DialChartProps) {
+  const { colors: SCENARIO_COLORS } = useScenarioColors();
   const isQuadCompactLayout = compact && paneCount >= 4;
   // The range handed down is the range — see the same note in FlatDial. It is
   // fixed upstream by the metadata bound, or failing that by the range mode's
@@ -697,7 +698,7 @@ function DialChart({
                       cx={referenceCallout.markerX}
                       cy={referenceCallout.markerY}
                       r={5}
-                      fill="#7ddc7a"
+                      fill={SCENARIO_COLORS.reference}
                       stroke="#fff"
                       strokeWidth={1.5}
                     />
@@ -706,7 +707,7 @@ function DialChart({
                       <path
                         d={`M ${referenceCallout.startX} ${referenceCallout.startY} L ${referenceCallout.elbowX} ${referenceCallout.elbowY} L ${referenceCallout.endX} ${referenceCallout.endY}`}
                         fill="none"
-                        stroke="#7ddc7a"
+                        stroke={SCENARIO_COLORS.reference}
                         strokeWidth={2.5}
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -716,7 +717,7 @@ function DialChart({
                         y={referenceCallout.textY}
                         textAnchor={referenceCallout.textAnchor}
                         dominantBaseline="middle"
-                        fill="#d9f99d"
+                        fill={SCENARIO_COLORS.reference}
                         fontSize={referenceCallout.fontSize}
                         fontFamily="Inter, system-ui, sans-serif"
                         fontWeight="700"
@@ -768,7 +769,7 @@ function DialChart({
               <g opacity={needleOpacity}>
                 {/* Reference */}
                 <g transform={`translate(${legendReferenceX}, ${legendY})`}>
-                  <circle cx={8} cy={0} r={8} fill="#2ecc40" stroke="#fff" strokeWidth={1.5} />
+                  <circle cx={8} cy={0} r={8} fill={SCENARIO_COLORS.reference} stroke="#fff" strokeWidth={1.5} />
                   <text x={24} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
                     {legendReferenceLabel}
                   </text>
