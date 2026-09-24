@@ -15,7 +15,7 @@ import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteR
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
-import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
@@ -46,6 +46,7 @@ interface ViewPaneProps {
   onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -122,6 +123,7 @@ function ViewPane({
   onRemovePane,
   onIdentify,
   identifyResult,
+  onSiteIdentify,
   onMapExtentChange,
   onStatisticsChange,
   isPanelOpen,
@@ -812,6 +814,7 @@ function ViewPane({
           onOpenSettings={() => onFocusPane(paneIndex)}
           onIdentify={onIdentify}
           identifyResult={identifyResult}
+          onSiteIdentify={onSiteIdentify}
           onMapExtentChange={onMapExtentChange}
           onStatisticsChange={onStatisticsChange}
           isPanelOpen={isPanelOpen}
