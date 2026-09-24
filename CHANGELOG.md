@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scenario selection is now synced across every open pane.** Changing
+  which scenario is Left ("Scenario 1") or Right ("Scenario 2") on one
+  pane's Indicator panel used to only change that pane — every other open
+  pane kept comparing whatever it already was, with no indication anything
+  had changed elsewhere. Panes could silently drift onto different
+  comparisons, and onto different colour accents for the same corner as a
+  result, since a pane's accent colour follows whichever scenario is
+  assigned to it. Both selections now propagate to every open pane; only
+  each pane's own attribute stays independent.
+
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers
   panics inside a handler, so a bad request cost one connection — but four

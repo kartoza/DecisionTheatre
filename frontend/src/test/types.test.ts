@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SCENARIOS } from '../types';
-import type { Scenario, ComparisonState } from '../types';
+import { SCENARIOS, applyScenarioToAllPanes } from '../types';
+import type { Scenario, ComparisonState, PaneStates } from '../types';
 
 describe('Types', () => {
   it('defines three scenarios', () => {
@@ -38,5 +38,39 @@ describe('Types', () => {
   it('Scenario type only allows valid values', () => {
     const validScenarios: Scenario[] = ['reference', 'current', 'future'];
     expect(validScenarios).toHaveLength(3);
+  });
+});
+
+describe('applyScenarioToAllPanes', () => {
+  const panes = (): PaneStates => [
+    { leftScenario: 'reference', rightScenario: 'current', attribute: 'attr_a' },
+    { leftScenario: 'reference', rightScenario: 'future', attribute: 'attr_b' },
+    { leftScenario: 'current', rightScenario: 'future', attribute: 'attr_c' },
+  ];
+
+  it('sets the same right scenario on every pane, regardless of what it was', () => {
+    // Reported: changing one pane's Right dropdown to Target State left
+    // every other open pane comparing whatever it already was, with no
+    // indication anything had changed elsewhere.
+    const result = applyScenarioToAllPanes(panes(), 'right', 'future');
+    expect(result.map((p) => p.rightScenario)).toEqual(['future', 'future', 'future']);
+  });
+
+  it('sets the same left scenario on every pane', () => {
+    const result = applyScenarioToAllPanes(panes(), 'left', 'current');
+    expect(result.map((p) => p.leftScenario)).toEqual(['current', 'current', 'current']);
+  });
+
+  it('leaves each pane\'s attribute and the other side untouched', () => {
+    const result = applyScenarioToAllPanes(panes(), 'right', 'future');
+    expect(result.map((p) => p.attribute)).toEqual(['attr_a', 'attr_b', 'attr_c']);
+    expect(result.map((p) => p.leftScenario)).toEqual(['reference', 'reference', 'current']);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = panes();
+    const snapshot = JSON.parse(JSON.stringify(input));
+    applyScenarioToAllPanes(input, 'right', 'future');
+    expect(input).toEqual(snapshot);
   });
 });

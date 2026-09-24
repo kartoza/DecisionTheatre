@@ -40,6 +40,7 @@ import {
   saveQuadColumns,
   markSessionActive,
   shouldPromptResumeSession,
+  applyScenarioToAllPanes,
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
 import type { CalculationDetailsProps } from './components/CalculationDetails';
@@ -969,15 +970,21 @@ function App() {
     });
   }, [layoutMode]);
 
+  // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
+  // not a per-pane preference -- reported: change one pane's Right dropdown
+  // to Target State and the others silently kept comparing Reference vs
+  // Current, so panes drifted onto different comparisons (and different
+  // colour accents for the same corner) with no indication anything had.
+  // Every open pane always compares the same pair now, the same way
+  // handleGridViewModeChange already applies a view-mode change to every
+  // pane rather than just the one being configured.
   const handleLeftChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'left', scenario));
+  }, []);
 
   const handleRightChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { rightScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'right', scenario));
+  }, []);
 
   const handleAttributeChange = useCallback((attribute: string) => {
     if (indicatorPaneIndex !== null)
