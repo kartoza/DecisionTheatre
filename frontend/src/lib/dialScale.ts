@@ -107,6 +107,28 @@ export function formatValue(value: number): string {
   return value.toFixed(1);
 }
 
+/**
+ * A factor label with its unit appended in brackets, e.g. "Grass cover
+ * fraction (%)" -- shared by every panel that names a factor (map, dial,
+ * belt, table).
+ *
+ * Some metadata "Detailed name" values already bake a unit into the label
+ * text itself instead of leaving it to the separate Units column -- e.g.
+ * "Percent burned (%)" or "Mean tree cover %". Appending blindly would
+ * double it up, so this skips appending when the label already ends in a
+ * parenthesised suffix, or already ends in a bare '%' for a percent-like
+ * unit.
+ */
+export function composeLabelWithUnit(label: string, unit: string): string {
+  const trimmedLabel = label.trim();
+  const trimmedUnit = unit.trim();
+  if (!trimmedUnit) return trimmedLabel;
+  if (/\([^)]*\)\s*$/.test(trimmedLabel)) return trimmedLabel;
+  const isPercentUnit = /^(percentage|percent|%)$/i.test(trimmedUnit);
+  if (isPercentUnit && trimmedLabel.endsWith('%')) return trimmedLabel;
+  return `${trimmedLabel} (${trimmedUnit})`;
+}
+
 /** Evenly spaced tick values across the scale, every other one major. */
 export function tickValues(min: number, max: number, count = 11) {
   return Array.from({ length: count }, (_, i) => {

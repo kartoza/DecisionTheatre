@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bandGradientStops,
+  composeLabelWithUnit,
   formatValue,
   greenZoneCenter,
   normalize,
@@ -18,6 +19,38 @@ import {
   hasDeclaredMin,
   tickValues,
 } from '../lib/dialScale';
+
+describe('composeLabelWithUnit', () => {
+  it('appends the unit in brackets', () => {
+    expect(composeLabelWithUnit('Total Methane production', 'kgkm-2')).toBe(
+      'Total Methane production (kgkm-2)',
+    );
+  });
+
+  it('leaves the label alone when there is no unit', () => {
+    expect(composeLabelWithUnit('Total Methane production', '')).toBe('Total Methane production');
+  });
+
+  it('does not double up a label that already ends in a parenthesised unit', () => {
+    // Reported: "Percent burned (%)" is metadata's own Detailed name, already
+    // carrying a unit -- blindly appending the separate Units column value
+    // ("percentage") would read as "Percent burned (%) (percentage)".
+    expect(composeLabelWithUnit('Percent burned (%)', 'percentage')).toBe('Percent burned (%)');
+  });
+
+  it('does not double up a percent-type label that ends in a bare %', () => {
+    // "Mean tree cover %" bakes the unit in without parentheses.
+    expect(composeLabelWithUnit('Mean tree cover %', 'percentage')).toBe('Mean tree cover %');
+    expect(composeLabelWithUnit('Mean tree cover %', 'percent')).toBe('Mean tree cover %');
+    expect(composeLabelWithUnit('Mean tree cover %', '%')).toBe('Mean tree cover %');
+  });
+
+  it('still appends a non-percent unit even if the label ends in a percent sign', () => {
+    // The bare-% guard is specific to percent-type units -- it should not
+    // suppress an unrelated unit that happens to follow a label ending in %.
+    expect(composeLabelWithUnit('Weird label %', 'kgkm-2')).toBe('Weird label % (kgkm-2)');
+  });
+});
 
 describe('normalize', () => {
   it('maps the ends and the middle', () => {

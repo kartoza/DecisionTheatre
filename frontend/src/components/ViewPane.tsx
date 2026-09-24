@@ -10,7 +10,7 @@ import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { attributeSpread, capRange, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
+import { attributeSpread, capRange, composeLabelWithUnit, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
@@ -435,7 +435,7 @@ function ViewPane({
   // mode, so the unit goes here rather than repeated on each reading below it.
   const dialAttributeUnit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
   const dialAttributeLabelWithUnit = dialAttributeLabel
-    ? (dialAttributeUnit ? `${dialAttributeLabel} (${dialAttributeUnit})` : dialAttributeLabel)
+    ? composeLabelWithUnit(dialAttributeLabel, dialAttributeUnit)
     : undefined;
 
   // Calculate dial chart values based on current attribute and range mode
