@@ -9,7 +9,8 @@ import '../lib/maplibreWorker';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, useAttributeUnits, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
+import { composeLabelWithUnit } from '../lib/dialScale';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
@@ -882,6 +883,7 @@ const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
+  const { units: attributeUnits } = useAttributeUnits();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   // Null whenever compare mode is off — see createRightMap in the map-init
@@ -3752,13 +3754,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             .replace(/_/g, ' ')
             .replace(/\b\w/g, (c) => c.toUpperCase())
         : '';
-      indicatorLabel.textContent = friendlyAttribute;
+      const unit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
+      indicatorLabel.textContent = friendlyAttribute ? composeLabelWithUnit(friendlyAttribute, unit) : '';
       indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
     }
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails, attributeUnits]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {

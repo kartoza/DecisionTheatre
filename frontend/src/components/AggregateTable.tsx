@@ -2,7 +2,8 @@ import { useMemo, useEffect, useRef, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { CatchmentIndicators, Scenario, SiteIndicators } from '../types';
-import { getSiteCatchments, useAttributeDetails } from '../hooks/useApi';
+import { getSiteCatchments, useAttributeDetails, useAttributeUnits } from '../hooks/useApi';
+import { composeLabelWithUnit } from '../lib/dialScale';
 
 interface AggregateTableProps {
   visible: boolean;
@@ -36,8 +37,9 @@ function AggregateTable({
   const [catchments, setCatchments] = useState<CatchmentIndicators[]>([]);
   const [loading, setLoading] = useState(false);
   const { details: attributeDetails } = useAttributeDetails();
+  const { units: attributeUnits } = useAttributeUnits();
 
-  const attributeLabel = attributeDetails[attribute] ?? attribute;
+  const attributeLabel = composeLabelWithUnit(attributeDetails[attribute] ?? attribute, attributeUnits[attribute] ?? '');
 
   // Tracks visible/siteId/siteGeometry — the dependencies that mean "the
   // table was just opened or pointed at a new site", as opposed to
