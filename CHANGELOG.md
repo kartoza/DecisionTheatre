@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One reference/current/target colour scheme, everywhere it's drawn** —
+  reference green, current blue, target pink. Previously the circular dial
+  used green for both reference and target (indistinguishable), the belt
+  dial used a red reference line next to a green reference bar (disagreeing
+  with itself), the chart view carried a third, independently hardcoded copy
+  of the old orange/blue/green scheme, and the map's corner-label accents,
+  swiper divider, and scenario picker read from a fourth, independently
+  drifted pastel palette (reference was pastel orange, target was pastel
+  green). Every view now reads from one `SCENARIO_COLORS` constant, with the
+  map/label accents as a softened pastel tint of the same hues rather than a
+  separately maintained palette.
+
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers
   panics inside a handler, so a bad request cost one connection — but four

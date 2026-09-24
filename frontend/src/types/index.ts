@@ -155,12 +155,20 @@ export function saveRangeMode(mode: RangeMode): void {
   safeSetItem(STORAGE_RANGE_MODE_KEY, mode);
 }
 
+// Pastel tints of dialScale.ts's SCENARIO_COLORS (reference green, current
+// blue, target pink) -- softened for use as label/accent backgrounds rather
+// than the saturated marker colours. These drifted out of sync with that
+// scheme (reference was pastel orange, target was pastel green) even though
+// LandingPage's own comment says they're meant to be "the app's own
+// reference/current/future colour coding, the same hues used on every dial
+// and chart" -- corner labels on the map read Reference in one colour while
+// the dial read it in another.
 export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'reference',
     label: 'Ecological Reference',
     description: `Condition compared to scientifically determined optimal standards`,
-    color: '#f6b07c',
+    color: '#9ecb9e',
   },
   {
     id: 'current',
@@ -172,7 +180,7 @@ export const SCENARIOS: ScenarioInfo[] = [
     id: 'future',
     label: 'Target State',
     description: 'User-defined target condition with aim to achieve.',
-    color: '#9ecb9e',
+    color: '#eca2f7',
   },
 ];
 

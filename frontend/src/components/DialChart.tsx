@@ -697,7 +697,7 @@ function DialChart({
                       cx={referenceCallout.markerX}
                       cy={referenceCallout.markerY}
                       r={5}
-                      fill="#7ddc7a"
+                      fill={SCENARIO_COLORS.reference}
                       stroke="#fff"
                       strokeWidth={1.5}
                     />
@@ -706,7 +706,7 @@ function DialChart({
                       <path
                         d={`M ${referenceCallout.startX} ${referenceCallout.startY} L ${referenceCallout.elbowX} ${referenceCallout.elbowY} L ${referenceCallout.endX} ${referenceCallout.endY}`}
                         fill="none"
-                        stroke="#7ddc7a"
+                        stroke={SCENARIO_COLORS.reference}
                         strokeWidth={2.5}
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -716,7 +716,7 @@ function DialChart({
                         y={referenceCallout.textY}
                         textAnchor={referenceCallout.textAnchor}
                         dominantBaseline="middle"
-                        fill="#d9f99d"
+                        fill={SCENARIO_COLORS.reference}
                         fontSize={referenceCallout.fontSize}
                         fontFamily="Inter, system-ui, sans-serif"
                         fontWeight="700"
@@ -768,7 +768,7 @@ function DialChart({
               <g opacity={needleOpacity}>
                 {/* Reference */}
                 <g transform={`translate(${legendReferenceX}, ${legendY})`}>
-                  <circle cx={8} cy={0} r={8} fill="#2ecc40" stroke="#fff" strokeWidth={1.5} />
+                  <circle cx={8} cy={0} r={8} fill={SCENARIO_COLORS.reference} stroke="#fff" strokeWidth={1.5} />
                   <text x={24} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
                     {legendReferenceLabel}
                   </text>

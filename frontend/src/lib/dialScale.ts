@@ -9,11 +9,22 @@
  * idea that drift apart.
  */
 
-/** Scenario colours, from the design system (`design-tokens.json`). */
+/**
+ * Scenario colours, from the design system (`design-tokens.json`).
+ *
+ * Reported: reference and target were both green on the circular dial
+ * (indistinguishable), and the belt dial disagreed with itself -- a red
+ * reference line next to a green reference bar -- and with the circular
+ * dial's scheme. Red also read as "bad" against the standard red-to-green
+ * progress convention, backwards for what reference means here. One scheme
+ * now: reference green, current blue, target pink -- distinct from both and
+ * from the red/green "good/bad" scale used elsewhere (e.g. soil organic
+ * carbon's value colouring).
+ */
 export const SCENARIO_COLORS = {
-  reference: '#e65100', // Orange
+  reference: '#4caf50', // Green
   current: '#2bb0ed', // Blue
-  future: '#4caf50', // Green
+  future: '#d946ef', // Pink/purple (target)
 } as const;
 
 /** Where `value` sits in `min..max`, clamped to 0..1. */

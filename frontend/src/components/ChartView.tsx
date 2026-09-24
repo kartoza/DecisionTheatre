@@ -23,11 +23,13 @@ function Plot(props: PlotProps) {
 import { fetchAggregate, getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import { isAbortError } from '../lib/sharedRequest';
+import { SCENARIO_COLORS } from '../lib/dialScale';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
 import { computeAOIWeightedScenarioValues } from '../utils/indicators';
 
-// Kartoza color scheme: orange, blue, green
-const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
+// Same scheme as the dial/belt charts: reference green, current blue, target
+// pink -- one shared SCENARIO_COLORS rather than a second hardcoded copy.
+const SERIES_COLORS = [SCENARIO_COLORS.reference, SCENARIO_COLORS.current, SCENARIO_COLORS.future];
 const SERIES_LABELS = ['Reference', 'Current', 'Target'];
 
 const PADDING = { top: 50, right: 60, bottom: 140, left: 80 };
