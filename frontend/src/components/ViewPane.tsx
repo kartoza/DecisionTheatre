@@ -431,6 +431,13 @@ function ViewPane({
         .replace(/\b\w/g, (c) => c.toUpperCase())
     : undefined;
 
+  // The pane header is the one place the label appears for every non-map view
+  // mode, so the unit goes here rather than repeated on each reading below it.
+  const dialAttributeUnit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
+  const dialAttributeLabelWithUnit = dialAttributeLabel
+    ? (dialAttributeUnit ? `${dialAttributeLabel} (${dialAttributeUnit})` : dialAttributeLabel)
+    : undefined;
+
   // Calculate dial chart values based on current attribute and range mode
   const dialData = useMemo(() => {
     const attribute = comparison.attribute;
@@ -951,7 +958,7 @@ function ViewPane({
       {viewMode !== 'map' && (
         <PaneHeader
           compact={compact}
-          title={dialAttributeLabel}
+          title={dialAttributeLabelWithUnit}
           leftLabel={viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (leftInfo?.label || comparison.leftScenario)}
           leftColor={leftInfo?.color}
           rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (rightInfo?.label || comparison.rightScenario)}

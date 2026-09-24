@@ -84,11 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Belt and flat dial legends now show each value's unit**, e.g. "Current:
-  836.3 kg/ha" instead of "Current: 836.3". The `unit` prop already reached
-  both dial components but was only wired into a hidden `<title>` tooltip, so
+- **The pane header now shows a factor's unit in brackets after its name**,
+  e.g. "Grass cover fraction (%)", for every view mode that shares that header
+  (dial, belt, table, chart). The `unit` prop already reached the dial and
+  belt charts but was only wired into a hidden `<title>` tooltip, so
   indicators with different units looked directly comparable when they were
-  not.
+  not. Matches the "label (unit)" convention already used on the chart view's
+  y-axis.
 
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers

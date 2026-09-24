@@ -507,18 +507,9 @@ function DialChart({
     };
   }, [greenCenter, min, max, radius, arcWidth, centerX, centerY, compact, isQuadCompactLayout]);
 
-  // Units render next to the value so indicators can be compared at a glance
-  // instead of only on hover (the accessible <title> below still carries it too).
-  const unitSuffix = unit ? ` ${unit}` : '';
-  const legendReferenceLabel = referenceValue !== undefined
-    ? `Reference: ${formatValue(referenceValue)}${unitSuffix}`
-    : 'Reference: N/A';
-  const legendCurrentLabel = currentValue !== undefined
-    ? `Current: ${formatValue(currentValue)}${unitSuffix}`
-    : 'Current: N/A';
-  const legendTargetLabel = targetValue !== undefined
-    ? `Target: ${formatValue(targetValue)}${unitSuffix}`
-    : 'Target: N/A';
+  const legendReferenceLabel = `Reference: ${referenceValue !== undefined ? formatValue(referenceValue) : 'N/A'}`;
+  const legendCurrentLabel = `Current: ${currentValue !== undefined ? formatValue(currentValue) : 'N/A'}`;
+  const legendTargetLabel = `Target: ${targetValue !== undefined ? formatValue(targetValue) : 'N/A'}`;
   const legendYOffset = compact
     ? (isQuadCompactLayout ? (denseLayout ? 40 : 48) : (denseLayout ? 72 : 100))
     : 100;
