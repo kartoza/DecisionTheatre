@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, so the URL is hardcoded now instead of reintroducing that whole
   class of problem for no benefit. Copy updated to the client's requested
   wording throughout.
+- **Every guided tour's last step now offers a real next action** —
+  "Back to main page" and "Create a site" — instead of just dismissing and
+  leaving the user to work out on their own how to leave the tour or start
+  building their own site. "Close" (DemoTour) / "Skip tour" (the onboarding
+  TourGuide) still just dismisses, for anyone who'd rather keep exploring
+  the demo or just-created site as-is. Covers all five tours: the four
+  site-specific demos (Munywana, Africa, Shai Hills, Viphya), which share
+  one runner component, and the separate onboarding walkthrough.
+- The progress dots on both tour components are real, labelled buttons now
+  (`aria-label` + keyboard-focusable), not unlabelled clickable `div`s —
+  they had no accessible name or keyboard path at all before.
 
 ### Added
 
