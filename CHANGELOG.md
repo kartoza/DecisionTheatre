@@ -134,6 +134,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assigned to it. Both selections now propagate to every open pane; only
   each pane's own attribute stays independent.
 
+- **The guided tour dialog no longer disappears while editing a target.**
+  It used to hide itself entirely while the targets panel was open and
+  reappear only once the panel closed — and a bug in the open/close
+  pairing (tracked in `ContentArea`, which unmounts on page navigation)
+  could leave it hidden for good if a tour step opened the panel and then
+  navigated elsewhere, with no explanation and no way back. The dialog now
+  stays visible the whole time a target is being edited — editing a target
+  and reading the tour aren't mutually exclusive, and the docked panel
+  never overlapped the tour box anyway. Opening the panel still advances a
+  step that was waiting for exactly that action.
+
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers
   panics inside a handler, so a bad request cost one connection — but four
