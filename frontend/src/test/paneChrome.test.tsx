@@ -245,6 +245,16 @@ describe('the scenario labels', () => {
     expect(MAPVIEW).toContain("leftLabel.className = 'dt-pane-label'");
     expect(MAPVIEW).toContain("rightLabel.className = 'dt-pane-label'");
   });
+
+  it("shows the factor's unit in brackets, the same as the pane header", () => {
+    // The map draws its own label instead of going through PaneHeader (see
+    // above), so it needed its own composeLabelWithUnit wiring rather than
+    // inheriting the fix that covers dial/belt/table/chart.
+    const indicator = MAPVIEW.slice(MAPVIEW.indexOf('if (indicatorLabel)'));
+    const block = indicator.slice(0, indicator.indexOf("indicatorLabel.style.display"));
+    expect(block).toContain('composeLabelWithUnit');
+    expect(block).toContain('attributeUnits[comparison.attribute]');
+  });
 });
 
 describe('usePaneChromeForced', () => {
