@@ -72,6 +72,30 @@ export type RangeMode = 'domain' | 'extent' | 'site';
 /** Per-pane state array (minimum one entry) */
 export type PaneStates = ComparisonState[];
 
+/**
+ * Apply a Scenario 1 (left) / Scenario 2 (right) choice to every open pane.
+ *
+ * Reported: changing one pane's Right dropdown to Target State left every
+ * other open pane comparing whatever it already was (e.g. Reference vs
+ * Current) with no indication anything had changed elsewhere -- panes
+ * silently drifted onto different comparisons, and onto different colour
+ * accents for the same corner as a result. Which scenario is Left and which
+ * is Right is a property of the comparison being made, not a per-pane
+ * preference, so it now applies to every pane at once -- the attribute each
+ * pane shows is unaffected.
+ */
+export function applyScenarioToAllPanes(
+  panes: PaneStates,
+  side: 'left' | 'right',
+  scenario: Scenario,
+): PaneStates {
+  return panes.map((pane) => (
+    side === 'left'
+      ? { ...pane, leftScenario: scenario }
+      : { ...pane, rightScenario: scenario }
+  ));
+}
+
 export type QuadColumns = 2 | 3;
 
 const STORAGE_KEY = 'dt-pane-states';
