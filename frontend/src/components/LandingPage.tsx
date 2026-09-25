@@ -16,7 +16,9 @@ import {
 } from '@chakra-ui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { SCENARIOS, type AppPage } from '../types';
+import type { AppPage } from '../types';
+import { useScenarioColors } from '../hooks/useApi';
+import { pastelTint } from '../lib/dialScale';
 import { colors } from '../styles/colors';
 
 import partnerAfricanWildlife from '../assets/partners/africanwildlifeeconomy_logo 1.png';
@@ -320,37 +322,30 @@ const dashboardAudiences: { image: string; audience: string; cta: string; event:
     audience: 'Land owners & conservation managers',
     cta: 'Explore Conservation Futures',
     event: 'dt:start-munywana-demo',
-    tooltip: 'Visualise the opportunities and challenges of conserving biodiversity while exploring carbon financing opportunities.\n\nThe dashboard can help users consider different options for financing land management activities, providing ecosystem services and conserving biodiversity within their ecological and social context.',
+    tooltip: 'Click here to visualise the opportunities and challenges of conserving biodiversity while taking advantage of carbon financing.',
   },
   {
     image: ruralCommunityImage,
     audience: 'Rural communities',
     cta: 'Explore Shared Landscapes',
     event: 'dt:start-viphya-demo',
-    tooltip: 'Explore how different landscape futures may affect nature’s contributions to people, including grazing, food, fuelwood, thatching grass, hunting and honey gathering.\n\nThe dashboard can support discussion about different desired ecosystem states and the priorities and tensions that may exist within communities.',
+    tooltip: 'Click here enable discussion about desired ecosystem states and the priorities and tensions that may exist within communities.',
   },
   {
     image: localGovernmentImage,
     audience: 'Local government agencies and traditional leadership',
     cta: 'Explore Policy Impacts',
     event: 'dt:start-shaihills-demo',
-    tooltip: 'Examine the consequences of different policies for landscapes and people.\n\nAcademics and practitioners working on carbon and biodiversity finance\n\nInvestigate the potential pitfalls and unintended outcomes of different carbon and biodiversity credit schemes, and explore mechanisms that may work in African contexts.',
+    tooltip: 'Click here to examine the implications of different national policies for landscapes and people.',
   },
   {
     image: futurePossibilitiesImage,
     audience: 'School learners, artists and members of the public',
     cta: 'Explore Future Possibilities',
     event: 'dt:start-africa-demo',
-    tooltip: 'Explore and reimagine African landscapes guided by different ideas about what people value and need in the future',
+    tooltip: 'Click here to reimagine African landscapes guided by what we value and futures we want to create.',
   },
 ];
-
-// Reuse the app's own reference/current/future colour coding (the same hues
-// used on every dial and chart) so the landing page teaches the legend
-// visitors will actually see once they open a site.
-const scenarioColors: Record<string, string> = Object.fromEntries(
-  SCENARIOS.map((s) => [s.id, s.color])
-);
 
 const gettingStartedStages: { id: string; eyebrow: string; description: string }[] = [
   {
@@ -371,6 +366,18 @@ const gettingStartedStages: { id: string; eyebrow: string; description: string }
 ];
 
 function LandingPage({ onNavigate }: LandingPageProps) {
+  const { colors: liveScenarioColors } = useScenarioColors();
+  // Reuse the app's own reference/current/future colour coding (the same
+  // hues used on every dial and chart) so the legend teaches what visitors
+  // will actually see once they open a site -- including a datapack's
+  // colours.json override, since this reads the live values rather than a
+  // module-level snapshot of the static defaults.
+  const scenarioColors: Record<string, string> = {
+    reference: pastelTint(liveScenarioColors.reference),
+    current: pastelTint(liveScenarioColors.current),
+    future: pastelTint(liveScenarioColors.future),
+  };
+
   return (
     <Box w="100%" h="100%" overflowY="auto" bg={colors.darkGray} color="gray.900">
 
@@ -410,8 +417,18 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               mb={9}
               lineHeight="1.25"
             >
-              Welcome to the Landscape Decision Dashboard
+              Welcome to the African Landscape Futures Dashboard
             </Heading>
+
+            <Text
+              fontSize={{ base: 'md', md: 'lg' }}
+              fontStyle="italic"
+              color="whiteAlpha.800"
+              mb={3}
+              lineHeight="1.5"
+            >
+              Science-based decision support for Africa's changing landscapes
+            </Text>
 
             <Text
               fontSize={{ base: 'lg', md: 'lg' }}
@@ -538,7 +555,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
               fontWeight="bold"
               color="white"
             >
-              Use the Landscape Decision Dashboard to:
+              Use the Landscape Futures Dashboard to:
             </Heading>
           </Box>
 
@@ -767,7 +784,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
           </Heading>
 
           <Text fontSize="md" color="white" lineHeight="1.75" mb={5}>
-            The Landscape Decision Dashboard is developed through a partnership between Future Ecosystems for Africa and ReWild Capital.
+            The African Landscape Futures Dashboard is developed through a partnership between Future Ecosystems for Africa and Rewild Capital.
           </Text>
 
           <Box mb={12}>

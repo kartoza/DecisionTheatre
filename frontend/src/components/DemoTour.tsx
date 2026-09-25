@@ -134,7 +134,6 @@ export default function DemoTour({
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
   const [loadStatus, setLoadStatus] = useState<{ message: string; pct: number } | null>(null);
-  const [isBlockedByModal, setIsBlockedByModal] = useState(false);
   const dragControls = useDragControls();
   const toast = useToast();
 
@@ -151,19 +150,20 @@ export default function DemoTour({
     onStepChange?.(step, visible);
   }, [step, visible, onStepChange]);
 
+  // Reported: opening the targets panel used to hide the tour text
+  // entirely, and a bug in the pairing that brought it back could leave it
+  // hidden for good. The dialog now stays visible the whole time a target
+  // is being edited -- editing a target and reading the tour are not
+  // mutually exclusive, and the docked panel (right side) never overlaps
+  // the tour box (bottom left) anyway. Opening the panel still advances a
+  // step that was waiting for exactly that action.
   useEffect(() => {
     if (targetsModalAdvanceSteps.length === 0) return;
     const handleOpen = () => {
-      setIsBlockedByModal(true);
       setStep((current) => (targetsModalAdvanceSteps.includes(current) ? current + 1 : current));
     };
-    const handleClose = () => setIsBlockedByModal(false);
     window.addEventListener('dt:targets-modal-opened', handleOpen);
-    window.addEventListener('dt:targets-modal-closed', handleClose);
-    return () => {
-      window.removeEventListener('dt:targets-modal-opened', handleOpen);
-      window.removeEventListener('dt:targets-modal-closed', handleClose);
-    };
+    return () => window.removeEventListener('dt:targets-modal-opened', handleOpen);
   }, [targetsModalAdvanceSteps]);
 
   const navigateTo = (page: string) => {
@@ -263,9 +263,9 @@ export default function DemoTour({
   const isLast = step === steps.length - 1;
   const spotlightRect = useSpotlightRect(visible ? current.targetId : undefined);
 
-  usePaneChromeForced(visible && !isBlockedByModal);
+  usePaneChromeForced(visible);
 
-  if (!visible || isBlockedByModal) return null;
+  if (!visible) return null;
 
   return (
     <Portal>
@@ -339,11 +339,17 @@ export default function DemoTour({
             </Text>
 
             <HStack spacing={1.5}>
-              {steps.map((_, index) => (
+              {steps.map((s, index) => (
                 <Box
                   key={index}
+                  as="button"
+                  type="button"
+                  aria-label={`Go to step ${index + 1} of ${steps.length}: ${s.title}`}
+                  aria-current={index === step ? 'step' : undefined}
                   w={index === step ? 4 : 2}
                   h={2}
+                  p={0}
+                  border="none"
                   borderRadius="full"
                   bg={index === step ? colors.brightGreen : 'whiteAlpha.300'}
                   transition="all 0.2s"
@@ -393,15 +399,43 @@ export default function DemoTour({
                       Back
                     </Button>
                   )}
-                  <Button
-                    size="xs"
-                    bg={colors.brightGreen}
-                    color="white"
-                    _hover={{ opacity: 0.85 }}
-                    onClick={next}
-                  >
-                    {isLast ? 'Start exploring' : 'Next'}
-                  </Button>
+                  {isLast ? (
+                    // The tour used to just dismiss here, leaving the user to work
+                    // out on their own how to leave it or start creating their own
+                    // site (#219) -- "Close" (left) still just dismisses, for
+                    // anyone who wants to keep exploring this demo site as-is.
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        borderColor="whiteAlpha.400"
+                        color="white"
+                        _hover={{ bg: 'whiteAlpha.100' }}
+                        onClick={() => { navigateTo('landing'); dismiss(); }}
+                      >
+                        Back to main page
+                      </Button>
+                      <Button
+                        size="xs"
+                        bg={colors.brightGreen}
+                        color="white"
+                        _hover={{ opacity: 0.85 }}
+                        onClick={() => { navigateTo('create-site'); dismiss(); }}
+                      >
+                        Create a site
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="xs"
+                      bg={colors.brightGreen}
+                      color="white"
+                      _hover={{ opacity: 0.85 }}
+                      onClick={next}
+                    >
+                      Next
+                    </Button>
+                  )}
                 </HStack>
               </Flex>
             )}

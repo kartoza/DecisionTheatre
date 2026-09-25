@@ -7,7 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grid view no longer overflows the viewport.** It sized every row as if
+  there were only two, no matter how many the pane count actually needed —
+  so a default six-pane grid already needed three rows and pushed the third
+  off-screen, forcing a scroll the user had no way to discover. The grid is
+  now always exactly three columns wide, and row count is not a setting —
+  it grows and shrinks with the pane count. Map, dial and table views stay
+  fixed at 2 rows (6 panes): they need more room per pane, so that stays the
+  ceiling. Belt charts are small enough to keep going — adding a row every 3
+  panes as more are added, up to 5 rows (15 panes) — and fill the available
+  space rather than sitting at a fixed size. "Add pane" disables with a
+  visible reason once a view's cap is reached, rather than silently doing
+  nothing or letting panes run off-screen again. Pane configurations beyond
+  the current cap are never discarded — only their rendering is — so
+  switching a capped grid back to belt charts brings the rest back exactly
+  as they were. Fixes #204.
+
+### Changed
+
+- **Rebranded to "African Landscape Futures Dashboard"**, with the subtitle
+  "Science-based decision support for Africa's changing landscapes", across
+  the landing page hero, its "Use the ... to:" heading, the partnership
+  page, and both guided-tour scripts that referenced the old name.
+- **"Configure factor" renamed to "Change variable"** (the per-pane button
+  that opens the factor/scenario controls).
+- **Partnership page now lists FEFA above Rewild Capital**, matching the
+  page's own heading order ("The FEFA and Rewild Capital Partnership").
+- **Landing page's four "Explore..." cards have new hover text**, matching
+  the client's requested copy for Conservation Futures, Shared Landscapes,
+  Policy Impacts and Future Possibilities.
+- **The feedback footer is a real call to action now**, not a single
+  gray line easy to mistake for decoration. It's a pinned strip under every
+  page (App.tsx) — already there, just easy to miss — with an orange accent
+  border, a heartbeat-pulsing icon, and a hover state that lights up the
+  whole bar and underlines the link text with a sliding arrow. It also used
+  to read its URL from a build-time env var that this project's build
+  pipeline does not treat as a rebuild trigger (`scripts/lib-build.sh`'s
+  staleness check has no entry for `frontend/.env`), so an edited `.env`
+  silently kept shipping the old, unconfigured build and "click here" did
+  nothing. There is only one form and no deployment that needs a different
+  one, so the URL is hardcoded now instead of reintroducing that whole
+  class of problem for no benefit. Copy updated to the client's requested
+  wording throughout.
+- **Every guided tour's last step now offers a real next action** —
+  "Back to main page" and "Create a site" — instead of just dismissing and
+  leaving the user to work out on their own how to leave the tour or start
+  building their own site. "Close" (DemoTour) / "Skip tour" (the onboarding
+  TourGuide) still just dismisses, for anyone who'd rather keep exploring
+  the demo or just-created site as-is. Covers all five tours: the four
+  site-specific demos (Munywana, Africa, Shai Hills, Viphya), which share
+  one runner component, and the separate onboarding walkthrough.
+- The progress dots on both tour components are real, labelled buttons now
+  (`aria-label` + keyboard-focusable), not unlabelled clickable `div`s —
+  they had no accessible name or keyboard path at all before.
+
 ### Added
+
+- **Scenario colours are now overridable per data pack**, via an optional
+  `colours.json` in the data directory (`{"reference": "#...", "current":
+  "#...", "target": "#..."}`). Any field left out keeps its built-in
+  default, and a missing or malformed file falls back to the defaults
+  entirely — served at `GET /scenarios/colours`, consumed by
+  `useScenarioColors()` on the frontend. See
+  `docs/administrator-guide/data-directory.md#customising-the-scenario-colours`.
+
+- **The Identify tool's results now dock into the right-hand side panel**
+  instead of a map-anchored popup that blocked whatever it was pointing at,
+  with no way to move it. Clicking a different catchment (or the site
+  boundary) while identifying replaces the panel's content in place.
+  Opening identify while another panel (indicator/target editor/chart
+  details) is already open widens the dock and shows identify results to
+  its left, rather than displacing it — each side collapses independently.
+  The identify panel's header is a fixed row above its own scrollable body
+  rather than a `position: sticky` table cell, so there's no gap above the
+  header as rows scroll underneath it (the old popup's failure mode). If
+  slot B closes while identify is still open, identify animates over to
+  take its place rather than snapping. Every docked panel's collapse
+  button is now a filled circle in the site's own orange, its chevron in
+  inverted (dark-on-orange) colours, replacing a plain `">"` that read as
+  an afterthought — including the indicator panel, which previously had no
+  collapse button at all in single-pane layout.
 
 - **Load shedding.** The server now runs a bounded number of API requests at
   once — two per CPU core — queues a short burst behind that, and refuses
@@ -83,6 +164,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question it was usually asked, from runs already recorded.
 
 ### Fixed
+
+- **The target arrow no longer hides under the current arrow on the circular
+  dial.** Current was drawn after target, so in SVG's paint order it always sat
+  on top — a target close to the current value could be fully obscured. Current
+  now draws first, target second, matching the belt dial's existing
+  target-drawn-last convention.
+
+- **The pane header now shows a factor's unit in brackets after its name**,
+  e.g. "Grass cover fraction (%)", for every view mode that shares that header
+  (dial, belt, table, chart). The `unit` prop already reached the dial and
+  belt charts but was only wired into a hidden `<title>` tooltip, so
+  indicators with different units looked directly comparable when they were
+  not. Matches the "label (unit)" convention already used on the chart view's
+  y-axis.
+
+- **The map panel's indicator label, and the table panel's own Site Average
+  caption and column header, now show the factor's unit in brackets too** —
+  the same "label (unit)" convention already applied to the shared pane
+  header. Both draw their labels independently of that header, so they
+  needed their own `composeLabelWithUnit()` wiring.
+
+- **One reference/current/target colour scheme, everywhere it's drawn** —
+  reference green, current blue, target pink. Previously the circular dial
+  used green for both reference and target (indistinguishable), the belt
+  dial used a red reference line next to a green reference bar (disagreeing
+  with itself), the chart view carried a third, independently hardcoded copy
+  of the old orange/blue/green scheme, and the map's corner-label accents,
+  swiper divider, and scenario picker read from a fourth, independently
+  drifted pastel palette (reference was pastel orange, target was pastel
+  green). Every view now reads from one `SCENARIO_COLORS` constant, with the
+  map/label accents as a softened pastel tint of the same hues rather than a
+  separately maintained palette.
+
+- **Scenario selection is now synced across every open pane.** Changing
+  which scenario is Left ("Scenario 1") or Right ("Scenario 2") on one
+  pane's Indicator panel used to only change that pane — every other open
+  pane kept comparing whatever it already was, with no indication anything
+  had changed elsewhere. Panes could silently drift onto different
+  comparisons, and onto different colour accents for the same corner as a
+  result, since a pane's accent colour follows whichever scenario is
+  assigned to it. Both selections now propagate to every open pane; only
+  each pane's own attribute stays independent.
+
+- **The guided tour dialog no longer disappears while editing a target.**
+  It used to hide itself entirely while the targets panel was open and
+  reappear only once the panel closed — and a bug in the open/close
+  pairing (tracked in `ContentArea`, which unmounts on page navigation)
+  could leave it hidden for good if a tour step opened the panel and then
+  navigated elsewhere, with no explanation and no way back. The dialog now
+  stays visible the whole time a target is being edited — editing a target
+  and reading the tour aren't mutually exclusive, and the docked panel
+  never overlapped the tour box anyway. Opening the panel still advances a
+  step that was waiting for exactly that action.
 
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers

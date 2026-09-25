@@ -41,21 +41,21 @@ function Section({ title, body, delay }: SectionProps) {
 function PartnershipPage({ onNavigate }: PartnershipPageProps) {
   const sections: SectionProps[] = [
     {
-      title: 'Rewild Capital',
-      body:
-        'A nature-based carbon project developer focused on restoring African landscapes through innovative conservation finance. By combining ecological science, carbon markets, and technology, Rewild Capital delivers high-integrity projects that enhance biodiversity, strengthen ecosystem resilience, sequester carbon, and create lasting benefits for local communities.',
-      delay: 0.2,
-    },
-    {
       title: 'Future Ecosystems for Africa',
       body:
         'Future Ecosystems for Africa (FEFA) advances African-led research at the intersection of conservation and development. Through interdisciplinary collaboration, FEFA generates knowledge, harnesses African data and expertise, and develops tools that support informed decision-making for resilient ecosystems and sustainable futures.',
+      delay: 0.2,
+    },
+    {
+      title: 'Rewild Capital',
+      body:
+        'A nature-based carbon project developer focused on restoring African landscapes through innovative conservation finance. By combining ecological science, carbon markets, and technology, Rewild Capital delivers high-integrity projects that enhance biodiversity, strengthen ecosystem resilience, sequester carbon, and create lasting benefits for local communities.',
       delay: 0.3,
     },
     {
-      title: 'ReWild Capital and FEFA Collaboration',
+      title: 'Rewild Capital and FEFA Collaboration',
       body:
-        "The Landscape Decision Dashboard brings together Rewild Capital's expertise in nature-based carbon project development with FEFA's leadership in ecosystem, rangeland, and climate science. Together, the partnership empowers evidence-based decision-making that supports context-specific ecosystem restoration, sustainable land management, and resilient livelihoods across African landscapes.",
+        "The African Landscape Futures Dashboard brings together Rewild Capital's expertise in nature-based carbon project development with FEFA's leadership in ecosystem, rangeland, and climate science. Together, the partnership empowers evidence-based decision-making that supports context-specific ecosystem restoration, sustainable land management, and resilient livelihoods across African landscapes.",
       delay: 0.4,
     },
   ];

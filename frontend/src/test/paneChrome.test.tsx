@@ -90,7 +90,7 @@ describe('ViewPane chrome', () => {
     // legitimately need six of them.
     const { getByLabelText } = await renderPane();
     expect(getByLabelText('Focus pane')).toBeInTheDocument();
-    expect(getByLabelText('Configure factor')).toBeInTheDocument();
+    expect(getByLabelText('Change variable')).toBeInTheDocument();
   });
 });
 
@@ -244,6 +244,16 @@ describe('the scenario labels', () => {
   it('is applied to both scenario labels', () => {
     expect(MAPVIEW).toContain("leftLabel.className = 'dt-pane-label'");
     expect(MAPVIEW).toContain("rightLabel.className = 'dt-pane-label'");
+  });
+
+  it("shows the factor's unit in brackets, the same as the pane header", () => {
+    // The map draws its own label instead of going through PaneHeader (see
+    // above), so it needed its own composeLabelWithUnit wiring rather than
+    // inheriting the fix that covers dial/belt/table/chart.
+    const indicator = MAPVIEW.slice(MAPVIEW.indexOf('if (indicatorLabel)'));
+    const block = indicator.slice(0, indicator.indexOf("indicatorLabel.style.display"));
+    expect(block).toContain('composeLabelWithUnit');
+    expect(block).toContain('attributeUnits[comparison.attribute]');
   });
 });
 

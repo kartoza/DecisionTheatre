@@ -1,16 +1,16 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
-import { FiChevronRight } from 'react-icons/fi';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
 import { createRecalculationScheduler, loadLiveUpdatePreference, resolveLiveUpdate, saveLiveUpdatePreference } from '../lib/liveTargetUpdate';
-import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
+import { DEFAULT_PANE_STATES, maxPanesForViewMode, quadRowsForPaneCount } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import type { ScaleDerivation } from '../lib/dialScale';
 import { usePanelWidth } from '../lib/panelWidth';
 import PanelResizeHandle from './PanelResizeHandle';
+import PanelCollapseButton from './PanelCollapseButton';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -31,6 +31,7 @@ interface ContentAreaProps {
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -82,8 +83,6 @@ interface ContentAreaProps {
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
-  quadColumns?: QuadColumns;
-  onQuadColumnsChange?: (cols: QuadColumns) => void;
   fullDomainData?: FullDomainData | null;
 }
 
@@ -183,6 +182,7 @@ function ContentArea({
   onRemovePane,
   onIdentify,
   identifyResult,
+  onSiteIdentify,
   onMapExtentChange,
   onStatisticsChange,
   isPanelOpen,
@@ -214,8 +214,6 @@ function ContentArea({
   isTargetModalOpen,
   onCloseTargetModal,
   refreshKey,
-  quadColumns = 2,
-  onQuadColumnsChange,
   fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
@@ -443,20 +441,10 @@ function ContentArea({
     return () => observer.disconnect();
   }, []);
 
-  // Broadcast open/close so the guided tour can react to the panel appearing.
-  // Using a ref to skip the initial mount dispatch. The event names predate
-  // the panel being a docked panel rather than a modal and are kept as-is so
-  // the tours keep working.
-  const prevPanelOpenRef = useRef(false);
-  useEffect(() => {
-    const isOpen = isTargetModalOpen ?? false;
-    if (isOpen && !prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-opened'));
-    } else if (!isOpen && prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-closed'));
-    }
-    prevPanelOpenRef.current = isOpen;
-  }, [isTargetModalOpen]);
+  // The dt:targets-modal-opened/closed broadcast (for the guided tour) moved
+  // to App.tsx, which never unmounts across page navigation -- this
+  // component does, and a local ref here lost track of the pairing whenever
+  // that happened. See App.tsx's isTargetModalOpen effect for why.
 
   // One recalculation round trip. `draftValues` is passed in rather than read
   // from `targetDraftValues` state so the value that triggered it is
@@ -562,17 +550,26 @@ function ContentArea({
     schedulerRef.current?.schedule(draftValues);
   };
 
+  // The grid is always 3 columns wide, showing at most maxPanesForViewMode
+  // panes for whatever it's currently displaying -- any more and they
+  // overflowed the viewport, forcing a scroll the user had no way to
+  // discover (#204). Extra pane configs beyond the cap are kept in
+  // paneStates, just not rendered, so they reappear if the cap grows again
+  // (e.g. switching to belt charts, which keep growing a row every 3 panes).
+  const gridViewMode = viewModes[0] ?? 'map';
+  const quadPaneCap = maxPanesForViewMode(gridViewMode);
   const visibleIndices = isQuad
-    ? paneStates.map((_, index) => index)
+    ? paneStates.slice(0, quadPaneCap).map((_, index) => index)
     : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
+  const quadRows = quadRowsForPaneCount(visibleIndices.length, gridViewMode);
 
   // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
   // rather than fixed, because which pane is bottom-left changes: panes are
-  // removable, the columns toggle between two and three, and a pane showing a
-  // chart cannot host a map control.
+  // removable, the row count grows and shrinks, and a pane showing a chart
+  // cannot host a map control.
   const navigationPane = navigationPaneIndex(
     visibleIndices,
-    isQuad ? quadColumns : 1,
+    isQuad ? 3 : 1,
     (paneIndex) => viewModes[paneIndex] === 'map',
   );
 
@@ -598,9 +595,15 @@ function ContentArea({
         h="100%"
         flex={1}
         display="grid"
-        gridTemplateColumns={isQuad ? `repeat(${quadColumns}, minmax(0, 1fr))` : '1fr'}
+        // Always 3 across -- quadRows (derived above, not a setting) picks
+        // how many rows deep (#204). Sized for the actual row count, not a
+        // fixed guess: the grid used to always size rows as if there were
+        // only 2, no matter how many the pane count actually needed, so a
+        // 6-pane grid already needed 3 rows and pushed the extra one
+        // off-screen with no visible scroll affordance pointing at it.
+        gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
         gridTemplateRows={isQuad ? undefined : '1fr'}
-        gridAutoRows={isQuad ? 'calc((100% - 2px) / 2)' : undefined}
+        gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
         alignContent={isQuad ? 'start' : undefined}
         gap={isQuad ? '2px' : 0}
         bg={isQuad ? 'gray.700' : 'transparent'}
@@ -638,6 +641,7 @@ function ContentArea({
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
                   identifyResult={identifyResult}
+                  onSiteIdentify={onSiteIdentify}
                   siteId={siteId}
                   siteBounds={siteBounds}
                   isBoundaryEditMode={isBoundaryEditMode}
@@ -664,8 +668,6 @@ function ContentArea({
                   refreshKey={refreshKey}
                   targetHasBeenUpdated={targetHasBeenUpdated}
                   editableTargetKeys={editableTargetKeys}
-                  quadColumns={quadColumns}
-                  onQuadColumnsChange={onQuadColumnsChange}
                   fullDomainData={fullDomainData}
                 />
               </motion.div>
@@ -691,6 +693,7 @@ function ContentArea({
             onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
+            onSiteIdentify={onSiteIdentify}
             onMapExtentChange={onMapExtentChange}
             onStatisticsChange={onStatisticsChange}
             isPanelOpen={isPanelOpen}
@@ -769,13 +772,7 @@ function ContentArea({
                 <Box>{STRINGS.recalculating}</Box>
               </HStack>
             )}
-            <IconButton
-              aria-label={STRINGS.closePanel}
-              icon={<FiChevronRight />}
-              size="sm"
-              variant="ghost"
-              onClick={onCloseTargetModal}
-            />
+            <PanelCollapseButton label={STRINGS.closePanel} onClick={() => onCloseTargetModal?.()} />
           </HStack>
 
           <Box px={4} pb={3}>

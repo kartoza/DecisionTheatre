@@ -4,20 +4,20 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
-import { BsGrid3X3, BsGrid, BsSpeedometer2 } from 'react-icons/bs';
+import { BsSpeedometer2 } from 'react-icons/bs';
 import MapView from './MapView';
 import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { attributeSpread, capRange, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
+import { attributeSpread, capRange, composeLabelWithUnit, hasDeclaredMax, hasDeclaredMin, pastelTint } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
-import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, LayoutMode, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits, useScenarioColors } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
@@ -46,6 +46,7 @@ interface ViewPaneProps {
   onRemovePane?: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -78,8 +79,6 @@ interface ViewPaneProps {
   refreshKey?: number;
   targetHasBeenUpdated?: boolean;
   editableTargetKeys?: string[];
-  quadColumns?: QuadColumns;
-  onQuadColumnsChange?: (cols: QuadColumns) => void;
   fullDomainData?: FullDomainData | null;
 }
 
@@ -122,6 +121,7 @@ function ViewPane({
   onRemovePane,
   onIdentify,
   identifyResult,
+  onSiteIdentify,
   onMapExtentChange,
   onStatisticsChange,
   isPanelOpen,
@@ -151,13 +151,12 @@ function ViewPane({
   refreshKey,
   targetHasBeenUpdated = false,
   editableTargetKeys = [],
-  quadColumns = 2,
-  onQuadColumnsChange,
   fullDomainData,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const { units: attributeUnits } = useAttributeUnits();
+  const { colors: scenarioColors } = useScenarioColors();
   const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
   const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
 
@@ -431,6 +430,13 @@ function ViewPane({
         .replace(/\b\w/g, (c) => c.toUpperCase())
     : undefined;
 
+  // The pane header is the one place the label appears for every non-map view
+  // mode, so the unit goes here rather than repeated on each reading below it.
+  const dialAttributeUnit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
+  const dialAttributeLabelWithUnit = dialAttributeLabel
+    ? composeLabelWithUnit(dialAttributeLabel, dialAttributeUnit)
+    : undefined;
+
   // Calculate dial chart values based on current attribute and range mode
   const dialData = useMemo(() => {
     const attribute = comparison.attribute;
@@ -671,6 +677,12 @@ function ViewPane({
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
+  // Corner-label accent: a pastel tint of the scenario's own colour (from
+  // useScenarioColors, itself overridable via the datapack's colours.json),
+  // not the static SCENARIOS.color default -- so an override actually shows
+  // up here instead of only on the dial/chart markers.
+  const leftAccentColor = leftInfo ? pastelTint(scenarioColors[leftInfo.id as keyof typeof scenarioColors]) : undefined;
+  const rightAccentColor = rightInfo ? pastelTint(scenarioColors[rightInfo.id as keyof typeof scenarioColors]) : undefined;
 
   const isQuad = layoutMode === 'quad';
   const showDialFactorPrompt = isQuad && (viewMode === 'dial' || viewMode === 'flat') && !comparison.attribute;
@@ -812,6 +824,7 @@ function ViewPane({
           onOpenSettings={() => onFocusPane(paneIndex)}
           onIdentify={onIdentify}
           identifyResult={identifyResult}
+          onSiteIdentify={onSiteIdentify}
           onMapExtentChange={onMapExtentChange}
           onStatisticsChange={onStatisticsChange}
           isPanelOpen={isPanelOpen}
@@ -951,11 +964,11 @@ function ViewPane({
       {viewMode !== 'map' && (
         <PaneHeader
           compact={compact}
-          title={dialAttributeLabel}
+          title={dialAttributeLabelWithUnit}
           leftLabel={viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (leftInfo?.label || comparison.leftScenario)}
-          leftColor={leftInfo?.color}
+          leftColor={leftAccentColor}
           rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (rightInfo?.label || comparison.rightScenario)}
-          rightColor={rightInfo?.color}
+          rightColor={rightAccentColor}
         />
       )}
 
@@ -1037,25 +1050,11 @@ function ViewPane({
               />
             </Tooltip>
             {onOpenControlPanel && (
-              <Tooltip label="Configure factor" placement="top">
+              <Tooltip label="Change variable" placement="top">
                 <IconButton
-                  aria-label="Configure factor"
+                  aria-label="Change variable"
                   icon={<FiSliders />}
                   onClick={() => onOpenControlPanel(paneIndex)}
-                  variant="ghost"
-                  color="white"
-                  _hover={{ bg: 'whiteAlpha.300' }}
-                  size={btnSize}
-                  borderRadius="md"
-                />
-              </Tooltip>
-            )}
-            {paneIndex === 0 && onQuadColumnsChange && (
-              <Tooltip label={quadColumns === 2 ? '3 across' : '2 across'} placement="top">
-                <IconButton
-                  aria-label={quadColumns === 2 ? 'Switch to 3 columns' : 'Switch to 2 columns'}
-                  icon={quadColumns === 2 ? <BsGrid3X3 /> : <BsGrid />}
-                  onClick={() => onQuadColumnsChange(quadColumns === 2 ? 3 : 2)}
                   variant="ghost"
                   color="white"
                   _hover={{ bg: 'whiteAlpha.300' }}

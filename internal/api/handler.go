@@ -38,6 +38,7 @@ type Handler struct {
 	cfg                config.Config
 	satelliteUsage     *config.SatelliteUsage
 	metaCache          *MetadataCache
+	scenarioColours    ScenarioColours
 	lookupsMu          sync.RWMutex
 	lookups            *LookupTables
 	pendingCatchments  sync.Map // siteID → chan struct{} closed when deferred catchment goroutine finishes
@@ -63,12 +64,13 @@ func NewHandler(
 	satelliteUsage *config.SatelliteUsage,
 ) *Handler {
 	h := &Handler{
-		tileStore:      tileStore,
-		gpkgStore:      gpkgStore,
-		siteStore:      siteStore,
-		cfg:            cfg,
-		satelliteUsage: satelliteUsage,
-		metaCache:      loadMetadataCache(cfg.DataDir),
+		tileStore:       tileStore,
+		gpkgStore:       gpkgStore,
+		siteStore:       siteStore,
+		cfg:             cfg,
+		satelliteUsage:  satelliteUsage,
+		metaCache:       loadMetadataCache(cfg.DataDir),
+		scenarioColours: loadScenarioColours(cfg.DataDir),
 	}
 
 	// metadata.csv is exported from R, whose make.names() rewrites spaces and
@@ -107,6 +109,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 
 	// Scenario data
 	r.HandleFunc("/scenarios", h.handleListScenarios).Methods("GET")
+	r.HandleFunc("/scenarios/colours", h.handleScenarioColours).Methods("GET")
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
 	r.HandleFunc("/metadata/colors", h.handleMetadataColors).Methods("GET")
 	r.HandleFunc("/metadata/details", h.handleMetadataDetails).Methods("GET")
@@ -449,6 +452,13 @@ func (h *Handler) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, h.gpkgStore.GetScenarios())
+}
+
+// handleScenarioColours returns the reference/current/target colours drawn
+// on every dial, chart, and map panel label -- the built-in defaults,
+// overridden by any fields set in colours.json.
+func (h *Handler) handleScenarioColours(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.scenarioColours)
 }
 
 // handleListColumns returns available attribute columns

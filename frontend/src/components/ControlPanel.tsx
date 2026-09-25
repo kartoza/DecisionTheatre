@@ -9,20 +9,21 @@ import {
   Badge,
   useColorModeValue,
   Slide,
-  IconButton,
   HStack,
   Tooltip,
   Button,
   ButtonGroup,
   Spacer,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
+import { FiInfo, FiMapPin } from 'react-icons/fi';
+import PanelCollapseButton from './PanelCollapseButton';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping, useScenarioColors } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
+import { pastelTint } from '../lib/dialScale';
 import { usePanelWidth } from '../lib/panelWidth';
 import PanelResizeHandle from './PanelResizeHandle';
 
@@ -30,9 +31,9 @@ interface ControlPanelProps {
   isOpen: boolean;
   onClose?: () => void;
   /**
-   * Single pane's control panel is the only way to reach its factor/scenario
-   * controls — there's no per-pane "Configure factor" button to reopen it the
-   * way grid view has one for each pane — so it isn't collapsible there.
+   * Defaults to shown in every layout. Each pane's own "Change variable"
+   * hover button (ViewPane.tsx) reopens this panel, in single-pane layout
+   * too, so closing it here is never a dead end.
    */
   canCollapse?: boolean;
   comparison: ComparisonState;
@@ -352,13 +353,19 @@ function ScenarioSelector({
   hideLabel?: boolean;
 }) {
   const selectedInfo = SCENARIOS.find((s) => s.id === value);
+  const { colors: scenarioColors } = useScenarioColors();
+  // The scenario currently assigned to this side, not a fixed left/right
+  // colour -- swapping which scenario is on which side now recolours the
+  // badge with it, matching every other scenario-identity accent in the app
+  // instead of a positional orange/blue pair unrelated to that identity.
+  const scenarioAccent = pastelTint(scenarioColors[value]);
 
   return (
     <Box>
       {!hideLabel && (
         <HStack mb={2}>
           <Badge
-            bg={side === 'left' ? colors.orange : colors.blue}
+            bg={scenarioAccent}
             color={colors.dark}
             variant="subtle"
             fontSize="xs"
@@ -379,7 +386,7 @@ function ScenarioSelector({
         bg={useColorModeValue('gray.50', 'gray.700')}
         border="none"
         fontWeight="500"
-        _focus={{ boxShadow: `0 0 0 2px ${selectedInfo?.color || '#2bb0ed'}` }}
+        _focus={{ boxShadow: `0 0 0 2px ${scenarioColors[value] || selectedInfo?.color || '#2bb0ed'}` }}
       >
         {SCENARIOS.map((s) => (
           <option key={s.id} value={s.id}>
@@ -1197,22 +1204,15 @@ function ControlPanel({
           panels that share this slot. It used to sit at top:2 of a box padded
           for a hardcoded 70px header, which put it visually underneath the
           real (content-sized) header rather than below it — invisible and
-          unclickable in grid view's "Configure factor" panel. The panel now
+          unclickable in grid view's "Change variable" panel. The panel now
           docks below the measured header instead, so the button sits in the
-          clear. Single pane has no equivalent button to reopen it, so it's
-          omitted there rather than left as a dead end.
+          clear. Shown in every layout, including single pane: each pane's own
+          "Change variable" hover button (ViewPane.tsx) reopens it, so
+          closing here is no longer a dead end the way it once was.
         */}
         {canCollapse && (
           <Box position="absolute" top={2} right={2} zIndex={3}>
-            <Tooltip label="Collapse panel" placement="left">
-              <IconButton
-                aria-label="Collapse panel"
-                icon={<FiChevronRight />}
-                size="sm"
-                variant="ghost"
-                onClick={() => onClose?.()}
-              />
-            </Tooltip>
+            <PanelCollapseButton onClick={() => onClose?.()} />
           </Box>
         )}
 

@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bandGradientStops,
+  composeLabelWithUnit,
   formatValue,
   greenZoneCenter,
   normalize,
@@ -16,8 +17,77 @@ import {
   capRange,
   hasDeclaredMax,
   hasDeclaredMin,
+  pastelTint,
   tickValues,
 } from '../lib/dialScale';
+
+describe('composeLabelWithUnit', () => {
+  it('appends the unit in brackets', () => {
+    expect(composeLabelWithUnit('Total Methane production', 'kgkm-2')).toBe(
+      'Total Methane production (kgkm-2)',
+    );
+  });
+
+  it('leaves the label alone when there is no unit', () => {
+    expect(composeLabelWithUnit('Total Methane production', '')).toBe('Total Methane production');
+  });
+
+  it('does not double up a label that already ends in a parenthesised unit', () => {
+    // Reported: "Percent burned (%)" is metadata's own Detailed name, already
+    // carrying a unit -- blindly appending the separate Units column value
+    // ("percentage") would read as "Percent burned (%) (percentage)".
+    expect(composeLabelWithUnit('Percent burned (%)', 'percentage')).toBe('Percent burned (%)');
+  });
+
+  it('does not double up a percent-type label that ends in a bare %', () => {
+    // "Mean tree cover %" bakes the unit in without parentheses.
+    expect(composeLabelWithUnit('Mean tree cover %', 'percentage')).toBe('Mean tree cover %');
+    expect(composeLabelWithUnit('Mean tree cover %', 'percent')).toBe('Mean tree cover %');
+    expect(composeLabelWithUnit('Mean tree cover %', '%')).toBe('Mean tree cover %');
+  });
+
+  it('still appends a non-percent unit even if the label ends in a percent sign', () => {
+    // The bare-% guard is specific to percent-type units -- it should not
+    // suppress an unrelated unit that happens to follow a label ending in %.
+    expect(composeLabelWithUnit('Weird label %', 'kgkm-2')).toBe('Weird label % (kgkm-2)');
+  });
+
+  it('does not crash when the metadata value is not actually a string', () => {
+    // Reported in CI: a test double's blanket fetch stub returned a number
+    // for /metadata/details, which crashed the whole pane on label.trim()
+    // once this composed the label directly instead of just interpolating
+    // it into JSX (which silently coerces). Nothing guarantees the real API
+    // response is Record<string, string> at runtime either -- it's parsed
+    // JSON with no shape validation -- so this coerces rather than trusts it.
+    // @ts-expect-error deliberately passing a non-string to check the guard
+    expect(composeLabelWithUnit(42, 'kgkm-2')).toBe('42 (kgkm-2)');
+    // @ts-expect-error deliberately passing undefined to check the guard
+    expect(composeLabelWithUnit(undefined, 'kgkm-2')).toBe(' (kgkm-2)');
+  });
+});
+
+describe('pastelTint', () => {
+  it('lightens a saturated colour toward white', () => {
+    expect(pastelTint('#4caf50', 0.5)).toBe('#a6d7a8');
+  });
+
+  it('at amount 0 returns the colour unchanged', () => {
+    expect(pastelTint('#4caf50', 0)).toBe('#4caf50');
+  });
+
+  it('at amount 1 returns white', () => {
+    expect(pastelTint('#4caf50', 1)).toBe('#ffffff');
+  });
+
+  it('accepts a hex without a leading #', () => {
+    expect(pastelTint('4caf50', 0.5)).toBe('#a6d7a8');
+  });
+
+  it('returns the input unchanged if it is not a valid 6-digit hex', () => {
+    expect(pastelTint('not-a-colour')).toBe('not-a-colour');
+    expect(pastelTint('#fff')).toBe('#fff');
+  });
+});
 
 describe('normalize', () => {
   it('maps the ends and the middle', () => {

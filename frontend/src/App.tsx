@@ -4,6 +4,7 @@ import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
 import ChartDetailsPanel from './components/ChartDetailsPanel';
+import IdentifyDock from './components/IdentifyDock';
 import Header from './components/Header';
 import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
@@ -21,7 +22,7 @@ import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
 import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
-import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
   loadPaneStates,
@@ -36,10 +37,10 @@ import {
   saveCurrentSite,
   loadRangeMode,
   saveRangeMode,
-  loadQuadColumns,
-  saveQuadColumns,
+  maxPanesForViewMode,
   markSessionActive,
   shouldPromptResumeSession,
+  applyScenarioToAllPanes,
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
 import type { CalculationDetailsProps } from './components/CalculationDetails';
@@ -61,7 +62,6 @@ function App() {
   const dataAvailabilityWarnedSiteRef = useRef<string | null>(null);
   const { isOpen: isDocsOpen, onToggle: onToggleDocs, onClose: onCloseDocs } = useDisclosure({ defaultIsOpen: false });
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
-  const [quadColumns, setQuadColumns] = useState<QuadColumns>(loadQuadColumns);
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
@@ -91,6 +91,7 @@ function App() {
   const boundaryEditedDuringSessionRef = useRef(false);
   const [editSite, setEditSite] = useState<Site | null>(null);
   const [identifyResult, setIdentifyResult] = useState<IdentifyResult>(null);
+  const [siteIdentifyResult, setSiteIdentifyResult] = useState<SiteIdentifyResult>(null);
   const [mapExtent, setMapExtent] = useState<MapExtent | null>(null);
   const [isExploreMode, setIsExploreMode] = useState(() => loadCurrentPage() === 'explore');
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
@@ -237,7 +238,6 @@ function App() {
   // Persist state changes to local storage
   useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
   useEffect(() => { saveLayoutMode(layoutMode); }, [layoutMode]);
-  useEffect(() => { saveQuadColumns(quadColumns); }, [quadColumns]);
   useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
@@ -425,6 +425,21 @@ function App() {
     }
   };
 
+  // Broadcast that the targets panel opened, so a guided-tour step waiting
+  // for exactly that action can advance. The tour dialog itself no longer
+  // hides while the panel is open -- editing a target and reading the tour
+  // are not mutually exclusive, and the docked panel never overlaps the
+  // tour box -- so there is no "closed" counterpart to dispatch or pair up.
+  // This used to live in ContentArea against a local ref, which lost track
+  // whenever ContentArea unmounted (a tour step that opened the panel and
+  // then navigated elsewhere, e.g. to the indicators page); tracking it
+  // here instead means it survives navigation, since App never unmounts.
+  useEffect(() => {
+    if (isTargetModalOpen) {
+      window.dispatchEvent(new Event('dt:targets-modal-opened'));
+    }
+  }, [isTargetModalOpen]);
+
   // The chart details panel: which pane it is explaining, and the account it
   // was handed when it opened. The derivation is stored rather than recomputed
   // here, because half of it is intermediate state of ViewPane's dial
@@ -579,9 +594,6 @@ function App() {
     if (site.layoutMode) {
       setLayoutMode(site.layoutMode);
     }
-    if (site.quadColumns) {
-      setQuadColumns(site.quadColumns);
-    }
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
     // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
@@ -636,12 +648,14 @@ function App() {
     setIndicatorPaneIndex(paneIndex);
   }, []);
 
-  // Switch to quad mode and hide filter panel
+  // Switch to quad mode and hide filter panel. Row count is derived (#204),
+  // not set here -- ContentArea works it out from the pane count and mode.
   const handleGoQuad = useCallback(() => {
+    const nextMode = viewModes[focusedPane] ?? 'map';
     setLayoutMode('quad');
     setIndicatorPaneIndex(null);
-    setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
-  }, [focusedPane]);
+    setViewModes((prev) => prev.map(() => nextMode));
+  }, [focusedPane, viewModes]);
 
   // Open the control panel as a modal, scoped to one pane, while staying in grid view.
   const handleOpenGridControlPanel = useCallback((paneIndex: number) => {
@@ -672,7 +686,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-single-map-view', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-dial, 3-column layout for the
+  // Listen for demo event to switch to a 6-dial, 2-row grid for the
   // Exploring Management Targets tour step.
   useEffect(() => {
     const handler = () => {
@@ -686,7 +700,6 @@ function App() {
         { ...base, attribute: 'NPP_gm2' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
@@ -696,7 +709,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-pane, 3-column flat-dial layout —
+  // Listen for demo event to switch to a 6-pane, 2-row flat-dial grid —
   // the Malawi case study's default factors — for the ViphyaDemoTour's
   // "Exploring Interventions" tour step.
   useEffect(() => {
@@ -711,7 +724,6 @@ function App() {
         { ...base, attribute: 'NPP_gm2.1' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'flat'));
@@ -795,7 +807,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-herbivore-functional-group-chart', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-dial, 3-column layout covering the
+  // Listen for demo event to switch to a 6-dial, 2-row grid covering the
   // ecosystem-scale consequences of the current herbivore regime, for the
   // AfricaDemoTour.
   useEffect(() => {
@@ -810,7 +822,6 @@ function App() {
         { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
@@ -820,7 +831,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial-africa', handler);
   }, []);
 
-  // Same 6-pane, 3-column layout as dt:demo-go-quad-dial-africa above, but as
+  // Same 6-pane, 2-row grid as dt:demo-go-quad-dial-africa above, but as
   // flat dials (bands rather than gauges) — for the AfricaDemoTour's
   // "Ecosystem-Scale Consequences" step, which shares its pane set with the
   // "Intervention" step but wants the flat presentation instead.
@@ -836,7 +847,6 @@ function App() {
         { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'flat'));
@@ -969,15 +979,21 @@ function App() {
     });
   }, [layoutMode]);
 
+  // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
+  // not a per-pane preference -- reported: change one pane's Right dropdown
+  // to Target State and the others silently kept comparing Reference vs
+  // Current, so panes drifted onto different comparisons (and different
+  // colour accents for the same corner) with no indication anything had.
+  // Every open pane always compares the same pair now, the same way
+  // handleGridViewModeChange already applies a view-mode change to every
+  // pane rather than just the one being configured.
   const handleLeftChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'left', scenario));
+  }, []);
 
   const handleRightChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { rightScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'right', scenario));
+  }, []);
 
   const handleAttributeChange = useCallback((attribute: string) => {
     if (indicatorPaneIndex !== null)
@@ -1023,13 +1039,23 @@ function App() {
   }, [indicatorPaneIndex]);
 
 
+  // Catchment identify and site-boundary identify share one dock slot (see
+  // IdentifyDock) -- a new one of either kind replaces whichever was
+  // showing, matching "click again on the map to replace it" for both.
   const handleIdentify = useCallback((result: IdentifyResult) => {
     setIdentifyResult(result);
-    // Open the side panel if not already open
-    if (indicatorPaneIndex === null) {
-      setIndicatorPaneIndex(focusedPane);
-    }
-  }, [indicatorPaneIndex, focusedPane]);
+    setSiteIdentifyResult(null);
+  }, []);
+
+  const handleSiteIdentify = useCallback((result: SiteIdentifyResult) => {
+    setSiteIdentifyResult(result);
+    setIdentifyResult(null);
+  }, []);
+
+  const handleCloseIdentify = useCallback(() => {
+    setIdentifyResult(null);
+    setSiteIdentifyResult(null);
+  }, []);
 
   // Track map extent changes
   const handleMapExtentChange = useCallback((extent: MapExtent) => {
@@ -1161,6 +1187,13 @@ function App() {
   // The control panel is the same slide-out in every layout now, so there is no
   // longer a grid-only modal variant to exclude.
   const isIndicatorOpen = indicatorPaneIndex !== null;
+
+  // "Slot B": the target editor, indicator panel, and chart details are
+  // mutually exclusive with each other. Identify results are a separate,
+  // independent slot (see IdentifyDock) that can show alongside whichever
+  // of these is open, widening the dock rather than replacing it.
+  const isSlotBOpen = isIndicatorOpen || (isTargetModalOpen ?? false) || chartDetails !== null;
+  const isIdentifyPanelOpen = identifyResult !== null || siteIdentifyResult !== null;
 
   // Show setup guide when tiles aren't loaded
   if (info && !info.tiles_loaded) {
@@ -1356,6 +1389,14 @@ function App() {
           rangeMode,
           onRangeModeChange: setRangeMode,
           onAddPane: handleAddPane,
+          // The grid can only grow so many panes before it overflows the
+          // viewport (#204) — belt charts grow a row every 3 panes up to 5
+          // rows (15 panes); everything else stays fixed at 2 rows (6
+          // panes). Single-pane mode has no such ceiling; only one pane is
+          // ever on screen there.
+          isAddPaneDisabled: layoutMode === 'quad'
+            && paneStates.length >= maxPanesForViewMode(viewModes[focusedPane] ?? viewModes[0] ?? 'map'),
+          addPaneDisabledLabel: `Maximum ${maxPanesForViewMode(viewModes[focusedPane] ?? viewModes[0] ?? 'map')} panels for this view`,
           onOpenTargets: handleToggleTargetModal,
           hasTargets: hasEditableTargets,
           siteId: currentSiteId,
@@ -1386,9 +1427,13 @@ function App() {
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
           // One slot, one width — so the content gives up the same strip
           // whichever panel is in it, and follows the edge as it is dragged.
-          mr={(isIndicatorOpen || isTargetModalOpen || chartDetails !== null)
-            ? { base: 0, md: `${panelWidth}px` }
-            : 0}
+          // Doubled when identify results sit alongside slot B, since the
+          // dock is then two sections wide rather than one.
+          mr={(isSlotBOpen && isIdentifyPanelOpen)
+            ? { base: 0, md: `${panelWidth * 2}px` }
+            : (isSlotBOpen || isIdentifyPanelOpen)
+              ? { base: 0, md: `${panelWidth}px` }
+              : 0}
           position="relative"
         >
           <ContentArea
@@ -1404,6 +1449,7 @@ function App() {
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
+            onSiteIdentify={handleSiteIdentify}
             onMapExtentChange={handleMapExtentChange}
             onStatisticsChange={handleStatisticsChange}
             isPanelOpen={isIndicatorOpen}
@@ -1435,8 +1481,6 @@ function App() {
             isTargetModalOpen={isTargetModalOpen}
             onCloseTargetModal={handleCloseTargetModal}
             refreshKey={mapRefreshSeq}
-            quadColumns={quadColumns}
-            onQuadColumnsChange={setQuadColumns}
             fullDomainData={fullDomainData}
           />
         </Box>
@@ -1448,11 +1492,17 @@ function App() {
           calculations={chartDetails?.calculations ?? null}
         />
 
+        <IdentifyDock
+          identifyResult={identifyResult}
+          siteIdentifyResult={siteIdentifyResult}
+          onClose={handleCloseIdentify}
+          isSlotBOpen={isSlotBOpen}
+        />
+
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
-          canCollapse={layoutMode !== 'single'}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
