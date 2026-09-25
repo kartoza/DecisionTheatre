@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grid view no longer overflows the viewport.** It sized every row as if
+  there were only two, no matter how many the pane count actually needed —
+  so a default six-pane grid already needed three rows and pushed the third
+  off-screen, forcing a scroll the user had no way to discover. The grid is
+  now always exactly three columns wide, and row count is not a setting —
+  it grows and shrinks with the pane count. Map, dial and table views stay
+  fixed at 2 rows (6 panes): they need more room per pane, so that stays the
+  ceiling. Belt charts are small enough to keep going — adding a row every 3
+  panes as more are added, up to 5 rows (15 panes) — and fill the available
+  space rather than sitting at a fixed size. "Add pane" disables with a
+  visible reason once a view's cap is reached, rather than silently doing
+  nothing or letting panes run off-screen again. Pane configurations beyond
+  the current cap are never discarded — only their rendering is — so
+  switching a capped grid back to belt charts brings the rest back exactly
+  as they were. Fixes #204.
+
 ### Added
 
 - **Scenario colours are now overridable per data pack**, via an optional

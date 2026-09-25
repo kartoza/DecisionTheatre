@@ -22,7 +22,7 @@ import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
 import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
-import type { Scenario, LayoutMode, QuadColumns, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
   loadPaneStates,
@@ -37,8 +37,7 @@ import {
   saveCurrentSite,
   loadRangeMode,
   saveRangeMode,
-  loadQuadColumns,
-  saveQuadColumns,
+  maxPanesForViewMode,
   markSessionActive,
   shouldPromptResumeSession,
   applyScenarioToAllPanes,
@@ -63,7 +62,6 @@ function App() {
   const dataAvailabilityWarnedSiteRef = useRef<string | null>(null);
   const { isOpen: isDocsOpen, onToggle: onToggleDocs, onClose: onCloseDocs } = useDisclosure({ defaultIsOpen: false });
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(loadLayoutMode);
-  const [quadColumns, setQuadColumns] = useState<QuadColumns>(loadQuadColumns);
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
@@ -240,7 +238,6 @@ function App() {
   // Persist state changes to local storage
   useEffect(() => { savePaneStates(paneStates); }, [paneStates]);
   useEffect(() => { saveLayoutMode(layoutMode); }, [layoutMode]);
-  useEffect(() => { saveQuadColumns(quadColumns); }, [quadColumns]);
   useEffect(() => { saveFocusedPane(focusedPane); }, [focusedPane]);
   useEffect(() => { saveCurrentPage(currentPage); }, [currentPage]);
   useEffect(() => { saveCurrentSite(currentSiteId); }, [currentSiteId]);
@@ -597,9 +594,6 @@ function App() {
     if (site.layoutMode) {
       setLayoutMode(site.layoutMode);
     }
-    if (site.quadColumns) {
-      setQuadColumns(site.quadColumns);
-    }
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
     // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
@@ -654,12 +648,14 @@ function App() {
     setIndicatorPaneIndex(paneIndex);
   }, []);
 
-  // Switch to quad mode and hide filter panel
+  // Switch to quad mode and hide filter panel. Row count is derived (#204),
+  // not set here -- ContentArea works it out from the pane count and mode.
   const handleGoQuad = useCallback(() => {
+    const nextMode = viewModes[focusedPane] ?? 'map';
     setLayoutMode('quad');
     setIndicatorPaneIndex(null);
-    setViewModes((prev) => prev.map(() => prev[focusedPane] ?? 'map'));
-  }, [focusedPane]);
+    setViewModes((prev) => prev.map(() => nextMode));
+  }, [focusedPane, viewModes]);
 
   // Open the control panel as a modal, scoped to one pane, while staying in grid view.
   const handleOpenGridControlPanel = useCallback((paneIndex: number) => {
@@ -690,7 +686,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-single-map-view', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-dial, 3-column layout for the
+  // Listen for demo event to switch to a 6-dial, 2-row grid for the
   // Exploring Management Targets tour step.
   useEffect(() => {
     const handler = () => {
@@ -704,7 +700,6 @@ function App() {
         { ...base, attribute: 'NPP_gm2' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
@@ -714,7 +709,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-pane, 3-column flat-dial layout —
+  // Listen for demo event to switch to a 6-pane, 2-row flat-dial grid —
   // the Malawi case study's default factors — for the ViphyaDemoTour's
   // "Exploring Interventions" tour step.
   useEffect(() => {
@@ -729,7 +724,6 @@ function App() {
         { ...base, attribute: 'NPP_gm2.1' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'flat'));
@@ -813,7 +807,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-herbivore-functional-group-chart', handler);
   }, []);
 
-  // Listen for demo event to switch to a 6-dial, 3-column layout covering the
+  // Listen for demo event to switch to a 6-dial, 2-row grid covering the
   // ecosystem-scale consequences of the current herbivore regime, for the
   // AfricaDemoTour.
   useEffect(() => {
@@ -828,7 +822,6 @@ function App() {
         { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'dial'));
@@ -838,7 +831,7 @@ function App() {
     return () => window.removeEventListener('dt:demo-go-quad-dial-africa', handler);
   }, []);
 
-  // Same 6-pane, 3-column layout as dt:demo-go-quad-dial-africa above, but as
+  // Same 6-pane, 2-row grid as dt:demo-go-quad-dial-africa above, but as
   // flat dials (bands rather than gauges) — for the AfricaDemoTour's
   // "Ecosystem-Scale Consequences" step, which shares its pane set with the
   // "Intervention" step but wants the flat presentation instead.
@@ -854,7 +847,6 @@ function App() {
         { ...base, attribute: 'herbs_fg_kgkm2_Megaherbivores' },
       ];
       setLayoutMode('quad');
-      setQuadColumns(3);
       setIndicatorPaneIndex(null);
       setPaneStates(demoPanes);
       setViewModes(demoPanes.map(() => 'flat'));
@@ -1397,6 +1389,14 @@ function App() {
           rangeMode,
           onRangeModeChange: setRangeMode,
           onAddPane: handleAddPane,
+          // The grid can only grow so many panes before it overflows the
+          // viewport (#204) — belt charts grow a row every 3 panes up to 5
+          // rows (15 panes); everything else stays fixed at 2 rows (6
+          // panes). Single-pane mode has no such ceiling; only one pane is
+          // ever on screen there.
+          isAddPaneDisabled: layoutMode === 'quad'
+            && paneStates.length >= maxPanesForViewMode(viewModes[focusedPane] ?? viewModes[0] ?? 'map'),
+          addPaneDisabledLabel: `Maximum ${maxPanesForViewMode(viewModes[focusedPane] ?? viewModes[0] ?? 'map')} panels for this view`,
           onOpenTargets: handleToggleTargetModal,
           hasTargets: hasEditableTargets,
           siteId: currentSiteId,
@@ -1481,8 +1481,6 @@ function App() {
             isTargetModalOpen={isTargetModalOpen}
             onCloseTargetModal={handleCloseTargetModal}
             refreshKey={mapRefreshSeq}
-            quadColumns={quadColumns}
-            onQuadColumnsChange={setQuadColumns}
             fullDomainData={fullDomainData}
           />
         </Box>

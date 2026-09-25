@@ -3,8 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
 import { createRecalculationScheduler, loadLiveUpdatePreference, resolveLiveUpdate, saveLiveUpdatePreference } from '../lib/liveTargetUpdate';
-import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
+import { DEFAULT_PANE_STATES, maxPanesForViewMode, quadRowsForPaneCount } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import type { ScaleDerivation } from '../lib/dialScale';
@@ -83,8 +83,6 @@ interface ContentAreaProps {
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
-  quadColumns?: QuadColumns;
-  onQuadColumnsChange?: (cols: QuadColumns) => void;
   fullDomainData?: FullDomainData | null;
 }
 
@@ -216,8 +214,6 @@ function ContentArea({
   isTargetModalOpen,
   onCloseTargetModal,
   refreshKey,
-  quadColumns = 2,
-  onQuadColumnsChange,
   fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
@@ -554,17 +550,26 @@ function ContentArea({
     schedulerRef.current?.schedule(draftValues);
   };
 
+  // The grid is always 3 columns wide, showing at most maxPanesForViewMode
+  // panes for whatever it's currently displaying -- any more and they
+  // overflowed the viewport, forcing a scroll the user had no way to
+  // discover (#204). Extra pane configs beyond the cap are kept in
+  // paneStates, just not rendered, so they reappear if the cap grows again
+  // (e.g. switching to belt charts, which keep growing a row every 3 panes).
+  const gridViewMode = viewModes[0] ?? 'map';
+  const quadPaneCap = maxPanesForViewMode(gridViewMode);
   const visibleIndices = isQuad
-    ? paneStates.map((_, index) => index)
+    ? paneStates.slice(0, quadPaneCap).map((_, index) => index)
     : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
+  const quadRows = quadRowsForPaneCount(visibleIndices.length, gridViewMode);
 
   // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
   // rather than fixed, because which pane is bottom-left changes: panes are
-  // removable, the columns toggle between two and three, and a pane showing a
-  // chart cannot host a map control.
+  // removable, the row count grows and shrinks, and a pane showing a chart
+  // cannot host a map control.
   const navigationPane = navigationPaneIndex(
     visibleIndices,
-    isQuad ? quadColumns : 1,
+    isQuad ? 3 : 1,
     (paneIndex) => viewModes[paneIndex] === 'map',
   );
 
@@ -590,9 +595,15 @@ function ContentArea({
         h="100%"
         flex={1}
         display="grid"
-        gridTemplateColumns={isQuad ? `repeat(${quadColumns}, minmax(0, 1fr))` : '1fr'}
+        // Always 3 across -- quadRows (derived above, not a setting) picks
+        // how many rows deep (#204). Sized for the actual row count, not a
+        // fixed guess: the grid used to always size rows as if there were
+        // only 2, no matter how many the pane count actually needed, so a
+        // 6-pane grid already needed 3 rows and pushed the extra one
+        // off-screen with no visible scroll affordance pointing at it.
+        gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
         gridTemplateRows={isQuad ? undefined : '1fr'}
-        gridAutoRows={isQuad ? 'calc((100% - 2px) / 2)' : undefined}
+        gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
         alignContent={isQuad ? 'start' : undefined}
         gap={isQuad ? '2px' : 0}
         bg={isQuad ? 'gray.700' : 'transparent'}
@@ -657,8 +668,6 @@ function ContentArea({
                   refreshKey={refreshKey}
                   targetHasBeenUpdated={targetHasBeenUpdated}
                   editableTargetKeys={editableTargetKeys}
-                  quadColumns={quadColumns}
-                  onQuadColumnsChange={onQuadColumnsChange}
                   fullDomainData={fullDomainData}
                 />
               </motion.div>

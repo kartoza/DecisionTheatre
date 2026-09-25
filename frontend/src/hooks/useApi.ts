@@ -727,7 +727,6 @@ export async function createSite(
       updatedAt: now,
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
       appRuntime: 'browser',
     };
@@ -768,7 +767,6 @@ export async function createSite(
     body: JSON.stringify({
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
     }),
   });
