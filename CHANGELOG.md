@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Rebranded to "African Landscape Futures Dashboard"**, with the subtitle
+  "Science-based decision support for Africa's changing landscapes", across
+  the landing page hero, its "Use the ... to:" heading, the partnership
+  page, and both guided-tour scripts that referenced the old name.
+- **"Configure factor" renamed to "Change variable"** (the per-pane button
+  that opens the factor/scenario controls).
+- **Partnership page now lists FEFA above Rewild Capital**, matching the
+  page's own heading order ("The FEFA and Rewild Capital Partnership").
+- **Landing page's four "Explore..." cards have new hover text**, matching
+  the client's requested copy for Conservation Futures, Shared Landscapes,
+  Policy Impacts and Future Possibilities.
+- **The feedback footer is a real call to action now**, not a single
+  gray line easy to mistake for decoration. It's a pinned strip under every
+  page (App.tsx) — already there, just easy to miss — with an orange accent
+  border, a heartbeat-pulsing icon, and a hover state that lights up the
+  whole bar and underlines the link text with a sliding arrow. It also used
+  to read its URL from a build-time env var that this project's build
+  pipeline does not treat as a rebuild trigger (`scripts/lib-build.sh`'s
+  staleness check has no entry for `frontend/.env`), so an edited `.env`
+  silently kept shipping the old, unconfigured build and "click here" did
+  nothing. There is only one form and no deployment that needs a different
+  one, so the URL is hardcoded now instead of reintroducing that whole
+  class of problem for no benefit. Copy updated to the client's requested
+  wording throughout.
+
 ### Added
 
 - **Load shedding.** The server now runs a bounded number of API requests at
