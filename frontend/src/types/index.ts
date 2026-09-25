@@ -71,12 +71,32 @@ export type RangeMode = 'domain' | 'extent' | 'site';
 /** Per-pane state array (minimum one entry) */
 export type PaneStates = ComparisonState[];
 
-export type QuadColumns = 2 | 3;
+/**
+ * The grid is always 3 columns wide. Row count is not a setting -- it is
+ * derived from how many panes are actually on screen, growing by a row
+ * every 3 panes as more are added. Map, dial and table views stay fixed at
+ * 2 rows (6 panes): the grid used to size every row as if there were only
+ * 2 regardless of pane count, which overflowed the viewport and forced a
+ * scroll the user had no way to discover (issue #204). Belt charts are
+ * small enough to keep growing past that, up to 5 rows (15 panes).
+ */
+const QUAD_COLUMNS = 3;
+const MIN_QUAD_ROWS = 2;
+const MAX_QUAD_ROWS_BELT = 5;
+
+export function maxPanesForViewMode(mode: ViewMode): number {
+  return QUAD_COLUMNS * (mode === 'flat' ? MAX_QUAD_ROWS_BELT : MIN_QUAD_ROWS);
+}
+
+/** How many rows the grid needs for this many panes, given the view mode. */
+export function quadRowsForPaneCount(paneCount: number, mode: ViewMode): number {
+  if (mode !== 'flat') return MIN_QUAD_ROWS;
+  return Math.min(MAX_QUAD_ROWS_BELT, Math.max(MIN_QUAD_ROWS, Math.ceil(paneCount / QUAD_COLUMNS)));
+}
 
 const STORAGE_KEY = 'dt-pane-states';
 const STORAGE_LAYOUT_KEY = 'dt-layout-mode';
 const STORAGE_FOCUSED_KEY = 'dt-focused-pane';
-const STORAGE_QUAD_COLUMNS_KEY = 'dt-quad-columns';
 
 export const DEFAULT_PANE_STATES: PaneStates = [
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'AGBwd_Mgha' },
@@ -130,18 +150,6 @@ export function saveFocusedPane(index: number): void {
 }
 
 const STORAGE_RANGE_MODE_KEY = 'dt-range-mode';
-
-export function loadQuadColumns(): QuadColumns {
-  try {
-    const raw = localStorage.getItem(STORAGE_QUAD_COLUMNS_KEY);
-    if (raw === '2' || raw === '3') return Number(raw) as QuadColumns;
-  } catch { /* default */ }
-  return 2;
-}
-
-export function saveQuadColumns(cols: QuadColumns): void {
-  safeSetItem(STORAGE_QUAD_COLUMNS_KEY, String(cols));
-}
 
 export function loadRangeMode(): RangeMode {
   try {
@@ -285,7 +293,6 @@ export function clearBrowserAppCache(): void {
     STORAGE_KEY,
     STORAGE_LAYOUT_KEY,
     STORAGE_FOCUSED_KEY,
-    STORAGE_QUAD_COLUMNS_KEY,
     STORAGE_RANGE_MODE_KEY,
     STORAGE_CURRENT_SITE_KEY,
     STORAGE_CURRENT_PAGE_KEY,
@@ -371,7 +378,6 @@ export interface Site {
   // Map state
   paneStates?: PaneStates;
   layoutMode?: LayoutMode;
-  quadColumns?: QuadColumns;
   focusedPane?: number;
   mapExtent?: MapExtent;
 

@@ -130,6 +130,36 @@ describe('GridControls map toggles', () => {
   });
 });
 
+describe('GridControls Add Pane cap (#204)', () => {
+  it('enables Add Pane by default', () => {
+    const { wide } = renderControls({ onAddPane: vi.fn() });
+    expect(wide.getByLabelText('Add pane')).not.toBeDisabled();
+  });
+
+  it('disables Add Pane at the cap, with a reason shown rather than a silent no-op', () => {
+    const { wide } = renderControls({
+      onAddPane: vi.fn(),
+      isAddPaneDisabled: true,
+      addPaneDisabledLabel: 'Maximum 6 panels for this view',
+    });
+    const button = wide.getByLabelText('Add pane');
+    expect(button).toBeDisabled();
+    fireEvent.mouseOver(button);
+    expect(screen.getByText('Maximum 6 panels for this view')).toBeInTheDocument();
+  });
+
+  it('disables the overflow-menu Add Pane item at the cap too', async () => {
+    const { narrow } = renderControls({
+      onAddPane: vi.fn(),
+      isAddPaneDisabled: true,
+      addPaneDisabledLabel: 'Maximum 9 panels for this view',
+    });
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Maximum 9 panels for this view')).toBeInTheDocument();
+  });
+});
+
 describe('Header placement', () => {
   /**
    * The cluster was gated on `currentPage === 'map'` and vanished in explore
