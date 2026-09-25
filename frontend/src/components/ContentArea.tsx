@@ -1,16 +1,16 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
-import { FiChevronRight } from 'react-icons/fi';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
 import { createRecalculationScheduler, loadLiveUpdatePreference, resolveLiveUpdate, saveLiveUpdatePreference } from '../lib/liveTargetUpdate';
 import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
+import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import type { ScaleDerivation } from '../lib/dialScale';
 import { usePanelWidth } from '../lib/panelWidth';
 import PanelResizeHandle from './PanelResizeHandle';
+import PanelCollapseButton from './PanelCollapseButton';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -31,6 +31,7 @@ interface ContentAreaProps {
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -183,6 +184,7 @@ function ContentArea({
   onRemovePane,
   onIdentify,
   identifyResult,
+  onSiteIdentify,
   onMapExtentChange,
   onStatisticsChange,
   isPanelOpen,
@@ -628,6 +630,7 @@ function ContentArea({
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
                   identifyResult={identifyResult}
+                  onSiteIdentify={onSiteIdentify}
                   siteId={siteId}
                   siteBounds={siteBounds}
                   isBoundaryEditMode={isBoundaryEditMode}
@@ -681,6 +684,7 @@ function ContentArea({
             onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
+            onSiteIdentify={onSiteIdentify}
             onMapExtentChange={onMapExtentChange}
             onStatisticsChange={onStatisticsChange}
             isPanelOpen={isPanelOpen}
@@ -759,13 +763,7 @@ function ContentArea({
                 <Box>{STRINGS.recalculating}</Box>
               </HStack>
             )}
-            <IconButton
-              aria-label={STRINGS.closePanel}
-              icon={<FiChevronRight />}
-              size="sm"
-              variant="ghost"
-              onClick={onCloseTargetModal}
-            />
+            <PanelCollapseButton label={STRINGS.closePanel} onClick={() => onCloseTargetModal?.()} />
           </HStack>
 
           <Box px={4} pb={3}>
