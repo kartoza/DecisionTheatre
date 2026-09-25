@@ -21,13 +21,13 @@ import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
 import {
-  SCENARIO_COLORS,
   bandGradientStops,
   formatValue,
   greenZoneCenter,
   normalize,
   tickValues,
 } from '../lib/dialScale';
+import { useScenarioColors } from '../hooks/useApi';
 
 export interface FlatDialProps {
   visible: boolean;
@@ -63,6 +63,7 @@ function FlatDial({
   isLoading = false,
   zeroCentered = false,
 }: FlatDialProps) {
+  const { colors: SCENARIO_COLORS } = useScenarioColors();
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 300 });
   const controls = useAnimation();

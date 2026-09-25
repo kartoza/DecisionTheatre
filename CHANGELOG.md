@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scenario colours are now overridable per data pack**, via an optional
+  `colours.json` in the data directory (`{"reference": "#...", "current":
+  "#...", "target": "#..."}`). Any field left out keeps its built-in
+  default, and a missing or malformed file falls back to the defaults
+  entirely — served at `GET /scenarios/colours`, consumed by
+  `useScenarioColors()` on the frontend. See
+  `docs/administrator-guide/data-directory.md#customising-the-scenario-colours`.
+
 - **Load shedding.** The server now runs a bounded number of API requests at
   once — two per CPU core — queues a short burst behind that, and refuses
   anything further with `503` and a `Retry-After` header. Before this it
@@ -103,6 +111,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same "label (unit)" convention already applied to the shared pane
   header. Both draw their labels independently of that header, so they
   needed their own `composeLabelWithUnit()` wiring.
+
+- **One reference/current/target colour scheme, everywhere it's drawn** —
+  reference green, current blue, target pink. Previously the circular dial
+  used green for both reference and target (indistinguishable), the belt
+  dial used a red reference line next to a green reference bar (disagreeing
+  with itself), the chart view carried a third, independently hardcoded copy
+  of the old orange/blue/green scheme, and the map's corner-label accents,
+  swiper divider, and scenario picker read from a fourth, independently
+  drifted pastel palette (reference was pastel orange, target was pastel
+  green). Every view now reads from one `SCENARIO_COLORS` constant, with the
+  map/label accents as a softened pastel tint of the same hues rather than a
+  separately maintained palette.
 
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers

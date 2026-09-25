@@ -20,14 +20,12 @@ function Plot(props: PlotProps) {
     </Suspense>
   );
 }
-import { fetchAggregate, getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, getSiteWhiskerBounds, useAttributeAxisLabels, useAttributeGroupingVariables, useAttributeVariableTypes, useColumns, useAttributeUnits, useAttributeXAxisLabels, useAttributeChartTypes, useScenarioColors } from '../hooks/useApi';
 import type { WhiskerBoundsResponse } from '../hooks/useApi';
 import { isAbortError } from '../lib/sharedRequest';
 import type { SiteIndicators, MapExtent, MapStatistics, RangeMode, Scenario, ZoneStats, CatchmentIndicators } from '../types';
 import { computeAOIWeightedScenarioValues } from '../utils/indicators';
 
-// Kartoza color scheme: orange, blue, green
-const SERIES_COLORS = ['#e65100', '#2bb0ed', '#4caf50'];
 const SERIES_LABELS = ['Reference', 'Current', 'Target'];
 
 const PADDING = { top: 50, right: 60, bottom: 140, left: 80 };
@@ -354,6 +352,12 @@ function ChartView({
   const startTimeRef = useRef<number>(0);
   const controls = useAnimation();
 
+  const { colors: scenarioColors } = useScenarioColors();
+  // Same scheme as the dial/belt charts: reference green, current blue,
+  // target pink -- one shared source (useScenarioColors) rather than a
+  // second hardcoded copy. A component-local array, not a module constant,
+  // since colours.json's overrides only resolve after mount.
+  const SERIES_COLORS = [scenarioColors.reference, scenarioColors.current, scenarioColors.future];
   const { axisLabels } = useAttributeAxisLabels();
   const { units } = useAttributeUnits();
   const { variableTypes } = useAttributeVariableTypes();
