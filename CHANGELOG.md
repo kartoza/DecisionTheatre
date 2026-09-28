@@ -92,6 +92,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The target arrow no longer hides under the current arrow on the circular
+  dial.** Current was drawn after target, so in SVG's paint order it always sat
+  on top — a target close to the current value could be fully obscured. Current
+  now draws first, target second, matching the belt dial's existing
+  target-drawn-last convention.
+
 - **One reference/current/target colour scheme, everywhere it's drawn** —
   reference green, current blue, target pink. Previously the circular dial
   used green for both reference and target (indistinguishable), the belt
