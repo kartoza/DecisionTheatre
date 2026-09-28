@@ -1483,6 +1483,10 @@ function App() {
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
+          // Single pane keeps this panel open for the one pane on screen —
+          // there is no grid of other panes to switch attention to, so a
+          // collapse control here would leave the user unable to get it back.
+          canCollapse={layoutMode === 'quad'}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}

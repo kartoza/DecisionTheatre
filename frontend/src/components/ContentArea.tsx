@@ -691,6 +691,7 @@ function ContentArea({
             onViewModeChange={onViewModeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
+            onOpenControlPanel={onOpenControlPanel}
             onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
