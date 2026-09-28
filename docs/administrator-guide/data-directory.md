@@ -126,10 +126,53 @@ parent must be writable.
 |---|---|
 | `walkthroughs/*.json` | Read-only demo sites backing the guided tours, served at `/data/walkthroughs/` |
 | `demo/` | Assets used by the tours, e.g. `Munywana_dissolved_fixed.zip` |
+| `colours.json` | Overrides for the reference/current/target colours used throughout the UI — see [Customising the scenario colours](#customising-the-scenario-colours) below |
 
 Each walkthrough file's name must equal the `id` field inside it, and both must match an
 entry in `frontend/src/constants/walkthroughSites.ts`. All three are checked by the
 validator.
+
+## Customising the scenario colours
+
+Every dial, chart, and map panel draws the same three colours for the same three things —
+the ecological reference, the current state, and the user's target — so that a colour
+means one thing wherever it appears. The built-in defaults are:
+
+| Role | Default |
+|---|---|
+| `reference` | `#4caf50` (green) |
+| `current` | `#2bb0ed` (blue) |
+| `target` | `#d946ef` (pink) |
+
+To override any of these, add `colours.json` to the data directory. Any field left out
+keeps its default — you do not need to specify all three to change one:
+
+```json
+{
+  "reference": "#4caf50",
+  "current": "#2bb0ed",
+  "target": "#ff9800"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `reference` | Colour for the ecological reference scenario |
+| `current` | Colour for the current-state scenario |
+| `target` | Colour for the user-defined target scenario |
+
+Each value must be a 6-digit hex colour (`#rrggbb`). If `colours.json` is absent, is not
+valid JSON, or a field is missing or blank, that field's built-in default is used instead
+— a malformed or partial file never breaks the application, and does not need to be valid
+for the app to start.
+
+Map corner-label accents and similar background-style uses are a softened tint of
+whichever colour is in effect, computed automatically — there is nothing extra to
+configure for those.
+
+!!! note "No restart required at the API level, but the frontend caches per session"
+    The server re-reads `colours.json` on startup. A running frontend session that has
+    already fetched the colours will not pick up a change until it reloads.
 
 ## Data pipeline inputs
 
@@ -183,6 +226,7 @@ data/
 ├── images/                        # runtime: site thumbnails
 ├── walkthroughs/*.json            # optional: demo sites for the guided tours
 ├── demo/                          # optional: tour assets
+├── colours.json                   # optional: scenario colour overrides
 │
 ├── catchments.gpkg                # pipeline input — not read at runtime
 ├── current*.csv                   # pipeline input — not read at runtime

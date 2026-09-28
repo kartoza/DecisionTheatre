@@ -76,7 +76,7 @@ function PaneHeader({
           left="50%"
           transform="translateX(-50%)"
           zIndex={7}
-          maxW="60%"
+          maxW="85%"
           bg="blackAlpha.800"
           color="white"
           px={4}
@@ -85,9 +85,8 @@ function PaneHeader({
           fontSize={compact ? 'xs' : 'sm'}
           fontWeight="700"
           letterSpacing="0.5px"
-          whiteSpace="nowrap"
-          overflow="hidden"
-          textOverflow="ellipsis"
+          whiteSpace="normal"
+          textAlign="center"
           backdropFilter="blur(8px)"
           pointerEvents="none"
         >
