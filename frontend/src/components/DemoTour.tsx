@@ -134,7 +134,6 @@ export default function DemoTour({
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
   const [loadStatus, setLoadStatus] = useState<{ message: string; pct: number } | null>(null);
-  const [isBlockedByModal, setIsBlockedByModal] = useState(false);
   const dragControls = useDragControls();
   const toast = useToast();
 
@@ -151,19 +150,20 @@ export default function DemoTour({
     onStepChange?.(step, visible);
   }, [step, visible, onStepChange]);
 
+  // Reported: opening the targets panel used to hide the tour text
+  // entirely, and a bug in the pairing that brought it back could leave it
+  // hidden for good. The dialog now stays visible the whole time a target
+  // is being edited -- editing a target and reading the tour are not
+  // mutually exclusive, and the docked panel (right side) never overlaps
+  // the tour box (bottom left) anyway. Opening the panel still advances a
+  // step that was waiting for exactly that action.
   useEffect(() => {
     if (targetsModalAdvanceSteps.length === 0) return;
     const handleOpen = () => {
-      setIsBlockedByModal(true);
       setStep((current) => (targetsModalAdvanceSteps.includes(current) ? current + 1 : current));
     };
-    const handleClose = () => setIsBlockedByModal(false);
     window.addEventListener('dt:targets-modal-opened', handleOpen);
-    window.addEventListener('dt:targets-modal-closed', handleClose);
-    return () => {
-      window.removeEventListener('dt:targets-modal-opened', handleOpen);
-      window.removeEventListener('dt:targets-modal-closed', handleClose);
-    };
+    return () => window.removeEventListener('dt:targets-modal-opened', handleOpen);
   }, [targetsModalAdvanceSteps]);
 
   const navigateTo = (page: string) => {
@@ -263,9 +263,9 @@ export default function DemoTour({
   const isLast = step === steps.length - 1;
   const spotlightRect = useSpotlightRect(visible ? current.targetId : undefined);
 
-  usePaneChromeForced(visible && !isBlockedByModal);
+  usePaneChromeForced(visible);
 
-  if (!visible || isBlockedByModal) return null;
+  if (!visible) return null;
 
   return (
     <Portal>

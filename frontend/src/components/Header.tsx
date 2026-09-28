@@ -62,6 +62,8 @@ interface HeaderProps {
     rangeMode?: RangeMode;
     onRangeModeChange?: (mode: RangeMode) => void;
     onAddPane?: () => void;
+    isAddPaneDisabled?: boolean;
+    addPaneDisabledLabel?: string;
     onOpenTargets?: () => void;
     hasTargets?: boolean;
     siteId?: string | null;
