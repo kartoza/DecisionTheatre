@@ -90,7 +90,7 @@ describe('ViewPane chrome', () => {
     // legitimately need six of them.
     const { getByLabelText } = await renderPane();
     expect(getByLabelText('Focus pane')).toBeInTheDocument();
-    expect(getByLabelText('Configure factor')).toBeInTheDocument();
+    expect(getByLabelText('Change variable')).toBeInTheDocument();
   });
 });
 

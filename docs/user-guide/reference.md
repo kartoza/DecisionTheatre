@@ -19,9 +19,9 @@ The entry point of the application.
 | Component | Description |
 |-----------|-------------|
 | **Header** | Logos (left); **My Sites**, **Download**, **Toggle documentation** icons (right) |
-| **Hero section** | "Welcome to the Landscape Decision Dashboard" title, strapline, and the **Explore the Future of Ecosystem Decision-Making** button, which opens [Explore mode](../guide/define-a-site-boundary.md) |
+| **Hero section** | "Welcome to the African Landscape Futures Dashboard" title, strapline, and the **Explore the Future of Ecosystem Decision-Making** button, which opens [Explore mode](../guide/define-a-site-boundary.md) |
 | **Supporting landscape management** | Auto-advancing screenshot carousel (Dials / Chart / Map / Sites) with descriptive text and **The FEFA and Rewild Capital Partnership** button |
-| **Use the Landscape Decision Dashboard to...** | Capability strip and four audience cards, each launching a scripted [guided tour](../guide/take-a-guided-tour.md) of a pre-built demo site: **Explore Conservation Futures**, **Explore Shared Landscapes**, **Explore Policy Impacts**, **Explore Future Possibilities** |
+| **Use the Landscape Futures Dashboard to...** | Capability strip and four audience cards, each launching a scripted [guided tour](../guide/take-a-guided-tour.md) of a pre-built demo site: **Explore Conservation Futures**, **Explore Shared Landscapes**, **Explore Policy Impacts**, **Explore Future Possibilities** |
 | **How does it work?** | **Guided Tour** button (replays the app's onboarding walkthrough) plus a reference/current/target explainer |
 | **Members of Our Ecosystem** | Auto-advancing carousel of partner-organisation logos |
 | **Feedback link** | Persistent footer banner linking to a feedback form (if configured) |

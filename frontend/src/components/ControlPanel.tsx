@@ -1204,7 +1204,7 @@ function ControlPanel({
           panels that share this slot. It used to sit at top:2 of a box padded
           for a hardcoded 70px header, which put it visually underneath the
           real (content-sized) header rather than below it — invisible and
-          unclickable in grid view's "Configure factor" panel. The panel now
+          unclickable in grid view's "Change variable" panel. The panel now
           docks below the measured header instead, so the button sits in the
           clear. Shown in every layout, including single pane: each pane's own
           "Configure factor" hover button (ViewPane.tsx) reopens it, so

@@ -1050,9 +1050,9 @@ function ViewPane({
               />
             </Tooltip>
             {onOpenControlPanel && (
-              <Tooltip label="Configure factor" placement="top">
+              <Tooltip label="Change variable" placement="top">
                 <IconButton
-                  aria-label="Configure factor"
+                  aria-label="Change variable"
                   icon={<FiSliders />}
                   onClick={() => onOpenControlPanel(paneIndex)}
                   variant="ghost"
