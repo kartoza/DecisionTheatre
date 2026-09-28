@@ -4,7 +4,7 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FiBarChart2, FiInfo, FiMap, FiMaximize, FiGrid, FiMinus, FiTable, FiTrash2, FiSliders } from 'react-icons/fi';
-import { BsGrid3X3, BsGrid, BsSpeedometer2 } from 'react-icons/bs';
+import { BsSpeedometer2 } from 'react-icons/bs';
 import MapView from './MapView';
 import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
@@ -15,7 +15,7 @@ import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteR
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
-import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
+import type { ComparisonState, LayoutMode, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits, useScenarioColors } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
@@ -79,8 +79,6 @@ interface ViewPaneProps {
   refreshKey?: number;
   targetHasBeenUpdated?: boolean;
   editableTargetKeys?: string[];
-  quadColumns?: QuadColumns;
-  onQuadColumnsChange?: (cols: QuadColumns) => void;
   fullDomainData?: FullDomainData | null;
 }
 
@@ -153,8 +151,6 @@ function ViewPane({
   refreshKey,
   targetHasBeenUpdated = false,
   editableTargetKeys = [],
-  quadColumns = 2,
-  onQuadColumnsChange,
   fullDomainData,
 }: ViewPaneProps) {
   const borderColor = useColorModeValue('gray.600', 'gray.600');
@@ -1059,20 +1055,6 @@ function ViewPane({
                   aria-label="Configure factor"
                   icon={<FiSliders />}
                   onClick={() => onOpenControlPanel(paneIndex)}
-                  variant="ghost"
-                  color="white"
-                  _hover={{ bg: 'whiteAlpha.300' }}
-                  size={btnSize}
-                  borderRadius="md"
-                />
-              </Tooltip>
-            )}
-            {paneIndex === 0 && onQuadColumnsChange && (
-              <Tooltip label={quadColumns === 2 ? '3 across' : '2 across'} placement="top">
-                <IconButton
-                  aria-label={quadColumns === 2 ? 'Switch to 3 columns' : 'Switch to 2 columns'}
-                  icon={quadColumns === 2 ? <BsGrid3X3 /> : <BsGrid />}
-                  onClick={() => onQuadColumnsChange(quadColumns === 2 ? 3 : 2)}
                   variant="ghost"
                   color="white"
                   _hover={{ bg: 'whiteAlpha.300' }}
