@@ -428,11 +428,17 @@ export default function TourGuide() {
 
             {/* Progress dots */}
             <HStack spacing={1.5}>
-              {STEPS.map((_, i) => (
+              {STEPS.map((s, i) => (
                 <Box
                   key={i}
+                  as="button"
+                  type="button"
+                  aria-label={`Go to step ${i + 1} of ${STEPS.length}: ${s.title}`}
+                  aria-current={i === step ? 'step' : undefined}
                   w={i === step ? 4 : 2}
                   h={2}
+                  p={0}
+                  border="none"
                   borderRadius="full"
                   bg={i === step ? colors.orange : 'whiteAlpha.300'}
                   transition="all 0.2s"
@@ -476,15 +482,43 @@ export default function TourGuide() {
                       Back
                     </Button>
                   )}
-                  <Button
-                    size="xs"
-                    bg={colors.orange}
-                    color="white"
-                    _hover={{ opacity: 0.85 }}
-                    onClick={next}
-                  >
-                    {isLast ? 'Get started' : 'Next'}
-                  </Button>
+                  {isLast ? (
+                    // The tour used to just dismiss here, leaving the user to work
+                    // out on their own how to leave it or start creating their own
+                    // site (#219) -- "Skip tour" (left) still just dismisses, for
+                    // anyone who wants to keep exploring the site the tour built.
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        borderColor="whiteAlpha.400"
+                        color="white"
+                        _hover={{ bg: 'whiteAlpha.100' }}
+                        onClick={() => { navigate('landing'); dismiss(); }}
+                      >
+                        Back to main page
+                      </Button>
+                      <Button
+                        size="xs"
+                        bg={colors.orange}
+                        color="white"
+                        _hover={{ opacity: 0.85 }}
+                        onClick={() => { navigate('create-site'); dismiss(); }}
+                      >
+                        Create a site
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="xs"
+                      bg={colors.orange}
+                      color="white"
+                      _hover={{ opacity: 0.85 }}
+                      onClick={next}
+                    >
+                      Next
+                    </Button>
+                  )}
                 </HStack>
               </Flex>
             )}

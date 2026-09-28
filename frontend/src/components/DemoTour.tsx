@@ -339,11 +339,17 @@ export default function DemoTour({
             </Text>
 
             <HStack spacing={1.5}>
-              {steps.map((_, index) => (
+              {steps.map((s, index) => (
                 <Box
                   key={index}
+                  as="button"
+                  type="button"
+                  aria-label={`Go to step ${index + 1} of ${steps.length}: ${s.title}`}
+                  aria-current={index === step ? 'step' : undefined}
                   w={index === step ? 4 : 2}
                   h={2}
+                  p={0}
+                  border="none"
                   borderRadius="full"
                   bg={index === step ? colors.brightGreen : 'whiteAlpha.300'}
                   transition="all 0.2s"
@@ -393,15 +399,43 @@ export default function DemoTour({
                       Back
                     </Button>
                   )}
-                  <Button
-                    size="xs"
-                    bg={colors.brightGreen}
-                    color="white"
-                    _hover={{ opacity: 0.85 }}
-                    onClick={next}
-                  >
-                    {isLast ? 'Start exploring' : 'Next'}
-                  </Button>
+                  {isLast ? (
+                    // The tour used to just dismiss here, leaving the user to work
+                    // out on their own how to leave it or start creating their own
+                    // site (#219) -- "Close" (left) still just dismisses, for
+                    // anyone who wants to keep exploring this demo site as-is.
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        borderColor="whiteAlpha.400"
+                        color="white"
+                        _hover={{ bg: 'whiteAlpha.100' }}
+                        onClick={() => { navigateTo('landing'); dismiss(); }}
+                      >
+                        Back to main page
+                      </Button>
+                      <Button
+                        size="xs"
+                        bg={colors.brightGreen}
+                        color="white"
+                        _hover={{ opacity: 0.85 }}
+                        onClick={() => { navigateTo('create-site'); dismiss(); }}
+                      >
+                        Create a site
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="xs"
+                      bg={colors.brightGreen}
+                      color="white"
+                      _hover={{ opacity: 0.85 }}
+                      onClick={next}
+                    >
+                      Next
+                    </Button>
+                  )}
                 </HStack>
               </Flex>
             )}
