@@ -4,6 +4,7 @@ import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
 import ChartDetailsPanel from './components/ChartDetailsPanel';
+import IdentifyDock from './components/IdentifyDock';
 import Header from './components/Header';
 import DocsPanel from './components/DocsPanel';
 import SetupGuide from './components/SetupGuide';
@@ -21,7 +22,7 @@ import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
 import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
-import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
+import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
 import {
   DEFAULT_PANE_STATES,
   loadPaneStates,
@@ -39,6 +40,7 @@ import {
   maxPanesForViewMode,
   markSessionActive,
   shouldPromptResumeSession,
+  applyScenarioToAllPanes,
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
 import type { CalculationDetailsProps } from './components/CalculationDetails';
@@ -89,6 +91,7 @@ function App() {
   const boundaryEditedDuringSessionRef = useRef(false);
   const [editSite, setEditSite] = useState<Site | null>(null);
   const [identifyResult, setIdentifyResult] = useState<IdentifyResult>(null);
+  const [siteIdentifyResult, setSiteIdentifyResult] = useState<SiteIdentifyResult>(null);
   const [mapExtent, setMapExtent] = useState<MapExtent | null>(null);
   const [isExploreMode, setIsExploreMode] = useState(() => loadCurrentPage() === 'explore');
   const [mapStatistics, setMapStatistics] = useState<MapStatistics | null>(null);
@@ -421,6 +424,21 @@ function App() {
       onOpenTargetModal();
     }
   };
+
+  // Broadcast that the targets panel opened, so a guided-tour step waiting
+  // for exactly that action can advance. The tour dialog itself no longer
+  // hides while the panel is open -- editing a target and reading the tour
+  // are not mutually exclusive, and the docked panel never overlaps the
+  // tour box -- so there is no "closed" counterpart to dispatch or pair up.
+  // This used to live in ContentArea against a local ref, which lost track
+  // whenever ContentArea unmounted (a tour step that opened the panel and
+  // then navigated elsewhere, e.g. to the indicators page); tracking it
+  // here instead means it survives navigation, since App never unmounts.
+  useEffect(() => {
+    if (isTargetModalOpen) {
+      window.dispatchEvent(new Event('dt:targets-modal-opened'));
+    }
+  }, [isTargetModalOpen]);
 
   // The chart details panel: which pane it is explaining, and the account it
   // was handed when it opened. The derivation is stored rather than recomputed
@@ -961,15 +979,21 @@ function App() {
     });
   }, [layoutMode]);
 
+  // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
+  // not a per-pane preference -- reported: change one pane's Right dropdown
+  // to Target State and the others silently kept comparing Reference vs
+  // Current, so panes drifted onto different comparisons (and different
+  // colour accents for the same corner) with no indication anything had.
+  // Every open pane always compares the same pair now, the same way
+  // handleGridViewModeChange already applies a view-mode change to every
+  // pane rather than just the one being configured.
   const handleLeftChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'left', scenario));
+  }, []);
 
   const handleRightChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { rightScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'right', scenario));
+  }, []);
 
   const handleAttributeChange = useCallback((attribute: string) => {
     if (indicatorPaneIndex !== null)
@@ -1015,13 +1039,23 @@ function App() {
   }, [indicatorPaneIndex]);
 
 
+  // Catchment identify and site-boundary identify share one dock slot (see
+  // IdentifyDock) -- a new one of either kind replaces whichever was
+  // showing, matching "click again on the map to replace it" for both.
   const handleIdentify = useCallback((result: IdentifyResult) => {
     setIdentifyResult(result);
-    // Open the side panel if not already open
-    if (indicatorPaneIndex === null) {
-      setIndicatorPaneIndex(focusedPane);
-    }
-  }, [indicatorPaneIndex, focusedPane]);
+    setSiteIdentifyResult(null);
+  }, []);
+
+  const handleSiteIdentify = useCallback((result: SiteIdentifyResult) => {
+    setSiteIdentifyResult(result);
+    setIdentifyResult(null);
+  }, []);
+
+  const handleCloseIdentify = useCallback(() => {
+    setIdentifyResult(null);
+    setSiteIdentifyResult(null);
+  }, []);
 
   // Track map extent changes
   const handleMapExtentChange = useCallback((extent: MapExtent) => {
@@ -1153,6 +1187,13 @@ function App() {
   // The control panel is the same slide-out in every layout now, so there is no
   // longer a grid-only modal variant to exclude.
   const isIndicatorOpen = indicatorPaneIndex !== null;
+
+  // "Slot B": the target editor, indicator panel, and chart details are
+  // mutually exclusive with each other. Identify results are a separate,
+  // independent slot (see IdentifyDock) that can show alongside whichever
+  // of these is open, widening the dock rather than replacing it.
+  const isSlotBOpen = isIndicatorOpen || (isTargetModalOpen ?? false) || chartDetails !== null;
+  const isIdentifyPanelOpen = identifyResult !== null || siteIdentifyResult !== null;
 
   // Show setup guide when tiles aren't loaded
   if (info && !info.tiles_loaded) {
@@ -1347,7 +1388,10 @@ function App() {
           onViewModeChange: handleGridViewModeChange,
           rangeMode,
           onRangeModeChange: setRangeMode,
-          onAddPane: handleAddPane,
+          // Adding a pane only makes sense in the grid: single-pane mode has
+          // nowhere to put a second one, so the button is hidden there
+          // rather than shown disabled.
+          onAddPane: layoutMode === 'quad' ? handleAddPane : undefined,
           // The grid can only grow so many panes before it overflows the
           // viewport (#204) — belt charts grow a row every 3 panes up to 5
           // rows (15 panes); everything else stays fixed at 2 rows (6
@@ -1386,9 +1430,13 @@ function App() {
           transition="margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
           // One slot, one width — so the content gives up the same strip
           // whichever panel is in it, and follows the edge as it is dragged.
-          mr={(isIndicatorOpen || isTargetModalOpen || chartDetails !== null)
-            ? { base: 0, md: `${panelWidth}px` }
-            : 0}
+          // Doubled when identify results sit alongside slot B, since the
+          // dock is then two sections wide rather than one.
+          mr={(isSlotBOpen && isIdentifyPanelOpen)
+            ? { base: 0, md: `${panelWidth * 2}px` }
+            : (isSlotBOpen || isIdentifyPanelOpen)
+              ? { base: 0, md: `${panelWidth}px` }
+              : 0}
           position="relative"
         >
           <ContentArea
@@ -1404,6 +1452,7 @@ function App() {
             onRemovePane={handleRemovePane}
             onIdentify={handleIdentify}
             identifyResult={identifyResult}
+            onSiteIdentify={handleSiteIdentify}
             onMapExtentChange={handleMapExtentChange}
             onStatisticsChange={handleStatisticsChange}
             isPanelOpen={isIndicatorOpen}
@@ -1446,11 +1495,21 @@ function App() {
           calculations={chartDetails?.calculations ?? null}
         />
 
+        <IdentifyDock
+          identifyResult={identifyResult}
+          siteIdentifyResult={siteIdentifyResult}
+          onClose={handleCloseIdentify}
+          isSlotBOpen={isSlotBOpen}
+        />
+
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
-          canCollapse={layoutMode !== 'single'}
+          // Single pane keeps this panel open for the one pane on screen —
+          // there is no grid of other panes to switch attention to, so a
+          // collapse control here would leave the user unable to get it back.
+          canCollapse={layoutMode === 'quad'}
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}

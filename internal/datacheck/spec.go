@@ -129,6 +129,13 @@ var KnownEntries = []Entry{
 		Why:      "herbivore traits used by the species calculations",
 	},
 	{
+		Path:     "colours.json",
+		Role:     RoleRuntime,
+		Required: false,
+		ReadBy:   "internal/api/colours_cache.go:loadScenarioColours",
+		Why:      "overrides for the reference/current/target scenario colours; falls back to built-in defaults if absent or invalid",
+	},
+	{
 		Path:     "mbtiles/",
 		Role:     RoleRuntime,
 		Required: true,
