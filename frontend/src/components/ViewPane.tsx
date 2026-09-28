@@ -10,7 +10,7 @@ import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { attributeSpread, capRange, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
+import { attributeSpread, capRange, composeLabelWithUnit, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
@@ -429,6 +429,13 @@ function ViewPane({
       ?? comparison.attribute
         .replace(/_/g, ' ')
         .replace(/\b\w/g, (c) => c.toUpperCase())
+    : undefined;
+
+  // The pane header is the one place the label appears for every non-map view
+  // mode, so the unit goes here rather than repeated on each reading below it.
+  const dialAttributeUnit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
+  const dialAttributeLabelWithUnit = dialAttributeLabel
+    ? composeLabelWithUnit(dialAttributeLabel, dialAttributeUnit)
     : undefined;
 
   // Calculate dial chart values based on current attribute and range mode
@@ -951,7 +958,7 @@ function ViewPane({
       {viewMode !== 'map' && (
         <PaneHeader
           compact={compact}
-          title={dialAttributeLabel}
+          title={dialAttributeLabelWithUnit}
           leftLabel={viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (leftInfo?.label || comparison.leftScenario)}
           leftColor={leftInfo?.color}
           rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (rightInfo?.label || comparison.rightScenario)}
