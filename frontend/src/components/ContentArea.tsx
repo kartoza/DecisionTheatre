@@ -443,20 +443,10 @@ function ContentArea({
     return () => observer.disconnect();
   }, []);
 
-  // Broadcast open/close so the guided tour can react to the panel appearing.
-  // Using a ref to skip the initial mount dispatch. The event names predate
-  // the panel being a docked panel rather than a modal and are kept as-is so
-  // the tours keep working.
-  const prevPanelOpenRef = useRef(false);
-  useEffect(() => {
-    const isOpen = isTargetModalOpen ?? false;
-    if (isOpen && !prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-opened'));
-    } else if (!isOpen && prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-closed'));
-    }
-    prevPanelOpenRef.current = isOpen;
-  }, [isTargetModalOpen]);
+  // The dt:targets-modal-opened/closed broadcast (for the guided tour) moved
+  // to App.tsx, which never unmounts across page navigation -- this
+  // component does, and a local ref here lost track of the pairing whenever
+  // that happened. See App.tsx's isTargetModalOpen effect for why.
 
   // One recalculation round trip. `draftValues` is passed in rather than read
   // from `targetDraftValues` state so the value that triggered it is
