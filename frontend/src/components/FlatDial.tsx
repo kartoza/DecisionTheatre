@@ -43,6 +43,7 @@ export interface FlatDialProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
+  colorLinear?: boolean;
 }
 
 function FlatDial({
@@ -62,6 +63,7 @@ function FlatDial({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
+  colorLinear = false,
 }: FlatDialProps) {
   const { colors: SCENARIO_COLORS } = useScenarioColors();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -143,8 +145,8 @@ function FlatDial({
   const xFor = (value: number) => barX + normalize(value, min, max) * barW;
 
   const stops = useMemo(
-    () => bandGradientStops(min, max, referenceValue, 0.12),
-    [min, max, referenceValue],
+    () => bandGradientStops(min, max, referenceValue, 0.12, colorLinear),
+    [min, max, referenceValue, colorLinear],
   );
   const greenCenter = useMemo(
     () => greenZoneCenter(min, max, referenceValue, 0.12),

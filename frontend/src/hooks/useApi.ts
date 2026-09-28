@@ -353,6 +353,11 @@ export function useAttributeDial0Middle() {
   return { dial0Middle, loading };
 }
 
+export function useAttributeDialColorLinear() {
+  const { data: dialColorLinear, loading } = useMetadata<Record<string, boolean>>('/metadata/dialcolorlinear', {});
+  return { dialColorLinear, loading };
+}
+
 export function useAttributeIgnoreXGrouping() {
   const { data: ignoreXGrouping, loading } = useMetadata<Record<string, boolean>>('/metadata/ignorexgrouping', {});
   return { ignoreXGrouping, loading };

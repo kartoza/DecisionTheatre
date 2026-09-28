@@ -59,13 +59,31 @@ export function normalize(value: number, min: number, max: number): number {
  * The green zone is centred on the reference value rather than on the middle of
  * the range, because "good" is defined by the reference, not by the midpoint of
  * whatever happens to be on screen.
+ *
+ * Some factors have no "good in the middle" — they are monotonic, where more
+ * (or less) is simply better across the whole scale. For those, metadata's
+ * `dial_color_linear` flag asks for a straight red-to-green ramp from min to
+ * max instead, ignoring the reference-centred band.
  */
 export function bandGradientStops(
   min: number,
   max: number,
   referenceValue?: number,
   greenWidth = 0.1,
+  linear = false,
 ): { offset: number; color: string }[] {
+  if (linear) {
+    // Intermediate hues spread across the whole scale, rather than pivoting
+    // straight from red to green through a single yellow midpoint, so the
+    // blend reads as a long, gradual transition end to end.
+    return [
+      { offset: 0, color: '#ff4136' },
+      { offset: 0.25, color: '#ff851b' },
+      { offset: 0.5, color: '#ffdc00' },
+      { offset: 0.75, color: '#b6e86f' },
+      { offset: 1, color: '#2ecc40' },
+    ];
+  }
   if (referenceValue === undefined || isNaN(referenceValue)) {
     // No reference to centre on, so there is no "good" to mark — the band
     // shows magnitude only.
