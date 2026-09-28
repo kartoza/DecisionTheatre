@@ -17,7 +17,7 @@ import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits, useScenarioColors } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeDialColorLinear, useAttributeTargetRanges, useAttributeUnits, useScenarioColors } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
@@ -158,6 +158,7 @@ function ViewPane({
   const { units: attributeUnits } = useAttributeUnits();
   const { colors: scenarioColors } = useScenarioColors();
   const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
+  const { dialColorLinear: attributeDialColorLinear } = useAttributeDialColorLinear();
   const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
 
   // Mount MapView only while the pane is showing a map, plus a grace period.
@@ -910,6 +911,7 @@ function ViewPane({
         paneCount={paneCount}
         isLoading={dialCatchmentLoading || dialRangeLoading}
         zeroCentered={comparison.attribute ? Boolean(attributeDial0Middle[comparison.attribute]) : false}
+        colorLinear={comparison.attribute ? Boolean(attributeDialColorLinear[comparison.attribute]) : false}
       />
 
       {/* Quad dial empty state for panes with no selected factor */}

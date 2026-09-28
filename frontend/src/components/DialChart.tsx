@@ -43,6 +43,7 @@ interface DialChartProps {
   paneCount?: number;
   isLoading?: boolean;
   zeroCentered?: boolean;
+  colorLinear?: boolean;
 }
 
 function DialChart({
@@ -59,6 +60,7 @@ function DialChart({
   paneCount = 1,
   isLoading = false,
   zeroCentered = false,
+  colorLinear = false,
 }: DialChartProps) {
   const { colors: SCENARIO_COLORS } = useScenarioColors();
   const isQuadCompactLayout = compact && paneCount >= 4;
@@ -425,8 +427,8 @@ function DialChart({
 
   const gradientId = 'dial-gradient-main';
   const arcGradientStops = useMemo(
-    () => bandGradientStops(min, max, referenceValue, 0.12),
-    [min, max, referenceValue]
+    () => bandGradientStops(min, max, referenceValue, 0.12, colorLinear),
+    [min, max, referenceValue, colorLinear]
   );
 
   // Normalized center of the green zone (0..1) so needles can be aligned visually
