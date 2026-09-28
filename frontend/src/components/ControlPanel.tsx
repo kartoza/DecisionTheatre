@@ -18,11 +18,12 @@ import {
 } from '@chakra-ui/react';
 import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping } from '../hooks/useApi';
+import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping, useScenarioColors } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
 import type { Scenario, ComparisonState, MapStatistics, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { colors } from '../styles/colors';
+import { pastelTint } from '../lib/dialScale';
 import { usePanelWidth } from '../lib/panelWidth';
 import PanelResizeHandle from './PanelResizeHandle';
 
@@ -352,13 +353,19 @@ function ScenarioSelector({
   hideLabel?: boolean;
 }) {
   const selectedInfo = SCENARIOS.find((s) => s.id === value);
+  const { colors: scenarioColors } = useScenarioColors();
+  // The scenario currently assigned to this side, not a fixed left/right
+  // colour -- swapping which scenario is on which side now recolours the
+  // badge with it, matching every other scenario-identity accent in the app
+  // instead of a positional orange/blue pair unrelated to that identity.
+  const scenarioAccent = pastelTint(scenarioColors[value]);
 
   return (
     <Box>
       {!hideLabel && (
         <HStack mb={2}>
           <Badge
-            bg={side === 'left' ? colors.orange : colors.blue}
+            bg={scenarioAccent}
             color={colors.dark}
             variant="subtle"
             fontSize="xs"
@@ -379,7 +386,7 @@ function ScenarioSelector({
         bg={useColorModeValue('gray.50', 'gray.700')}
         border="none"
         fontWeight="500"
-        _focus={{ boxShadow: `0 0 0 2px ${selectedInfo?.color || '#2bb0ed'}` }}
+        _focus={{ boxShadow: `0 0 0 2px ${scenarioColors[value] || selectedInfo?.color || '#2bb0ed'}` }}
       >
         {SCENARIOS.map((s) => (
           <option key={s.id} value={s.id}>

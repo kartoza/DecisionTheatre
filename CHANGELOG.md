@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scenario colours are now overridable per data pack**, via an optional
+  `colours.json` in the data directory (`{"reference": "#...", "current":
+  "#...", "target": "#..."}`). Any field left out keeps its built-in
+  default, and a missing or malformed file falls back to the defaults
+  entirely — served at `GET /scenarios/colours`, consumed by
+  `useScenarioColors()` on the frontend. See
+  `docs/administrator-guide/data-directory.md#customising-the-scenario-colours`.
+
 - **Load shedding.** The server now runs a bounded number of API requests at
   once — two per CPU core — queues a short burst behind that, and refuses
   anything further with `503` and a `Retry-After` header. Before this it
@@ -83,6 +91,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question it was usually asked, from runs already recorded.
 
 ### Fixed
+
+- **The target arrow no longer hides under the current arrow on the circular
+  dial.** Current was drawn after target, so in SVG's paint order it always sat
+  on top — a target close to the current value could be fully obscured. Current
+  now draws first, target second, matching the belt dial's existing
+  target-drawn-last convention.
+
+- **One reference/current/target colour scheme, everywhere it's drawn** —
+  reference green, current blue, target pink. Previously the circular dial
+  used green for both reference and target (indistinguishable), the belt
+  dial used a red reference line next to a green reference bar (disagreeing
+  with itself), the chart view carried a third, independently hardcoded copy
+  of the old orange/blue/green scheme, and the map's corner-label accents,
+  swiper divider, and scenario picker read from a fourth, independently
+  drifted pastel palette (reference was pastel orange, target was pastel
+  green). Every view now reads from one `SCENARIO_COLORS` constant, with the
+  map/label accents as a softened pastel tint of the same hues rather than a
+  separately maintained palette.
+
+- **Scenario selection is now synced across every open pane.** Changing
+  which scenario is Left ("Scenario 1") or Right ("Scenario 2") on one
+  pane's Indicator panel used to only change that pane — every other open
+  pane kept comparing whatever it already was, with no indication anything
+  had changed elsewhere. Panes could silently drift onto different
+  comparisons, and onto different colour accents for the same corner as a
+  result, since a pane's accent colour follows whichever scenario is
+  assigned to it. Both selections now propagate to every open pane; only
+  each pane's own attribute stays independent.
 
 - **The guided tour dialog no longer disappears while editing a target.**
   It used to hide itself entirely while the targets panel was open and

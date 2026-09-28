@@ -9,7 +9,8 @@ import '../lib/maplibreWorker';
 import type { ComparisonState, Scenario, IdentifyResult, MapExtent, MapStatistics, ZoneStats, BoundingBox, DomainRange, ColorScaleMode, ColorScaleType, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
 import { registerMap, unregisterMap, getLastMapView } from '../hooks/useMapSync';
-import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
+import { getSite, getSiteCatchments, getSiteAOIFractions, useAttributeColors, useAttributeDetails, useAttributeUnits, useScenarioColors, loadLocalSite, saveLocalSite, clearSiteWhiskerCache } from '../hooks/useApi';
+import { composeLabelWithUnit, pastelTint } from '../lib/dialScale';
 import { getAppRuntime } from '../types/runtime';
 import { colors } from '../styles/colors';
 import { applyZoomOutClipToBounds, fetchCatchmentBounds, fetchTileBounds } from '../lib/mapBounds';
@@ -879,9 +880,11 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad: _isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
+  const { colors: scenarioColors } = useScenarioColors();
+  const { units: attributeUnits } = useAttributeUnits();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leftMapRef = useRef<maplibregl.Map | null>(null);
   // Null whenever compare mode is off — see createRightMap in the map-init
@@ -3037,12 +3040,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
          are supporting text and shrank; this one names what the pane is
          showing, and is the only label worth reading from across a room. */
       padding:8px 20px;
-      font-size:14px;
+      /* Matches PaneHeader's title, which the dial/chart/table views use:
+         'xs' (12px) when compact (grid view), 'sm' (14px) otherwise. */
+      font-size:${isQuad ? '12px' : '14px'};
       letter-spacing:0.5px;
-      white-space:nowrap;
-      max-width:60%;
-      overflow:hidden;
-      text-overflow:ellipsis;
+      white-space:normal;
+      text-align:center;
+      max-width:85%;
     `);
     container.appendChild(indicatorLabel);
 
@@ -3721,7 +3725,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       // frame — an accent there reads as part of the frame rather than as the
       // scenario's colour. Both labels point their accent at the map between
       // them, which is what the colour identifies.
-      const leftAccent = leftInfo?.color || '#fff';
+      const leftAccent = leftInfo ? pastelTint(scenarioColors[leftInfo.id as keyof typeof scenarioColors]) : '#fff';
       // The custom property is what the collapsed state fills with — see
       // styles/paneChrome.css. Set here because only this side knows the
       // scenario's colour, and read there so the border and the fill cannot
@@ -3739,7 +3743,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
       rightLabel.textContent = rightInfo?.label || comparison.rightScenario;
       // Already inward-facing: this one sits in the top-right corner, so its
       // left edge is the one over the map.
-      const rightAccent = rightInfo?.color || '#fff';
+      const rightAccent = rightInfo ? pastelTint(scenarioColors[rightInfo.id as keyof typeof scenarioColors]) : '#fff';
       rightLabel.style.setProperty('--dt-accent', rightAccent);
       rightLabel.style.borderLeft = `3px solid ${rightAccent}`;
       rightLabel.style.display = isSwiperEnabled && sliderDockedRef.current !== 'right' ? 'block' : 'none';
@@ -3752,13 +3756,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onMap
             .replace(/_/g, ' ')
             .replace(/\b\w/g, (c) => c.toUpperCase())
         : '';
-      indicatorLabel.textContent = friendlyAttribute;
+      const unit = comparison.attribute ? attributeUnits[comparison.attribute] ?? '' : '';
+      indicatorLabel.textContent = friendlyAttribute ? composeLabelWithUnit(friendlyAttribute, unit) : '';
       indicatorLabel.style.display = comparison.attribute ? 'block' : 'none';
     }
 
     // Apply scenario-specific colours
     applyColors();
-  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails]);
+  }, [comparison, applyColors, isSwiperEnabled, colorScaleMode, colorScaleType, rangeMode, attributeColors, attributeDetails, attributeUnits, scenarioColors]);
 
   // Highlight identified catchment with neon yellow glow effect
   useEffect(() => {
