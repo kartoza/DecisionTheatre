@@ -17,6 +17,7 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import FlatDial from '../components/FlatDial';
 import DialChart from '../components/DialChart';
+import { SCENARIO_COLORS } from '../lib/dialScale';
 
 /** The tick labels only: the legend carries the target, which is meant to change. */
 function axis(): string {
@@ -151,5 +152,29 @@ describe('the target marker', () => {
 
   it('draws no target when the site has no ideal for the factor', () => {
     expect(renderWith(undefined)).toBe(0);
+  });
+});
+
+describe('the arc needle order', () => {
+  it('draws the target needle after the current needle, so it is never hidden underneath it', () => {
+    cleanup();
+    render(
+      <ChakraProvider theme={theme}>
+        <DialChart
+          visible
+          attribute="Grass cover fraction"
+          min={0}
+          max={1}
+          referenceValue={0.52}
+          currentValue={0.31}
+          targetValue={0.47}
+        />
+      </ChakraProvider>,
+    );
+    const paths = Array.from(document.querySelectorAll('svg path'));
+    const currentIndex = paths.findIndex((p) => p.getAttribute('fill') === SCENARIO_COLORS.current);
+    const targetIndex = paths.findIndex((p) => p.getAttribute('stroke-dasharray') === '8,6');
+    expect(currentIndex).toBeGreaterThanOrEqual(0);
+    expect(targetIndex).toBeGreaterThan(currentIndex);
   });
 });

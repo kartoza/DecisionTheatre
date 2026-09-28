@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The target arrow no longer hides under the current arrow on the circular
+  dial.** Current was drawn after target, so in SVG's paint order it always sat
+  on top — a target close to the current value could be fully obscured. Current
+  now draws first, target second, matching the belt dial's existing
+  target-drawn-last convention.
+
 - **A panic in background work no longer kills the process.** An unrecovered
   panic in any goroutine takes the whole program with it. `net/http` recovers
   panics inside a handler, so a bad request cost one connection — but four
