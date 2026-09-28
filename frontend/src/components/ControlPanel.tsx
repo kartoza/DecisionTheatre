@@ -9,14 +9,14 @@ import {
   Badge,
   useColorModeValue,
   Slide,
-  IconButton,
   HStack,
   Tooltip,
   Button,
   ButtonGroup,
   Spacer,
 } from '@chakra-ui/react';
-import { FiChevronRight, FiInfo, FiMapPin } from 'react-icons/fi';
+import { FiInfo, FiMapPin } from 'react-icons/fi';
+import PanelCollapseButton from './PanelCollapseButton';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping, useScenarioColors } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
@@ -31,9 +31,9 @@ interface ControlPanelProps {
   isOpen: boolean;
   onClose?: () => void;
   /**
-   * Single pane's control panel is the only way to reach its factor/scenario
-   * controls — there's no per-pane "Configure factor" button to reopen it the
-   * way grid view has one for each pane — so it isn't collapsible there.
+   * Defaults to shown in every layout. Each pane's own "Configure factor"
+   * hover button (ViewPane.tsx) reopens this panel, in single-pane layout
+   * too, so closing it here is never a dead end.
    */
   canCollapse?: boolean;
   comparison: ComparisonState;
@@ -1206,20 +1206,13 @@ function ControlPanel({
           real (content-sized) header rather than below it — invisible and
           unclickable in grid view's "Configure factor" panel. The panel now
           docks below the measured header instead, so the button sits in the
-          clear. Single pane has no equivalent button to reopen it, so it's
-          omitted there rather than left as a dead end.
+          clear. Shown in every layout, including single pane: each pane's own
+          "Configure factor" hover button (ViewPane.tsx) reopens it, so
+          closing here is no longer a dead end the way it once was.
         */}
         {canCollapse && (
           <Box position="absolute" top={2} right={2} zIndex={3}>
-            <Tooltip label="Collapse panel" placement="left">
-              <IconButton
-                aria-label="Collapse panel"
-                icon={<FiChevronRight />}
-                size="sm"
-                variant="ghost"
-                onClick={() => onClose?.()}
-              />
-            </Tooltip>
+            <PanelCollapseButton onClick={() => onClose?.()} />
           </Box>
         )}
 
