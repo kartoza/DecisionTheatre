@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -323,14 +323,14 @@ export function useScenarioColors() {
     '/scenarios/colours', {},
   );
   const response = data as Partial<ScenarioColoursResponse>;
-  return {
-    colors: {
-      reference: response.reference || SCENARIO_COLORS.reference,
-      current: response.current || SCENARIO_COLORS.current,
-      future: response.target || SCENARIO_COLORS.future,
-    },
-    loading,
-  };
+  const reference = response.reference || SCENARIO_COLORS.reference;
+  const current = response.current || SCENARIO_COLORS.current;
+  const future = response.target || SCENARIO_COLORS.future;
+  const colors = useMemo(
+    () => ({ reference, current, future }),
+    [reference, current, future],
+  );
+  return { colors, loading };
 }
 
 export interface TargetRange {
