@@ -19,7 +19,7 @@ Nothing here changes any data, so it is a safe place to look around.
 
 ## Steps
 
-1. Launch the application. You arrive at **Welcome to the Landscape Decision Dashboard**.
+1. Launch the application. You arrive at **Welcome to the African Landscape Futures Dashboard**.
 
 ![The landing page](../assets/images/screenshots/landing-page.jpg)
 

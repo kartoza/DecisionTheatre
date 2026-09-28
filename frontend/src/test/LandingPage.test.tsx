@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { ChakraProvider } from '@chakra-ui/react';
@@ -36,7 +37,28 @@ describe('LandingPage', () => {
         <LandingPage onNavigate={() => {}} />
       </ChakraProvider>
     );
-    expect(container.textContent).toContain('Welcome to the Landscape Decision Dashboard');
+    expect(container.textContent).toContain('Welcome to the African Landscape Futures Dashboard');
+    expect(container.textContent).toContain("Science-based decision support for Africa's changing landscapes");
+    expect(container.textContent).toContain('Use the Landscape Futures Dashboard to:');
+  });
+
+  it('has the client-requested hover text on every Explore card (#216)', () => {
+    // The tooltip text only mounts in the DOM on hover (a Chakra Tooltip,
+    // like several elsewhere in the app that don't reliably open on a
+    // synthetic hover under jsdom) -- pinned at the source level instead.
+    const source = readFileSync('src/components/LandingPage.tsx', 'utf8');
+    expect(source).toContain(
+      'Click here to visualise the opportunities and challenges of conserving biodiversity while taking advantage of carbon financing.',
+    );
+    expect(source).toContain(
+      'Click here enable discussion about desired ecosystem states and the priorities and tensions that may exist within communities.',
+    );
+    expect(source).toContain(
+      'Click here to examine the implications of different national policies for landscapes and people.',
+    );
+    expect(source).toContain(
+      'Click here to reimagine African landscapes guided by what we value and futures we want to create.',
+    );
   });
 
   /**

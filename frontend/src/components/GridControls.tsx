@@ -240,6 +240,8 @@ interface GridControlsProps {
   rangeMode?: RangeMode;
   onRangeModeChange?: (mode: RangeMode) => void;
   onAddPane?: () => void;
+  isAddPaneDisabled?: boolean;
+  addPaneDisabledLabel?: string;
   onOpenTargets?: () => void;
   hasTargets?: boolean;
   siteId?: string | null;
@@ -397,6 +399,8 @@ function GridControls({
   rangeMode,
   onRangeModeChange,
   onAddPane,
+  isAddPaneDisabled = false,
+  addPaneDisabledLabel,
   onOpenTargets,
   hasTargets,
   siteId,
@@ -463,14 +467,18 @@ function GridControls({
         <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} />
 
         {onAddPane && (
-          <Tooltip label={STRINGS.addPane} placement="bottom">
-            <IconButton
-              aria-label={STRINGS.addPane}
-              icon={<FiPlus />}
-              onClick={onAddPane}
-              size="sm"
-              variant="ghost"
-            />
+          <Tooltip label={isAddPaneDisabled ? addPaneDisabledLabel ?? STRINGS.addPane : STRINGS.addPane} placement="bottom">
+            {/* Tooltip needs a focusable child, so the disabled case wraps in a Box. */}
+            <Box>
+              <IconButton
+                aria-label={STRINGS.addPane}
+                icon={<FiPlus />}
+                onClick={onAddPane}
+                isDisabled={isAddPaneDisabled}
+                size="sm"
+                variant="ghost"
+              />
+            </Box>
           </Tooltip>
         )}
 
@@ -558,7 +566,9 @@ function GridControls({
             )}
             {onAddPane && <MenuDivider />}
             {onAddPane && (
-              <MenuItem icon={<FiPlus />} onClick={onAddPane}>{STRINGS.addPane}</MenuItem>
+              <MenuItem icon={<FiPlus />} onClick={onAddPane} isDisabled={isAddPaneDisabled}>
+                {isAddPaneDisabled ? addPaneDisabledLabel ?? STRINGS.addPane : STRINGS.addPane}
+              </MenuItem>
             )}
             {hasTargets && onOpenTargets && (
               <MenuItem icon={<FiEdit2 />} onClick={onOpenTargets}>{STRINGS.targets}</MenuItem>

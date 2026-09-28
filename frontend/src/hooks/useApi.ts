@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -7,6 +7,7 @@ import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
 import { sharedRequest, type SharedCache } from '../lib/sharedRequest';
 import { loadSite, loadSites, saveSite, saveSites, deleteSite as deleteSiteRecord } from '../lib/siteStore';
+import { SCENARIO_COLORS } from '../lib/dialScale';
 
 const API_BASE = '/api';
 /**
@@ -302,6 +303,34 @@ export function useAttributeXAxisLabels() {
 export function useAttributeUnits() {
   const { data: units, loading } = useMetadata<Record<string, string>>('/metadata/units', {});
   return { units, loading };
+}
+
+interface ScenarioColoursResponse {
+  reference: string;
+  current: string;
+  target: string;
+}
+
+/**
+ * The reference/current/target colours drawn on every dial, chart, and map
+ * panel label -- the server's built-in defaults, overridden by any fields an
+ * administrator has set in the datapack's colours.json. Falls back to the
+ * same client-side defaults (SCENARIO_COLORS) if the request fails, so a
+ * network error never leaves a colour undefined.
+ */
+export function useScenarioColors() {
+  const { data, loading } = useMetadata<ScenarioColoursResponse | Record<string, never>>(
+    '/scenarios/colours', {},
+  );
+  const response = data as Partial<ScenarioColoursResponse>;
+  const reference = response.reference || SCENARIO_COLORS.reference;
+  const current = response.current || SCENARIO_COLORS.current;
+  const future = response.target || SCENARIO_COLORS.future;
+  const colors = useMemo(
+    () => ({ reference, current, future }),
+    [reference, current, future],
+  );
+  return { colors, loading };
 }
 
 export interface TargetRange {
@@ -698,7 +727,6 @@ export async function createSite(
       updatedAt: now,
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
       appRuntime: 'browser',
     };
@@ -739,7 +767,6 @@ export async function createSite(
     body: JSON.stringify({
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
     }),
   });
