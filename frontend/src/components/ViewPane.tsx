@@ -10,14 +10,14 @@ import PaneHeader from './PaneHeader';
 import ChartView from './ChartView';
 import DialChart from './DialChart';
 import FlatDial from './FlatDial';
-import { attributeSpread, capRange, composeLabelWithUnit, hasDeclaredMax, hasDeclaredMin } from '../lib/dialScale';
+import { attributeSpread, capRange, composeLabelWithUnit, hasDeclaredMax, hasDeclaredMin, pastelTint } from '../lib/dialScale';
 import { loadSiteRange, saveSiteRange, siteRangeFingerprint } from '../lib/siteRangeCache';
 import type { ScaleDerivation } from '../lib/dialScale';
 import type { CalculationDetailsProps } from './CalculationDetails';
 import AggregateTable from './AggregateTable';
 import type { ComparisonState, LayoutMode, QuadColumns, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, ViewMode, RangeMode, SiteIndicators } from '../types';
 import { SCENARIOS } from '../types';
-import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits } from '../hooks/useApi';
+import { fetchAggregate, getSiteCatchments, useAttributeDetails, useAttributeDial0Middle, useAttributeTargetRanges, useAttributeUnits, useScenarioColors } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
 import { computeAOIWeightedAttributeValue } from '../utils/indicators';
 
@@ -158,6 +158,7 @@ function ViewPane({
   const borderColor = useColorModeValue('gray.600', 'gray.600');
   const { details: attributeDetails } = useAttributeDetails();
   const { units: attributeUnits } = useAttributeUnits();
+  const { colors: scenarioColors } = useScenarioColors();
   const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
   const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
 
@@ -678,6 +679,12 @@ function ViewPane({
 
   const leftInfo = SCENARIOS.find((s) => s.id === comparison.leftScenario);
   const rightInfo = SCENARIOS.find((s) => s.id === comparison.rightScenario);
+  // Corner-label accent: a pastel tint of the scenario's own colour (from
+  // useScenarioColors, itself overridable via the datapack's colours.json),
+  // not the static SCENARIOS.color default -- so an override actually shows
+  // up here instead of only on the dial/chart markers.
+  const leftAccentColor = leftInfo ? pastelTint(scenarioColors[leftInfo.id as keyof typeof scenarioColors]) : undefined;
+  const rightAccentColor = rightInfo ? pastelTint(scenarioColors[rightInfo.id as keyof typeof scenarioColors]) : undefined;
 
   const isQuad = layoutMode === 'quad';
   const showDialFactorPrompt = isQuad && (viewMode === 'dial' || viewMode === 'flat') && !comparison.attribute;
@@ -960,9 +967,9 @@ function ViewPane({
           compact={compact}
           title={dialAttributeLabelWithUnit}
           leftLabel={viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (leftInfo?.label || comparison.leftScenario)}
-          leftColor={leftInfo?.color}
+          leftColor={leftAccentColor}
           rightLabel={viewMode === 'table' || viewMode === 'chart' || viewMode === 'flat' || viewMode === 'dial' ? undefined : (rightInfo?.label || comparison.rightScenario)}
-          rightColor={rightInfo?.color}
+          rightColor={rightAccentColor}
         />
       )}
 

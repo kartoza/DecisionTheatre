@@ -17,6 +17,7 @@ import {
   capRange,
   hasDeclaredMax,
   hasDeclaredMin,
+  pastelTint,
   tickValues,
 } from '../lib/dialScale';
 
@@ -62,6 +63,29 @@ describe('composeLabelWithUnit', () => {
     expect(composeLabelWithUnit(42, 'kgkm-2')).toBe('42 (kgkm-2)');
     // @ts-expect-error deliberately passing undefined to check the guard
     expect(composeLabelWithUnit(undefined, 'kgkm-2')).toBe(' (kgkm-2)');
+  });
+});
+
+describe('pastelTint', () => {
+  it('lightens a saturated colour toward white', () => {
+    expect(pastelTint('#4caf50', 0.5)).toBe('#a6d7a8');
+  });
+
+  it('at amount 0 returns the colour unchanged', () => {
+    expect(pastelTint('#4caf50', 0)).toBe('#4caf50');
+  });
+
+  it('at amount 1 returns white', () => {
+    expect(pastelTint('#4caf50', 1)).toBe('#ffffff');
+  });
+
+  it('accepts a hex without a leading #', () => {
+    expect(pastelTint('4caf50', 0.5)).toBe('#a6d7a8');
+  });
+
+  it('returns the input unchanged if it is not a valid 6-digit hex', () => {
+    expect(pastelTint('not-a-colour')).toBe('not-a-colour');
+    expect(pastelTint('#fff')).toBe('#fff');
   });
 });
 
