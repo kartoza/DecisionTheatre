@@ -41,6 +41,7 @@ import {
   saveQuadColumns,
   markSessionActive,
   shouldPromptResumeSession,
+  applyScenarioToAllPanes,
 } from './types';
 import type { ScaleDerivation } from './lib/dialScale';
 import type { CalculationDetailsProps } from './components/CalculationDetails';
@@ -426,6 +427,21 @@ function App() {
       onOpenTargetModal();
     }
   };
+
+  // Broadcast that the targets panel opened, so a guided-tour step waiting
+  // for exactly that action can advance. The tour dialog itself no longer
+  // hides while the panel is open -- editing a target and reading the tour
+  // are not mutually exclusive, and the docked panel never overlaps the
+  // tour box -- so there is no "closed" counterpart to dispatch or pair up.
+  // This used to live in ContentArea against a local ref, which lost track
+  // whenever ContentArea unmounted (a tour step that opened the panel and
+  // then navigated elsewhere, e.g. to the indicators page); tracking it
+  // here instead means it survives navigation, since App never unmounts.
+  useEffect(() => {
+    if (isTargetModalOpen) {
+      window.dispatchEvent(new Event('dt:targets-modal-opened'));
+    }
+  }, [isTargetModalOpen]);
 
   // The chart details panel: which pane it is explaining, and the account it
   // was handed when it opened. The derivation is stored rather than recomputed
@@ -971,15 +987,21 @@ function App() {
     });
   }, [layoutMode]);
 
+  // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
+  // not a per-pane preference -- reported: change one pane's Right dropdown
+  // to Target State and the others silently kept comparing Reference vs
+  // Current, so panes drifted onto different comparisons (and different
+  // colour accents for the same corner) with no indication anything had.
+  // Every open pane always compares the same pair now, the same way
+  // handleGridViewModeChange already applies a view-mode change to every
+  // pane rather than just the one being configured.
   const handleLeftChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { leftScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'left', scenario));
+  }, []);
 
   const handleRightChange = useCallback((scenario: Scenario) => {
-    if (indicatorPaneIndex !== null)
-      handlePaneStateChange(indicatorPaneIndex, { rightScenario: scenario });
-  }, [indicatorPaneIndex, handlePaneStateChange]);
+    setPaneStates((prev) => applyScenarioToAllPanes(prev, 'right', scenario));
+  }, []);
 
   const handleAttributeChange = useCallback((attribute: string) => {
     if (indicatorPaneIndex !== null)

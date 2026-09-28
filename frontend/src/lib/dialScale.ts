@@ -9,12 +9,41 @@
  * idea that drift apart.
  */
 
-/** Scenario colours, from the design system (`design-tokens.json`). */
+/**
+ * Scenario colours, from the design system (`design-tokens.json`).
+ *
+ * Reported: reference and target were both green on the circular dial
+ * (indistinguishable), and the belt dial disagreed with itself -- a red
+ * reference line next to a green reference bar -- and with the circular
+ * dial's scheme. Red also read as "bad" against the standard red-to-green
+ * progress convention, backwards for what reference means here. One scheme
+ * now: reference green, current blue, target pink -- distinct from both and
+ * from the red/green "good/bad" scale used elsewhere (e.g. soil organic
+ * carbon's value colouring).
+ */
 export const SCENARIO_COLORS = {
-  reference: '#e65100', // Orange
+  reference: '#4caf50', // Green
   current: '#2bb0ed', // Blue
-  future: '#4caf50', // Green
+  future: '#d946ef', // Pink/purple (target)
 } as const;
+
+/**
+ * A softened tint of a scenario colour, for use as a label/accent
+ * background rather than the saturated marker colour itself (e.g. the map's
+ * corner-label side border). Blends toward white by `amount` (0..1) so
+ * overriding the three marker colours in `colours.json` also retints these
+ * accents, rather than the accent staying on the old palette.
+ */
+export function pastelTint(hex: string, amount = 0.5): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!match) return hex;
+  const n = parseInt(match[1], 16);
+  const blend = (channel: number) => Math.round(channel + (255 - channel) * amount);
+  const r = blend((n >> 16) & 0xff);
+  const g = blend((n >> 8) & 0xff);
+  const b = blend(n & 0xff);
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
 
 /** Where `value` sits in `min..max`, clamped to 0..1. */
 export function normalize(value: number, min: number, max: number): number {
@@ -105,6 +134,31 @@ export function formatValue(value: number): string {
   if (Math.abs(value) < 0.01 && value !== 0) return value.toExponential(1);
   if (Math.abs(value) < 10) return value.toFixed(2);
   return value.toFixed(1);
+}
+
+/**
+ * A factor label with its unit appended in brackets, e.g. "Grass cover
+ * fraction (%)" -- shared by every panel that names a factor (map, dial,
+ * belt, table).
+ *
+ * Some metadata "Detailed name" values already bake a unit into the label
+ * text itself instead of leaving it to the separate Units column -- e.g.
+ * "Percent burned (%)" or "Mean tree cover %". Appending blindly would
+ * double it up, so this skips appending when the label already ends in a
+ * parenthesised suffix, or already ends in a bare '%' for a percent-like
+ * unit.
+ */
+export function composeLabelWithUnit(label: string, unit: string): string {
+  // Metadata is parsed JSON with no runtime shape guarantee -- coerce rather
+  // than trust the Record<string, string> type, since a non-string value
+  // reaching here would otherwise crash the whole pane on .trim().
+  const trimmedLabel = String(label ?? '').trim();
+  const trimmedUnit = String(unit ?? '').trim();
+  if (!trimmedUnit) return trimmedLabel;
+  if (/\([^)]*\)\s*$/.test(trimmedLabel)) return trimmedLabel;
+  const isPercentUnit = /^(percentage|percent|%)$/i.test(trimmedUnit);
+  if (isPercentUnit && trimmedLabel.endsWith('%')) return trimmedLabel;
+  return `${trimmedLabel} (${trimmedUnit})`;
 }
 
 /** Evenly spaced tick values across the scale, every other one major. */

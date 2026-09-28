@@ -1,5 +1,6 @@
 import { getAppRuntime } from './runtime';
 import { safeRemoveItem, safeSetItem } from '../lib/storage';
+import { SCENARIO_COLORS, pastelTint } from '../lib/dialScale';
 
 export type Scenario = 'reference' | 'current' | 'future';
 
@@ -70,6 +71,30 @@ export type RangeMode = 'domain' | 'extent' | 'site';
 
 /** Per-pane state array (minimum one entry) */
 export type PaneStates = ComparisonState[];
+
+/**
+ * Apply a Scenario 1 (left) / Scenario 2 (right) choice to every open pane.
+ *
+ * Reported: changing one pane's Right dropdown to Target State left every
+ * other open pane comparing whatever it already was (e.g. Reference vs
+ * Current) with no indication anything had changed elsewhere -- panes
+ * silently drifted onto different comparisons, and onto different colour
+ * accents for the same corner as a result. Which scenario is Left and which
+ * is Right is a property of the comparison being made, not a per-pane
+ * preference, so it now applies to every pane at once -- the attribute each
+ * pane shows is unaffected.
+ */
+export function applyScenarioToAllPanes(
+  panes: PaneStates,
+  side: 'left' | 'right',
+  scenario: Scenario,
+): PaneStates {
+  return panes.map((pane) => (
+    side === 'left'
+      ? { ...pane, leftScenario: scenario }
+      : { ...pane, rightScenario: scenario }
+  ));
+}
 
 export type QuadColumns = 2 | 3;
 
@@ -155,24 +180,38 @@ export function saveRangeMode(mode: RangeMode): void {
   safeSetItem(STORAGE_RANGE_MODE_KEY, mode);
 }
 
+// Pastel tints of dialScale.ts's SCENARIO_COLORS (reference green, current
+// blue, target pink) -- softened for use as label/accent backgrounds rather
+// than the saturated marker colours. These drifted out of sync with that
+// scheme (reference was pastel orange, target was pastel green) even though
+// LandingPage's own comment says they're meant to be "the app's own
+// reference/current/future colour coding, the same hues used on every dial
+// and chart" -- corner labels on the map read Reference in one colour while
+// the dial read it in another.
+//
+// These are the pre-fetch/offline fallback only: once useScenarioColors()
+// resolves (possibly overridden by the datapack's colours.json), consumers
+// retint via pastelTint(colors.<role>) instead of reading .color here, so
+// the two stay in exact agreement rather than two independently-drifting
+// approximations of the same colour.
 export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'reference',
     label: 'Ecological Reference',
     description: `Condition compared to scientifically determined optimal standards`,
-    color: '#f6b07c',
+    color: pastelTint(SCENARIO_COLORS.reference),
   },
   {
     id: 'current',
     label: 'Current State',
     description: 'Current observed conditions',
-    color: '#8ccde1',
+    color: pastelTint(SCENARIO_COLORS.current),
   },
   {
     id: 'future',
     label: 'Target State',
     description: 'User-defined target condition with aim to achieve.',
-    color: '#9ecb9e',
+    color: pastelTint(SCENARIO_COLORS.future),
   },
 ];
 
