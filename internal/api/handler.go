@@ -127,6 +127,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/groupingvariables", h.handleMetadataGroupingVariables).Methods("GET")
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/metadata/dial0middle", h.handleMetadataDial0Middle).Methods("GET")
+	r.HandleFunc("/metadata/dialcolorlinear", h.handleMetadataDialColorLinear).Methods("GET")
 	r.HandleFunc("/metadata/ignorexgrouping", h.handleMetadataIgnoreXGrouping).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
@@ -276,6 +277,14 @@ func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request)
 // zero with positive values to the right and negative values to the left.
 func (h *Handler) handleMetadataDial0Middle(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.metaCache.Dial0Middle)
+}
+
+// handleMetadataDialColorLinear returns a map of attribute column names to
+// dial_color_linear flags, indicating whether the dial/flat-dial gauge should
+// colour its scale as a straight red (min) to green (max) ramp instead of the
+// default band centred on the ecological reference value.
+func (h *Handler) handleMetadataDialColorLinear(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.metaCache.DialColorLinear)
 }
 
 // handleMetadataIgnoreXGrouping returns a map of attribute column names to
