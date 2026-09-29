@@ -200,6 +200,29 @@ func TestCompressedStaticHonoursAcceptEncoding(t *testing.T) {
 	}
 }
 
+// A walkthrough document regenerated in place (its data re-extracted, same
+// URL, new bytes) must be picked up on the very next load. With no
+// Cache-Control at all, a client that has only ever seen Last-Modified is
+// free to treat the response as fresh indefinitely and never ask again — a
+// real webview did exactly that for over a month against production data.
+// no-cache forces a conditional GET every time, which the 304 path above
+// already answers cheaply when the file has not actually changed.
+func TestCompressedStaticForcesRevalidation(t *testing.T) {
+	dir := writeStatic(t, "tour.json", 200_000)
+	h := newCompressedStatic(http.Dir(dir))
+
+	for _, ae := range []string{"gzip", ""} {
+		hdr := map[string]string{}
+		if ae != "" {
+			hdr["Accept-Encoding"] = ae
+		}
+		rec := getStatic(t, h, "/tour.json", hdr)
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("Accept-Encoding %q: Cache-Control %q, want %q", ae, got, "no-cache")
+		}
+	}
+}
+
 // Vary is what stops a shared cache handing a compressed body to a client that
 // cannot read one.
 func TestCompressedStaticSetsVary(t *testing.T) {

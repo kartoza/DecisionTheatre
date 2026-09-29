@@ -7,7 +7,292 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grid view no longer overflows the viewport.** It sized every row as if
+  there were only two, no matter how many the pane count actually needed —
+  so a default six-pane grid already needed three rows and pushed the third
+  off-screen, forcing a scroll the user had no way to discover. The grid is
+  now always exactly three columns wide, and row count is not a setting —
+  it grows and shrinks with the pane count. Map, dial and table views stay
+  fixed at 2 rows (6 panes): they need more room per pane, so that stays the
+  ceiling. Belt charts are small enough to keep going — adding a row every 3
+  panes as more are added, up to 5 rows (15 panes) — and fill the available
+  space rather than sitting at a fixed size. "Add pane" disables with a
+  visible reason once a view's cap is reached, rather than silently doing
+  nothing or letting panes run off-screen again. Pane configurations beyond
+  the current cap are never discarded — only their rendering is — so
+  switching a capped grid back to belt charts brings the rest back exactly
+  as they were. Fixes #204.
+
+### Changed
+
+- **Rebranded to "African Landscape Futures Dashboard"**, with the subtitle
+  "Science-based decision support for Africa's changing landscapes", across
+  the landing page hero, its "Use the ... to:" heading, the partnership
+  page, and both guided-tour scripts that referenced the old name.
+- **"Configure factor" renamed to "Change variable"** (the per-pane button
+  that opens the factor/scenario controls).
+- **Partnership page now lists FEFA above Rewild Capital**, matching the
+  page's own heading order ("The FEFA and Rewild Capital Partnership").
+- **Landing page's four "Explore..." cards have new hover text**, matching
+  the client's requested copy for Conservation Futures, Shared Landscapes,
+  Policy Impacts and Future Possibilities.
+- **The feedback footer is a real call to action now**, not a single
+  gray line easy to mistake for decoration. It's a pinned strip under every
+  page (App.tsx) — already there, just easy to miss — with an orange accent
+  border, a heartbeat-pulsing icon, and a hover state that lights up the
+  whole bar and underlines the link text with a sliding arrow. It also used
+  to read its URL from a build-time env var that this project's build
+  pipeline does not treat as a rebuild trigger (`scripts/lib-build.sh`'s
+  staleness check has no entry for `frontend/.env`), so an edited `.env`
+  silently kept shipping the old, unconfigured build and "click here" did
+  nothing. There is only one form and no deployment that needs a different
+  one, so the URL is hardcoded now instead of reintroducing that whole
+  class of problem for no benefit. Copy updated to the client's requested
+  wording throughout.
+
+### Changed
+
+- **Every guided tour's last step now offers a real next action** —
+  "Back to main page" and "Create a site" — instead of just dismissing and
+  leaving the user to work out on their own how to leave the tour or start
+  building their own site. "Close" (DemoTour) / "Skip tour" (the onboarding
+  TourGuide) still just dismisses, for anyone who'd rather keep exploring
+  the demo or just-created site as-is. Covers all five tours: the four
+  site-specific demos (Munywana, Africa, Shai Hills, Viphya), which share
+  one runner component, and the separate onboarding walkthrough.
+- The progress dots on both tour components are real, labelled buttons now
+  (`aria-label` + keyboard-focusable), not unlabelled clickable `div`s —
+  they had no accessible name or keyboard path at all before.
+
 ### Added
+
+- **Scenario colours are now overridable per data pack**, via an optional
+  `colours.json` in the data directory (`{"reference": "#...", "current":
+  "#...", "target": "#..."}`). Any field left out keeps its built-in
+  default, and a missing or malformed file falls back to the defaults
+  entirely — served at `GET /scenarios/colours`, consumed by
+  `useScenarioColors()` on the frontend. See
+  `docs/administrator-guide/data-directory.md#customising-the-scenario-colours`.
+
+- **The Identify tool's results now dock into the right-hand side panel**
+  instead of a map-anchored popup that blocked whatever it was pointing at,
+  with no way to move it. Clicking a different catchment (or the site
+  boundary) while identifying replaces the panel's content in place.
+  Opening identify while another panel (indicator/target editor/chart
+  details) is already open widens the dock and shows identify results to
+  its left, rather than displacing it — each side collapses independently.
+  The identify panel's header is a fixed row above its own scrollable body
+  rather than a `position: sticky` table cell, so there's no gap above the
+  header as rows scroll underneath it (the old popup's failure mode). If
+  slot B closes while identify is still open, identify animates over to
+  take its place rather than snapping. Every docked panel's collapse
+  button is now a filled circle in the site's own orange, its chevron in
+  inverted (dark-on-orange) colours, replacing a plain `">"` that read as
+  an afterthought — including the indicator panel, which previously had no
+  collapse button at all in single-pane layout.
+
+- **Load shedding.** The server now runs a bounded number of API requests at
+  once — two per CPU core — queues a short burst behind that, and refuses
+  anything further with `503` and a `Retry-After` header. Before this it
+  accepted everything and queued it, so overload came back as latency rather
+  than as an error: measured on four cores, 64 concurrent clients saw a 95th
+  percentile of 60 seconds with not one request refused. It is now 5.3 seconds,
+  and response time no longer tracks the load. `/api/health` and the site's own
+  assets are never refused. See `docs/administrator-guide/capacity-and-overload.md`.
+
+- **Rate limiting** in `deployments/nginx.conf`: 10 requests a second to `/api`
+  with bursts of 20, 100 a second for tiles, and 24 connections per client.
+  Over the limit gets `429`. Shedding made the server cheap to refuse, which
+  raised the request rate rather than lowering it — 1.1/s to 60/s at 64
+  clients — so the rate that reaches the application needs bounding too.
+
+- **`robots.txt`**, which the site did not have. The SPA fallback was answering
+  `/robots.txt` with a page of HTML — a `200` containing no directives, which a
+  crawler reads as permission to crawl everything. It now disallows `/api`,
+  `/tiles` and `/data`, where there is nothing for a crawler anyway, and leaves
+  the pages and docs open. nginx additionally closes the connection on declared
+  AI and SEO crawlers requesting `/api`.
+
+- **Memory limits for the container**, with `GOMEMLIMIT` set below the cgroup
+  ceiling so the collector works harder instead of the process being OOM-killed
+  mid-request, and swap disabled so overload cannot degrade into something
+  slower than a timeout while still answering health checks.
+
+- **`scripts/dtbench.py`**, a standard-library Python benchmark and stress tool
+  that points at any running instance, records every run to SQLite, and
+  compares against the whole history rather than a nominated baseline. It
+  measures under concurrency, which the previous tool deliberately did not, and
+  its report distinguishes a server that sheds load from one that queues.
+
+- **`dt benchmark`**, with `make benchmark` and `nix run .#benchmark` beside it,
+  the same three doors as everything else in the project. It measures, records,
+  compares, writes a PDF and opens it. `benchmark-quick` skips the load phase,
+  `benchmark-list` shows what has been measured and `benchmark-regressions`
+  searches the history.
+
+- **The commit is recorded with every benchmark run**, taken from the server's
+  own `/api/info` rather than from the local checkout — point the tool at
+  production and those are different, and recording the local one would attach
+  a plausible sha to somebody else's numbers. `/api/info` now reports `commit`,
+  stamped at link time by `scripts/commit.sh` on the ordinary build paths and
+  from `self.rev` under nix. An unstamped build reports `unknown` and the tool
+  records that as-is.
+
+- **`dt benchmark-regressions`**, which finds where in the recorded history a
+  measurement moved to a new level and stayed there, and names the commit it
+  first appeared in. This is the bisect, run over measurements already taken
+  rather than by rebuilding each revision. It reports steps found across
+  several unrelated endpoints at once separately and without a commit, because
+  that pattern is the machine rather than the code.
+
+- **A PDF report**, drawn by `scripts/dtbench_pdf.py` — a few hundred lines of
+  standard library that writes the PDF format directly, so the benchmark keeps
+  its most useful property of running on a server with nothing installed. Four
+  pages: what was measured and the verdict, every endpoint against its history,
+  trend charts labelled by commit, and the step changes.
+
+- **Remote targets skip the load phase** unless `--stress-remote` is passed.
+  The obvious thing to type is the production URL, and the load phase saturates
+  the server on purpose.
+
+### Removed
+
+- **The Go benchmark tool** (`internal/bench`, `cmd/dtbench` — about 12,000
+  lines), replaced by `scripts/dtbench.py`. The scenario list and the
+  response-size guard were carried over; what went is the branded HTML and PDF
+  report generation. `bench-sweep`, which built each revision in a range and
+  measured it, has no direct replacement — `benchmark-regressions` answers the
+  question it was usually asked, from runs already recorded.
+
+### Fixed
+
+- **The target arrow no longer hides under the current arrow on the circular
+  dial.** Current was drawn after target, so in SVG's paint order it always sat
+  on top — a target close to the current value could be fully obscured. Current
+  now draws first, target second, matching the belt dial's existing
+  target-drawn-last convention.
+
+- **One reference/current/target colour scheme, everywhere it's drawn** —
+  reference green, current blue, target pink. Previously the circular dial
+  used green for both reference and target (indistinguishable), the belt
+  dial used a red reference line next to a green reference bar (disagreeing
+  with itself), the chart view carried a third, independently hardcoded copy
+  of the old orange/blue/green scheme, and the map's corner-label accents,
+  swiper divider, and scenario picker read from a fourth, independently
+  drifted pastel palette (reference was pastel orange, target was pastel
+  green). Every view now reads from one `SCENARIO_COLORS` constant, with the
+  map/label accents as a softened pastel tint of the same hues rather than a
+  separately maintained palette.
+
+- **Scenario selection is now synced across every open pane.** Changing
+  which scenario is Left ("Scenario 1") or Right ("Scenario 2") on one
+  pane's Indicator panel used to only change that pane — every other open
+  pane kept comparing whatever it already was, with no indication anything
+  had changed elsewhere. Panes could silently drift onto different
+  comparisons, and onto different colour accents for the same corner as a
+  result, since a pane's accent colour follows whichever scenario is
+  assigned to it. Both selections now propagate to every open pane; only
+  each pane's own attribute stays independent.
+
+- **The guided tour dialog no longer disappears while editing a target.**
+  It used to hide itself entirely while the targets panel was open and
+  reappear only once the panel closed — and a bug in the open/close
+  pairing (tracked in `ContentArea`, which unmounts on page navigation)
+  could leave it hidden for good if a tour step opened the panel and then
+  navigated elsewhere, with no explanation and no way back. The dialog now
+  stays visible the whole time a target is being edited — editing a target
+  and reading the tour aren't mutually exclusive, and the docked panel
+  never overlapped the tour box anyway. Opening the panel still advances a
+  step that was waiting for exactly that action.
+
+- **A panic in background work no longer kills the process.** An unrecovered
+  panic in any goroutine takes the whole program with it. `net/http` recovers
+  panics inside a handler, so a bad request cost one connection — but four
+  background goroutines had no such protection, and two of them are started by
+  ordinary requests: creating a site, and extracting its indicators. A
+  malformed site was a way to stop the container without sending any load at
+  all. Background work now runs through `internal/safego`.
+
+- **`/api/precalculate/full` computes once for everyone** instead of once per
+  concurrent caller. It checked a cache and then computed outside the lock, so
+  every request arriving during the 26-second cold computation started its own
+  copy of it. One page load opening four panes ran the same full-dataset
+  aggregation four times, and pointing anything at that endpoint turned one
+  request into as many full-dataset scans as it could open connections.
+
+- **Proxy timeouts cut from 300 seconds** to 90 for `/api` and 120 elsewhere.
+  Nothing here legitimately takes five minutes, and the old value meant a
+  connection to an upstream that had stopped responding was held for that long.
+  These bound the gap between reads, not the total, so streaming downloads are
+  unaffected.
+
+### Added
+
+- **Flat chart view** — a horizontal band as an alternative to the arc dial,
+  chosen from the top bar next to Dial. Reference and current are drawn as
+  vertical lines through the band, the target as a buckle around it: two are
+  readings, one is a setting, so they are not three colours of the same shape.
+
+- **Chart details side panel**, opened by a pane's info button. Shows how the
+  scale was arrived at — every candidate range, the metadata bounds, each step,
+  and which source each value came from. Anything not loaded says so rather than
+  showing a plausible number. "Show calculations" swaps it for the target
+  arithmetic that used to be a modal.
+
+- **Reset to reference** and **Reset to current** in the target editor,
+  confirmed in the panel rather than in a popup.
+
+- The three right-hand panels are resizable from their edge and share one
+  remembered width.
+
+### Changed
+
+- **A declared metadata bound is now the scale**, not a limit on it. Percent
+  burned draws 0–100 because it is a percentage, not 45–97.5 because that is
+  what one site happens to span. Where no bound is declared — 387 of 504
+  columns — the range mode's own minima and maxima serve instead.
+
+- **The target no longer stretches the axis.** Three separate places were
+  widening the scale to fit it, which moved every other marker while the reading
+  it stood for had not changed.
+
+- Site range mode uses the site's actual spread across its catchments rather
+  than a 10% pad around the three plotted values.
+
+- One header for every view mode — scenario, factor, scenario — so cycling
+  map, flat, dial and table changes what is drawn in the pane and not the frame
+  around it. Table widgets are titled by their factor.
+
+- Site area and catchment count are stated once in the header instead of once
+  per table pane. The factor configuration opens in the side panel rather than
+  as a modal over the grid.
+
+- Removed as duplicates of controls the header already carries: the Zone Range
+  panel, the range buttons on each dial, the per-widget shape toggle and help
+  button, the scale lock, the Hide Table button and the Tiles badge.
+
+### Fixed
+
+- Dials no longer flicker while a target moves. Every value change replayed the
+  reveal animation, which drives opacity across the whole widget.
+
+- A dial whose own values did not change is no longer redrawn — one of sixty
+  SVGs during a live drag, rather than all of them.
+
+- The target marker is drawn even when it sits on the current value, so a reset
+  to current lands on the line instead of vanishing.
+
+- Dials no longer read N/A for every value in grid view.
+
+- A reset lands exactly on the scenario it names. It went through the cascading
+  edit path and only covered editable keys, so it landed near the scenario
+  rather than on it.
+
+- The factor panel's close button works. It was shown only on mobile and had no
+  click handler at all.
+
 
 - **Live update in the target editor, and an end to the redraw after every
   change.** Moving a slider used to disable every other slider, drop a spinner

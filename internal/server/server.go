@@ -224,6 +224,24 @@ func (s *Server) buildRouter() *mux.Router {
 	router.PathPrefix("/data/demo/").Handler(
 		http.StripPrefix("/data/demo/", http.FileServer(dataDirFS{srv: s, sub: "demo"})))
 
+	// Serve the area-weighted whisker-bound CSVs from the data directory root.
+	// These back ChartView's box-plot whisker fallback for any site the backend
+	// has no record of — walkthrough demo sites, always, since they are static
+	// assets rather than site-store records — so /sites/{id}/whiskers 404s and
+	// the frontend falls back to fetching these directly and computing bounds
+	// itself. Before this route existed the fetch fell through to the SPA
+	// handler and got index.html back with a 200, which parsed as zero rows:
+	// every box plot in every demo tour silently collapsed to a flat line.
+	// Named explicitly, not PathPrefix'd, because nothing else at the data
+	// root is meant to be downloadable this way.
+	whiskerCSVHandler := http.StripPrefix("/data/", newCompressedStatic(dataDirFS{srv: s, sub: ""}))
+	for _, name := range []string{
+		"current_upper.csv", "current_lower.csv",
+		"reference_upper.csv", "reference_lower.csv",
+	} {
+		router.Handle("/data/"+name, whiskerCSVHandler).Methods("GET")
+	}
+
 	// Embedded documentation site (MkDocs build output)
 	docsContent, err := fs.Sub(docsFS, "docs_site")
 	if err != nil {
@@ -246,6 +264,11 @@ func (s *Server) buildRouter() *mux.Router {
 		httputil.RespondError(w, http.StatusNotFound,
 			"no such endpoint: "+r.Method+" "+r.URL.Path)
 	})
+
+	// Crawler rules. Registered before the SPA fallback, which would otherwise
+	// answer /robots.txt with a page of HTML — a 200 with no directives in it,
+	// which a crawler reads as permission to crawl everything. See robots.go.
+	router.HandleFunc("/robots.txt", handleRobots).Methods("GET")
 
 	// Static frontend files (embedded)
 	staticContent, err := fs.Sub(staticFS, "static")
@@ -371,6 +394,10 @@ func (s *Server) Start() error {
 
 // rootHandler wraps the router in the middleware every request passes through.
 //
+// Outermost first: admission control, then the body limit, then compression,
+// then the live router. Admission leads because refusing has to be cheaper
+// than serving, or shedding just moves the overload rather than relieving it.
+//
 // Compression is applied in server mode only. Desktop mode reaches the server
 // exclusively over loopback — it binds 127.0.0.1 and opens its own WebView onto
 // it — where there is no bandwidth to save, so compressing the full-Africa
@@ -387,7 +414,10 @@ func (s *Server) rootHandler() http.Handler {
 	if !s.cfg.DesktopMode {
 		handler = compressResponses(handler)
 	}
-	return limitRequestBody(handler)
+	// Admission control is outermost so that a refused request costs a status
+	// line and nothing else: no body read, no compression, no routing. The
+	// whole value of shedding is that saying no is cheap.
+	return admitRequests(limitRequestBody(handler))
 }
 
 // newHTTPServer builds the main listener's configuration.

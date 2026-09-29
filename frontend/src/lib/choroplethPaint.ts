@@ -1,4 +1,4 @@
-import type maplibregl from 'maplibre-gl';
+import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec';
 import type { ColorScaleType, ZoneStats } from '../types';
 
 /**
@@ -56,16 +56,16 @@ export const CHOROPLETH_VALUE_STATE_KEY = 'v';
  * geometry; `['feature-state', 'v']` for the vector-tile path, where it was
  * joined on afterwards.
  */
-export type ChoroplethValueAccessor = maplibregl.ExpressionSpecification;
+export type ChoroplethValueAccessor = ExpressionSpecification;
 
 /** Reads the value from the feature's own properties (GeoJSON path). */
 export function attributeValueAccessor(attribute: string): ChoroplethValueAccessor {
-  return ['get', attribute] as maplibregl.ExpressionSpecification;
+  return ['get', attribute] as ExpressionSpecification;
 }
 
 /** Reads the value from feature state (vector-tile path). */
 export function featureStateValueAccessor(): ChoroplethValueAccessor {
-  return ['feature-state', CHOROPLETH_VALUE_STATE_KEY] as maplibregl.ExpressionSpecification;
+  return ['feature-state', CHOROPLETH_VALUE_STATE_KEY] as ExpressionSpecification;
 }
 
 export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -110,12 +110,12 @@ export function buildNormalizedValueExpression(
   min: number,
   range: number,
   scaleType: ColorScaleType
-): maplibregl.ExpressionSpecification {
+): ExpressionSpecification {
   const linearRatio = [
     '/',
     ['-', ['coalesce', value, min], min],
     range,
-  ] as maplibregl.ExpressionSpecification;
+  ] as ExpressionSpecification;
 
   if (scaleType === 'linear') {
     return linearRatio;
@@ -131,7 +131,7 @@ export function buildNormalizedValueExpression(
         ['ln', ['+', 1, ['*', LOGARITHMIC_STRENGTH, ['var', 't']]]],
         Math.log(1 + LOGARITHMIC_STRENGTH),
       ],
-    ] as maplibregl.ExpressionSpecification;
+    ] as ExpressionSpecification;
   }
 
   return [
@@ -143,7 +143,7 @@ export function buildNormalizedValueExpression(
       1,
       ['+', 1, ['^', Math.E, ['*', -LOGISTIC_STEEPNESS, ['-', ['var', 't'], 0.5]]]],
     ],
-  ] as maplibregl.ExpressionSpecification;
+  ] as ExpressionSpecification;
 }
 
 /**
@@ -155,7 +155,7 @@ export function buildFillColorExpression(
   max: number,
   baseColor?: string | null,
   scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
+): ExpressionSpecification | string {
   // When a metadata base color is provided, blend from white (low values)
   // to the base color (high values) instead of using opacity.
   if (baseColor) {
@@ -177,7 +177,7 @@ export function buildFillColorExpression(
       '#FFFFFF',
       1,
       baseColor,
-    ] as maplibregl.ExpressionSpecification;
+    ] as ExpressionSpecification;
   }
 
   const range = max - min;
@@ -192,7 +192,7 @@ export function buildFillColorExpression(
     ['linear'],
     buildNormalizedValueExpression(value, min, range, scaleType),
     ...PRISM_STOPS.flatMap(([t, color]) => [t, color]),
-  ] as maplibregl.ExpressionSpecification;
+  ] as ExpressionSpecification;
 }
 
 export function buildOpacityColorExpression(
@@ -201,7 +201,7 @@ export function buildOpacityColorExpression(
   max: number,
   baseColor: string,
   scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | string {
+): ExpressionSpecification | string {
   // Blend color from white (low values) to the metadata base color
   // (high values). Opacity will be handled separately by layer paint.
   const rgb = hexToRgb(baseColor);
@@ -222,7 +222,7 @@ export function buildOpacityColorExpression(
     '#FFFFFF',
     1,
     baseColor,
-  ] as maplibregl.ExpressionSpecification;
+  ] as ExpressionSpecification;
 }
 
 /**
@@ -233,7 +233,7 @@ export function buildExtrusionExpression(
   min: number,
   max: number,
   scaleType: ColorScaleType = 'linear'
-): maplibregl.ExpressionSpecification | number {
+): ExpressionSpecification | number {
   const range = max - min;
   if (range === 0) {
     return MAX_EXTRUSION_HEIGHT / 2;
@@ -243,7 +243,7 @@ export function buildExtrusionExpression(
     '*',
     buildNormalizedValueExpression(value, min, range, scaleType),
     MAX_EXTRUSION_HEIGHT,
-  ] as maplibregl.ExpressionSpecification;
+  ] as ExpressionSpecification;
 }
 
 /**

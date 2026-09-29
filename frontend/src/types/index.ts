@@ -1,5 +1,6 @@
 import { getAppRuntime } from './runtime';
 import { safeRemoveItem, safeSetItem } from '../lib/storage';
+import { SCENARIO_COLORS, pastelTint } from '../lib/dialScale';
 
 export type Scenario = 'reference' | 'current' | 'future';
 
@@ -55,7 +56,15 @@ export type ColorScaleType = 'linear' | 'logistic' | 'logarithmic';
 export type LayoutMode = 'single' | 'quad';
 
 /** View mode for each pane: map choropleth, line chart, dial gauge, or aggregate table */
-export type ViewMode = 'map' | 'chart' | 'dial' | 'table';
+/**
+ * What a pane draws.
+ *
+ * `flat` and `dial` are two renderings of the same scale — a horizontal band
+ * and an arc gauge. They are separate view modes rather than a shape toggle on
+ * one, because that is how the user picks them: once for the grid, from the
+ * same cluster as the other views, not per widget.
+ */
+export type ViewMode = 'map' | 'chart' | 'flat' | 'dial' | 'table';
 
 /** Range mode for dial chart min/max values */
 export type RangeMode = 'domain' | 'extent' | 'site';
@@ -63,20 +72,66 @@ export type RangeMode = 'domain' | 'extent' | 'site';
 /** Per-pane state array (minimum one entry) */
 export type PaneStates = ComparisonState[];
 
+/**
+ * The grid is always 3 columns wide. Row count is not a setting -- it is
+ * derived from how many panes are actually on screen, growing by a row
+ * every 3 panes as more are added. Map, dial and table views stay fixed at
+ * 2 rows (6 panes): the grid used to size every row as if there were only
+ * 2 regardless of pane count, which overflowed the viewport and forced a
+ * scroll the user had no way to discover (issue #204). Belt charts are
+ * small enough to keep growing past that, up to 5 rows (15 panes).
+ */
+const QUAD_COLUMNS = 3;
+const MIN_QUAD_ROWS = 2;
+const MAX_QUAD_ROWS_BELT = 5;
+
+export function maxPanesForViewMode(mode: ViewMode): number {
+  return QUAD_COLUMNS * (mode === 'flat' ? MAX_QUAD_ROWS_BELT : MIN_QUAD_ROWS);
+}
+
+/** How many rows the grid needs for this many panes, given the view mode. */
+export function quadRowsForPaneCount(paneCount: number, mode: ViewMode): number {
+  if (mode !== 'flat') return MIN_QUAD_ROWS;
+  return Math.min(MAX_QUAD_ROWS_BELT, Math.max(MIN_QUAD_ROWS, Math.ceil(paneCount / QUAD_COLUMNS)));
+}
+
+/**
+ * Apply a Scenario 1 (left) / Scenario 2 (right) choice to every open pane.
+ *
+ * Reported: changing one pane's Right dropdown to Target State left every
+ * other open pane comparing whatever it already was (e.g. Reference vs
+ * Current) with no indication anything had changed elsewhere -- panes
+ * silently drifted onto different comparisons, and onto different colour
+ * accents for the same corner as a result. Which scenario is Left and which
+ * is Right is a property of the comparison being made, not a per-pane
+ * preference, so it now applies to every pane at once -- the attribute each
+ * pane shows is unaffected.
+ */
+export function applyScenarioToAllPanes(
+  panes: PaneStates,
+  side: 'left' | 'right',
+  scenario: Scenario,
+): PaneStates {
+  return panes.map((pane) => (
+    side === 'left'
+      ? { ...pane, leftScenario: scenario }
+      : { ...pane, rightScenario: scenario }
+  ));
+}
+
 export type QuadColumns = 2 | 3;
 
 const STORAGE_KEY = 'dt-pane-states';
 const STORAGE_LAYOUT_KEY = 'dt-layout-mode';
 const STORAGE_FOCUSED_KEY = 'dt-focused-pane';
-const STORAGE_QUAD_COLUMNS_KEY = 'dt-quad-columns';
 
 export const DEFAULT_PANE_STATES: PaneStates = [
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'lowTC_prop' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'AGBwd_Mgha' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'percBurned' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'CH4_both_kg_km2' },
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'SOC_Mgha_0_30' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'deltaSOC_Mgha' },
   { leftScenario: 'reference', rightScenario: 'current', attribute: 'herbs_tot_kgkm2' },
-  { leftScenario: 'reference', rightScenario: 'current', attribute: 'NPP_gm2' },
+  { leftScenario: 'reference', rightScenario: 'current', attribute: 'NPP_gm2.1' },
 ];
 
 export function loadPaneStates(): PaneStates {
@@ -123,18 +178,6 @@ export function saveFocusedPane(index: number): void {
 
 const STORAGE_RANGE_MODE_KEY = 'dt-range-mode';
 
-export function loadQuadColumns(): QuadColumns {
-  try {
-    const raw = localStorage.getItem(STORAGE_QUAD_COLUMNS_KEY);
-    if (raw === '2' || raw === '3') return Number(raw) as QuadColumns;
-  } catch { /* default */ }
-  return 2;
-}
-
-export function saveQuadColumns(cols: QuadColumns): void {
-  safeSetItem(STORAGE_QUAD_COLUMNS_KEY, String(cols));
-}
-
 export function loadRangeMode(): RangeMode {
   try {
     const raw = localStorage.getItem(STORAGE_RANGE_MODE_KEY);
@@ -147,24 +190,38 @@ export function saveRangeMode(mode: RangeMode): void {
   safeSetItem(STORAGE_RANGE_MODE_KEY, mode);
 }
 
+// Pastel tints of dialScale.ts's SCENARIO_COLORS (reference green, current
+// blue, target pink) -- softened for use as label/accent backgrounds rather
+// than the saturated marker colours. These drifted out of sync with that
+// scheme (reference was pastel orange, target was pastel green) even though
+// LandingPage's own comment says they're meant to be "the app's own
+// reference/current/future colour coding, the same hues used on every dial
+// and chart" -- corner labels on the map read Reference in one colour while
+// the dial read it in another.
+//
+// These are the pre-fetch/offline fallback only: once useScenarioColors()
+// resolves (possibly overridden by the datapack's colours.json), consumers
+// retint via pastelTint(colors.<role>) instead of reading .color here, so
+// the two stay in exact agreement rather than two independently-drifting
+// approximations of the same colour.
 export const SCENARIOS: ScenarioInfo[] = [
   {
     id: 'reference',
     label: 'Ecological Reference',
     description: `Condition compared to scientifically determined optimal standards`,
-    color: '#f6b07c',
+    color: pastelTint(SCENARIO_COLORS.reference),
   },
   {
     id: 'current',
     label: 'Current State',
     description: 'Current observed conditions',
-    color: '#8ccde1',
+    color: pastelTint(SCENARIO_COLORS.current),
   },
   {
     id: 'future',
     label: 'Target State',
     description: 'User-defined target condition with aim to achieve.',
-    color: '#9ecb9e',
+    color: pastelTint(SCENARIO_COLORS.future),
   },
 ];
 
@@ -178,10 +235,37 @@ export interface MapExtent {
   bounds?: [number, number, number, number]; // [minX, minY, maxX, maxY]
 }
 
-// Identify result: scenario -> attribute -> value
+/**
+ * One row of an identify table: an attribute's value under each of the two
+ * columns being compared, plus the departure-from-reference trend used to
+ * draw the small bar next to it.
+ */
+export interface IdentifyRow {
+  label: string;
+  left: string;
+  right: string;
+  trend: 'up' | 'down' | 'neutral';
+  delta: number | null;
+  trendWidthPx: number;
+}
+
+// Catchment identify result (the "i" tool, clicked on a choropleth fill).
+// Rows are pre-computed where the click happened (MapView has the
+// comparison/attribute-label context this needs) rather than carrying the
+// raw per-scenario values for the docked panel to recompute.
 export type IdentifyResult = {
   catchmentID: string;
-  data: Record<string, Record<string, number>>;
+  leftLabel: string;
+  rightLabel: string;
+  rows: IdentifyRow[];
+} | null;
+
+// Site-boundary identify result (clicking the site outline itself, rather
+// than a catchment) -- always Reference vs Current, for the whole site.
+export type SiteIdentifyResult = {
+  leftLabel: string;
+  rightLabel: string;
+  rows: IdentifyRow[];
 } | null;
 
 export type AppPage = 'landing' | 'about' | 'partnership' | 'sites' | 'create-site' | 'map' | 'explore' | 'indicators' | 'download' | 'setup';
@@ -277,7 +361,6 @@ export function clearBrowserAppCache(): void {
     STORAGE_KEY,
     STORAGE_LAYOUT_KEY,
     STORAGE_FOCUSED_KEY,
-    STORAGE_QUAD_COLUMNS_KEY,
     STORAGE_RANGE_MODE_KEY,
     STORAGE_CURRENT_SITE_KEY,
     STORAGE_CURRENT_PAGE_KEY,
@@ -363,7 +446,6 @@ export interface Site {
   // Map state
   paneStates?: PaneStates;
   layoutMode?: LayoutMode;
-  quadColumns?: QuadColumns;
   focusedPane?: number;
   mapExtent?: MapExtent;
 

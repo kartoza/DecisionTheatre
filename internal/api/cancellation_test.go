@@ -114,11 +114,9 @@ func TestPrecalculateFullSurvivesTheRequestThatTriggeredIt(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, cancelledRequest("/precalculate/full"))
 
-	handler.fullDomainMu.Lock()
-	cached := handler.fullDomainCache
-	handler.fullDomainMu.Unlock()
+	cached, ok := handler.fullDomain.cached()
 
-	if cached == nil {
+	if !ok || cached == nil {
 		t.Fatal("the shared full-domain cache was discarded because one client disconnected")
 	}
 	if len(cached.Current) == 0 || len(cached.Reference) == 0 {

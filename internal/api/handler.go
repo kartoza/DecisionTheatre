@@ -17,6 +17,7 @@ import (
 	"github.com/kartoza/decision-theatre/internal/config"
 	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/httputil"
+	"github.com/kartoza/decision-theatre/internal/safego"
 	"github.com/kartoza/decision-theatre/internal/sites"
 	"github.com/kartoza/decision-theatre/internal/tiles"
 )
@@ -37,14 +38,17 @@ type Handler struct {
 	cfg                config.Config
 	satelliteUsage     *config.SatelliteUsage
 	metaCache          *MetadataCache
+	scenarioColours    ScenarioColours
 	lookupsMu          sync.RWMutex
 	lookups            *LookupTables
 	pendingCatchments  sync.Map // siteID → chan struct{} closed when deferred catchment goroutine finishes
 	pendingExtractions sync.Map // siteID → struct{} while async indicator extraction is running
 
 	// Cached full-domain precalculation: computed once on first request.
-	fullDomainMu    sync.Mutex
-	fullDomainCache *FullDomainData
+	// Guarded by sharedResult itself: one computation, shared by everyone who
+	// asks for it while it runs. See sharedresult.go for why the plain
+	// check-then-compute it replaced was a load amplifier.
+	fullDomain sharedResult[*FullDomainData]
 }
 
 // NewHandler creates a new API handler. metadata.csv is parsed synchronously
@@ -60,12 +64,13 @@ func NewHandler(
 	satelliteUsage *config.SatelliteUsage,
 ) *Handler {
 	h := &Handler{
-		tileStore:      tileStore,
-		gpkgStore:      gpkgStore,
-		siteStore:      siteStore,
-		cfg:            cfg,
-		satelliteUsage: satelliteUsage,
-		metaCache:      loadMetadataCache(cfg.DataDir),
+		tileStore:       tileStore,
+		gpkgStore:       gpkgStore,
+		siteStore:       siteStore,
+		cfg:             cfg,
+		satelliteUsage:  satelliteUsage,
+		metaCache:       loadMetadataCache(cfg.DataDir),
+		scenarioColours: loadScenarioColours(cfg.DataDir),
 	}
 
 	// metadata.csv is exported from R, whose make.names() rewrites spaces and
@@ -74,12 +79,12 @@ func NewHandler(
 	if gpkgStore != nil {
 		h.metaCache.AddColumnAliases(gpkgStore.GetColumns())
 	}
-	go func() {
+	safego.Run("load-lookup-tables", func() {
 		lt := LoadLookupTables(cfg.DataDir)
 		h.lookupsMu.Lock()
 		h.lookups = lt
 		h.lookupsMu.Unlock()
-	}()
+	})
 	return h
 }
 
@@ -104,6 +109,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 
 	// Scenario data
 	r.HandleFunc("/scenarios", h.handleListScenarios).Methods("GET")
+	r.HandleFunc("/scenarios/colours", h.handleScenarioColours).Methods("GET")
 	r.HandleFunc("/columns", h.handleListColumns).Methods("GET")
 	r.HandleFunc("/metadata/colors", h.handleMetadataColors).Methods("GET")
 	r.HandleFunc("/metadata/details", h.handleMetadataDetails).Methods("GET")
@@ -403,6 +409,7 @@ func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 	info := map[string]interface{}{
 		"version":                  h.cfg.Version,
+		"commit":                   h.cfg.Commit,
 		"tiles_loaded":             h.tileStore != nil,
 		"geo_loaded":               h.gpkgStore != nil,
 		"satellite_style_url":      "/api/satellite-style.json",
@@ -445,6 +452,13 @@ func (h *Handler) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, h.gpkgStore.GetScenarios())
+}
+
+// handleScenarioColours returns the reference/current/target colours drawn
+// on every dial, chart, and map panel label -- the built-in defaults,
+// overridden by any fields set in colours.json.
+func (h *Handler) handleScenarioColours(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.scenarioColours)
 }
 
 // handleListColumns returns available attribute columns
@@ -584,62 +598,57 @@ func (h *Handler) handlePrecalculateFull(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	h.fullDomainMu.Lock()
-	cached := h.fullDomainCache
-	h.fullDomainMu.Unlock()
-
-	if cached != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_ = json.NewEncoder(w).Encode(cached)
-		return
-	}
-
 	columns := h.gpkgStore.GetColumns()
 	if len(columns) == 0 {
 		respondError(w, http.StatusInternalServerError, "no columns available")
 		return
 	}
 
-	// Deliberately detached from the request's cancellation. This computes the
-	// full-domain averages for every column across the whole dataset - seconds
-	// of work - and the result is cached for the life of the process and
-	// served to every pane of every subsequent quad-view load. It is shared
-	// work that one request merely happens to trigger, so one impatient user
-	// reloading must not discard it and leave the next arrival to start over.
-	//
-	// The request itself is still cancellable in the sense that matters: if
-	// the client has gone by the time this finishes, the response write is
-	// discarded by net/http. Only the computation is protected.
-	//
-	// context.WithoutCancel keeps the request context's values but drops both
-	// its cancellation and its deadline, so this computation has no time limit
-	// of its own. That is acceptable here only because it is bounded work over
-	// a fixed dataset that the process is going to have to do exactly once;
-	// anything unbounded would need its own deadline instead.
-	computeCtx := context.WithoutCancel(r.Context())
+	data, err := h.fullDomain.Get(r.Context(), "full-domain averages", func() (*FullDomainData, error) {
+		// Deliberately detached from any request's cancellation. This computes
+		// the full-domain averages for every column across the whole dataset -
+		// seconds of work - and the result is cached for the life of the
+		// process and served to every pane of every subsequent quad-view load.
+		// It is shared work that one request merely happens to trigger, so one
+		// impatient user reloading must not discard it and leave the next
+		// arrival to start over.
+		//
+		// The request itself is still cancellable in the sense that matters:
+		// if the client has gone by the time this finishes, the response write
+		// is discarded by net/http, and a waiting caller stops waiting. Only
+		// the computation is protected.
+		//
+		// context.Background rather than a request context because there is no
+		// longer one request this belongs to. That means no deadline of its
+		// own, which is acceptable only because it is bounded work over a fixed
+		// dataset that the process has to do exactly once; anything unbounded
+		// would need its own deadline instead.
+		ctx := context.Background()
 
-	start := time.Now()
-	refAgg, err := h.gpkgStore.GetScenarioAverages(computeCtx, "reference", columns, nil)
+		start := time.Now()
+		refAgg, err := h.gpkgStore.GetScenarioAverages(ctx, "reference", columns, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute reference averages: %w", err)
+		}
+		curAgg, err := h.gpkgStore.GetScenarioAverages(ctx, "current", columns, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute current averages: %w", err)
+		}
+		log.Printf("[perf] handlePrecalculateFull columns=%d duration_ms=%d", len(columns), time.Since(start).Milliseconds())
+
+		return &FullDomainData{Reference: refAgg, Current: curAgg}, nil
+	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute reference averages: %v", err))
+		// A caller who hung up while waiting is not a failure; only the
+		// computation itself can be one. See cancel.go on why a disconnect must
+		// not land in the error bucket.
+		if geodata.IsCancellation(r.Context(), err) {
+			respondCancelled(w, r)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	curAgg, err := h.gpkgStore.GetScenarioAverages(computeCtx, "current", columns, nil)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to compute current averages: %v", err))
-		return
-	}
-	log.Printf("[perf] handlePrecalculateFull columns=%d duration_ms=%d", len(columns), time.Since(start).Milliseconds())
-
-	data := &FullDomainData{
-		Reference: refAgg,
-		Current:   curAgg,
-	}
-
-	h.fullDomainMu.Lock()
-	h.fullDomainCache = data
-	h.fullDomainMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
@@ -1192,13 +1201,13 @@ func (h *Handler) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[perf] handleCreateSite step=deferCatchmentDetails site_id=%s catchments=%d", created.ID, len(catchmentIDs))
 		done := make(chan struct{})
 		h.pendingCatchments.Store(created.ID, done)
-		go func() {
+		safego.Run("populate-site-catchments", func() {
 			defer func() {
 				h.pendingCatchments.Delete(created.ID)
 				close(done)
 			}()
 			h.populateSiteCatchmentDetailsDeferred(created.ID, catchmentIDs, geometry)
-		}()
+		})
 	}
 
 	respondJSON(w, http.StatusCreated, created)
@@ -1720,7 +1729,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 	}
 
 	h.pendingExtractions.Store(id, struct{}{})
-	go func() {
+	safego.Run("extract-site-indicators", func() {
 		defer h.pendingExtractions.Delete(id)
 		// Deliberately context.Background(): this handler responds 202 and
 		// returns immediately, so the request context is already cancelled by
@@ -1730,7 +1739,7 @@ func (h *Handler) handleExtractIndicators(w http.ResponseWriter, r *http.Request
 		if err := h.doSiteExtraction(context.Background(), id); err != nil {
 			log.Printf("Async extraction failed for site %s: %v", id, err)
 		}
-	}()
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -2049,7 +2058,32 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// handleResetIdealIndicators resets ideal values to match current values
+// ResetIdealRequest is the body of a target reset.
+//
+// Scenario is optional and defaults to the historical behaviour, so the
+// Indicators page — which has always sent no body at all — still means "reset
+// to current".
+//
+// There is deliberately no runtime:"browser" branch here, unlike the indicators
+// PATCH. This route is desktop-only on purpose: in browser runtime the client
+// does the same work locally, because sending the user's site to the server is
+// exactly what this application does not do.
+type ResetIdealRequest struct {
+	// "current" (default) or "reference": which observed scenario the targets
+	// are pointed at.
+	Scenario string `json:"scenario"`
+}
+
+// handleResetIdealIndicators points every target at one of the observed
+// scenarios.
+//
+// Deliberately not a cascade. The indicators PATCH recomputes derived values
+// from whichever primary inputs changed, which is right for an edit and wrong
+// for a reset: `current` was produced by extraction, not by the cascade
+// formulas, so recomputing it would land near current rather than on it. A
+// reset writes the scenario through unchanged, for every key rather than only
+// the editable ones, so the target genuinely coincides with what it was reset
+// to.
 func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Request) {
 	if h.siteStore == nil {
 		respondError(w, http.StatusInternalServerError, "site store not initialized")
@@ -2057,6 +2091,12 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 	}
 
 	id := mux.Vars(r)["id"]
+
+	// An absent or unparseable body is not an error: the original caller sent
+	// none, and its meaning is the default.
+	var req ResetIdealRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	site, err := h.siteStore.Get(id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
@@ -2068,27 +2108,29 @@ func (h *Handler) handleResetIdealIndicators(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Reset ideal to current values (falling back to reference for any key
-	// with no current value) — the target's baseline is the current state.
-	site.Indicators.Ideal = make(map[string]float64)
-	for key, value := range site.Indicators.Reference {
-		site.Indicators.Ideal[key] = value
+	// Reference is the floor in both cases, so a key the chosen scenario has no
+	// value for still lands somewhere meaningful rather than vanishing from the
+	// ideal map. For a reference reset that floor is the whole answer.
+	resetTo := func(reference, chosen map[string]float64) map[string]float64 {
+		ideal := make(map[string]float64, len(reference))
+		for key, value := range reference {
+			ideal[key] = value
+		}
+		if req.Scenario != "reference" {
+			for key, value := range chosen {
+				ideal[key] = value
+			}
+		}
+		return ideal
 	}
-	for key, value := range site.Indicators.Current {
-		site.Indicators.Ideal[key] = value
-	}
+
+	site.Indicators.Ideal = resetTo(site.Indicators.Reference, site.Indicators.Current)
 	site.Indicators.Warnings = nil
 
-	// Reset each catchment's ideal to its current values (same fallback).
+	// The per-catchment ideals go with it. Leaving them behind would leave the
+	// map and the aggregate table disagreeing with the dial about the target.
 	for i := range site.Catchments {
-		ideal := make(map[string]float64, len(site.Catchments[i].Reference))
-		for k, v := range site.Catchments[i].Reference {
-			ideal[k] = v
-		}
-		for k, v := range site.Catchments[i].Current {
-			ideal[k] = v
-		}
-		site.Catchments[i].Ideal = ideal
+		site.Catchments[i].Ideal = resetTo(site.Catchments[i].Reference, site.Catchments[i].Current)
 	}
 
 	updated, err := h.siteStore.Update(id, site)

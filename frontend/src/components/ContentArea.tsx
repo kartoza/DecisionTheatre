@@ -1,13 +1,17 @@
-import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Checkbox, FormControl, FormLabel, HStack, IconButton, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
-import { FiChevronRight } from 'react-icons/fi';
+import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
 import { navigationPaneIndex } from '../lib/navigationPane';
 import { createRecalculationScheduler, loadLiveUpdatePreference, resolveLiveUpdate, saveLiveUpdatePreference } from '../lib/liveTargetUpdate';
-import { DEFAULT_PANE_STATES } from '../types';
-import type { LayoutMode, QuadColumns, PaneStates, IdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
+import { DEFAULT_PANE_STATES, maxPanesForViewMode, quadRowsForPaneCount } from '../types';
+import type { LayoutMode, PaneStates, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, BoundingBox, ColorScaleMode, ColorScaleType, SiteIndicators, RangeMode, ViewMode } from '../types';
 import { useAttributeDetails, useAttributeOrder, useAttributeTargetInputs, useAttributeTargetRanges, useAttributeUnits, useAttributeVariableTypes } from '../hooks/useApi';
 import type { FullDomainData } from '../hooks/useApi';
+import type { ScaleDerivation } from '../lib/dialScale';
+import { usePanelWidth } from '../lib/panelWidth';
+import PanelResizeHandle from './PanelResizeHandle';
+import PanelCollapseButton from './PanelCollapseButton';
+import type { CalculationDetailsProps } from './CalculationDetails';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface ContentAreaProps {
@@ -19,9 +23,15 @@ interface ContentAreaProps {
   onFocusPane: (index: number) => void;
   onGoQuad: () => void;
   onOpenControlPanel?: (paneIndex: number) => void;
+  onOpenChartDetails?: (
+    paneIndex: number,
+    derivation: ScaleDerivation | null,
+    calculations: CalculationDetailsProps | null,
+  ) => void;
   onRemovePane: (paneIndex: number) => void;
   onIdentify?: (result: IdentifyResult) => void;
   identifyResult?: IdentifyResult;
+  onSiteIdentify?: (result: SiteIdentifyResult) => void;
   onMapExtentChange?: (extent: MapExtent) => void;
   onStatisticsChange?: (stats: MapStatistics) => void;
   isPanelOpen?: boolean;
@@ -44,20 +54,35 @@ interface ContentAreaProps {
   onSwiperPositionChange?: (position: number) => void;
   // Dial chart props
   siteIndicators?: SiteIndicators | null;
+  // Raw catchment count from the site itself, used to size the live-update
+  // default before indicator extraction has finished and siteIndicators is
+  // still null (extraction runs in the background after site creation).
+  siteCatchmentCount?: number;
   rangeMode?: RangeMode;
-  onRangeModeChange?: (mode: RangeMode) => void;
   mapStatistics?: MapStatistics | null;
   chartGroups?: (string | null)[];
   chartAxisLabelFilters?: (string | null)[];
   chartGraphModes?: ('line' | 'boxplot' | null)[];
   mapExtent?: MapExtent | null;
-  onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<void> | void;
+  // Returns the server-confirmed indicators on success. runRecalculation
+  // needs this returned value, not just the resolved promise: React applies
+  // the resulting siteIndicators prop update asynchronously, but the
+  // scheduler drains its next queued request synchronously the instant this
+  // promise resolves, with no guarantee a re-render has happened in
+  // between. Building that next request from a siteIndicatorsRef that's
+  // still one response behind sends an untouched-but-cascaded field's
+  // stale value — see runRecalculation.
+  onSiteIndicatorsChange?: (indicators: SiteIndicators) => Promise<SiteIndicators | void> | void;
+  /**
+   * Point every target at an observed scenario. Separate from
+   * onSiteIndicatorsChange because a reset must not cascade — see
+   * resetSiteIdeal in hooks/useApi.
+   */
+  onResetTargets?: (scenario: 'reference' | 'current') => Promise<void> | void;
   // For target panel control from parent
   isTargetModalOpen?: boolean;
   onCloseTargetModal?: () => void;
   refreshKey?: number;
-  quadColumns?: QuadColumns;
-  onQuadColumnsChange?: (cols: QuadColumns) => void;
   fullDomainData?: FullDomainData | null;
 }
 
@@ -98,6 +123,16 @@ const STRINGS = {
   liveUpdateHintOff:
     'Charts and sliders recalculate once you let go of a slider. Best on large sites.',
   recalculating: 'Recalculating…',
+  resetToReference: 'Reset to reference',
+  resetToCurrent: 'Reset to current',
+  resetToReferenceHint: 'Set every target to the ecological reference value',
+  resetToCurrentHint: 'Set every target back to the current state, clearing all targets',
+  resetConfirmReference: 'Set every target to the reference?',
+  resetConfirmCurrent: 'Set every target back to current?',
+  resetConfirmBody: 'This replaces the targets you have set.',
+  resetConfirm: 'Reset',
+  resetCancel: 'Cancel',
+  resetUnavailable: 'No values to reset to',
   invalidTargetTitle: 'Invalid target value',
   invalidTargetBody: (label: string) => `Please enter a valid number for ${label}.`,
   updateFailed: 'Failed to update target values',
@@ -111,6 +146,29 @@ function formatVariableType(value: string): string {
     .join(' ');
 }
 
+// The step-derived precision below (1 or 2 decimals) is tuned for a single
+// reserve's numbers, but a slider's range is fixed for the attribute — the
+// same 0–50/km² range a small reserve fills out is also what a whole-Africa
+// site uses, where a rare species' density averaged over the entire
+// continent can be three orders of magnitude smaller (e.g. 0.00025/km² for
+// Black Rhino) than in a reserve where it is actually found. Rounded to the
+// step's precision that reads as "0.0" — indistinguishable from a species
+// that is not there at all, even though the value driving the slider is
+// correct. Falling back to enough decimals for ~2 significant figures only
+// for values small enough that the step-derived precision would erase them
+// keeps ordinary reserve-scale numbers unchanged.
+function formatTargetValue(numVal: number, step: number): string {
+  if (numVal % 1 === 0) return String(numVal);
+
+  const stepPrecision = step < 0.1 ? 2 : 1;
+  const magnitude = Math.abs(numVal);
+  if (magnitude > 0 && magnitude < 0.5 * 10 ** -stepPrecision) {
+    const significantDecimals = Math.min(6, Math.ceil(-Math.log10(magnitude)) + 1);
+    return numVal.toFixed(Math.max(stepPrecision, significantDecimals));
+  }
+  return numVal.toFixed(stepPrecision);
+}
+
 function ContentArea({
   mode,
   paneStates,
@@ -120,9 +178,11 @@ function ContentArea({
   onFocusPane,
   onGoQuad,
   onOpenControlPanel,
+  onOpenChartDetails,
   onRemovePane,
   onIdentify,
   identifyResult,
+  onSiteIdentify,
   onMapExtentChange,
   onStatisticsChange,
   isPanelOpen,
@@ -142,22 +202,22 @@ function ContentArea({
   swiperPosition,
   onSwiperPositionChange,
   siteIndicators,
+  siteCatchmentCount,
   rangeMode,
-  onRangeModeChange,
   mapStatistics,
   chartGroups,
   chartAxisLabelFilters,
   chartGraphModes,
   mapExtent,
   onSiteIndicatorsChange,
+  onResetTargets,
   isTargetModalOpen,
   onCloseTargetModal,
   refreshKey,
-  quadColumns = 2,
-  onQuadColumnsChange,
   fullDomainData,
 }: ContentAreaProps) {
   const toast = useToast();
+  const { width: panelWidth, startResize } = usePanelWidth();
   const { details: attributeDetails } = useAttributeDetails();
   const { targetInputs } = useAttributeTargetInputs();
   const { units: attributeUnits } = useAttributeUnits();
@@ -167,6 +227,10 @@ function ContentArea({
   const [targetDraftValues, setTargetDraftValues] = useState<Record<string, string>>({});
   const [targetDefaultValues, setTargetDefaultValues] = useState<Record<string, number>>({});
   const [isSavingTargets, setIsSavingTargets] = useState(false);
+  // Which reset is awaiting confirmation, or null. A reset discards target work
+  // and cannot be undone, so it is confirmed — but in place rather than in a
+  // dialog, so the panel the user is working in is where the question appears.
+  const [pendingReset, setPendingReset] = useState<'reference' | 'current' | null>(null);
 
   // --- Live update -------------------------------------------------------
   //
@@ -177,8 +241,11 @@ function ContentArea({
   // The count the recalculation actually iterates over, straight off the
   // extraction that produced these indicators — the same number the backend
   // rescores on every edit, which is what makes it the right one to size the
-  // default by.
-  const catchmentCount = siteIndicators?.catchmentCount ?? 0;
+  // default by. Extraction runs in the background after site creation, so
+  // siteIndicators can still be null when this panel first mounts; falling
+  // back to the site's raw catchment count keeps the default correct for a
+  // large site in that window instead of defaulting to live update on.
+  const catchmentCount = siteIndicators?.catchmentCount ?? siteCatchmentCount ?? 0;
   const isLiveUpdate = resolveLiveUpdate(catchmentCount, storedLiveUpdate);
 
   const handleLiveUpdateChange = useCallback((enabled: boolean) => {
@@ -318,14 +385,32 @@ function ContentArea({
 
     const nextDrafts = computeTargetDrafts();
     // Mid-drag, a live recalculation's cascade must not yank the thumb out
-    // from under the pointer, so the dragged slider keeps the user's value
-    // and everything else takes the freshly calculated one.
+    // from under the pointer, so the dragged slider keeps the user's value.
+    //
+    // More than that: while the scheduler still has a request in flight or
+    // queued (isSavingTargets), this response can be answering an
+    // *intermediate* value from earlier in the drag, not the one the user
+    // has since moved on to (including after release, once
+    // draggingTargetKeyRef has already gone back to null). Adopting it
+    // anyway made every touched slider spring back to that stale reading
+    // for a moment before the real, final response arrived and snapped it
+    // forward again — visible as a slider that "gets stuck" or leaps
+    // backward on its own. So every touched key keeps its current
+    // on-screen value until the scheduler fully settles; only then is the
+    // response guaranteed to be the answer to what's actually on screen.
     const draggingKey = draggingTargetKeyRef.current;
-    setTargetDraftValues((prev) =>
-      draggingKey != null && prev[draggingKey] !== undefined
+    setTargetDraftValues((prev) => {
+      if (isSavingTargets) {
+        const merged = { ...nextDrafts };
+        for (const key of touchedTargetKeysRef.current) {
+          if (prev[key] !== undefined) merged[key] = prev[key];
+        }
+        return merged;
+      }
+      return draggingKey != null && prev[draggingKey] !== undefined
         ? { ...nextDrafts, [draggingKey]: prev[draggingKey] }
-        : nextDrafts
-    );
+        : nextDrafts;
+    });
 
     if (!targetPanelWasOpenRef.current) {
       // Only snapshot the "opened at" values on the initial open — this
@@ -338,7 +423,7 @@ function ContentArea({
     }
     targetPanelWasOpenRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTargetModalOpen, siteIndicators]);
+  }, [isTargetModalOpen, siteIndicators, isSavingTargets]);
 
 
   // The application header is content-sized — logos plus padding — not a fixed
@@ -356,20 +441,10 @@ function ContentArea({
     return () => observer.disconnect();
   }, []);
 
-  // Broadcast open/close so the guided tour can react to the panel appearing.
-  // Using a ref to skip the initial mount dispatch. The event names predate
-  // the panel being a docked panel rather than a modal and are kept as-is so
-  // the tours keep working.
-  const prevPanelOpenRef = useRef(false);
-  useEffect(() => {
-    const isOpen = isTargetModalOpen ?? false;
-    if (isOpen && !prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-opened'));
-    } else if (!isOpen && prevPanelOpenRef.current) {
-      window.dispatchEvent(new Event('dt:targets-modal-closed'));
-    }
-    prevPanelOpenRef.current = isOpen;
-  }, [isTargetModalOpen]);
+  // The dt:targets-modal-opened/closed broadcast (for the guided tour) moved
+  // to App.tsx, which never unmounts across page navigation -- this
+  // component does, and a local ref here lost track of the pairing whenever
+  // that happened. See App.tsx's isTargetModalOpen effect for why.
 
   // One recalculation round trip. `draftValues` is passed in rather than read
   // from `targetDraftValues` state so the value that triggered it is
@@ -407,10 +482,55 @@ function ContentArea({
     if (!hasChanges) return;
 
     try {
-      await onSiteIndicatorsChange({ ...indicators, ideal: nextIdeal });
+      const confirmed = await onSiteIndicatorsChange({ ...indicators, ideal: nextIdeal });
+      // Sync synchronously, not through the siteIndicators prop: the
+      // scheduler drains its next queued payload the instant this promise
+      // resolves, before React necessarily re-renders with the new prop.
+      // Without this, that next call reads siteIndicatorsRef.current still
+      // one response behind and rebuilds its own ideal snapshot from
+      // it — sending an untouched-but-server-cascaded field's stale value
+      // (e.g. highTC_prop after only lowTC_prop was edited) back to a
+      // backend that reads any change in that field as a direct edit of
+      // it, overwriting what was actually touched.
+      if (confirmed) siteIndicatorsRef.current = confirmed;
     } catch {
       toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
     }
+  };
+
+  /**
+   * Point every editable target at one of the observed scenarios.
+   *
+   * Both buttons go through the same path a slider does — set the drafts, mark
+   * the keys as touched, schedule a recalculation — so a reset cascades exactly
+   * as a manual edit would and cannot land the site in a state the sliders
+   * could not have produced.
+   *
+   * Resetting to current is the "clear my targets" case: with ideal equal to
+   * current there is no divergence, so the dials stop showing a target at all.
+   */
+  const resetTargetsTo = (scenario: 'reference' | 'current') => {
+    if (!onResetTargets) return;
+    // Every editable slider is untouched again: the reset has replaced the
+    // targets wholesale, so nothing the user did before it is still pending.
+    touchedTargetKeysRef.current = new Set();
+    // A slider whose drag ended without cleanly firing onChangeEnd (seen with
+    // keyboard-driven changes) leaves this pointing at a key forever. The
+    // resync effect below then treats that key as still mid-drag and keeps
+    // its pre-reset value instead of adopting the reset one — the one slider
+    // out of the whole set that silently stays stale. A reset replaces every
+    // target wholesale, so there is no drag left to protect.
+    draggingTargetKeyRef.current = null;
+    setIsSavingTargets(true);
+    void (async () => {
+      try {
+        await onResetTargets(scenario);
+      } catch {
+        toast({ title: STRINGS.updateFailed, status: 'error', duration: 2500 });
+      } finally {
+        setIsSavingTargets(false);
+      }
+    })();
   };
 
   // The scheduler is created once and reaches the current render's
@@ -430,17 +550,26 @@ function ContentArea({
     schedulerRef.current?.schedule(draftValues);
   };
 
+  // The grid is always 3 columns wide, showing at most maxPanesForViewMode
+  // panes for whatever it's currently displaying -- any more and they
+  // overflowed the viewport, forcing a scroll the user had no way to
+  // discover (#204). Extra pane configs beyond the cap are kept in
+  // paneStates, just not rendered, so they reappear if the cap grows again
+  // (e.g. switching to belt charts, which keep growing a row every 3 panes).
+  const gridViewMode = viewModes[0] ?? 'map';
+  const quadPaneCap = maxPanesForViewMode(gridViewMode);
   const visibleIndices = isQuad
-    ? paneStates.map((_, index) => index)
+    ? paneStates.slice(0, quadPaneCap).map((_, index) => index)
     : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
+  const quadRows = quadRowsForPaneCount(visibleIndices.length, gridViewMode);
 
   // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
   // rather than fixed, because which pane is bottom-left changes: panes are
-  // removable, the columns toggle between two and three, and a pane showing a
-  // chart cannot host a map control.
+  // removable, the row count grows and shrinks, and a pane showing a chart
+  // cannot host a map control.
   const navigationPane = navigationPaneIndex(
     visibleIndices,
-    isQuad ? quadColumns : 1,
+    isQuad ? 3 : 1,
     (paneIndex) => viewModes[paneIndex] === 'map',
   );
 
@@ -466,9 +595,15 @@ function ContentArea({
         h="100%"
         flex={1}
         display="grid"
-        gridTemplateColumns={isQuad ? `repeat(${quadColumns}, minmax(0, 1fr))` : '1fr'}
+        // Always 3 across -- quadRows (derived above, not a setting) picks
+        // how many rows deep (#204). Sized for the actual row count, not a
+        // fixed guess: the grid used to always size rows as if there were
+        // only 2, no matter how many the pane count actually needed, so a
+        // 6-pane grid already needed 3 rows and pushed the extra one
+        // off-screen with no visible scroll affordance pointing at it.
+        gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
         gridTemplateRows={isQuad ? undefined : '1fr'}
-        gridAutoRows={isQuad ? 'calc((100% - 2px) / 2)' : undefined}
+        gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
         alignContent={isQuad ? 'start' : undefined}
         gap={isQuad ? '2px' : 0}
         bg={isQuad ? 'gray.700' : 'transparent'}
@@ -501,10 +636,12 @@ function ContentArea({
                   onFocusPane={onFocusPane}
                   onGoQuad={onGoQuad}
                   onOpenControlPanel={onOpenControlPanel}
+                  onOpenChartDetails={onOpenChartDetails}
                   canRemove={paneStates.length > minimumQuadPaneCount && i >= minimumQuadPaneCount}
                   onRemovePane={onRemovePane}
                   onIdentify={onIdentify}
                   identifyResult={identifyResult}
+                  onSiteIdentify={onSiteIdentify}
                   siteId={siteId}
                   siteBounds={siteBounds}
                   isBoundaryEditMode={isBoundaryEditMode}
@@ -523,7 +660,6 @@ function ContentArea({
                   onSwiperPositionChange={onSwiperPositionChange}
                   siteIndicators={siteIndicators}
                   rangeMode={rangeMode}
-                  onRangeModeChange={onRangeModeChange}
                   mapStatistics={mapStatistics}
                   chartGroup={chartGroups?.[i] ?? null}
                   mapExtent={mapExtent}
@@ -532,8 +668,6 @@ function ContentArea({
                   refreshKey={refreshKey}
                   targetHasBeenUpdated={targetHasBeenUpdated}
                   editableTargetKeys={editableTargetKeys}
-                  quadColumns={quadColumns}
-                  onQuadColumnsChange={onQuadColumnsChange}
                   fullDomainData={fullDomainData}
                 />
               </motion.div>
@@ -556,8 +690,11 @@ function ContentArea({
             onViewModeChange={onViewModeChange}
             onFocusPane={onFocusPane}
             onGoQuad={onGoQuad}
+            onOpenControlPanel={onOpenControlPanel}
+            onOpenChartDetails={onOpenChartDetails}
             onIdentify={onIdentify}
             identifyResult={identifyResult}
+            onSiteIdentify={onSiteIdentify}
             onMapExtentChange={onMapExtentChange}
             onStatisticsChange={onStatisticsChange}
             isPanelOpen={isPanelOpen}
@@ -579,7 +716,6 @@ function ContentArea({
             onSwiperPositionChange={onSwiperPositionChange}
             siteIndicators={siteIndicators}
             rangeMode={rangeMode}
-            onRangeModeChange={onRangeModeChange}
             mapStatistics={mapStatistics}
             chartGroup={chartGroups?.[visibleIndices[0]] ?? null}
             chartAxisLabelFilter={chartAxisLabelFilters?.[visibleIndices[0]] ?? null}
@@ -617,7 +753,7 @@ function ContentArea({
           id="tour-target-panel"
           role="region"
           aria-label={STRINGS.targetsHeading}
-          w={{ base: '100vw', md: '440px' }}
+          w={{ base: '100vw', md: `${panelWidth}px` }}
           h="100%"
           bg="gray.800"
           color="white"
@@ -626,7 +762,9 @@ function ContentArea({
           boxShadow="-4px 0 24px rgba(0,0,0,0.35)"
           display="flex"
           flexDirection="column"
+          position="relative"
         >
+          <PanelResizeHandle onResizeStart={startResize} />
           <HStack px={4} pt={3} pb={2} align="center" spacing={2}>
             <Box fontSize="md" fontWeight="bold" flex="1">{STRINGS.targetsHeading}</Box>
             {isSavingTargets && (
@@ -635,13 +773,7 @@ function ContentArea({
                 <Box>{STRINGS.recalculating}</Box>
               </HStack>
             )}
-            <IconButton
-              aria-label={STRINGS.closePanel}
-              icon={<FiChevronRight />}
-              size="sm"
-              variant="ghost"
-              onClick={onCloseTargetModal}
-            />
+            <PanelCollapseButton label={STRINGS.closePanel} onClick={() => onCloseTargetModal?.()} />
           </HStack>
 
           <Box px={4} pb={3}>
@@ -661,6 +793,67 @@ function ContentArea({
                 </Checkbox>
               </Box>
             </Tooltip>
+          </Box>
+
+          {/*
+            Reset the whole target set to one of the observed scenarios.
+            Confirmed in place rather than in a dialog: this discards target
+            work and cannot be undone, and the question belongs in the panel
+            the user is already working in.
+          */}
+          <Box px={4} pb={3}>
+            {pendingReset === null ? (
+              <HStack spacing={2}>
+                <Tooltip label={STRINGS.resetToReferenceHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="orange"
+                    isDisabled={!onResetTargets || !siteIndicators?.reference}
+                    onClick={() => setPendingReset('reference')}
+                  >
+                    {STRINGS.resetToReference}
+                  </Button>
+                </Tooltip>
+                <Tooltip label={STRINGS.resetToCurrentHint} placement="bottom" openDelay={400}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="cyan"
+                    isDisabled={!onResetTargets || !siteIndicators?.current}
+                    onClick={() => setPendingReset('current')}
+                  >
+                    {STRINGS.resetToCurrent}
+                  </Button>
+                </Tooltip>
+              </HStack>
+            ) : (
+              <Box bg="whiteAlpha.100" borderRadius="md" p={3}>
+                <Box fontSize="sm" color="gray.100" fontWeight="600">
+                  {pendingReset === 'reference'
+                    ? STRINGS.resetConfirmReference
+                    : STRINGS.resetConfirmCurrent}
+                </Box>
+                <Box fontSize="xs" color="gray.400" mt={1} mb={2}>
+                  {STRINGS.resetConfirmBody}
+                </Box>
+                <HStack spacing={2}>
+                  <Button
+                    size="xs"
+                    colorScheme={pendingReset === 'reference' ? 'orange' : 'cyan'}
+                    onClick={() => {
+                      resetTargetsTo(pendingReset);
+                      setPendingReset(null);
+                    }}
+                  >
+                    {STRINGS.resetConfirm}
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setPendingReset(null)}>
+                    {STRINGS.resetCancel}
+                  </Button>
+                </HStack>
+              </Box>
+            )}
           </Box>
 
           <Box px={4} pb={4} flex="1" overflowY="auto">
@@ -703,7 +896,7 @@ function ContentArea({
                                 <Box fontSize="xs" color="gray.500" fontWeight="normal" mt={0.5}>{key}</Box>
                               </FormLabel>
                               <Box fontSize="sm" color="cyan.300" fontWeight="600" minW="50px" textAlign="right">
-                                {numVal % 1 === 0 ? numVal : numVal.toFixed(step < 0.1 ? 2 : 1)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
+                                {formatTargetValue(numVal, step)}{attributeUnits[key] ? <Box as="span" fontSize="xs" color="gray.400" ml={1}>{attributeUnits[key]}</Box> : null}
                               </Box>
                             </HStack>
                             <Slider

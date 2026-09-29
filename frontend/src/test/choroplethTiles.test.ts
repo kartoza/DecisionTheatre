@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import {
   CATCHMENT_TILE_ID_PROPERTY,
   CATCHMENT_TILE_SOURCE_LAYER,

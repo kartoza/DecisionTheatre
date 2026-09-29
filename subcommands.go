@@ -4,8 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kartoza/decision-theatre/internal/datacheck"
 )
@@ -23,6 +26,7 @@ Usage:
   decision-theatre [flags]              Run the application
   decision-theatre check-data [dir]     Check a data directory and report on it
   decision-theatre pack-data [dir]      Check, then build a distributable pack
+  decision-theatre healthcheck          Check that a running server is answering
 
 Run flags:
   --port N              HTTP port (default 8080)
@@ -48,6 +52,8 @@ func runSubcommand(args []string) (handled bool, code int) {
 		return true, cmdCheckData(args[2:])
 	case "pack-data":
 		return true, cmdPackData(args[2:])
+	case "healthcheck":
+		return true, cmdHealthcheck(args[2:])
 	case "help", "--help", "-h":
 		usage()
 		return true, 0
@@ -190,6 +196,48 @@ Flags:
 	if err := datacheck.RenderManifest(os.Stdout, manifest, outPath); err != nil {
 		fmt.Fprintf(os.Stderr, "decision-theatre pack-data: %v\n", err)
 		return 2
+	}
+	return 0
+}
+
+// cmdHealthcheck asks a running server whether it is answering requests. It
+// exists so Docker's HEALTHCHECK can run the binary that is already in the
+// image instead of requiring curl or wget: the release container is built
+// from the Nix flake, which carries only this application's own runtime
+// closure, and adding a second HTTP client just to poll a port this binary
+// already serves would be exactly the second dependency list the flake's
+// container derivation was written to avoid.
+func cmdHealthcheck(args []string) int {
+	fs := flag.NewFlagSet("healthcheck", flag.ExitOnError)
+	port := fs.Int("port", 8080, "Port the server is listening on")
+	timeout := fs.Duration("timeout", 5*time.Second, "How long to wait for a response")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: decision-theatre healthcheck [flags]
+
+Requests /api/health from a server running on this host and exits 0 if it
+answers 200, non-zero otherwise. Intended for Docker's HEALTHCHECK, in place
+of "curl -f http://localhost:PORT/api/health".
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	url := fmt.Sprintf("http://%s/api/health", net.JoinHostPort("127.0.0.1", fmt.Sprint(*port)))
+	client := &http.Client{Timeout: *timeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "decision-theatre healthcheck: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "decision-theatre healthcheck: %s returned %s\n", url, resp.Status)
+		return 1
 	}
 	return 0
 }

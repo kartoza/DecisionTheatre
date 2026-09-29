@@ -18,6 +18,21 @@ import (
 
 var version = "dev"
 
+// commit is the git revision this binary was built from, stamped at link time
+// with -X main.commit. It is reported by /api/info so that a measurement can
+// name what it measured.
+//
+// A benchmark that records the commit of whatever the operator happens to have
+// checked out locally is recording a guess: point the tool at production and
+// that guess is simply wrong, which is worse than an empty field, because it
+// looks like an answer. The build is the only thing that knows, so the build
+// is what says.
+//
+// "unknown" rather than a fake sha when unstamped: `go run .` and `go build`
+// with no ldflags both produce a working binary, and neither should claim a
+// provenance it does not have.
+var commit = "unknown"
+
 func main() {
 	// Subcommands are dispatched before flag parsing, because flag stops at the
 	// first non-flag argument and would otherwise treat "check-data" as one.
@@ -123,6 +138,7 @@ func main() {
 		DataDir:              resolvedDataDir,
 		ResourcesDir:         resolvedResourcesDir,
 		Version:              version,
+		Commit:               commit,
 		BindAddress:          *bindAddress,
 		SatelliteStyleURL:    *satelliteStyleURL,
 		SatelliteAttribution: *satelliteAttribution,

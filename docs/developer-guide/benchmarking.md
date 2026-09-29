@@ -1,350 +1,310 @@
 # Benchmarking
 
-`dtbench` measures the HTTP surface of a Decision Theatre server and compares one
-measurement against another. It exists because performance claims in this project
-used to be argued with numbers produced by hand — a `curl` here, a timing there,
-against whatever happened to be running. That is fine for a single claim and
-useless for a trend.
+`scripts/dtbench.py` measures a running Decision Theatre server, stresses it,
+and compares the result against every measurement taken before it.
 
-It answers three questions that hand measurement cannot:
+It exists because performance claims in this project used to be argued with
+numbers produced by hand — a `curl` here, a timing there, against whatever
+happened to be running. That is fine for a single claim and useless for a
+trend.
 
-- Is today's build faster than last week's, and by how much?
-- Did the change that landed on Tuesday help, or did something else?
-- Is production behaving the way the local build does?
-
-It talks to a server only over HTTP and imports nothing from the application, so
-it can point at a server it did not build — including production.
+It is standard-library Python with no dependencies, and it talks to the server
+only over HTTP. It imports nothing from the application, so it can point at a
+server it did not build, including production.
 
 ## Quick start
 
 From the development shell, with a server running (`dt run`):
 
 ```bash
-dt bench                  # measure it, save the result
-... make your change, restart the server ...
-dt bench                  # measure it again
-dt bench-report           # compare the two most recent runs and open the report
+dt benchmark                # measure, record, compare, and open the report
+dt benchmark-quick          # the same without the load phase
+dt benchmark-list           # what has been measured so far
+dt benchmark-report         # rebuild and open the report for a run
+dt benchmark-regressions    # where in the history something changed, and which commit
 ```
 
-`dt bench-list` shows what has been measured; `dt bench-sweep` builds a range of
-revisions. `<leader>pm` and `<leader>pM` are bound to the first two in neovim.
-
-`dt bench` takes `DT_BENCH_LABEL` and `DT_BENCH_TARGET`; `dt bench-report` takes
-`DT_BENCH_BASELINE` and `DT_BENCH_CURRENT`, each accepting a label, a filename or
-a position such as `last-3`.
-
-The underlying command is `dtbench`, and everything below describes it directly.
-
-With a server running:
+The same three ways as everything else in this project — `dt benchmark`,
+`make benchmark`, and:
 
 ```bash
-dtbench run --target http://127.0.0.1:8080 --label before
-# ... make the change you want to measure, restart the server ...
-dtbench run --target http://127.0.0.1:8080 --label after
-dtbench report --pdf
+nix run .#benchmark -- --quick --target https://your-instance
 ```
 
-The last line needs no arguments: with nothing else said, `report` compares the
-two most recent stored runs and tells you which ones it chose.
-
-Every run is saved as JSON under `./benchmarks/results`. Those files are the
-point of the tool — a comparison against last month is only possible if last
-month's file is still readable — so nothing deletes them but you.
-
-## Exit status
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Success |
-| `1` | Failure |
-| `2` | Mistake in the command |
-| `130` | Interrupted |
-
-`stdout` carries data; everything said to a person goes to `stderr`. That means
-`dtbench list --json | jq …` works without filtering out commentary.
-
----
-
-## `dtbench run`
-
-Measures one target and saves the result.
+All three run `scripts/benchmark.sh`, which runs `scripts/dtbench.py`. The
+Python program has no dependencies and can always be called directly, which is
+what you want on a server that has neither nix nor this repository:
 
 ```bash
-dtbench run --label before
-dtbench run --target https://decision-theatre.example.org --label prod -n 50
-dtbench run --heavy --heavy-n 3
+scp scripts/dtbench.py scripts/dtbench_pdf.py server:
+python3 dtbench.py run --target http://localhost:8080 --label "in-place"
 ```
 
-| Option | Default | Purpose |
+`dt benchmark` writes a PDF to `benchmarks/reports/` and opens it. Pass
+`--no-open` to skip that, which is what CI wants.
+
+!!! warning "The load phase saturates the server on purpose"
+    `dt benchmark` finishes by pushing the server past what it can serve. That
+    is the point of it, and on a server with load shedding configured it will
+    cause real users to be refused while it runs. Use `dt benchmark-quick`
+    against anything anyone is using.
+
+## Measuring production
+
+```bash
+dt benchmark --target https://africanlandscapefutures.wits.ac.za
+```
+
+The load phase is **skipped automatically** for a target that is not on this
+machine, because the obvious thing to type is the production URL and the load
+phase would take the site down for real users while it ran. `--stress-remote`
+opts back in, with that understood.
+
+The probe and latency phases still run. Those are a few hundred ordinary
+requests — what a visitor does — but `--samples` is worth lowering against a
+live site: the default of 20 means twenty fetches of a 14 MB response.
+
+Two things to know before reading the numbers.
+
+**Remote and local runs are never compared with each other.** Every run records
+whether it was co-located with the server, and the history is filtered to match.
+The difference between the two is mostly network, and reading that as a
+performance change is how a benchmark starts producing confident nonsense.
+
+**Rate limits apply to the benchmark too.** A production instance limits `/api`
+to 10 requests a second (see
+[Capacity and Overload](../administrator-guide/capacity-and-overload.md)). Past
+the burst allowance the tool is measuring the rate limiter rather than the
+server, and the run records `429`s as broken scenarios. That is the limiter
+working, not the benchmark failing.
+
+A real run against production, for scale — every figure includes about 800 ms
+of round trip from a European connection:
+
+| Endpoint | p50 | Size |
 | --- | --- | --- |
-| `--target` | `http://127.0.0.1:8080` | Base URL to measure |
-| `--label` | — | What you will recognise this run by later |
-| `-n` | `20` | Measured samples per scenario |
-| `--warmup` | `3` | Discarded requests before measuring |
-| `--heavy` | off | Include the expensive scenarios |
-| `--heavy-n` | `3` | Samples for heavy scenarios |
-| `--timeout` | `2m` | Per-request timeout |
-| `--results` | `benchmarks/results` | Where to save |
-| `--yes` | off | Answer the cost confirmation, for unattended use |
+| `health` | 797 ms | 16 B |
+| `choropleth-domain-aggregated` | 11.8 s | 5.8 MB |
+| `choropleth-full-domain-values` | 14.9 s | 14.4 MB |
 
-### Before it measures anything
+## Which commit was this?
 
-`run` checks the target answers. This matters more than it sounds: a run against
-a port with nothing listening used to complete, save a file, and report success —
-and that file could then be chosen as a baseline, so a comparison could rest on a
-run that never reached a server. It now refuses, and a run in which every scenario
-failed is not saved at all.
+Every run records the commit the **server** was built from, as the server
+itself reports it at `/api/info`. Not the commit this tool was run from.
 
-A malformed URL is caught before measuring rather than after. `http//localhost`
-— one missing colon — parses cleanly as a *relative* URL, so it is checked
-explicitly and the corrected string is suggested.
+That distinction is the whole reason the field can be trusted. Point the
+benchmark at production and the local checkout has no relationship to what is
+running at the other end, so recording `git rev-parse HEAD` would attach a
+plausible sha to somebody else's numbers — and a wrong answer here is worse
+than an empty one, because it survives into a bisect and sends someone to a
+commit that never contained the change.
 
-### Heavy scenarios
+The build stamps it (`scripts/commit.sh`, `-X main.commit`, or `self.rev` under
+nix) and the server reports it. A build made without the stamp reports
+`unknown`, and the tool records that as-is rather than filling it in. A build
+made from a dirty tree is recorded with a `-dirty` suffix, because a
+measurement taken against uncommitted work cannot be reproduced from the sha
+alone.
 
-Some scenarios are expensive enough that running them by default would be
-antisocial. The full-domain statistics query returns about 14 MB per request.
-They are excluded unless you pass `--heavy`.
+## What it measures
 
-!!! warning "`--heavy` against a shared server is a load test"
-    Against production this transfers tens of megabytes per sample. `run` warns
-    and asks before proceeding. Use `--yes` only when you mean it.
+Three phases, in order.
 
----
+**Probe** — one request to each of 22 endpoints, checking that it answers, with
+the right content type, and with a plausible amount of data in it. A run where
+things are broken says so at the top rather than burying it.
 
-## `dtbench sweep`
+**Latency** — repeated sequential samples of each endpoint, reported as
+medians. This is the "is this build slower than the last one" number.
 
-Builds each revision in a range, measures it, and saves the results — so
-"compare the versions" is a command rather than an afternoon.
+**Load** — concurrent clients at rising levels, with a health probe running
+alongside so the report can distinguish "the server is slow" from "the server
+is gone".
 
-```bash
-dtbench sweep --from v0.4.0 --dry-run     # list what would be built, and stop
-dtbench sweep --from v0.4.0 --data-dir ./data
+### The size guard
+
+Every scenario declares a minimum plausible response size. Without it, a `404`
+body or an empty JSON array records as the fastest endpoint in the suite and
+the report reads as a performance win. A broken server must never look like a
+fast one — that is the failure this kind of tool is most prone to, because the
+numbers all look excellent.
+
+## Reading the report
+
+Each endpoint is compared against the median of its history, not against one
+nominated baseline. A single baseline invites picking a flattering one, and
+cannot tell a real regression from an unlucky afternoon.
+
+```
+choropleth-domain-aggregated     p50   4709.0 ms   unchanged   [median of 5: 4680.1 ms]
 ```
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `--repo` | `.` | Checkout to take revisions from |
-| `--from` | — | Revision to start after (exclusive) |
-| `--to` | `HEAD` | Revision to end at (inclusive) |
-| `--merges` | `true` | Only merge commits — one point per pull request |
-| `--max` | `20` | Maximum revisions to build |
-| `--every` | `1` | Build every Nth revision |
-| `--data-dir` | `data` | Data directory each built server uses |
-| `--port` | `8099` | Port each built server listens on, one at a time |
-| `--dry-run` | off | List the revisions and stop |
+Runs with fewer than three prior samples say `not enough to judge` rather than
+inventing a comparison.
 
-Each revision is a full build in a throwaway worktree, so a sweep is slow. Start
-with `--dry-run`, which prints the list and the estimated cost before anything is
-built. Ctrl-C stops between revisions and keeps what is already done.
+### The load table and the verdict
 
-!!! note "Swept revisions have no frontend"
-    Revisions are built with placeholder frontend assets, because building the
-    real frontend for every revision would multiply an already slow operation.
-    The API is measured faithfully; anything that needs the actual interface —
-    including any browser-side measurement — is meaningless against a swept
-    build, which serves a 16-byte index page.
+```
+  Under load
+      conc      rps     p95 ms  errors  health p95
+         4      0.9     8367.8       0         5.6
+        32      5.7    10220.2      48        43.7
 
----
-
-## `dtbench report`
-
-Renders a Kartoza-branded HTML report, and optionally a PDF, from two results.
-
-```bash
-dtbench report --pdf                              # the two most recent runs
-dtbench report --baseline before --current after  # by label
-dtbench report --baseline last-3 --current last   # by position
+  VERDICT: load did not make it worse — latency held at 1.2x from 4 to 32
+           concurrent, refusing the excess.
+           But the work itself is slow: 10.2 s at p95.
 ```
 
-`--baseline` and `--current` each accept **a label, a filename, a path, or a
-position** — `first`, `last`, `last-1`, `last-2` and so on, where `last` is the
-newest. Given neither, the two most recent runs are compared and the report
-records which ones they were.
+The verdict is the part worth understanding, because it has been wrong twice
+and both mistakes looked entirely reasonable at the time.
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `--baseline` | `last-1` | Run to compare against |
-| `--current` | `last` | Run to report on |
-| `--out` | `benchmark-report.html` | HTML output path |
-| `--pdf` | off | Also print to PDF with a headless browser |
-| `--title`, `--subtitle` | derived | Override the cover text |
-| `--mark` | the Kartoza symbol | Brand mark for the cover |
-| `--repo` | `.` | Checkout to read merged pull requests from |
-| `--no-changes` | off | Omit the attribution section |
-| `--open` | off | Open the report when it is written |
+The first version judged the server by its health check, and reported "stayed
+responsive" for an instance whose real work had reached 18.5 seconds at p95.
+Health answered in 2 ms throughout — health checks are cheap, and say nothing
+about whether real work is getting done.
 
-`--open` hands the PDF — or the HTML when there is no PDF — to `xdg-open`, or to
-`open` on macOS, and does not wait for the viewer to exit. It is off by default
-because this runs in CI, where launching a viewer is at best noise; `dt
-bench-report` passes it. A missing viewer is a note, not a failure: the report
-exists and its path is on stdout either way.
+The second version judged by latency alone, and read any slow result with no
+errors as unbounded queueing. That is right under overload and wrong below it:
+with one client there is no queue to be in. It duly accused a server of
+queueing at a concurrency of one.
 
-### What landed between the builds
+So the question it actually asks is **does load make it slower**, which needs
+at least two load levels to answer:
 
-The report ends with the pull requests merged between the two builds and the
-issues they reference, each linked, so a difference can be attributed to work
-rather than guessed at.
+| What it sees                             | What it means                                          |
+| ---------------------------------------- | ------------------------------------------------------ |
+| Health failing                            | Down for everyone                                       |
+| Health slow                               | Cheap requests queued behind expensive ones             |
+| Latency tracks concurrency, no refusals   | Unbounded queueing — overload handed back as latency    |
+| Latency flat, some refusals               | The limits are working                                  |
+| Latency flat but high                     | The endpoint is expensive — look at the handler         |
+| Fast and flat                             | Not saturated; the test did not push hard enough        |
 
-This reads **git and nothing else** — no network, no token, no `gh` — so a report
-rendered on a laptop with no credentials produces the same list as one rendered
-in CI. Integration merges within a branch are excluded, because counting them
-would list the same work twice and attribute a change to a merge that did not
-introduce it. Each entry shows the merged work's own subject rather than
-`Merge pull request #130 from …`, and issues attach to the pull request whose own
-commits referenced them.
+Errors are not automatically a failure and their absence is not automatically a
+pass. A server past its capacity has two honest options — refuse quickly or
+serve slowly — and refusing is the better one, because the client learns
+immediately and can back off. See
+[Capacity and Overload](../administrator-guide/capacity-and-overload.md).
 
-The range comes from the revision each run recorded: the commit a sweep built,
-or the hash in the `git describe` version a server reports over `/api/info`.
-
-!!! warning "It narrows the search for a cause; it does not establish one"
-    Several pull requests in a range can move the same scenario, in opposite
-    directions. The section says this on the page, because a list of changes next
-    to a list of numbers invites being read as causation.
-
-    A build reporting its version as `dev` cannot be attributed to a commit. The
-    report then prints why rather than rendering an empty list, since an empty
-    section reads as "nothing merged".
-
-The PDF is printed with headless Chromium. If no browser is available the HTML is
-still written and the command says so rather than failing — the HTML is the
-artefact, the PDF is a convenience.
-
-!!! note "The report embeds its own typefaces"
-    Both faces are embedded as data URIs and the embedded alias leads the font
-    stack. This is not decoration: on a host with no matching font installed,
-    Chromium resolves the first family in a stack, finds nothing, and abandons
-    the chain — producing a fully laid out PDF containing **no text at all**.
-
----
-
-## `dtbench list`
-
-Shows what has been stored.
+## Finding where something changed
 
 ```bash
-dtbench list
-dtbench list --json | jq -r '.[].path'
+dt benchmark-regressions
 ```
 
-The names in the first column are what `--baseline` and `--current` accept,
-alongside labels and positions.
+This is the bisect. It walks the recorded history for each endpoint, looks for
+a point where the measurement moved to a new level **and stayed there**, and
+names the commit the new level first appeared in:
 
----
+```
+  choropleth-domain-aggregated
+    SLOWER    1240.5 ->   4680.1 ms (+277%)
+    first seen in run 14, 2026-08-22T09:14:02, nightly
+    commit 7fb8f6b3a1
+    git show 7fb8f6b3a1
+```
 
-## How to read a result
+It searches runs already recorded rather than rebuilding each revision. A
+`git bisect` over this would mean a full build and a server start per
+candidate, several minutes each, to arrive at an answer already sitting in the
+database — every row names its commit.
 
-### It refuses to flatter
+Two things it deliberately will not do.
 
-The most likely failure of a benchmark suite is not inaccuracy, it is
-**flattery**: a number that looks like a win and is not. Those numbers get
-quoted, so the tool is built to withhold them.
+**Report a spike as a step.** The halves either side of a candidate split are
+compared by median, so one pathological run — a laptop that began a backup
+mid-benchmark — cannot invent a change. A step also needs at least four runs,
+two on each side: with one measurement either side, any difference between them
+is as likely to be jitter as news.
 
-Running the suite twice against **an unchanged server** is the test that matters.
-An earlier version of this tool reported *5 faster, 3 slower* from that — the
-largest fake improvement being 41%, resting on 0.04 ms. It now reports nothing
-changed, because a difference must pass three independent gates:
+**Blame a commit for the machine.** When several unrelated endpoints move by a
+similar proportion at the same run, that is reported separately and without a
+commit, as a systemic change. The first report drawn from real history
+announced step changes on `/api/health`, `/api/info`, the index page and a tile
+read, all at once, all 4 ms down to 1 ms — four "regressions" whose actual
+cause was that the host had been busy earlier. Pinning that on a commit is how
+an innocent change gets reverted.
 
-1. **An absolute floor.** A change smaller than 1 ms is not reported, whatever
-   its percentage. Below about a millisecond, a relative threshold measures the
-   scheduler.
-2. **A relative floor.** At least 10%.
-3. **A significance test.** A Mann-Whitney rank-sum test over the raw samples,
-   Holm-corrected across the suite. With fewer than eight samples a side it
-   refuses to answer rather than answering badly.
+## The database
 
-A consequence worth knowing: this is conservative, and a genuine improvement
-below roughly 15–20% may be reported as unchanged. Raise `-n` when a claim
-matters.
+Runs go to `benchmarks/dtbench.sqlite`: `runs`, `measurements`, `load_results`.
+It is git-ignored on purpose. A measurement is only comparable against others
+from the same hardware, and a shared database would invite comparing a laptop
+against the server and reading the difference as a regression.
 
-### States other than faster and slower
+It is plain SQLite, so anything else can read it:
 
-| State | Meaning |
-| --- | --- |
-| **faster** / **slower** | Passed all three gates |
-| **unchanged** | Inside the noise |
-| **absent** | The endpoint does not exist on that build |
-| **broken** | It exists and stopped working |
-| **not run** | Skipped, e.g. a heavy scenario without `--heavy` |
+```bash
+sqlite3 benchmarks/dtbench.sqlite \
+  "SELECT r.label, m.p50 FROM measurements m JOIN runs r ON r.id = m.run_id
+   WHERE m.scenario = 'choropleth-domain-aggregated' ORDER BY r.id"
+```
 
-**Absent** deserves particular attention. An unrouted `/api/…` path returns
-`200 OK` with `text/html`, because it falls through to the single-page
-application. Measured naively, an endpoint that did not exist yet looks like a
-fast success — so a newly added endpoint appears to have existed all along *and
-to have been faster before it was written*. Scenarios declare the content type
-and minimum size they expect, and a response failing those is recorded as absent,
-never as fast.
+### Co-located runs
 
-### Payload changes are not timing changes
+Each run records whether the tool ran on the same machine as the server, and it
+refuses to compare a co-located run against a remote one. The difference
+between them is mostly network, and reading that as a performance change is
+how a benchmark starts producing confident nonsense.
 
-Compression trades CPU for bytes. Measured over loopback that is pure cost, so a
-change that made the application dramatically faster for real users can present
-as a large regression. The tool reports the trade explicitly and computes the
-**crossover bandwidth** — bytes saved divided by time added — which contains no
-assumption about anyone's connection. A change breaking even at 913 Mbps is a
-win on any link slower than a gigabit.
+## The report
 
-Payload verdicts are kept separate from timing verdicts, and a payload trade can
-never be reported as the headline regression.
+`--pdf` writes one; `--open` opens it. Four pages:
 
-### What it cannot tell you
+1. What was measured — target, server version, commit — and the verdict
+2. Every endpoint against the median of its history
+3. Trend charts, one per interesting endpoint, labelled by commit
+4. Step changes, with the commit each first appeared in
 
-- **Sub-millisecond scenarios cannot be compared locally.** They are liveness
-  checks, not evidence.
-- **Remote runs measure the network.** Production sits behind a round-trip floor
-  of a couple of hundred milliseconds; "did our code get faster" is not
-  answerable from them.
-- **Lifetime-cached endpoints cannot be measured against a long-running server.**
-  `/api/precalculate/full` takes about 26 seconds on the first call after a
-  restart and under 2 ms thereafter. Against a server `dtbench` starts itself the
-  warm-up captures this; against one that has been up for a while, nothing can,
-  and the scenario says so rather than presenting the warm figure as the cost.
-- **Concurrency and throughput are out of scope.** This measures latency — how
-  long one user waits.
+It is drawn by `scripts/dtbench_pdf.py`, a few hundred lines of standard
+library that writes the PDF format directly. That is not enthusiasm for
+implementing file formats: the benchmark's most useful property is that it can
+be copied onto a server and run there, and that stops being true the moment it
+needs something installed. It uses the base-14 fonts, which every reader has
+and none of which need embedding.
 
-### Coverage
+The report is a rendering of the same analysis the terminal prints, using the
+same words for the verdict. Anything the PDF said that the terminal did not
+would be a place for the two to drift apart, and the one nobody reads would be
+the one that goes wrong.
 
-A scenario count measures effort; only the route table measures coverage. The
-suite carries an inventory of every registered route and **derives** the figure
-from the URLs the scenarios actually request, so it cannot drift into claiming
-more than it does. Every run records it, and the report states it.
+## Options
 
-A route that cannot be measured meaningfully is recorded as unprobeable with a
-written reason rather than quietly omitted.
+```
+run          --target --label --notes --samples --concurrency --duration
+             --no-report --pdf [PATH] --open
+report       --run --pdf [PATH] --open
+regressions  --remote --slower-only
+list         --limit
+```
 
----
+`--concurrency` takes several levels: `--concurrency 8 32 64`. At least two are
+needed for the verdict to distinguish queueing from slowness.
 
-## Settling
+## Testing the tool
 
-`/api/health` answers within a fraction of a second of startup, but the grid
-geometry cache keeps building for around twelve seconds afterwards. The most
-expensive query costs roughly 2.4× its steady-state figure during that window —
-a bias that lands entirely on whichever revision a sweep happened to measure
-first.
+```bash
+python3 scripts/test_dtbench.py
+```
 
-`dtbench` waits for the server to settle before measuring, and warns when it
-cannot establish that a run was settled.
+The measuring fails loudly when it breaks. The verdict is the part that has
+been wrong while looking plausible, so it is the part with tests — including
+one for each of the two mistakes above, so neither comes back.
 
----
+## History
 
-## Adding a scenario
+This replaces a Go implementation (`internal/bench`, `cmd/dtbench`, about
+12,000 lines) that produced branded HTML and PDF reports. The scenario list and
+the size guard were carried over — that was the part with the thinking in it.
 
-Scenarios are declared in `internal/bench/scenario.go`, deliberately rather than
-discovered. An automatically enumerated route list drifts into measuring whatever
-is cheapest to call, and the interesting requests are the specific expensive
-ones.
+What went is the report generation. What arrived is the load phase: the Go
+suite deliberately put concurrency out of scope on the grounds that saturation
+is a different question needing a different tool, which was a fair call, and
+this is that tool.
 
-Each carries a `Why` explaining what it is evidence about, which is printed next
-to the number — a reader who does not already know the codebase cannot otherwise
-tell whether 400 ms is good.
-
-!!! warning "Names are identifiers, not labels"
-    A scenario's `Name` is the key used to line up one run against another.
-    Renaming it silently orphans every stored result recorded under the old name.
-    Adding a scenario is cheap and safe; renaming one is not.
-
-## Where the results live
-
-`benchmarks/results/*.json`, one file per run, schema-versioned so that a reader
-tolerates files written by older versions. Each records what was measured, which
-build answered, how many samples were taken, and from which machine — because a
-number without its provenance is precisely the thing this tool replaces.
+`bench-sweep`, which built each revision in a range and measured it, went with
+it. `dt benchmark-regressions` answers the question it was usually asked —
+where did this get slower — from measurements already recorded, without
+rebuilding anything. Where a genuine sweep is wanted, runs are labelled and
+stored, so the shell equivalent is a loop over `git checkout`, build, and
+`dtbench.py run --label "$rev"`.

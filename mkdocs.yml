@@ -120,6 +120,7 @@ nav:
       - Overview: administrator-guide/index.md
       - The Data Directory: administrator-guide/data-directory.md
       - Checking the Data Directory: administrator-guide/validating-data.md
+      - Capacity and Overload: administrator-guide/capacity-and-overload.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
       - Client/Server Boundary: developer-guide/client-server-boundary.md

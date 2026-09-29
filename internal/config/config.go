@@ -40,6 +40,12 @@ type Config struct {
 	ResourcesDir string
 	Version      string
 
+	// Commit is the git revision this binary was built from, or "unknown" for
+	// a build that was not stamped. Reported by /api/info so a benchmark run
+	// can record what it actually measured rather than what the machine
+	// running the benchmark happens to have checked out.
+	Commit string
+
 	// SatelliteStyleURL is the upstream MapLibre style document — satellite
 	// imagery plus roads and place labels, not a single raster tile type. The
 	// server fetches and rewrites it, not the browser: see

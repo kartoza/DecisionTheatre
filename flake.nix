@@ -16,7 +16,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "2.7.0";
+        version = "2.9.0";
 
         # MkDocs environment for requirements documentation
         mkdocsEnv = pkgs.python3.withPackages (
@@ -129,7 +129,7 @@
           # frontend/package-lock.json, so ANY change to that file — including
           # the version field — changes this hash. Recompute with:
           #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
-          npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
+          npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -181,7 +181,7 @@
           # when its output path changes, and the path embeds the version. The
           # 0.2.0 output was already in the store, so nothing revalidated it until
           # the bump to 0.3.0 forced a rebuild.
-          vendorHash = "sha256-LjBgQc1+ZgCer2aSug9kxSwumsGlp/owVgrUATnqPo8=";
+          vendorHash = "sha256-YI/2YNvzczYymZKZZEvgAKFn4RjxJbKPUZeXkne/6AI=";
 
           # The local replace directive (./internal/webview_go) needs the
           # source present during the go-modules download phase.
@@ -216,10 +216,21 @@
               gsettings-desktop-schemas
             ];
 
+          # self.rev is the revision of the flake input, and only exists for a
+          # clean checkout; self.dirtyRev appears instead when the tree has
+          # uncommitted changes. Reading git directly is not an option here and
+          # should not be: a nix build takes its source from the store, where
+          # there is no .git and no such thing as "the current branch", and a
+          # build that reached outside for that would stop being reproducible.
+          #
+          # A source tarball has neither attribute, hence the fallback. See
+          # scripts/commit.sh for the same value on the non-nix build paths, and
+          # for why an unstamped build says so rather than guessing.
           ldflags = [
             "-s"
             "-w"
             "-X main.version=${version}"
+            "-X main.commit=${self.rev or self.dirtyRev or "unknown"}"
           ];
 
           # Inject the nix-built frontend into the embed directory
@@ -332,6 +343,12 @@
               # volume at /root/.config/decision-theatre expecting exactly this.
               "HOME=/root"
               "TZ=UTC"
+              # Entrypoint above uses the binary's absolute store path, which
+              # needs no PATH. Docker's HEALTHCHECK does not: it names the
+              # binary by argv[0] ("decision-theatre healthcheck"), resolved
+              # against PATH the same way a shell would, so the store path
+              # must be on it for that lookup to succeed.
+              "PATH=${decision-theatre}/bin"
             ];
           };
 
@@ -508,6 +525,27 @@
           ];
         };
 
+        # nix run .#benchmark -- [--quick] [--target URL]
+        #
+        # python3 with no package set: scripts/dtbench.py is standard library
+        # only, deliberately, so that it can be copied onto a server and run
+        # there. Adding a dependency here would not break that, but it would
+        # make it easy to stop noticing when one crept in.
+        #
+        # xdg-utils supplies xdg-open for the finished report. curl is the
+        # pre-flight check that something is actually listening, which turns
+        # "twenty-two broken scenarios" into "nothing on that port".
+        benchmark = mkScriptTool {
+          name = "benchmark";
+          script = "benchmark.sh";
+          runtimeInputs = with pkgs; [
+            python3
+            curl
+            xdg-utils
+            coreutils
+          ];
+        };
+
       in
       {
         # =====================================================
@@ -568,7 +606,7 @@
             inherit version;
             src = ./frontend;
             # Same source as the frontend package, so the same hash.
-            npmDepsHash = "sha256-qCI5cEbDnuC4o4TfHoqZdarFskRRedCWd+ho98c+Tmo=";
+            npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
             buildPhase = ''
               npm test
             '';
@@ -816,6 +854,16 @@
         apps.check-flake = {
           type = "app";
           program = "${check-flake}/bin/check-flake";
+        };
+
+        # nix run .#benchmark -- [--quick] [--target URL]
+        #
+        # Measures a running server, records the run against the commit the
+        # server reports, compares it with the whole recorded history, and
+        # opens the PDF.
+        apps.benchmark = {
+          type = "app";
+          program = "${benchmark}/bin/benchmark";
         };
       }
     );

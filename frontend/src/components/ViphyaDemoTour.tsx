@@ -1,74 +1,69 @@
 import {
   FiActivity,
-  FiBarChart2,
   FiCheckCircle,
   FiMap,
   FiTarget,
+  FiUsers,
 } from 'react-icons/fi';
 import DemoTour, { type DemoStep } from './DemoTour';
 import { VIPHYA_SITE_ID } from '../constants/walkthroughSites';
 
 const LOAD_SITE_STEP = 1;
-const RESTORATION_PATHWAY_STEP = 5;
+const EXPLORING_INTERVENTIONS_STEP = 3;
+const FIRE_TRADE_OFF_STEP = 5;
 
 const DEMO_STEPS: DemoStep[] = [
   {
     icon: <FiMap size={28} />,
     title: 'Setting the Scene',
     description:
-      'The Viphya Complex in northern Malawi forms part of one of southern Africa\'s largest remaining miombo woodland landscapes. These woodlands support rich biodiversity while providing fuelwood, charcoal, timber and other resources that many local communities depend on. Over recent decades, agricultural expansion, wood harvesting and plantation forestry have altered parts of the landscape, raising concerns about woodland degradation and forest loss. The Landscape Decision Dashboard lets us compare the current landscape with its ecological reference state and explore the trade-offs between carbon storage, biodiversity and ecosystem resilience.',
+      'Malawi is part of southern Africa\'s largest remaining miombo woodland landscapes. However, agricultural expansion, wood harvesting and plantation forestry have degraded parts of the landscape. Use the LDD to explore potential ways of creating shared landscapes that benefit both people and nature.',
   },
   {
     icon: <FiMap size={28} />,
-    title: 'Welcome to the Viphya Complex Forest Reserve',
+    title: 'Welcome to the Mzimba District',
     description:
-      'The Viphya Plateau in northern Malawi is dominated by miombo woodland — an ecosystem of widely spaced trees, a grassy understory and frequent natural fires. Alongside native woodland that supports communities relying on woodland resources for fuelwood, grazing and livelihoods, the landscape also contains extensive pine plantations. This mix of natural and managed forests makes the Viphya Complex an ideal place to explore how different management decisions influence ecosystem health.',
+      'The Mzimba district contains areas of miombo woodland, characterised by widely spaced trees, a grassy understory and frequent fires. Over time, wood harvesting and land clearing for agriculture and development have altered the structure and functioning of these woodlands and decreased the overall woody cover. Drag the swiper to compare the reference and current states.',
+    targetId: 'tour-map-swiper',
     navigateTo: 'map',
     autoUiEvent: 'dt:demo-single-map-view',
   },
   {
-    icon: <FiBarChart2 size={28} />,
-    title: 'Reference vs Current',
+    icon: <FiUsers size={28} />,
+    title: 'Local Interventions',
     description:
-      'The current landscape shows an increase in above-ground woody biomass compared with the ecological reference state. However, more woody biomass does not necessarily indicate a healthier woodland. Tree gains may result from plantation expansion or changing land management, rather than the recovery of native miombo ecosystems.',
-    targetId: 'demo-attribute-selector',
-    navigateTo: 'map',
-    autoPaneState: { attribute: 'AGBwd_Mgha', leftScenario: 'reference', rightScenario: 'current' },
-  },
-  {
-    icon: <FiActivity size={28} />,
-    title: 'Closer Look',
-    description:
-      'Explore the Site indicators and notice that Biomass Burned has decreased substantially compared with the reference state. Fire is a natural part of miombo woodlands, helping maintain their characteristic woodland structure. Reduced burning may reflect changes in land management that increase woody biomass but can also alter ecosystem functioning over time.',
-    navigateTo: 'indicators',
-  },
-  {
-    icon: <FiTarget size={28} />,
-    title: 'Tough Decisions',
-    description:
-      'Managing the Viphya Complex means balancing multiple objectives. Commercial forestry supports local economies, while native miombo woodlands provide biodiversity, carbon storage and natural resources for surrounding communities. Different priorities can lead to very different ecological outcomes.',
+      'A local non-profit organisation, Global Faith and Hope Organisation, are implementing biodiversity programs in the Mzimba district. Their goal is to use community structures to help protect local species so that people and the environment can co-exist. However, funding these projects is not always an easy task. Using a tool like the LDD can help organisations like these create evidence-backed proposals and management plans.',
     navigateTo: 'map',
   },
   {
     icon: <FiTarget size={28} />,
-    title: 'Miombo Woodland Restoration',
+    title: 'Exploring Interventions',
     description:
-      'Let\'s compare some potential management plans. If we adjust the target towards the ecological reference state, the woodland becomes more open, resembling native miombo. Biomass burned also increases, reflecting the important role of fire in maintaining these ecosystems.',
+      'Let\'s test what increasing the woody cover will do to the Mzimba district. Edit the "Tree cover fraction" in the Targets section.',
     targetId: 'demo-edit-targets-btn',
     navigateTo: 'map',
-    autoUiEvent: 'dt:demo-go-quad-dial',
+    autoUiEvent: 'dt:demo-go-quad-flat',
   },
   {
     icon: <FiActivity size={28} />,
-    title: 'Increasing Tree Cover',
+    title: 'Trade-offs',
     description:
-      'Now try the opposite: increasing woody biomass shifts the landscape further from its reference condition. Biomass burned declines, illustrating how changes in vegetation structure and fire regimes are linked. While expanding plantations may provide economic benefits through timber production and employment, it may also reduce the ecological characteristics that define native miombo woodland.',
+      'As tree cover increases, the percentage of area burned, methane production, changes in soil organic carbon and grass standing biomass all decrease. While lower methane production may benefit the region, reduced grass standing biomass means less forage is available for livestock. This highlights an important trade-off that local communities and land managers need to consider.',
+    navigateTo: 'map',
+  },
+  {
+    icon: <FiTarget size={28} />,
+    title: 'Fire Trade-off',
+    description:
+      'Fire is an important part of miombo woodlands, but increasing woody cover reduces fire. To maintain fire in the region, try reducing early-season fires in the Targets section and test to see if this is a management plan that local communities can consider.',
+    targetId: 'demo-edit-targets-btn',
+    navigateTo: 'map',
   },
   {
     icon: <FiCheckCircle size={28} />,
-    title: 'Final Message',
+    title: 'Your Turn to Explore',
     description:
-      'The Viphya Complex shows that restoration is about more than planting trees. Healthy miombo woodlands depend on the right balance of vegetation, fire and ecological processes. By exploring different management pathways, the Landscape Decision Dashboard helps reveal the trade-offs between biodiversity, carbon storage, livelihoods and ecosystem health.',
+      'There are many pathways to creating landscapes that benefit both people and nature. Use the LDD to explore other ways this landscape could better meet the needs of both.',
   },
 ];
 
@@ -79,7 +74,7 @@ export default function ViphyaDemoTour() {
       startEvent="dt:start-viphya-demo"
       steps={DEMO_STEPS}
       loadSiteStep={LOAD_SITE_STEP}
-      targetsModalAdvanceSteps={[RESTORATION_PATHWAY_STEP]}
+      targetsModalAdvanceSteps={[EXPLORING_INTERVENTIONS_STEP, FIRE_TRADE_OFF_STEP]}
     />
   );
 }

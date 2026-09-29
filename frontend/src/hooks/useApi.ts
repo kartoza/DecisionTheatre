@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Scenario, ServerInfo, Site, CatchmentIndicators } from '../types';
 import { DEFAULT_PANE_STATES } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -7,6 +7,7 @@ import { applyAOIWeightedIndicators } from '../utils/indicators';
 import { evictExpired } from '../lib/ttlCache';
 import { sharedRequest, type SharedCache } from '../lib/sharedRequest';
 import { loadSite, loadSites, saveSite, saveSites, deleteSite as deleteSiteRecord } from '../lib/siteStore';
+import { SCENARIO_COLORS } from '../lib/dialScale';
 
 const API_BASE = '/api';
 /**
@@ -102,6 +103,34 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return response.json();
 }
 
+/**
+ * Retries a request the server sheds for being at capacity (503 with
+ * Retry-After — see internal/server/admission.go's deliberate load
+ * shedding). A burst of quick live-update edits can be enough to get one
+ * PATCH shed; without a retry that just throws, and for the indicators
+ * endpoint the caller's response is to roll the edit back as though it had
+ * never happened — the slider then sits on a stale value that nothing ever
+ * corrects, because nothing tries again. Honors the server's own
+ * Retry-After rather than guessing a backoff.
+ */
+async function fetchWithAdmissionRetry(
+  input: string,
+  init: RequestInit,
+  maxRetries = 2,
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(input, init);
+    if (response.status !== 503 || attempt >= maxRetries) {
+      return response;
+    }
+    const retryAfterSeconds = Number(response.headers.get('Retry-After'));
+    const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? retryAfterSeconds * 1000
+      : 500 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 // How often to re-fetch /api/info after the first load. Version/data-loaded
 // status never changes at runtime, but satellite_quota_exceeded can flip mid
 // session — this is what lets a map that is actively showing satellite
@@ -173,180 +202,135 @@ export function useExecutablesInfo() {
   return { executablesInfo, loading };
 }
 
-export function useColumns() {
-  const [columns, setColumns] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+// Every /api/columns and /api/metadata/* endpoint returns a small map that is
+// static for the session — metadata.csv doesn't change without a server
+// restart. Grid view mounts up to 12 MapView/ViewPane/ChartView instances at
+// once, and each of these hooks used to fetch independently per mounted
+// component: 12 uncoordinated requests to the exact same URL, with no retry if
+// one of them failed. A pane whose own copy of that fetch failed (e.g. the
+// desktop runtime's embedded server fielding a dozen near-simultaneous
+// duplicates of itself) was left with that hook's empty default forever — for
+// useAttributeColors specifically, an empty color map is indistinguishable
+// from "no metadata color defined for this attribute", so the choropleth layer
+// fell back to the rainbow default (buildFillColorExpression in
+// choroplethPaint.ts) instead of the palette metadata.csv defines, on one
+// random pane, depending on which of the 12 duplicate requests happened not to
+// land.
+//
+// One promise per URL, shared by every caller and retried (not cached as
+// failure) on error, removes both the duplication and that failure mode.
+const _metadataPromises = new Map<string, Promise<unknown>>();
+
+function fetchMetadataOnce<T>(url: string): Promise<T> {
+  const cached = _metadataPromises.get(url) as Promise<T> | undefined;
+  if (cached) return cached;
+  const promise = fetchJSON<T>(url).catch((err) => {
+    _metadataPromises.delete(url);
+    throw err;
+  });
+  _metadataPromises.set(url, promise);
+  return promise;
+}
+
+function useMetadata<T>(path: string, empty: T): { data: T; loading: boolean } {
+  const url = `${API_BASE}${path}`;
+  const [state, setState] = useState<{ data: T; loading: boolean }>({ data: empty, loading: true });
 
   useEffect(() => {
-    fetchJSON<string[]>(`${API_BASE}/columns`)
-      .then((cols) => {
-        setColumns(cols || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+    fetchMetadataOnce<T>(url)
+      .then((data) => { if (!cancelled) setState({ data: data ?? empty, loading: false }); })
+      .catch(() => { if (!cancelled) setState({ data: empty, loading: false }); });
+    return () => { cancelled = true; };
+    // `empty` is a fallback value, not part of the request identity — a new
+    // literal per render must not re-run the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
 
+  return state;
+}
+
+export function useColumns() {
+  const { data: columns, loading } = useMetadata<string[]>('/columns', []);
   return { columns, loading };
 }
 
 export function useAttributeColors() {
-  const [colors, setColors] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/colors`)
-      .then((data) => {
-        setColors(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: colors, loading } = useMetadata<Record<string, string>>('/metadata/colors', {});
   return { colors, loading };
 }
 
 export function useAttributeDetails() {
-  const [details, setDetails] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/details`)
-      .then((data) => {
-        setDetails(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: details, loading } = useMetadata<Record<string, string>>('/metadata/details', {});
   return { details, loading };
 }
 
 export function useAttributeOrder() {
-  const [order, setOrder] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, number>>(`${API_BASE}/metadata/order`)
-      .then((data) => {
-        setOrder(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: order, loading } = useMetadata<Record<string, number>>('/metadata/order', {});
   return { order, loading };
 }
 
 export function useAttributeVariableTypes() {
-  const [variableTypes, setVariableTypes] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/variabletypes`)
-      .then((data) => {
-        setVariableTypes(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: variableTypes, loading } = useMetadata<Record<string, string>>('/metadata/variabletypes', {});
   return { variableTypes, loading };
 }
 
 export function useAttributeUserInputs() {
-  const [userInputs, setUserInputs] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/inputs`)
-      .then((data) => {
-        setUserInputs(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: userInputs, loading } = useMetadata<Record<string, boolean>>('/metadata/inputs', {});
   return { userInputs, loading };
 }
 
 export function useAttributeTargetInputs() {
-  const [targetInputs, setTargetInputs] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/targetinputs`)
-      .then((data) => {
-        setTargetInputs(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: targetInputs, loading } = useMetadata<Record<string, boolean>>('/metadata/targetinputs', {});
   return { targetInputs, loading };
 }
 
 export function useAttributeCanMap() {
-  const [canMap, setCanMap] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/canmap`)
-      .then((data) => {
-        setCanMap(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: canMap, loading } = useMetadata<Record<string, boolean>>('/metadata/canmap', {});
   return { canMap, loading };
 }
 
 export function useAttributeAxisLabels() {
-  const [axisLabels, setAxisLabels] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/axislabels`)
-      .then((data) => {
-        setAxisLabels(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: axisLabels, loading } = useMetadata<Record<string, string>>('/metadata/axislabels', {});
   return { axisLabels, loading };
 }
 
 export function useAttributeXAxisLabels() {
-  const [xAxisLabels, setXAxisLabels] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/xaxislabels`)
-      .then((data) => {
-        setXAxisLabels(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: xAxisLabels, loading } = useMetadata<Record<string, string>>('/metadata/xaxislabels', {});
   return { xAxisLabels, loading };
 }
 
 export function useAttributeUnits() {
-  const [units, setUnits] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/units`)
-      .then((data) => {
-        setUnits(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: units, loading } = useMetadata<Record<string, string>>('/metadata/units', {});
   return { units, loading };
+}
+
+interface ScenarioColoursResponse {
+  reference: string;
+  current: string;
+  target: string;
+}
+
+/**
+ * The reference/current/target colours drawn on every dial, chart, and map
+ * panel label -- the server's built-in defaults, overridden by any fields an
+ * administrator has set in the datapack's colours.json. Falls back to the
+ * same client-side defaults (SCENARIO_COLORS) if the request fails, so a
+ * network error never leaves a colour undefined.
+ */
+export function useScenarioColors() {
+  const { data, loading } = useMetadata<ScenarioColoursResponse | Record<string, never>>(
+    '/scenarios/colours', {},
+  );
+  const response = data as Partial<ScenarioColoursResponse>;
+  const reference = response.reference || SCENARIO_COLORS.reference;
+  const current = response.current || SCENARIO_COLORS.current;
+  const future = response.target || SCENARIO_COLORS.future;
+  const colors = useMemo(
+    () => ({ reference, current, future }),
+    [reference, current, future],
+  );
+  return { colors, loading };
 }
 
 export interface TargetRange {
@@ -355,114 +339,42 @@ export interface TargetRange {
 }
 
 export function useAttributeTargetRanges() {
-  const [targetRanges, setTargetRanges] = useState<Record<string, TargetRange>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, TargetRange>>(`${API_BASE}/metadata/targetranges`)
-      .then((data) => {
-        setTargetRanges(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: targetRanges, loading } = useMetadata<Record<string, TargetRange>>('/metadata/targetranges', {});
   return { targetRanges, loading };
 }
 
 export function useAttributeCanGraph() {
-  const [canGraph, setCanGraph] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/cangraph`)
-      .then((data) => {
-        setCanGraph(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: canGraph, loading } = useMetadata<Record<string, boolean>>('/metadata/cangraph', {});
   return { canGraph, loading };
 }
 
 export function useAttributeDial0Middle() {
-  const [dial0Middle, setDial0Middle] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/dial0middle`)
-      .then((data) => {
-        setDial0Middle(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: dial0Middle, loading } = useMetadata<Record<string, boolean>>('/metadata/dial0middle', {});
   return { dial0Middle, loading };
 }
 
+export function useAttributeDialColorLinear() {
+  const { data: dialColorLinear, loading } = useMetadata<Record<string, boolean>>('/metadata/dialcolorlinear', {});
+  return { dialColorLinear, loading };
+}
+
 export function useAttributeIgnoreXGrouping() {
-  const [ignoreXGrouping, setIgnoreXGrouping] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, boolean>>(`${API_BASE}/metadata/ignorexgrouping`)
-      .then((data) => {
-        setIgnoreXGrouping(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: ignoreXGrouping, loading } = useMetadata<Record<string, boolean>>('/metadata/ignorexgrouping', {});
   return { ignoreXGrouping, loading };
 }
 
 export function useAttributeChartTypes() {
-  const [chartTypes, setChartTypes] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/charttypes`)
-      .then((data) => {
-        setChartTypes(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: chartTypes, loading } = useMetadata<Record<string, string>>('/metadata/charttypes', {});
   return { chartTypes, loading };
 }
 
 export function useAttributeGroupingVariables() {
-  const [groupingVariables, setGroupingVariables] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvariables`)
-      .then((data) => {
-        setGroupingVariables(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: groupingVariables, loading } = useMetadata<Record<string, string>>('/metadata/groupingvariables', {});
   return { groupingVariables, loading };
 }
 
 export function useAttributeGroupingValues() {
-  const [groupingValues, setGroupingValues] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchJSON<Record<string, string>>(`${API_BASE}/metadata/groupingvalues`)
-      .then((data) => {
-        setGroupingValues(data || {});
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
+  const { data: groupingValues, loading } = useMetadata<Record<string, string>>('/metadata/groupingvalues', {});
   return { groupingValues, loading };
 }
 
@@ -715,11 +627,14 @@ export async function listSites(): Promise<Site[]> {
     loadWalkthroughSites(),
   ]);
 
-  // A walkthrough already persisted into the real site list (e.g. the browser
-  // ran its tour before, resetting ideal targets along the way) takes
-  // precedence over the freshly-fetched static copy.
-  const realSiteIds = new Set(realSites.map((site) => site.id));
-  const merged = [...realSites, ...walkthroughSites.filter((site) => !realSiteIds.has(site.id))];
+  // A walkthrough id is never a real, persisted site — even if since-removed
+  // code once wrote one into dt-sites (see the note on getSite's browser
+  // branch) — so the freshly-fetched static copy always wins for a known demo
+  // id, rather than whatever was captured, possibly mid-edit, the last time
+  // that stale write happened.
+  const walkthroughIds = new Set(WALKTHROUGH_SITE_IDS as readonly string[]);
+  const realSitesExcludingWalkthroughs = realSites.filter((site) => !walkthroughIds.has(site.id));
+  const merged = [...realSitesExcludingWalkthroughs, ...walkthroughSites];
   return sortSitesByCreatedAtDesc(merged);
 }
 
@@ -760,28 +675,40 @@ export async function getSite(id: string): Promise<Site | null> {
 
   const promise = (async (): Promise<Site | null> => {
     if (isBrowserRuntime()) {
+      // A known demo id is resolved from the session override or the static
+      // walkthrough JSON only — never from dt-sites — checked before touching
+      // localStorage at all. Old, since-removed code used to write the whole
+      // walkthrough site into dt-sites "so it is available for the rest of the
+      // session"; a profile that still carries one of those entries would
+      // otherwise have it win here forever, silently shadowing every future
+      // tour's reset-to-current with whatever was captured — possibly
+      // mid-edit — the last time that write happened.
+      if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
+        const session = _sessionSites.get(id);
+        if (session) return session;
+        return loadWalkthroughSite(id);
+      }
+
       const sites = loadLocalSites();
       const stored = sites.find((site) => site.id === id);
       if (stored) return stored;
-
-      // A session override, then the static walkthrough JSON. Without these a
-      // demo site resolved only because starting its tour had written the whole
-      // thing into localStorage; that write is gone, so look here instead of
-      // returning null and breaking the tour.
-      const session = _sessionSites.get(id);
-      if (session) return session;
-
-      // Only for a known demo id — fetching /data/walkthroughs/{id}.json for a
-      // real site id would just be a 404 on every lookup of a deleted site.
-      if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
-        return loadWalkthroughSite(id);
-      }
       return null;
     }
     const response = await fetch(`${API_BASE}/sites/${id}`);
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`Failed to fetch site: ${response.statusText}`);
-    return response.json();
+    if (response.ok) return response.json();
+    if (response.status !== 404) throw new Error(`Failed to fetch site: ${response.statusText}`);
+
+    // Walkthrough demo sites are static assets under /data/walkthroughs/, not
+    // records in the site store, in webview runtime exactly as in the
+    // browser — so /api/sites/{id} 404s for them here the same way it would
+    // there. A session override (e.g. a tour's reset-to-current on start)
+    // wins over the static file; fall back to the file itself otherwise.
+    const session = _sessionSites.get(id);
+    if (session) return session;
+    if ((WALKTHROUGH_SITE_IDS as readonly string[]).includes(id)) {
+      return loadWalkthroughSite(id);
+    }
+    return null;
   })();
 
   // Evict on error so next caller retries cleanly.
@@ -805,7 +732,6 @@ export async function createSite(
       updatedAt: now,
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
       appRuntime: 'browser',
     };
@@ -846,7 +772,6 @@ export async function createSite(
     body: JSON.stringify({
       paneStates: structuredClone(DEFAULT_PANE_STATES),
       layoutMode: 'single',
-      quadColumns: 3,
       ...data,
     }),
   });
@@ -914,6 +839,100 @@ export async function patchSite(
   return response.json();
 }
 
+/**
+ * The ideal map for a reset: reference as the floor, overlaid with the chosen
+ * scenario.
+ *
+ * Reference is the floor in both cases so a key the chosen scenario has no
+ * value for still lands somewhere meaningful, rather than dropping out of the
+ * ideal map and taking the dial's target marker with it.
+ *
+ * Mirrors what the desktop endpoint does server-side. It is written twice
+ * because the two runtimes genuinely cannot share code — but they must not
+ * disagree, so a change to either belongs in both.
+ */
+function idealForReset(
+  reference: Record<string, number> | undefined,
+  current: Record<string, number> | undefined,
+  scenario: 'reference' | 'current',
+): Record<string, number> {
+  const ideal: Record<string, number> = { ...(reference ?? {}) };
+  if (scenario !== 'reference') {
+    for (const [key, value] of Object.entries(current ?? {})) ideal[key] = value;
+  }
+  return ideal;
+}
+
+/**
+ * Point every target at one of the observed scenarios.
+ *
+ * Deliberately not a wholesale PATCH: the indicators PATCH cascades,
+ * recomputing derived values from whichever primary inputs changed. That is
+ * right for an edit and wrong for a reset — `current` came from extraction, not
+ * from the cascade formulas, so a cascaded reset lands *near* current instead
+ * of on it and the target marker visibly misses the current one. A reset writes
+ * the scenario through unchanged, for every key rather than only the editable
+ * ones.
+ *
+ * Browser runtime does the work locally rather than calling the desktop-only
+ * endpoint. That is the architecture, not a workaround: the user's sites are
+ * not sent to the server.
+ */
+export async function resetSiteIdeal(
+  id: string,
+  scenario: 'reference' | 'current',
+  site?: Site,
+): Promise<Site> {
+  const isWalkthrough = site?.source === 'walkthrough';
+  const isLocal = isWalkthrough || isBrowserRuntime();
+
+  if (isLocal) {
+    const local = (isWalkthrough ? site : loadLocalSite(id)) ?? site;
+    const indicators = local?.indicators;
+    if (!local || !indicators) throw new Error('site has no indicators to reset');
+
+    const nextIndicators = {
+      ...indicators,
+      ideal: idealForReset(indicators.reference, indicators.current, scenario),
+      warnings: [],
+    };
+
+    // The per-catchment ideals go with it, or the map and the aggregate table
+    // would disagree with the dial about where the target is.
+    const catchments = await getSiteCatchments(id).catch(() => null);
+    if (catchments && catchments.length > 0) {
+      cacheCatchments(id, catchments.map((c) => ({
+        ...c,
+        ideal: idealForReset(c.reference, c.current, scenario),
+      })));
+    }
+
+    // Walkthrough demo sites were never created through the site store, so
+    // updateSite's desktop-runtime PUT 404s for them — same reason
+    // patchSiteIndicators never persists walkthrough edits either. Record the
+    // reset in the session-site map instead of writing it through, so every
+    // later getSite lookup (other panes, the indicators page) sees it too.
+    if (isWalkthrough) {
+      const updated: Site = { ...local, indicators: nextIndicators };
+      setSessionSite(updated);
+      return updated;
+    }
+
+    return updateSite(id, { indicators: nextIndicators });
+  }
+
+  const response = await fetch(`${API_BASE}/sites/${id}/indicators/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset target values: ${response.statusText}`);
+  }
+  _catchmentsCache.delete(id);
+  return await response.json() as Site;
+}
+
 export async function patchSiteIndicators(
   id: string,
   indicators: Site['indicators'],
@@ -927,7 +946,7 @@ export async function patchSiteIndicators(
   // it from data/sites/, and the result is never persisted to disk.
   if (site?.source === 'walkthrough') {
     const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = site;
-    const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+    const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -947,50 +966,68 @@ export async function patchSiteIndicators(
     if (!response.ok) {
       throw new Error(`Failed to update site indicators: ${response.statusText}`);
     }
-    _catchmentsCache.delete(id);
-    return response.json();
+    const updatedSite = await response.json() as SiteWithCatchments;
+    if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
+      // Cache the fresh breakdown instead of deleting the cache entry: a
+      // walkthrough site has no backend record to refetch it from, so a bare
+      // delete here leaves getSiteCatchments permanently returning [] for
+      // the rest of the session — every dial's "current" marker then freezes
+      // at whatever it last computed, silently drifting from the target
+      // markers that keep reading the fresh siteIndicators.ideal directly.
+      cacheCatchments(id, updatedSite.catchments);
+    }
+    return updatedSite;
   }
 
   if (isBrowserRuntime()) {
     const localSite = loadLocalSite(id);
     if (localSite) {
-      try {
-        const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
-        const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            runtime: 'browser',
-            site: siteWithoutThumbnail,
-            ideal: indicators?.ideal,
-            idealLower: indicators?.idealLower,
-            idealUpper: indicators?.idealUpper,
-            reference: indicators?.reference,
-            referenceLower: indicators?.referenceLower,
-            referenceUpper: indicators?.referenceUpper,
-            current: indicators?.current,
-            currentLower: indicators?.currentLower,
-            currentUpper: indicators?.currentUpper,
-          }),
-        });
-        if (response.ok) {
-          const updatedSite = await response.json() as SiteWithCatchments;
-          if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
-            // Cache the fresh breakdown. This used to persist it and then
-            // invalidate a separate in-memory cache; both are now the same
-            // cache, so deleting here would discard what was just fetched.
-            cacheCatchments(id, updatedSite.catchments);
-          }
-          return updateSite(id, { indicators: updatedSite.indicators });
-        }
-      } catch {
-        // Fall through to local-only update
+      const { thumbnail: _thumbnail, ...siteWithoutThumbnail } = localSite;
+      const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runtime: 'browser',
+          site: siteWithoutThumbnail,
+          ideal: indicators?.ideal,
+          idealLower: indicators?.idealLower,
+          idealUpper: indicators?.idealUpper,
+          reference: indicators?.reference,
+          referenceLower: indicators?.referenceLower,
+          referenceUpper: indicators?.referenceUpper,
+          current: indicators?.current,
+          currentLower: indicators?.currentLower,
+          currentUpper: indicators?.currentUpper,
+        }),
+      });
+      // A silent fall-through to a local-only save used to live here: on any
+      // fetch failure or non-2xx response, it persisted `indicators` — the
+      // caller's un-cascaded guess, where only the just-edited key is right
+      // and every derived total (herbivore biomass, methane, ...) still
+      // holds its pre-edit value — as if it were the server's recalculated
+      // answer, and resolved successfully instead of rejecting. The caller
+      // (App.tsx's handleSiteIndicatorsChange) treated that resolution as a
+      // real cascade and adopted it into site state, so a single dropped
+      // request during a live-update drag could leave a factor's slider at
+      // its new value while everything it feeds into stayed stuck at the
+      // old one, permanently. Throwing here lets the caller's existing
+      // catch-and-roll-back handle it instead.
+      if (!response.ok) {
+        throw new Error(`Failed to update site indicators: ${response.statusText}`);
       }
+      const updatedSite = await response.json() as SiteWithCatchments;
+      if (Array.isArray(updatedSite.catchments) && updatedSite.catchments.length > 0) {
+        // Cache the fresh breakdown. This used to persist it and then
+        // invalidate a separate in-memory cache; both are now the same
+        // cache, so deleting here would discard what was just fetched.
+        cacheCatchments(id, updatedSite.catchments);
+      }
+      return updateSite(id, { indicators: updatedSite.indicators });
     }
     return updateSite(id, { indicators });
   }
 
-  const response = await fetch(`${API_BASE}/sites/${id}/indicators`, {
+  const response = await fetchWithAdmissionRetry(`${API_BASE}/sites/${id}/indicators`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1249,52 +1286,92 @@ function hasWhiskerData(bounds: WhiskerBoundsResponse | null | undefined): boole
     || Object.keys(bounds.currentLower || {}).length > 0;
 }
 
-async function loadWhiskerCSVFile(filename: string): Promise<Record<string, Record<string, number>>> {
+// Every whisker CSV is one row per catchment across the whole datapack —
+// 147,837 of them for Africa, ~177 MB each. Parsing a file like that into a
+// Record keyed by every catchment id, the way this used to work, holds the
+// entire file in memory as a JS object; asking for that four times at once
+// (one per file) crashed the tab outright the one time this path actually
+// ran end to end (it silently 404'd before the backend route below existed,
+// which is how the crash went unnoticed). Both parsers below stream the file
+// line by line and keep only what the caller asked for — a handful of named
+// rows, or a running per-column sum/count — so peak memory stays proportional
+// to what is wanted, not to the file on disk.
+// Hands control back to the browser between chunks of row parsing below, so a
+// 147,837-row file doesn't run as one uninterruptible synchronous block — that
+// was blocking the main thread for the several seconds it took to parse
+// Africa's whisker CSVs, freezing the tab on the first chart-view load.
+const WHISKER_ROWS_PER_YIELD = 2000;
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function parseWhiskerCSVHeader(headerLine: string): { headers: string[]; catchIdIndex: number } {
+  const headers = headerLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+  return { headers, catchIdIndex: headers.findIndex((h) => h.toLowerCase() === 'catchid') };
+}
+
+function parseWhiskerCSVRow(
+  line: string,
+  headers: string[],
+  catchIdIndex: number,
+): { catchId: string; row: Record<string, number> } | null {
+  const values = line.split(',');
+  if (values.length !== headers.length) return null;
+
+  const rawId = values[catchIdIndex].trim().replace(/^"|"$/g, '');
+  const catchId = normalizeCatchmentId(rawId);
+  if (!catchId || catchId.toUpperCase() === 'NA') return null;
+
+  const row: Record<string, number> = {};
+  for (let j = 0; j < headers.length; j += 1) {
+    if (j === catchIdIndex) continue;
+    const rawVal = values[j].trim().replace(/^"|"$/g, '');
+    if (!rawVal || rawVal.toUpperCase() === 'NA') continue;
+    const num = Number(rawVal);
+    if (Number.isFinite(num)) row[headers[j]] = num;
+  }
+  return { catchId, row };
+}
+
+// Keeps full rows, but only for a known, bounded set of catchment ids — a
+// real site's own catchments, never more than a few hundred even for a large
+// one — so retained memory is proportional to the site, not the datapack.
+async function loadWhiskerCSVFileFiltered(
+  filename: string,
+  wantedIds: Set<string>,
+): Promise<Record<string, Record<string, number>>> {
   try {
     const response = await fetch(`/data/${filename}`);
     if (!response.ok) return {};
 
     const text = await response.text();
-    const lines = text.trim().split('\n');
+    const lines = text.split('\n');
     if (lines.length < 2) return {};
 
-    const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-    const catchIdIndex = headers.findIndex((h) => h.toLowerCase() === 'catchid');
+    const { headers, catchIdIndex } = parseWhiskerCSVHeader(lines[0]);
     if (catchIdIndex === -1) return {};
 
     const data: Record<string, Record<string, number>> = {};
-
     for (let i = 1; i < lines.length; i += 1) {
-      const values = lines[i].split(',');
-      if (values.length !== headers.length) continue;
-
-      const rawId = values[catchIdIndex].trim().replace(/^"|"$/g, '');
-      const catchId = normalizeCatchmentId(rawId);
-      if (!catchId || catchId.toUpperCase() === 'NA') continue;
-
-      const row: Record<string, number> = {};
-      for (let j = 0; j < headers.length; j += 1) {
-        if (j === catchIdIndex) continue;
-        const rawVal = values[j].trim().replace(/^"|"$/g, '');
-        if (!rawVal || rawVal.toUpperCase() === 'NA') continue;
-        const num = Number(rawVal);
-        if (Number.isFinite(num)) row[headers[j]] = num;
-      }
-      data[catchId] = row;
+      const line = lines[i];
+      if (!line) continue;
+      const parsed = parseWhiskerCSVRow(line, headers, catchIdIndex);
+      if (parsed && wantedIds.has(parsed.catchId)) data[parsed.catchId] = parsed.row;
+      if (i % WHISKER_ROWS_PER_YIELD === 0) await yieldToMain();
     }
-
     return data;
   } catch {
     return {};
   }
 }
 
-async function loadWhiskerCSVData(): Promise<WhiskerCSVData | null> {
+async function loadWhiskerCSVDataFiltered(wantedIds: Set<string>): Promise<WhiskerCSVData | null> {
   const [currentUpper, currentLower, referenceUpper, referenceLower] = await Promise.all([
-    loadWhiskerCSVFile('current_upper.csv'),
-    loadWhiskerCSVFile('current_lower.csv'),
-    loadWhiskerCSVFile('reference_upper.csv'),
-    loadWhiskerCSVFile('reference_lower.csv'),
+    loadWhiskerCSVFileFiltered('current_upper.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('current_lower.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('reference_upper.csv', wantedIds),
+    loadWhiskerCSVFileFiltered('reference_lower.csv', wantedIds),
   ]);
 
   const hasAny = Object.keys(currentUpper).length > 0
@@ -1304,6 +1381,43 @@ async function loadWhiskerCSVData(): Promise<WhiskerCSVData | null> {
 
   if (!hasAny) return null;
   return { currentUpper, currentLower, referenceUpper, referenceLower };
+}
+
+// Accumulates a running per-column sum/count as each line is read, without
+// ever holding a row — or the parsed id it belongs to — past that line's own
+// iteration. Output size is bounded by column count (~500), not row count
+// (147,837 for Africa), regardless of how large the file being scanned is.
+async function loadWhiskerCSVFileAggregate(
+  filename: string,
+): Promise<{ sums: Record<string, number>; counts: Record<string, number> }> {
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  try {
+    const response = await fetch(`/data/${filename}`);
+    if (!response.ok) return { sums, counts };
+
+    const text = await response.text();
+    const lines = text.split('\n');
+    if (lines.length < 2) return { sums, counts };
+
+    const { headers, catchIdIndex } = parseWhiskerCSVHeader(lines[0]);
+    if (catchIdIndex === -1) return { sums, counts };
+
+    for (let i = 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line) continue;
+      const parsed = parseWhiskerCSVRow(line, headers, catchIdIndex);
+      if (!parsed) continue;
+      for (const [col, val] of Object.entries(parsed.row)) {
+        sums[col] = (sums[col] ?? 0) + val;
+        counts[col] = (counts[col] ?? 0) + 1;
+      }
+      if (i % WHISKER_ROWS_PER_YIELD === 0) await yieldToMain();
+    }
+    return { sums, counts };
+  } catch {
+    return { sums, counts };
+  }
 }
 
 function computeWhiskerBoundsFromCSV(
@@ -1355,6 +1469,43 @@ function computeWhiskerBoundsFromCSV(
   };
 }
 
+// Unweighted fallback for a site with no per-catchment breakdown to weight
+// by — the Africa walkthrough covers all 147,837 catchments continent-wide,
+// too many to embed in its document or fetch (getSiteCatchments always fails
+// for it: it isn't a real, persisted site either), so there is nothing
+// computeWhiskerBoundsFromCSV can area-weight against. Without this, every
+// box plot collapsed to its single point value — a degenerate box with
+// zero-width quartiles rendered as a flat line. A simple mean across every
+// row is a coarser stand-in for the area-weighted figure a real site gets,
+// but it is a real distribution rather than one point repeated five times —
+// and, via loadWhiskerCSVFileAggregate, computed without ever holding the
+// 147,837 rows it is averaging over.
+async function computeWhiskerBoundsAggregate(): Promise<WhiskerBoundsResponse | null> {
+  const [currentUpper, currentLower, referenceUpper, referenceLower] = await Promise.all([
+    loadWhiskerCSVFileAggregate('current_upper.csv'),
+    loadWhiskerCSVFileAggregate('current_lower.csv'),
+    loadWhiskerCSVFileAggregate('reference_upper.csv'),
+    loadWhiskerCSVFileAggregate('reference_lower.csv'),
+  ]);
+
+  const mean = (agg: { sums: Record<string, number>; counts: Record<string, number> }): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [col, sum] of Object.entries(agg.sums)) {
+      const n = agg.counts[col] ?? 0;
+      if (n > 0) out[col] = sum / n;
+    }
+    return out;
+  };
+
+  const bounds: WhiskerBoundsResponse = {
+    referenceUpper: mean(referenceUpper),
+    referenceLower: mean(referenceLower),
+    currentUpper: mean(currentUpper),
+    currentLower: mean(currentLower),
+  };
+  return hasWhiskerData(bounds) ? bounds : null;
+}
+
 // Module-level cache for whisker bounds, keyed by siteId. ComputeWhiskerBounds
 // on the backend is a full-table scan-and-join across 4 scenario tables for
 // every catchment in the site (several seconds for a large site), and the
@@ -1396,11 +1547,18 @@ export async function getSiteWhiskerBounds(siteId: string): Promise<WhiskerBound
 async function fetchSiteWhiskerBounds(siteId: string): Promise<WhiskerBoundsResponse | null> {
   const csvFallback = async (): Promise<WhiskerBoundsResponse | null> => {
     const catchments = await getSiteCatchments(siteId).catch(() => []);
-    if (!Array.isArray(catchments) || catchments.length === 0) return null;
-    const csvData = await loadWhiskerCSVData();
-    if (!csvData) return null;
-    const computed = computeWhiskerBoundsFromCSV(catchments, csvData);
-    return hasWhiskerData(computed) ? computed : null;
+
+    if (Array.isArray(catchments) && catchments.length > 0) {
+      const wantedIds = new Set(catchments.map((c) => normalizeCatchmentId(c.id)));
+      const csvData = await loadWhiskerCSVDataFiltered(wantedIds);
+      if (csvData) {
+        const computed = computeWhiskerBoundsFromCSV(catchments, csvData);
+        if (hasWhiskerData(computed)) return computed;
+      }
+    }
+
+    // No per-catchment breakdown to weight by (see computeWhiskerBoundsAggregate).
+    return computeWhiskerBoundsAggregate();
   };
 
   if (isBrowserRuntime()) {

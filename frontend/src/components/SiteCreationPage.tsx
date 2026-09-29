@@ -128,8 +128,12 @@ const EXACT_GEOMETRY_INFERENCE_LIMIT = 150;
 const LOW_DATA_COVERAGE_THRESHOLD = 0.2;
 
 function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }: SiteCreationPageProps) {
-  const isEditMode = !!editSite;
-  const [step, setStep] = useState<Step>(() => isEditMode ? 'details' : 'method');
+  // editSite is also used to pre-fill a clone (with id blanked out), so only
+  // treat it as a real edit when it carries an existing site id - otherwise
+  // submission must create a new site rather than updating the original.
+  const hasPrefilledSite = !!editSite;
+  const isEditMode = !!editSite?.id;
+  const [step, setStep] = useState<Step>(() => hasPrefilledSite ? 'details' : 'method');
   const [selectedMethod, setSelectedMethod] = useState<SiteCreationMethod | null>(() =>
     editSite?.creationMethod || null
   );
@@ -428,7 +432,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       toast({ title: 'Please enter a title', status: 'warning', duration: 3000 });
       return;
     }
-    if (!isEditMode && !geometry) {
+    if (!hasPrefilledSite && !geometry) {
       toast({ title: 'Please complete the boundary', status: 'warning', duration: 3000 });
       return;
     }
@@ -485,7 +489,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
         siteData.catchmentIds = catchmentIdsToPersist;
       }
 
-      const site = isEditMode
+      const site = isEditMode && editSite
         ? await updateSite(editSite.id, siteData as Partial<Site>)
         : await createSite(siteData as Partial<Site>);
 
@@ -506,7 +510,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       setIsSubmitting(false);
     }
   }, [siteTitle, siteDescription, geometry, boundingBox, selectedCatchmentIds, selectedMethod,
-      isEditMode, editSite, thumbnail, inferCatchmentIdsForGeometry, onSiteCreated, toast]);
+      isEditMode, hasPrefilledSite, editSite, thumbnail, inferCatchmentIdsForGeometry, onSiteCreated, toast]);
 
   const handleSubmitSite = (e: React.FormEvent) => {
     e.preventDefault();
@@ -515,7 +519,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
 
   const handleBack = useCallback(() => {
     if (step === 'details') {
-      if (isEditMode) onNavigate('sites');
+      if (hasPrefilledSite) onNavigate('sites');
       else setStep('geometry');
     } else if (step === 'geometry') {
       setStep('method');
@@ -526,7 +530,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     } else {
       onNavigate('sites');
     }
-  }, [step, onNavigate, isEditMode]);
+  }, [step, onNavigate, hasPrefilledSite]);
 
   // Step indicator with physics bounce
   const stepIndicators = [
@@ -655,11 +659,11 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
               _hover={{ bg: 'whiteAlpha.100', transform: 'translateX(-4px)' }}
               transition="all 0.2s"
             >
-              {isEditMode || step === 'method' ? 'Back to Sites' : 'Back'}
+              {hasPrefilledSite || step === 'method' ? 'Back to Sites' : 'Back'}
             </Button>
 
             {/* Step indicator - physics bouncing badges */}
-            {!isEditMode && (
+            {!hasPrefilledSite && (
               <HStack spacing={3}>
                 {stepIndicators.map((s, i) => {
                   const isActive = step === s.id;
@@ -947,7 +951,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
                 >
                   <VStack spacing={8} align="stretch">
                     {/* Boundary info badge */}
-                    {!isEditMode && (
+                    {!hasPrefilledSite && (
                       <MotionBox
                         initial={{ scale: 0.9, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}

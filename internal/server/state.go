@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/kartoza/decision-theatre/internal/safego"
 	"log"
 	"net/http"
 	"os"
@@ -107,10 +108,10 @@ func closeAfterGrace(old *dataStores) {
 	if old == nil {
 		return
 	}
-	go func() {
+	safego.Run("close-superseded-store", func() {
 		time.Sleep(storeGracePeriod)
 		old.close()
-	}()
+	})
 }
 
 // currentRouter returns the live router.

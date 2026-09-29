@@ -70,7 +70,7 @@ const DEMO_STEPS: DemoStep[] = [
       'Land management decisions never happen in isolation. Over the decades, maximising livestock numbers in an ecosystem has produced undesirable consequences elsewhere. Click the dial button for a multi-panel view of how the current herbivore regime has altered ecosystem functioning.',
     targetId: 'tour-view-modes',
     navigateTo: 'map',
-    autoUiEvent: 'dt:demo-go-quad-dial-africa',
+    autoUiEvent: 'dt:demo-go-quad-flat-africa',
   },
   {
     icon: <FiActivity size={28} />,
@@ -122,7 +122,7 @@ const DEMO_STEPS: DemoStep[] = [
     icon: <FiCheckCircle size={28} />,
     title: 'Your Turn to Explore',
     description:
-      'There is no single blueprint for rewilding a continent as vast and varied as Africa. Explore different herbivore regimes, uncover their trade-offs across methane, soil carbon and fire, and discover how the Landscape Decision Dashboard can support better decisions for shared landscapes everywhere.',
+      'There is no single blueprint for rewilding a continent as vast and varied as Africa. Explore different herbivore regimes, uncover their trade-offs across methane, soil carbon and fire, and discover how the African Landscape Futures Dashboard can support better decisions for shared landscapes everywhere.',
   },
 ];
 

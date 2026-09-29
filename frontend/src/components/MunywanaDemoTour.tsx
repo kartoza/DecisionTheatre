@@ -144,7 +144,7 @@ const DEMO_STEPS: DemoStep[] = [
     icon: <FiCheckCircle size={28} />,
     title: 'Your Turn to Explore',
     description:
-      'Ecosystems are complex and management decisions involve trade-offs. The Landscape Decision Dashboard combines scientific models with local knowledge to evaluate potential outcomes of different decisions. Adjust the indicators, test management scenarios, and discover how changes in one part of the ecosystem influence the whole landscape.',
+      'Ecosystems are complex and management decisions involve trade-offs. The African Landscape Futures Dashboard combines scientific models with local knowledge to evaluate potential outcomes of different decisions. Adjust the indicators, test management scenarios, and discover how changes in one part of the ecosystem influence the whole landscape.',
   },
 ];
 

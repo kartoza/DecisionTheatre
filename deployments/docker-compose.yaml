@@ -1,3 +1,21 @@
+# Neither service had a logging driver configured, so both ran on Docker's
+# default json-file driver with no size cap: nginx logs a [warn] per proxy-
+# buffer spill and per rate-limit throttle (both deliberately logged at warn,
+# not error — see nginx.conf), and neither container had ever been recycled
+# for rotation to kick in some other way. Left alone that grows without bound
+# for the container's entire lifetime.
+#
+# One anchor, applied to both services below, rather than repeating the same
+# three lines twice and having them drift. 5m x 3 files caps each container at
+# 15 MB of log history — enough to have caught the 429 burst and buffering
+# warnings this stack has actually hit, without letting logs become a second
+# thing to worry about running out of disk for.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DT_LOG_MAX_SIZE:-5m}
+    max-file: ${DT_LOG_MAX_FILES:-3}
+
 services:
   app:
     build:
@@ -11,6 +29,7 @@ services:
     # image that is already loaded uses it as-is.
     image: ${DT_IMAGE:-decision-theatre:latest}
     restart: unless-stopped
+    logging: *default-logging
     # Not a --flag: a flag value is visible to anyone who can run `docker top`
     # or `ps` against the container, which a key should not be. Read directly
     # from the environment by internal/config.MapTilerAPIKey. Empty is a valid
@@ -18,6 +37,53 @@ services:
     # and the app falls back to the built-in basemap / unlabelled glyphs.
     environment:
       - DT_MAPTILER_API_KEY=${DT_MAPTILER_API_KEY:-}
+      # A soft memory ceiling for the Go heap, set below the container's hard
+      # limit below. Without it the runtime has no idea it is in a box: it
+      # grows the heap according to how much it has allocated, notices nothing
+      # as it approaches the cgroup limit, and the kernel OOM-kills the process
+      # mid-request. With it, the collector runs progressively harder as the
+      # heap approaches this number and the process trades CPU for staying
+      # alive — which is the trade you want, because a slow server recovers and
+      # a killed one drops every request in flight.
+      #
+      # It must stay comfortably under DT_MEMORY_LIMIT. GOMEMLIMIT governs the
+      # Go heap only; the process also holds SQLite page cache, mmap'd
+      # mbtiles, thread stacks and the allocator's unreturned spans, none of
+      # which it counts. The gap is that headroom, not slack.
+      - GOMEMLIMIT=${DT_GOMEMLIMIT:-6GiB}
+    # Sized for the documented 4-core/16 GB deployment target, leaving the rest
+    # for nginx, the page cache the GeoPackage reads depend on, and the OS.
+    # A limit is not a reservation: normal operation sits far below this, and
+    # what the limit buys is that a runaway allocation kills one container
+    # rather than pushing the host into swap and taking everything down with
+    # it.
+    mem_limit: ${DT_MEMORY_LIMIT:-8g}
+    # No swap beyond the memory limit. Swapping a server this size does not
+    # save it, it just makes every request slow enough to time out while the
+    # health check keeps answering — failure that looks like life.
+    memswap_limit: ${DT_MEMORY_LIMIT:-8g}
+    # Go 1.25 sizes GOMAXPROCS from the cgroup CPU limit rather than the host's
+    # core count, so this also sets the application's internal concurrency: the
+    # admission controller in internal/server/admission.go admits two requests
+    # per core. 4 cores gives 8 concurrent, which is what the measurements in
+    # benchmarks/ were taken at.
+    cpus: ${DT_CPU_LIMIT:-4}
+    # restart: unless-stopped only reacts to a process that exited. This is how
+    # a process that is still running but no longer answering gets noticed.
+    healthcheck:
+      # decision-theatre healthcheck rather than curl: the release image is
+      # built from the Nix flake, which carries only this binary's own
+      # runtime closure and no HTTP client. Using the app's own subcommand
+      # means one healthcheck command works against both that image and the
+      # one this Dockerfile builds.
+      test: ["CMD", "decision-theatre", "healthcheck", "--port", "8080"]
+      # Generous: a cold start loads and indexes the datapack, and a health
+      # check that fails during startup would restart the container forever.
+      # start_period covers that window without weakening the steady-state check.
+      start_period: 180s
+      interval: 30s
+      timeout: 10s
+      retries: 3
     command:
       - --headless
       # Required and deliberate — see the note on CMD in Dockerfile. The
@@ -70,6 +136,11 @@ services:
   nginx:
     image: nginx:1.27-bookworm
     restart: unless-stopped
+    logging: *default-logging
+    # Small and fixed: nginx here proxies and rate-limits, it does not cache or
+    # serve large files from disk. Capping it means a request flood cannot make
+    # the front door compete with the application for the host's memory.
+    mem_limit: ${DT_NGINX_MEMORY_LIMIT:-512m}
     depends_on:
       - app
     ports:
