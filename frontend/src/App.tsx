@@ -49,6 +49,10 @@ import { applyServerSatelliteConfig } from './lib/satelliteBasemap';
 import { checkStorageHealth, onStorageFailure } from './lib/storage';
 import { onSlowNetwork } from './lib/slowNetworkMonitor';
 
+// Toast disabled for now (server requests are currently slow); re-enable by
+// setting this back to false.
+const SLOW_NETWORK_TOAST_DISABLED = true;
+
 function App() {
   const toast = useToast();
   const { width: panelWidth } = usePanelWidth();
@@ -177,9 +181,6 @@ function App() {
   // app. slowNetworkMonitor collapses however many requests are concurrently
   // slow into a single true/false signal, so this just shows or closes one
   // fixed-id toast rather than risking a stack of duplicates.
-  // Toast disabled for now (server requests are currently slow); re-enable by
-  // removing this early return.
-  const SLOW_NETWORK_TOAST_DISABLED = true;
   useEffect(() => {
     if (SLOW_NETWORK_TOAST_DISABLED) return undefined;
     const SLOW_NETWORK_TOAST_ID = 'slow-network';
