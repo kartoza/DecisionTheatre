@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The catchment choropleth now paints before the basemap, not after it.**
+  Overlay application used to defer behind `map.loaded()`/`once('idle')` and
+  the maps' `load` events — all of which wait for every basemap tile — so
+  the choropleth appeared only after the basemap had fully streamed in, and
+  the initial viewport never painted it at all until the first user
+  interaction. It now applies as soon as each map's style is in
+  (`style.load` trigger + `whenStyleReady` deferral), and the basemap
+  streams in beneath it. Measured before/after in
+  `benchmarks/map-load-overlay-first-main-2026-09-30.md`: the first
+  choropleth request moves from ~16 s (after the first click) to ~4–10 s
+  (at style-ready, no interaction needed).
+
 ### Fixed
 
 - **Grid view no longer overflows the viewport.** It sized every row as if

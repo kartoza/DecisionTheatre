@@ -52,4 +52,14 @@ describe('choropleth vector-tile render path', () => {
     expect(mapView).toMatch(/currentZoom >= tileset\.minzoom/);
     expect(mapView).toMatch(/kind: 'geojson', data: leftDisplay/);
   });
+
+  it('paints when the style is ready, not when the basemap goes idle', () => {
+    // 'idle' fires only after every basemap tile has streamed in, which held
+    // the choropleth back seconds past its own data being ready. Style-ready
+    // is the real precondition for addSource/addLayer: the overlay draws
+    // first and the basemap fills in beneath it.
+    expect(mapView).toMatch(/whenStyleReady\(map, \(\) => \{/);
+    expect(mapView).toMatch(/whenStyleReady\(leftMap, \(\) => \{/);
+    expect(mapView).not.toMatch(/once\('idle', apply\)/);
+  });
 });

@@ -596,6 +596,28 @@ export function formatNumber(n: number): string {
 const _choroplethCache: SharedCache<ChoroplethData> = new Map();
 const CHOROPLETH_CACHE_TTL_MS = 60_000;
 
+/**
+ * Run fn as soon as the map's style can take sources and layers.
+ *
+ * This used to wait for `map.loaded()` / the 'idle' event, which only fires
+ * once every basemap tile has streamed in — so the choropleth, whose own data
+ * was long since ready, appeared seconds after the basemap instead of before
+ * it. Style-ready is the real precondition for addSource/addLayer; the
+ * basemap tiles then fill in underneath the already-painted overlay.
+ */
+function whenStyleReady(map: maplibregl.Map, fn: () => void): void {
+  if (map.isStyleLoaded()) {
+    fn();
+    return;
+  }
+  const onStyleData = () => {
+    if (!map.isStyleLoaded()) return;
+    map.off('styledata', onStyleData);
+    fn();
+  };
+  map.on('styledata', onStyleData);
+}
+
 // Module-level caches for the two expensive synchronous intersection routines.
 // inferCatchmentIdsFromBoundary / inferNearbyCatchmentIdsFromBoundary each do an
 // O(n_catchments × poly_complexity) turf.intersect loop on the main thread.
@@ -1032,7 +1054,17 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     // rightMap may legitimately be null: it only exists in compare mode. Every
     // right-side call below either takes a nullable map or is guarded.
     if (!leftMap) return;
-    if (!mapsReady.current.left || !mapsReady.current.right) return;
+    // Style-ready is enough to paint: sources and layers can be added the
+    // moment the style document is in. Gating on the maps' 'load' events
+    // (mapsReady) held the choropleth back until the basemap's initial tiles
+    // had streamed in — the catchments should draw first and the basemap fill
+    // in beneath them. 'load' stays as the fallback signal because
+    // isStyleLoaded() goes false again during a basemap style swap.
+    const leftPaintable = mapsReady.current.left || leftMap.isStyleLoaded();
+    const rightPaintable = rightMap
+      ? (mapsReady.current.right || rightMap.isStyleLoaded())
+      : mapsReady.current.right;
+    if (!leftPaintable || !rightPaintable) return;
 
     // Taken only once the run is certain to do something: an early bail on a
     // map that is not there yet must not cancel a run that is.
@@ -1214,18 +1246,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
             // cleared when what it means changes — scenario or attribute.
             stateKey: `${scenario}|${c.attribute}`,
           };
-          const apply = () => {
-            // The deferred branch below can fire long after the map goes idle,
-            // by which time a later run may own the map.
+          whenStyleReady(map, () => {
+            // The deferred branch can fire well after this run started, by
+            // which time a later run may own the map.
             if (superseded()) return;
             applyChoroplethLayer(
               map, side, layerSource, c.attribute, min, max, extruded, attributeColor, colorScaleType);
-          };
-          if (map.loaded()) {
-            apply();
-          } else {
-            map.once('idle', apply);
-          }
+          });
         };
 
         applySide(leftMap, 'left', leftValues, c.leftScenario);
@@ -1321,28 +1348,20 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
       // Apply to left map - verify the map is ready
       if (leftDisplay && leftDisplay.features.length > 0) {
-        if (leftMap.loaded()) {
+        whenStyleReady(leftMap, () => {
+          if (superseded()) return;
           applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
-        } else {
-          leftMap.once('idle', () => {
-            if (superseded()) return;
-            applyChoroplethLayer(leftMap, 'left', { kind: 'geojson', data: leftDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
-          });
-        }
+        });
       } else {
         removeChoroplethLayers(leftMap, 'left');
       }
 
       // Apply to right map - verify it exists (compare mode only) and is ready
       if (rightMap && rightDisplay && rightDisplay.features.length > 0) {
-        if (rightMap.loaded()) {
+        whenStyleReady(rightMap, () => {
+          if (superseded()) return;
           applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
-        } else {
-          rightMap.once('idle', () => {
-            if (superseded()) return;
-            applyChoroplethLayer(rightMap, 'right', { kind: 'geojson', data: rightDisplay }, c.attribute, min, max, extruded, attributeColor, colorScaleType);
-          });
-        }
+        });
       } else {
         removeChoroplethLayers(rightMap, 'right');
       }
@@ -2830,6 +2849,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       }
     };
 
+    // Paint the choropleth the moment the style is in — before the basemap's
+    // initial tiles finish streaming. 'load' (below) fires only after the
+    // first visually complete render, which is exactly the wait this avoids;
+    // the applyColors guard accepts a style-loaded map, so the overlay draws
+    // first and the basemap fills in beneath it. Also fires after a basemap
+    // style swap (setStyle), which needs the same repaint.
+    leftMap.on('style.load', () => applyColorsRef.current());
+
     leftMap.on('load', () => {
       mapsReady.current.left = true;
       signalReady();
@@ -2905,6 +2932,9 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       // only runs on site changes and readiness — a map created after that
       // would never re-add its boundary after a style swap.
       rightMap.on('styledata', () => reapplyBoundaryLayers());
+
+      // Same early paint as the left map: overlay first, basemap underneath.
+      rightMap.on('style.load', () => applyColorsRef.current());
 
       rightMap.on('load', () => {
         mapsReady.current.right = true;
