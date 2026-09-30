@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Each catchment level is now tiled exactly once and overzoomed across its
+  whole display band.** The four levels become standalone tilesets
+  (`catchments-lev04/06/08/12`) tiled at a single zoom each (z2/6/9/11) with
+  raised tile detail (`--full-detail=14`, a new `detail` column in
+  `layer-treatment.csv`), and the client gives each band its own MapLibre
+  source whose `minzoom = maxzoom = tilezoom` — the per-source ceiling that
+  makes MapLibre overzoom the band instead of requesting zooms that were
+  never generated. `/data/catchments-tiles.json` gains a split-tileset form
+  (legacy combined datapacks keep the old document and behaviour). Measured
+  on the production datapack: the catchments tile store shrinks from
+  425 MiB across 11 tiled zooms to **173 MiB across 4**, tiling completes in
+  ~4 minutes, and the whole deployable pack is now ~4.6 GiB apparent
+  (vs 13.1 GiB for the legacy layout).
+
 - **The choropleth now renders from vector tiles at every zoom.** The
   multi-resolution catchment tilesets (`catchments_lev04/06/08/12`, one
   HydroBASINS level per zoom band, overzoomed past z12) were already in the

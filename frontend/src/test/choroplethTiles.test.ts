@@ -5,6 +5,7 @@ import {
   CATCHMENT_TILE_SOURCE_LAYER,
   applyCatchmentValues,
   bandForZoom,
+  catchmentBandSourceSpec,
   catchmentTileSourceSpec,
   fetchCatchmentTileset,
   forgetCatchmentValues,
@@ -99,6 +100,64 @@ describe('resolveCatchmentTileset', () => {
     expect(resolveCatchmentTileset(tilejson(MULTIRES_LAYERS, []))).toBeNull();
     expect(resolveCatchmentTileset({ tiles: TILE_URLS })).toBeNull();
     expect(resolveCatchmentTileset(null)).toBeNull();
+  });
+});
+
+// The split form: one standalone tileset per level, each tiled at a single
+// zoom and overzoomed through its display band.
+const SPLIT_TILESETS = [
+  { name: 'catchments-lev04', sourceLayer: 'catchments_lev04', tilezoom: 2, tiles: ['http://localhost:8080/tiles/catchments-lev04/{z}/{x}/{y}.pbf'] },
+  { name: 'catchments-lev06', sourceLayer: 'catchments_lev06', tilezoom: 6, tiles: ['http://localhost:8080/tiles/catchments-lev06/{z}/{x}/{y}.pbf'] },
+  { name: 'catchments-lev08', sourceLayer: 'catchments_lev08', tilezoom: 9, tiles: ['http://localhost:8080/tiles/catchments-lev08/{z}/{x}/{y}.pbf'] },
+  { name: 'catchments-lev12', sourceLayer: CATCHMENT_TILE_SOURCE_LAYER, tilezoom: 11, tiles: ['http://localhost:8080/tiles/catchments-lev12/{z}/{x}/{y}.pbf'] },
+];
+
+describe('resolveCatchmentTileset (split tilesets)', () => {
+  it('derives each band’s display range from the next band’s tilezoom', () => {
+    const tileset = resolveCatchmentTileset({ tilejson: '2.2.0', tilesets: SPLIT_TILESETS }) as CatchmentTileset;
+
+    expect(tileset.bands.map((b) => [b.sourceLayer, b.minzoom, b.maxzoom, b.tilezoom])).toEqual([
+      ['catchments_lev04', 2, 5, 2],
+      ['catchments_lev06', 6, 8, 6],
+      ['catchments_lev08', 9, 10, 9],
+      [CATCHMENT_TILE_SOURCE_LAYER, 11, 11, 11],
+    ]);
+    // bandForZoom works identically on split bands, overzoom range included.
+    expect(bandForZoom(tileset, 5.9)?.sourceLayer).toBe('catchments_lev04');
+    expect(bandForZoom(tileset, 15)?.sourceLayer).toBe(CATCHMENT_TILE_SOURCE_LAYER);
+  });
+
+  it('refuses a split document without the detail level', () => {
+    expect(resolveCatchmentTileset({ tilesets: SPLIT_TILESETS.slice(0, 3) })).toBeNull();
+  });
+
+  it('drops a level with no tile URLs rather than blanking the rest', () => {
+    const broken = SPLIT_TILESETS.map((t) => (t.sourceLayer === 'catchments_lev06' ? { ...t, tiles: [] } : t));
+    const tileset = resolveCatchmentTileset({ tilesets: broken }) as CatchmentTileset;
+    expect(tileset.bands.map((b) => b.sourceLayer)).toEqual([
+      'catchments_lev04', 'catchments_lev08', CATCHMENT_TILE_SOURCE_LAYER,
+    ]);
+  });
+});
+
+describe('catchmentBandSourceSpec', () => {
+  it('pins the source to the single tiled zoom so MapLibre overzooms it', () => {
+    const tileset = resolveCatchmentTileset({ tilesets: SPLIT_TILESETS }) as CatchmentTileset;
+    const lev04 = tileset.bands[0];
+
+    const spec = catchmentBandSourceSpec(lev04);
+    expect(spec).toEqual({
+      type: 'vector',
+      tiles: lev04.tiles,
+      minzoom: 2,
+      maxzoom: 2,
+      promoteId: { catchments_lev04: CATCHMENT_TILE_ID_PROPERTY },
+    });
+  });
+
+  it('returns null for legacy combined-tileset bands', () => {
+    const legacy = resolveCatchmentTileset(tilejson(MULTIRES_LAYERS)) as CatchmentTileset;
+    expect(catchmentBandSourceSpec(legacy.bands[0])).toBeNull();
   });
 });
 

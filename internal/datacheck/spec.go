@@ -364,6 +364,12 @@ const RequiredTilesetName = "context"
 // before this split, or missing this file for any other reason, still
 // works: the choropleth's fetchCatchmentTileset falls back to its GeoJSON
 // path when this tileset is absent.
+//
+// Newer datapacks split further: one standalone tileset per catchment
+// level (catchments-lev04/06/08/12), each tiled at a single zoom and
+// overzoomed across its whole display band — see catchmentLevelTilesets in
+// internal/server/server.go. The combined "catchments" name remains the
+// legacy spelling this constant documents.
 const OptionalTilesetName = "catchments"
 
 // MetadataColumnName is the one metadata.csv column without which the whole

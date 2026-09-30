@@ -331,7 +331,13 @@ a strobe.
   (z2–5 → lev04, z6–8 → lev06, z9–10 → lev08, z11+ → lev12 detail); coarse
   levels return the precomputed basin aggregates, bbox-independent, so the
   response is cacheable per scenario+attribute+level. Without `zoom` the
-  endpoint serves lev12 values for the bbox, unchanged.
+  endpoint serves lev12 values for the bbox, unchanged. On current datapacks
+  each level ships as its own standalone tileset tiled at exactly one zoom
+  (z2/6/9/11) and overzoomed across its display band —
+  `/data/catchments-tiles.json` then serves a `tilesets` array (per-level
+  tile URLs + `tilezoom`) and the client builds one MapLibre source per band
+  with `minzoom = maxzoom = tilezoom`; legacy combined tilesets keep the old
+  TileJSON document and shared-source behaviour.
 - `GET /api/stats/full` - full-dataset min/max/mean/count for one scenario and
   attribute, computed server-side in a single aggregate scan; what the "Full"
   range mode reads instead of downloading every raw value

@@ -123,7 +123,15 @@ func New(cfg config.Config) (*Server, error) {
 	if tileStore := s.data().tiles; tileStore != nil {
 		go tileStore.WarmCache("context",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		// The catchments tileset comes in two generations: one combined
+		// "catchments" file (legacy), or one standalone tileset per level,
+		// each tiled at a single zoom (see catchmentLevelTilesets). Warming
+		// a name that is not present is a cheap no-op, so warm both spellings
+		// rather than branching on which datapack this is. Only the low-zoom
+		// levels matter here — lev08/lev12 tiles are fetched on approach.
 		go tileStore.WarmCache("catchments",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		go tileStore.WarmCache("catchments-lev04",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 	}
 
@@ -625,7 +633,112 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 // visual-tuning question, not a fixed constant — adjust the treatment
 // table and this call together.
 func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
+	// Preferred: one standalone tileset per level, each tiled at exactly one
+	// zoom and overzoomed through its whole display band (tile once, draw
+	// all the way in). Present iff the datapack was tiled with the
+	// split-tileset treatment matrix; older datapacks carry the combined
+	// "catchments" tileset and get the legacy document unchanged.
+	if s.hasTileset("catchments-lev12") {
+		s.writeSplitCatchmentsTileJSON(w, r)
+		return
+	}
 	s.writeTileJSON(w, r, "catchments", 2, 12)
+}
+
+// catchmentLevelTilesets lists the per-level standalone catchment tilesets in
+// band order with the single zoom each is tiled at (see
+// datasources/mbtiles-config/layer-treatment.csv — the two must agree). The
+// display band each level covers is derived by the client: from its tilezoom
+// up to the next level's, the last level unbounded.
+var catchmentLevelTilesets = []struct {
+	name        string
+	sourceLayer string
+	tilezoom    int
+}{
+	{"catchments-lev04", "catchments_lev04", 2},
+	{"catchments-lev06", "catchments_lev06", 6},
+	{"catchments-lev08", "catchments_lev08", 9},
+	{"catchments-lev12", "catchments_lev12", 11},
+}
+
+// hasTileset reports whether the tile store serves a tileset by this name.
+func (s *Server) hasTileset(name string) bool {
+	tileStore := s.data().tiles
+	if tileStore == nil {
+		return false
+	}
+	for _, t := range tileStore.ListTilesets() {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
+// tileURLVariants builds the tile URL templates for one tileset: the request
+// host, its localhost↔127.0.0.1 twin, and the aux ports — each a separate
+// origin with its own HTTP/1.1 connection pool (see writeTileJSON).
+func (s *Server) tileURLVariants(r *http.Request, name string) []string {
+	base := baseURL(r)
+	altBase := base
+	switch {
+	case strings.Contains(r.Host, "localhost"):
+		altBase = strings.Replace(base, "localhost", "127.0.0.1", 1)
+	case strings.Contains(r.Host, "127.0.0.1"):
+		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
+	}
+	urls := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf"}
+	if altBase != base {
+		urls = append(urls, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf")
+	}
+	for _, p := range s.auxPorts {
+		urls = append(urls, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf", p, name))
+	}
+	return urls
+}
+
+// writeSplitCatchmentsTileJSON describes the per-level catchment tilesets in
+// one document: a "tilesets" array with each level's own tile URLs and the
+// single zoom it is tiled at. The client builds one MapLibre source per
+// entry with minzoom=maxzoom=tilezoom, which is precisely what makes
+// MapLibre overzoom that level's tiles across its whole display band
+// instead of requesting zooms that were never generated.
+func (s *Server) writeSplitCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
+	type levelTileset struct {
+		Name        string   `json:"name"`
+		SourceLayer string   `json:"sourceLayer"`
+		Tilezoom    int      `json:"tilezoom"`
+		Tiles       []string `json:"tiles"`
+	}
+	levels := make([]levelTileset, 0, len(catchmentLevelTilesets))
+	for _, lt := range catchmentLevelTilesets {
+		if !s.hasTileset(lt.name) {
+			// All-or-nothing would blank whole bands on a partially built
+			// store; serving the levels that exist keeps the map usable and
+			// the client falls back to GeoJSON for uncovered zooms.
+			continue
+		}
+		levels = append(levels, levelTileset{
+			Name:        lt.name,
+			SourceLayer: lt.sourceLayer,
+			Tilezoom:    lt.tilezoom,
+			Tiles:       s.tileURLVariants(r, lt.name),
+		})
+	}
+
+	doc := map[string]interface{}{
+		"tilejson": "2.2.0",
+		"name":     "catchments",
+		"scheme":   "xyz",
+		"bounds":   []float64{-17.546539, -34.837477, 63.500977, 37.352693},
+		"center":   []float64{22.977, 1.258, 4},
+		"tilesets": levels,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode(doc)
 }
 
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for

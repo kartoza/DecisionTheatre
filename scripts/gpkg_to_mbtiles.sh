@@ -161,13 +161,13 @@ mkdir -p "$CACHE_DIR"
 TREATMENT_CSV="$PROJECT_ROOT/datasources/mbtiles-config/layer-treatment.csv"
 [[ -f "$TREATMENT_CSV" ]] || error "Treatment table not found: $TREATMENT_CSV"
 
-declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET
+declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET T_DETAIL
 CSV_LAYER_ORDER=()
 
 load_treatment_csv() {
   T_MINZOOM=(); T_SIMPLIFIED_END=(); T_MAXZOOM=(); T_GENERALISE=()
   T_VISVALINGAM=(); T_TOLERANCE=(); T_PRESERVE_SHARED_NODES=(); T_MERGE_TINY_POLYGONS=()
-  T_TILESET=()
+  T_TILESET=(); T_DETAIL=()
   CSV_LAYER_ORDER=()
 
   local line header_skipped=false
@@ -178,7 +178,7 @@ load_treatment_csv() {
       header_skipped=true
       continue
     fi
-    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset <<< "$line"
+    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset detail <<< "$line"
     [[ -z "$layer" ]] && continue
     CSV_LAYER_ORDER+=("$layer")
     T_MINZOOM[$layer]="$minz"
@@ -190,6 +190,12 @@ load_treatment_csv() {
     T_PRESERVE_SHARED_NODES[$layer]="$psn"
     T_MERGE_TINY_POLYGONS[$layer]="$mtp"
     T_TILESET[$layer]="$tileset"
+    # Tile coordinate detail in bits (tippecanoe --full-detail). Blank means
+    # tippecanoe's default (12). Raised for single-zoom standalone tilesets:
+    # overzoom magnifies the tile's coordinate grid along with its geometry,
+    # so a layer tiled once and displayed several zooms deeper needs the
+    # finer grid to stay sub-pixel at its deepest display zoom.
+    T_DETAIL[$layer]="$detail"
   done < "$TREATMENT_CSV"
 }
 
@@ -206,7 +212,7 @@ append_missing_layers() {
   for layer in "${MAP_LAYERS[@]}"; do
     if ! layer_in_csv "$layer"; then
       warn "'$layer' not in $(basename "$TREATMENT_CSV") — appending defaults (z6-z15, generalised, merged into the combined tileset)"
-      echo "$layer,6,14,15,true,true,10,true,false," >> "$TREATMENT_CSV"
+      echo "$layer,6,14,15,true,true,10,true,false,," >> "$TREATMENT_CSV"
     fi
   done
 }
@@ -230,6 +236,11 @@ validate_treatment() {
       errs=$((errs + 1))
     elif [[ "$gen" == true ]] && ! [[ "$send" =~ ^[0-9]+$ ]]; then
       warn "$layer: simplified_end must be an integer when generalise=true (got '$send')"
+      errs=$((errs + 1))
+    fi
+    local det="${T_DETAIL[$layer]:-}"
+    if [[ -n "$det" ]] && ! [[ "$det" =~ ^[0-9]+$ && "$det" -ge 10 && "$det" -le 18 ]]; then
+      warn "$layer: detail must be blank (tippecanoe default) or an integer 10-18 (got '$det')"
       errs=$((errs + 1))
     fi
     local field name val
@@ -262,7 +273,7 @@ validate_treatment() {
 # have happened *while* writing exactly the layer being resumed.
 layer_fingerprint() {
   local layer="$1"
-  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}" \
+  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}|${T_DETAIL[$layer]:-}" \
     | sha256sum | cut -d' ' -f1
 }
 
@@ -615,6 +626,8 @@ for LAYER in "${MAP_LAYERS[@]}"; do
 
   COMMON=(--force --read-parallel --layer="$LAYER")
   [[ "$MTP" != true ]] && COMMON+=(--no-tiny-polygon-reduction)
+  DET="${T_DETAIL[$LAYER]:-}"
+  [[ -n "$DET" ]] && COMMON+=(--full-detail="$DET")
 
   SIMP=(--simplification="$TOL")
   [[ "$VV" == true ]] && SIMP+=(--visvalingam)

@@ -16,7 +16,10 @@ const mapView = readFileSync(join(src, 'components', 'MapView.tsx'), 'utf8');
 
 describe('choropleth vector-tile render path', () => {
   it('sources catchment geometry from the tile pipeline', () => {
-    expect(mapView).toMatch(/map\.addSource\(sourceId, catchmentTileSourceSpec\(/);
+    // Split tilesets install the band's own single-zoom source (that
+    // per-source maxzoom drives overzoom); the legacy combined tileset
+    // remains the fallback spec.
+    expect(mapView).toMatch(/map\.addSource\(sourceId, bandSpec \?\? catchmentTileSourceSpec\(/);
   });
 
   it('gives every layer on the choropleth source its source-layer', () => {

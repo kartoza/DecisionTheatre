@@ -44,10 +44,20 @@ export const CATCHMENT_TILE_ID_PROPERTY = 'HYBAS_ID';
 /** One catchment level's zoom band within the tileset. */
 export interface CatchmentTileBand {
   sourceLayer: string;
-  /** Lowest zoom at which tiles carry this level's geometry. */
+  /** Lowest display zoom this band covers. */
   minzoom: number;
-  /** Highest zoom this level is tiled at. */
+  /** Highest display zoom this band covers (the last band is open-ended). */
   maxzoom: number;
+  /**
+   * Split-tileset form only: this level's own tile URL templates and the
+   * single zoom it is tiled at. A band carrying these gets its own MapLibre
+   * source with minzoom = maxzoom = tilezoom, which is what makes MapLibre
+   * overzoom the level's tiles across the whole display band instead of
+   * requesting zooms that were never generated. Absent on the legacy
+   * combined tileset, where every band shares one source.
+   */
+  tiles?: string[];
+  tilezoom?: number;
 }
 
 /** The catchment vector layers found in the served tileset. */
@@ -82,7 +92,43 @@ interface TileJSONVectorLayer {
  */
 export function resolveCatchmentTileset(tilejson: unknown): CatchmentTileset | null {
   if (!tilejson || typeof tilejson !== 'object') return null;
-  const doc = tilejson as { vector_layers?: unknown; tiles?: unknown };
+  const doc = tilejson as { vector_layers?: unknown; tiles?: unknown; tilesets?: unknown };
+
+  // Split form: one standalone tileset per level, each tiled at a single
+  // zoom (tilezoom) and overzoomed through its display band. Preferred over
+  // the legacy vector_layers form when the server offers it.
+  if (Array.isArray(doc.tilesets)) {
+    const bands: CatchmentTileBand[] = [];
+    for (const raw of doc.tilesets) {
+      const t = raw as { sourceLayer?: unknown; tilezoom?: unknown; tiles?: unknown };
+      if (typeof t?.sourceLayer !== 'string' || !CATCHMENT_LAYER_PATTERN.test(t.sourceLayer)) continue;
+      if (typeof t.tilezoom !== 'number') continue;
+      const bandTiles = Array.isArray(t.tiles)
+        ? t.tiles.filter((u): u is string => typeof u === 'string')
+        : [];
+      if (bandTiles.length === 0) continue;
+      bands.push({
+        sourceLayer: t.sourceLayer,
+        minzoom: t.tilezoom,
+        maxzoom: t.tilezoom,
+        tiles: bandTiles,
+        tilezoom: t.tilezoom,
+      });
+    }
+    if (!bands.some((b) => b.sourceLayer === CATCHMENT_TILE_SOURCE_LAYER)) return null;
+    bands.sort((a, b) => a.minzoom - b.minzoom);
+    // Each band's display range runs to the next band's start (bandForZoom
+    // treats maxzoom + 1 as exclusive; the last band is open-ended anyway).
+    for (let i = 0; i < bands.length - 1; i++) {
+      bands[i].maxzoom = bands[i + 1].minzoom - 1;
+    }
+    return {
+      bands,
+      minzoom: bands[0].minzoom,
+      maxzoom: Math.max(...bands.map((b) => b.tilezoom ?? b.maxzoom)),
+      tiles: [],
+    };
+  }
 
   const tiles = Array.isArray(doc.tiles)
     ? doc.tiles.filter((t): t is string => typeof t === 'string')
@@ -170,6 +216,26 @@ export function resetCatchmentTilesetCache(): void {
  * overzooms rather than requesting deeper tiles. Every band's layer promotes
  * HYBAS_ID so feature state can be keyed by it at any zoom.
  */
+/**
+ * The vector source specification for one split-form band, or null when the
+ * band belongs to a legacy combined tileset (use catchmentTileSourceSpec).
+ *
+ * minzoom = maxzoom = tilezoom is the whole mechanism: the level is tiled at
+ * exactly one zoom, and declaring that zoom as the source's maximum makes
+ * MapLibre overzoom those tiles across the band's entire display range
+ * instead of requesting zooms that were never generated.
+ */
+export function catchmentBandSourceSpec(band: CatchmentTileBand): VectorSourceSpecification | null {
+  if (!band.tiles || band.tilezoom === undefined) return null;
+  return {
+    type: 'vector',
+    tiles: band.tiles,
+    minzoom: band.tilezoom,
+    maxzoom: band.tilezoom,
+    promoteId: { [band.sourceLayer]: CATCHMENT_TILE_ID_PROPERTY },
+  };
+}
+
 export function catchmentTileSourceSpec(tileset: CatchmentTileset): VectorSourceSpecification {
   const promoteId: Record<string, string> = {};
   for (const band of tileset.bands) {

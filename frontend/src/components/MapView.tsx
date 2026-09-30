@@ -34,6 +34,7 @@ import {
   applyCatchmentValues,
   bandForZoom,
   CATCHMENT_TILE_SOURCE_LAYER,
+  catchmentBandSourceSpec,
   catchmentTileSourceSpec,
   fetchCatchmentTileset,
   forgetCatchmentValues,
@@ -602,6 +603,11 @@ const CHOROPLETH_CACHE_TTL_MS = 60_000;
 // the server ignores it at those levels — but it must be the *same* box every
 // time, because it is part of the request memo and HTTP cache key.
 const FULL_DOMAIN_VALUE_BOUNDS = new maplibregl.LngLatBounds([-180, -90], [180, 90]);
+
+// Which band's standalone source each map currently holds per source id
+// (split tilesets only) — the signal that a band boundary crossing must
+// replace the source, not merely the layers on it.
+const _tileSourceBandByMap = new WeakMap<maplibregl.Map, Record<string, string>>();
 
 /**
  * Run fn as soon as the map's style can take sources and layers.
@@ -2017,8 +2023,21 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       return undefined;
     }
 
+    // Split tilesets carry each band as its own standalone source whose
+    // minzoom = maxzoom = tilezoom — that per-source ceiling is what makes
+    // MapLibre overzoom the band's single tiled zoom across its whole
+    // display range. Crossing a band boundary therefore replaces the
+    // source, not just the layers; on the legacy combined tileset
+    // (bandSpec null) the one shared source persists across bands exactly
+    // as before.
+    const bandSpec = catchmentBandSourceSpec(source.band);
+    const installedBands = _tileSourceBandByMap.get(map);
+    if (bandSpec && map.getSource(sourceId) && installedBands?.[sourceId] !== source.band.sourceLayer) {
+      removeChoroplethLayers(map, side);
+    }
     if (!map.getSource(sourceId)) {
-      map.addSource(sourceId, catchmentTileSourceSpec(source.tileset));
+      map.addSource(sourceId, bandSpec ?? catchmentTileSourceSpec(source.tileset));
+      _tileSourceBandByMap.set(map, { ...(installedBands ?? {}), [sourceId]: source.band.sourceLayer });
     }
 
     // Feature state, not a source update: the geometry in the tiles is already
