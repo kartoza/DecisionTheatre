@@ -33,7 +33,7 @@ GOFMT := gofmt
 GOLINT := golangci-lint
 
 .PHONY: all app build build-backend build-frontend clean
-.PHONY: run serve dev dev-backend dev-frontend dev-all
+.PHONY: run serve serve-debug dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
 .PHONY: benchmark benchmark-quick benchmark-report benchmark-list benchmark-regressions
 .PHONY: container
@@ -99,6 +99,13 @@ run:
 # browser to connect to. Same script, same build, only the mode differs.
 serve:
 	./scripts/run-app.sh --server $(ARGS)
+
+# Server mode with the map debug overlay: every pane shows its live zoom,
+# the active catchment band and which layers are rendering. Same build —
+# the server just reports debug_overlay via /api/info and the frontend
+# draws the overlay.
+serve-debug:
+	DT_DEBUG_OVERLAY=1 ./scripts/run-app.sh --server $(ARGS)
 
 # ============================
 # Development

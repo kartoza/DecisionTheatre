@@ -5,12 +5,13 @@ import {
 } from '@chakra-ui/react';
 import {
   FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
-  FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
+  FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget, FiTool,
 } from 'react-icons/fi';
 import { BsSpeedometer2 } from 'react-icons/bs';
 import { colors } from '../styles/colors';
 import type { RangeMode, ViewMode } from '../types';
 import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/satelliteBasemap';
+import { setDebugFeaturesEnabled, useDebugFeaturesToggle, useDebugOverlayEnabled } from './MapDebugOverlay';
 
 /**
  * The controls that act on the whole grid, in one place.
@@ -64,6 +65,8 @@ const STRINGS = {
   satelliteUnavailable: 'Satellite imagery is unavailable',
   swiperOn: 'Enable map swiper',
   swiperOff: 'Disable map swiper',
+  debugOn: 'Show debug overlay and outlines',
+  debugOff: 'Hide debug overlay and outlines',
   zoomToSite: 'Zoom to site',
 } as const;
 
@@ -423,6 +426,12 @@ function GridControls({
   // Satellite can become unavailable at runtime — quota spent, or no provider
   // configured once /api/info resolves. The button says so rather than offering
   // a switch that silently fails.
+  // Debug toggle: offered decides whether the button exists at all, the
+  // toggle position is module state shared with every MapView (see
+  // MapDebugOverlay) so no prop needs threading between here and there.
+  const isDebugOffered = useDebugOverlayEnabled();
+  const isDebugToggledOn = useDebugFeaturesToggle();
+
   const [noSatellite, setNoSatellite] = useState(satelliteUnavailable);
   useEffect(() => subscribeSatelliteUnavailable(setNoSatellite), []);
 
@@ -435,6 +444,17 @@ function GridControls({
     { key: 'identify', label: isIdentifyMode ? STRINGS.identifyOff : STRINGS.identifyOn, icon: <FiInfo />, isOn: isIdentifyMode, onToggle: () => onIdentifyModeChange?.(!isIdentifyMode), on: onIdentifyModeChange },
     { key: 'satellite', label: isGoogleBasemap ? STRINGS.satelliteOff : STRINGS.satelliteOn, icon: <FiGlobe />, isOn: isGoogleBasemap, onToggle: () => onGoogleBasemapChange?.(!isGoogleBasemap), on: onGoogleBasemapChange, isDisabled: noSatellite && !isGoogleBasemap, disabledLabel: STRINGS.satelliteUnavailable },
     { key: 'swiper', label: isSwiperEnabled ? STRINGS.swiperOff : STRINGS.swiperOn, icon: <FiColumns />, isOn: isSwiperEnabled, onToggle: () => onSwiperEnabledChange?.(!isSwiperEnabled), on: onSwiperEnabledChange },
+    // Present only when the server was started with --debug-overlay
+    // (dt serve-debug): switches the info box, the white catchment outlines
+    // and the catchment labels on and off mid-session, no restart needed.
+    ...(isDebugOffered ? [{
+      key: 'debug',
+      label: isDebugToggledOn ? STRINGS.debugOff : STRINGS.debugOn,
+      icon: <FiTool />,
+      isOn: isDebugToggledOn,
+      onToggle: () => setDebugFeaturesEnabled(!isDebugToggledOn),
+      on: setDebugFeaturesEnabled,
+    }] : []),
   ] as const).filter((t) => t.on && showMapToggles);
 
   return (

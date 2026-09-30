@@ -68,6 +68,13 @@ describe('choropleth vector-tile render path', () => {
     expect(mapView).toMatch(/rightMap\s*\n?\s*\? fetchChoroplethData\(c\.rightScenario/);
   });
 
+  it('adds the white catchment outline only in debug-overlay sessions', () => {
+    // The outline is a diagnosis aid (band extents, overzoomed geometry);
+    // outside dt serve-debug the choropleth must keep its soft, outline-free
+    // look exactly as before.
+    expect(mapView).toMatch(/if \(isDebugOverlayEnabledRef\.current\) \{[\s\S]{0,200}debugOutlineLayerId/);
+  });
+
   it('paints when the style is ready, not when the basemap goes idle', () => {
     // 'idle' fires only after every basemap tile has streamed in, which held
     // the choropleth back seconds past its own data being ready. Style-ready

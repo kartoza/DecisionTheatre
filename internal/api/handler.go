@@ -430,6 +430,7 @@ func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"satellite_attribution":    satelliteAttribution,
 		"satellite_available":      h.cfg.SatelliteAvailable(),
 		"satellite_quota_exceeded": quotaExceeded,
+		"debug_overlay":            h.cfg.DebugOverlay,
 	}
 	respondJSON(w, http.StatusOK, info)
 }

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -67,6 +68,10 @@ type Server struct {
 	// Glyphs fetched from the external CDN on first use are served locally
 	// for all subsequent requests, eliminating external HTTPS latency in grid view.
 	glyphCache      sync.Map
+	// The datapack style's own glyphs URL, the no-key fallback for the glyph
+	// proxy — see datapackGlyphTemplate.
+	glyphTemplateOnce sync.Once
+	glyphTemplate     string
 	glyphCacheSizeB atomic.Int64
 
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
@@ -746,10 +751,56 @@ func (s *Server) writeSplitCatchmentsTileJSON(w http.ResponseWriter, r *http.Req
 	_ = json.NewEncoder(w).Encode(doc)
 }
 
+// glyphUpstreamURL builds the CDN URL for one glyph range. With a configured
+// MapTiler key that key is used; without one it falls back to the glyphs URL
+// template embedded in the datapack's own style.json, which ships with its
+// own key — before this fallback, a machine with no DT_MAPTILER_API_KEY got
+// an empty 200 for every glyph range and the map rendered no text at all
+// (no place names, and no debug catchment labels).
+func (s *Server) glyphUpstreamURL(fontstack, glyphRange string) string {
+	if key := config.MapTilerAPIKey(); key != "" {
+		return fmt.Sprintf("https://api.maptiler.com/fonts/%s/%s.pbf?key=%s", fontstack, glyphRange, key)
+	}
+	if tpl := s.datapackGlyphTemplate(); tpl != "" {
+		u := strings.Replace(tpl, "{fontstack}", url.PathEscape(fontstack), 1)
+		return strings.Replace(u, "{range}", glyphRange, 1)
+	}
+	// No key and no datapack template: keep the old behaviour (the fetch
+	// fails and the handler answers with an empty 200).
+	return fmt.Sprintf("https://api.maptiler.com/fonts/%s/%s.pbf?key=", fontstack, glyphRange)
+}
+
+// datapackGlyphTemplate reads the absolute glyphs URL out of the datapack's
+// style.json, once. Empty when the style has none or is unreadable — callers
+// treat that as "no fallback available".
+func (s *Server) datapackGlyphTemplate() string {
+	s.glyphTemplateOnce.Do(func() {
+		current := s.data()
+		for _, dir := range []string{current.dataDir, current.resourcesDir} {
+			raw, err := os.ReadFile(filepath.Join(dir, "mbtiles", "style.json"))
+			if err != nil {
+				continue
+			}
+			var style struct {
+				Glyphs string `json:"glyphs"`
+			}
+			if json.Unmarshal(raw, &style) != nil {
+				continue
+			}
+			if strings.HasPrefix(style.Glyphs, "http") {
+				s.glyphTemplate = style.Glyphs
+				return
+			}
+		}
+	})
+	return s.glyphTemplate
+}
+
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
-// each {fontstack}/{range} pair is fetched from the upstream MapTiler CDN and
-// stored in an in-process cache; all subsequent requests (from other map
-// instances in grid view) are served instantly from memory.
+// each {fontstack}/{range} pair is fetched from the upstream CDN (see
+// glyphUpstreamURL) and stored in an in-process cache; all subsequent
+// requests (from other map instances in grid view) are served instantly from
+// memory.
 func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	fontstack := vars["fontstack"]
@@ -769,10 +820,7 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamURL := fmt.Sprintf(
-		"https://api.maptiler.com/fonts/%s/%s.pbf?key=%s",
-		fontstack, glyphRange, config.MapTilerAPIKey(),
-	)
+	upstreamURL := s.glyphUpstreamURL(fontstack, glyphRange)
 	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {
 		// CDN unreachable (no internet, timeout, etc.) — return an empty 200 so

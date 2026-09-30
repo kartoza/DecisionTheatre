@@ -341,3 +341,24 @@ func TestFullDomainStatsValidatesParameters(t *testing.T) {
 		})
 	}
 }
+
+// dt serve-debug works by the server reporting the flag and the frontend
+// obeying it — /api/info is the entire contract, so its field is pinned here.
+func TestInfoReportsDebugOverlay(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		handler := NewHandler(nil, nil, nil, config.Config{Version: "test", DebugOverlay: enabled}, nil)
+		r := mux.NewRouter()
+		handler.RegisterRoutes(r)
+
+		req := httptest.NewRequest("GET", "/info", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var info map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if string(info["debug_overlay"]) != map[bool]string{true: "true", false: "false"}[enabled] {
+			t.Errorf("debug_overlay = %s, want %v", info["debug_overlay"], enabled)
+		}
+	}
+}

@@ -46,6 +46,13 @@ type Config struct {
 	// running the benchmark happens to have checked out.
 	Commit string
 
+	// DebugOverlay asks the frontend to draw its map debug overlay (live
+	// zoom, active catchment band, rendered layers). Reported by /api/info;
+	// set by --debug-overlay, which is what `dt serve-debug` passes. A
+	// server-side switch rather than a client toggle so a debug session is
+	// explicit and never ships enabled by accident.
+	DebugOverlay bool
+
 	// SatelliteStyleURL is the upstream MapLibre style document — satellite
 	// imagery plus roads and place labels, not a single raster tile type. The
 	// server fetches and rewrites it, not the browser: see

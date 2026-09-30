@@ -20,6 +20,7 @@ import {
   satelliteStyleUrl,
   subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
+import MapDebugOverlay, { useDebugFeaturesActive, useSoleDebugOverlay } from './MapDebugOverlay';
 import {
   PRISM_STOPS,
   attributeValueAccessor,
@@ -166,6 +167,11 @@ const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
 const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
 const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
 const CHOROPLETH_EDGE_BLEND_OPACITY = 0.12;
+// Debug-overlay mode only (dt serve-debug): a plainly visible white outline
+// per catchment, on top of the unchanged fills, so band extents and
+// overzoomed geometry can be judged by eye.
+const CHOROPLETH_DEBUG_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.9)';
+const CHOROPLETH_DEBUG_OUTLINE_WIDTH = 1;
 const CATCHMENTS_OUTLINES_LAYER_ID = 'Catchments Outlines';
 const CATCHMENTS_OUTLINES_SOFT_OPACITY = 0.03;
 const MIN_CATCHMENT_OVERLAP_FRACTION = 0.2;
@@ -1102,6 +1108,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
   // as before.
   const catchmentTilesetRef = useRef<CatchmentTileset | null>(null);
 
+  // Server-offered (dt serve-debug → --debug-overlay → /api/info) AND the
+  // toolbar toggle: both must agree for any debug feature to draw.
+  const isDebugOverlayEnabled = useDebugFeaturesActive();
+  // Mirrored into a ref for applyChoroplethLayer, which is called from async
+  // paths that must not rebind on state changes — and repaint on every flip:
+  // on (which can race the /api/info fetch at boot) adds the outlines and
+  // labels, off strips them on the same repaint.
+  const isDebugOverlayEnabledRef = useRef(false);
+  useEffect(() => {
+    isDebugOverlayEnabledRef.current = isDebugOverlayEnabled;
+    applyColorsRef.current();
+  }, [isDebugOverlayEnabled]);
+  // The info box itself is a singleton across panes (cameras are synced, so
+  // one box speaks for all); the white debug outline still draws everywhere.
+  const showDebugOverlayBox = useSoleDebugOverlay(isDebugOverlayEnabled);
+
   /** Fetch and apply choropleth data to both maps based on current viewport.
    *  Only shown when zoomed in past MIN_CATCHMENT_ZOOM. */
   const applyColors = useCallback(async () => {
@@ -1954,6 +1976,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     const edgeBlendLayerId = `${layerId}-edge-blend`;
     const sourceId = `choropleth-source-${side}`;
 
+    if (map.getLayer(`${layerId}-debug-label`)) {
+      map.removeLayer(`${layerId}-debug-label`);
+    }
+    if (map.getLayer(`${layerId}-debug-outline`)) {
+      map.removeLayer(`${layerId}-debug-outline`);
+    }
     if (map.getLayer(edgeBlendLayerId)) {
       map.removeLayer(edgeBlendLayerId);
     }
@@ -2081,6 +2109,8 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     const layerId = `choropleth-${side}`;
     const layer3dId = `${layerId}-3d`;
     const edgeBlendLayerId = `${layerId}-edge-blend`;
+    const debugOutlineLayerId = `${layerId}-debug-outline`;
+    const debugLabelLayerId = `${layerId}-debug-label`;
     const sourceId = `choropleth-source-${side}`;
 
     try {
@@ -2101,7 +2131,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       // band boundary (lev04 -> lev06 -> lev08 -> lev12) has to recreate the
       // layers against the new band. Rare — only at band edges — and the
       // source, with every tile already fetched and tessellated, stays put.
-      for (const id of [layerId, layer3dId, edgeBlendLayerId]) {
+      for (const id of [layerId, layer3dId, edgeBlendLayerId, debugOutlineLayerId, debugLabelLayerId]) {
         const existing = map.getLayer(id) as { sourceLayer?: string } | undefined;
         if (existing && existing.sourceLayer !== sourceLayer) {
           map.removeLayer(id);
@@ -2111,6 +2141,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       setCatchmentOutlinesSoftness(map, true);
 
       if (extruded) {
+        if (map.getLayer(debugLabelLayerId)) {
+          map.removeLayer(debugLabelLayerId);
+        }
+        if (map.getLayer(debugOutlineLayerId)) {
+          map.removeLayer(debugOutlineLayerId);
+        }
         if (map.getLayer(edgeBlendLayerId)) {
           map.removeLayer(edgeBlendLayerId);
         }
@@ -2198,6 +2234,56 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
           map.setPaintProperty(edgeBlendLayerId, 'line-width', CHOROPLETH_EDGE_BLEND_WIDTH);
           map.setPaintProperty(edgeBlendLayerId, 'line-blur', CHOROPLETH_EDGE_BLEND_BLUR);
           map.setPaintProperty(edgeBlendLayerId, 'line-opacity', CHOROPLETH_EDGE_BLEND_OPACITY);
+        }
+
+        // Debug sessions get a plainly visible outline per catchment on top
+        // of the unchanged fill, plus a centre label naming the catchment's
+        // level and number — so band extents, overzoomed geometry, and which
+        // basin is which can all be judged by eye. Never added outside debug
+        // mode, and stripped on the next repaint when the toolbar toggle
+        // turns the features off.
+        if (isDebugOverlayEnabledRef.current) {
+          if (!map.getLayer(debugOutlineLayerId)) {
+            map.addLayer({
+              id: debugOutlineLayerId,
+              type: 'line',
+              source: sourceId,
+              ...sourceLayerSpec,
+              paint: {
+                'line-color': CHOROPLETH_DEBUG_OUTLINE_COLOR,
+                'line-width': CHOROPLETH_DEBUG_OUTLINE_WIDTH,
+              },
+            });
+          }
+          // Labels only on the tile path: its features are real catchments
+          // with a HYBAS_ID; the GeoJSON fallback's aggregated cells are not.
+          if (source.kind === 'tiles' && !map.getLayer(debugLabelLayerId)) {
+            const levelDigits = source.band.sourceLayer.replace('catchments_lev', '');
+            map.addLayer({
+              id: debugLabelLayerId,
+              type: 'symbol',
+              source: sourceId,
+              ...sourceLayerSpec,
+              layout: {
+                'symbol-placement': 'point',
+                'text-field': ['concat', `L${levelDigits} `, ['to-string', ['get', 'HYBAS_ID']]],
+                // The one font stack the glyph proxy is known to serve (see
+                // handleGlyphProxy); the default stack asks for fonts this
+                // style does not carry.
+                'text-font': ['Arial Unicode MS Regular'],
+                'text-size': 10,
+              },
+              paint: {
+                'text-color': '#ffffff',
+                'text-halo-color': 'rgba(0, 0, 0, 0.85)',
+                'text-halo-width': 1.2,
+              },
+            });
+          }
+        } else {
+          for (const id of [debugLabelLayerId, debugOutlineLayerId]) {
+            if (map.getLayer(id)) map.removeLayer(id);
+          }
         }
       }
 
@@ -4629,6 +4715,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       bottom={0}
       overflow="hidden"
     >
+      {/* Developer overlay, present only when the server was started with
+          --debug-overlay (dt serve-debug), and on exactly one pane. */}
+      {showDebugOverlayBox && (
+        <MapDebugOverlay mapRef={leftMapRef} tilesetRef={catchmentTilesetRef} />
+      )}
       {/* Unconfigured Panel Overlay */}
       {isUnconfigured && (
         <Flex

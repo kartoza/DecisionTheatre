@@ -194,6 +194,9 @@ ARGS=()
 [ -n "${DT_DATA_DIR:-}" ] && ARGS+=(--data-dir "$DT_DATA_DIR")
 [ -n "${DT_RESOURCES_DIR:-}" ] && ARGS+=(--resources-dir "$DT_RESOURCES_DIR")
 [ "$DT_MODE" = "server" ] && ARGS+=(--headless)
+# Set by `make serve-debug`/`dt serve-debug`: the frontend draws its map
+# debug overlay (live zoom, active catchment band, rendered layers).
+[ -n "${DT_DEBUG_OVERLAY:-}" ] && ARGS+=(--debug-overlay)
 
 # Not a flag (see the comment on DT_MAPTILER_API_KEY above) — exported instead
 # so the exec'd binary picks it up via os.Getenv. `. "$env_file"` above sets

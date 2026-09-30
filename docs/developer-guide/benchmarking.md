@@ -12,6 +12,30 @@ It is standard-library Python with no dependencies, and it talks to the server
 only over HTTP. It imports nothing from the application, so it can point at a
 server it did not build, including production.
 
+## Map debug overlay
+
+For eyeballing *why* the map behaves as it does rather than timing it:
+
+```bash
+dt serve-debug        # or: make serve-debug
+```
+
+starts the server with `--debug-overlay`. One pane (exactly one, however
+many are mounted — the cameras are synced) draws a small info box showing
+the live zoom and centre, the active catchment band and how it is
+rendering — `tiles catchments_lev04 @z0 split, overzoom x11.8`,
+`tiles … legacy`, or the GeoJSON fallback — plus how many style layers are
+visible at that zoom and which of the app's own layers (choropleth,
+boundary, outlines) they include. Every pane additionally outlines each
+catchment in white on top of the unchanged fills and labels it at its
+centre with its level and number (`L04 1040000010`), so band extents,
+overzoomed geometry and basin identity can all be judged by eye. A
+wrench toggle in the map toolbar — present only in debug sessions —
+switches all of this on and off without a restart. The offer itself is
+server-side (`/api/info`'s `debug_overlay`): without `--debug-overlay`
+neither the features nor the toggle exist, so none of this can ever ship
+enabled by accident.
+
 ## Quick start
 
 From the development shell, with a server running (`dt run`):
