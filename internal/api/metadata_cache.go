@@ -28,6 +28,7 @@ type MetadataCache struct {
 	GroupingVariables map[string]string
 	GroupingValues    map[string]string
 	Dial0Middle       map[string]bool
+	DialColorLinear   map[string]bool
 	IgnoreXGrouping   map[string]bool
 	MaxValCurrent     map[string]float64
 	MaxValReference   map[string]float64
@@ -57,6 +58,7 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 		GroupingVariables: make(map[string]string),
 		GroupingValues:    make(map[string]string),
 		Dial0Middle:       make(map[string]bool),
+		DialColorLinear:   make(map[string]bool),
 		IgnoreXGrouping:   make(map[string]bool),
 		MaxValCurrent:     make(map[string]float64),
 		MaxValReference:   make(map[string]float64),
@@ -163,6 +165,7 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 	iGroupingValues := col("GroupingValues")
 
 	iDial0Middle := col("dial_0_middle")
+	iDialColorLinear := col("dial_color_linear")
 	iIgnoreXGrouping := col("ignore_x_grouping")
 
 	iMaxValCurrent := col("maxval_curr")
@@ -370,6 +373,19 @@ func loadMetadataCache(dataDir string) *MetadataCache {
 			}
 		}
 
+		// DialColorLinear: whether the dial/flat-dial gauge should colour its
+		// scale as a straight red (min) to green (max) ramp instead of the
+		// default band centred on the ecological reference value.
+		if iDialColorLinear >= 0 {
+			if v := get(rec, iDialColorLinear); v != "" {
+				b := parseBool(v)
+				mc.DialColorLinear[column] = b
+				if norm != "" {
+					mc.DialColorLinear[norm] = b
+				}
+			}
+		}
+
 		// IgnoreXGrouping: whether the grouping-variable filter should skip
 		// narrowing options down to the selected factor's axis label for this
 		// column's variable type.
@@ -515,7 +531,7 @@ func (mc *MetadataCache) AddColumnAliases(columns []string) int {
 
 		// The boolean sets carry meaning by presence, so only a true entry is
 		// worth aliasing.
-		for _, set := range []map[string]bool{mc.Inputs, mc.TargetInputs, mc.CanMap, mc.CanGraph, mc.Dial0Middle, mc.IgnoreXGrouping} {
+		for _, set := range []map[string]bool{mc.Inputs, mc.TargetInputs, mc.CanMap, mc.CanGraph, mc.Dial0Middle, mc.DialColorLinear, mc.IgnoreXGrouping} {
 			if v, ok := set[metaName]; ok && v {
 				if _, exists := set[realName]; !exists {
 					set[realName] = v

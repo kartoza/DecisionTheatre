@@ -714,6 +714,10 @@
               # to nano if neither is set.
               nano
 
+              # Datapack transfer (scripts/fetch-data.sh pulls the production
+              # datapack from Google Drive through an rclone "gdrive" remote)
+              rclone
+
               # Documentation
               mkdocsEnv
 

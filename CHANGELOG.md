@@ -37,6 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   throttling and scripted zooming. Complements `dtbench.py`, which measures
   the server side only.
 
+### Changed
+
+- **The aggregated (low-zoom) choropleth answers in ~0.1 s instead of ~4 s.**
+  Every request re-ran the same 147k-row scan to rebuild rows that are
+  static for the life of the datapack; the full-domain row set is now cached
+  per scenario+attribute and filtered in memory per request. Measured on the
+  production datapack: 3,985 ms → 96 ms p50 (dtbench runs 14 → 15).
+- **Full-range statistics come from the server: 105 bytes instead of
+  14 MB.** New `GET /api/stats/full` computes the min/max/mean/count the
+  "Full" range mode needs in one aggregate scan; the client prefers it and
+  keeps the old every-raw-value download only as a fallback for servers
+  that predate the endpoint.
+- **Single-map mode no longer downloads the scenario it isn't showing.**
+  With the compare swiper off, the right scenario was fetched on every
+  viewport change purely to feed fallback statistics that every consumer
+  null-guards; it is now fetched only when a compare map exists, halving
+  choropleth traffic for single-map users. (The overlay-first painting
+  change these fixes were measured alongside is described under Added
+  above; its main-branch before/after lives in
+  `benchmarks/map-load-overlay-first-main-2026-09-30.md`.)
+
 ### Fixed
 
 - **Grid view no longer overflows the viewport.** It sized every row as if

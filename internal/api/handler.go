@@ -127,6 +127,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/metadata/groupingvariables", h.handleMetadataGroupingVariables).Methods("GET")
 	r.HandleFunc("/metadata/groupingvalues", h.handleMetadataGroupingValues).Methods("GET")
 	r.HandleFunc("/metadata/dial0middle", h.handleMetadataDial0Middle).Methods("GET")
+	r.HandleFunc("/metadata/dialcolorlinear", h.handleMetadataDialColorLinear).Methods("GET")
 	r.HandleFunc("/metadata/ignorexgrouping", h.handleMetadataIgnoreXGrouping).Methods("GET")
 	r.HandleFunc("/scenario/{scenario}/{attribute}", h.handleScenarioData).Methods("GET")
 	r.HandleFunc("/aggregate", h.handleAggregateData).Methods("GET")
@@ -141,6 +142,11 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	// geometry comes from the tile pipeline, so only the attribute values for
 	// the viewport need fetching. See handleCatchmentValues.
 	r.HandleFunc("/catchment-values", h.handleCatchmentValues).Methods("GET")
+
+	// Full-domain statistics for one scenario+attribute, computed server-side.
+	// The four numbers the client's "Full" range mode needs, instead of the
+	// 14 MB of raw values it used to download to derive them itself.
+	r.HandleFunc("/stats/full", h.handleFullDomainStats).Methods("GET")
 
 	// Site management is desktop-only; see registerDesktopSiteRoutes.
 	h.registerDesktopSiteRoutes(r)
@@ -276,6 +282,14 @@ func (h *Handler) handleMetadataCanGraph(w http.ResponseWriter, r *http.Request)
 // zero with positive values to the right and negative values to the left.
 func (h *Handler) handleMetadataDial0Middle(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.metaCache.Dial0Middle)
+}
+
+// handleMetadataDialColorLinear returns a map of attribute column names to
+// dial_color_linear flags, indicating whether the dial/flat-dial gauge should
+// colour its scale as a straight red (min) to green (max) ramp instead of the
+// default band centred on the ecological reference value.
+func (h *Handler) handleMetadataDialColorLinear(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.metaCache.DialColorLinear)
 }
 
 // handleMetadataIgnoreXGrouping returns a map of attribute column names to
@@ -910,6 +924,61 @@ type CatchmentValuesResponse struct {
 	Values    []float64 `json:"values"`
 	DomainMin float64   `json:"domain_min"`
 	DomainMax float64   `json:"domain_max"`
+}
+
+// FullDomainStatsResponse carries geodata.FullDomainStats plus the
+// scenario/attribute echo every other stats-shaped response here carries.
+type FullDomainStatsResponse struct {
+	Scenario  string  `json:"scenario"`
+	Attribute string  `json:"attribute"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	Mean      float64 `json:"mean"`
+	Count     int64   `json:"count"`
+}
+
+// handleFullDomainStats serves the full-dataset min/max/mean/count for one
+// scenario and attribute. Static for the life of the datapack, hence the
+// long cache header. "future" maps to reference exactly as the choropleth
+// endpoints do — with no site targets applied there is no distinct future
+// dataset to summarise.
+func (h *Handler) handleFullDomainStats(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	scenario := q.Get("scenario")
+	if scenario == "" {
+		scenario = "current"
+	}
+	attribute := q.Get("attribute")
+
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+	if attribute == "" {
+		respondError(w, http.StatusBadRequest, "attribute parameter is required")
+		return
+	}
+
+	queryScenario := scenario
+	if scenario == "future" {
+		queryScenario = "reference"
+	}
+
+	stats, err := h.gpkgStore.QueryFullDomainStats(r.Context(), queryScenario, attribute)
+	if err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	respondJSON(w, http.StatusOK, FullDomainStatsResponse{
+		Scenario:  scenario,
+		Attribute: attribute,
+		Min:       stats.Min,
+		Max:       stats.Max,
+		Mean:      stats.Mean,
+		Count:     stats.Count,
+	})
 }
 
 // handleCatchmentValues returns catchment attribute values for a bbox with no

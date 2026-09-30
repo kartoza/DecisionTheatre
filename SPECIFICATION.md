@@ -332,6 +332,9 @@ a strobe.
   levels return the precomputed basin aggregates, bbox-independent, so the
   response is cacheable per scenario+attribute+level. Without `zoom` the
   endpoint serves lev12 values for the bbox, unchanged.
+- `GET /api/stats/full` - full-dataset min/max/mean/count for one scenario and
+  attribute, computed server-side in a single aggregate scan; what the "Full"
+  range mode reads instead of downloading every raw value
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent

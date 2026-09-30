@@ -339,9 +339,11 @@ describe('choropleth requests during a pan', () => {
     await settle();
 
     const urls = choroplethCalls().map((c) => c.url);
-    // Two scenarios, one viewport: two distinct questions, and no duplicates of
-    // either however many panes are asking.
-    expect(new Set(urls).size).toBe(2);
-    expect(urls).toHaveLength(2);
+    // Swiper off: only the displayed (left) scenario is a real question —
+    // the right scenario has no map to paint and is not fetched. One
+    // question, and no duplicates of it however many panes are asking.
+    expect(new Set(urls).size).toBe(1);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain(`scenario=${comparison.leftScenario}`);
   });
 });

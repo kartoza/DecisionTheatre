@@ -271,3 +271,73 @@ func TestCatchmentValuesRejectsUnparseableZoom(t *testing.T) {
 		t.Errorf("status %d, want 400", w.Code)
 	}
 }
+
+// The four numbers the "Full" range mode needs, computed where the data
+// lives. Must match what the client's zoneStatsFromValues derived from the
+// raw payload: plain min/max/mean over non-null values, count of values used.
+func TestFullDomainStats(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	req := httptest.NewRequest("GET", "/stats/full?scenario=current&attribute="+gpkgtest.Attribute, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var resp FullDomainStatsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Min != 10 || resp.Max != 20 || resp.Mean != 15 || resp.Count != 2 {
+		t.Errorf("stats = %+v, want min 10 max 20 mean 15 count 2", resp)
+	}
+}
+
+// "future" with no site is the reference scenario, exactly as /choropleth
+// and /catchment-values treat it — disagreeing would recolour the Full range
+// depending on which endpoint a client asked.
+func TestFullDomainStatsFutureIsReference(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	get := func(scenario string) FullDomainStatsResponse {
+		req := httptest.NewRequest("GET", "/stats/full?scenario="+scenario+"&attribute="+gpkgtest.Attribute, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status %d: %s", scenario, w.Code, w.Body.String())
+		}
+		var resp FullDomainStatsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp
+	}
+
+	future, reference := get("future"), get("reference")
+	if future.Min != reference.Min || future.Max != reference.Max || future.Mean != reference.Mean || future.Count != reference.Count {
+		t.Errorf("future %+v != reference %+v", future, reference)
+	}
+}
+
+func TestFullDomainStatsValidatesParameters(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	cases := []struct {
+		name   string
+		target string
+		status int
+	}{
+		{"missing attribute", "/stats/full?scenario=current", http.StatusBadRequest},
+		{"unknown attribute", "/stats/full?scenario=current&attribute=not_a_column", http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tc.target, nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Errorf("status %d, want %d (body %s)", w.Code, tc.status, w.Body.String())
+			}
+		})
+	}
+}
