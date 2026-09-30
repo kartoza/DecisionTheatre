@@ -6,27 +6,31 @@ import { CHOROPLETH_VALUE_STATE_KEY } from './choroplethPaint';
  * The vector-tile transport for the choropleth.
  *
  * The catchment geometry is already in the tile pipeline - `gpkg_to_mbtiles.sh`
- * tiles `catchments_lev12` as its own tileset, separate from the combined
- * basemap tileset, so it can stop tiling once fully unsimplified and let
- * MapLibre overzoom the rest (see internal/server/server.go's
- * handleCatchmentsTileJSON) - but the choropleth was not using it: it fetched
- * the same polygons as GeoJSON on every viewport
- * change, for every map instance, and paid for the parse and the tessellation
- * each time. Sourcing the geometry from tiles means MapLibre fetches and
- * tessellates each tile once and then reuses it for every subsequent pan, zoom
- * and attribute change.
+ * tiles the multi-resolution HydroBASINS levels (`catchments_lev04/06/08/12`)
+ * as one standalone tileset, each level in its own zoom band, so every zoom
+ * from the tileset minimum up renders catchments from tiles: the coarse levels
+ * cover the low and mid zooms and MapLibre overzooms lev12 past the tiled
+ * maximum (see internal/server/server.go's handleCatchmentsTileJSON). Before
+ * the bands existed the choropleth fetched megabytes of GeoJSON polygons on
+ * every viewport change below the detail zoom, and paid for the parse and the
+ * tessellation each time; tiles are fetched and tessellated once and reused
+ * for every subsequent pan, zoom and attribute change.
  *
  * What tiles cannot carry is the value being rendered: there are dozens of
  * indicators across three scenarios, and baking them all into the tiles would
  * multiply their size at every zoom level. So the values are fetched separately
- * (`/api/catchment-values`, geometry-free) and joined onto the tiles with
- * feature state, which MapLibre applies to tiles as they load - including tiles
- * loaded long after the state was set. Colouring itself stays exactly what it
- * was: a data-driven paint expression, evaluated on the GPU.
+ * (`/api/catchment-values`, geometry-free, level-matched via its zoom
+ * parameter) and joined onto the tiles with feature state, which MapLibre
+ * applies to tiles as they load - including tiles loaded long after the state
+ * was set. Colouring itself stays exactly what it was: a data-driven paint
+ * expression, evaluated on the GPU.
  */
 
-/** The layer name `gpkg_to_mbtiles.sh` gives catchment geometry in the tiles. */
+/** The layer name `gpkg_to_mbtiles.sh` gives full-detail catchment geometry. */
 export const CATCHMENT_TILE_SOURCE_LAYER = 'catchments_lev12';
+
+/** Matches every multi-resolution catchment layer in the tileset. */
+const CATCHMENT_LAYER_PATTERN = /^catchments_lev\d{2}$/;
 
 /**
  * The tile attribute holding a catchment's HYBAS_ID, promoted to the feature id
@@ -37,10 +41,20 @@ export const CATCHMENT_TILE_SOURCE_LAYER = 'catchments_lev12';
  */
 export const CATCHMENT_TILE_ID_PROPERTY = 'HYBAS_ID';
 
-/** A catchment vector layer found in the served tileset. */
-export interface CatchmentTileset {
+/** One catchment level's zoom band within the tileset. */
+export interface CatchmentTileBand {
   sourceLayer: string;
-  /** Lowest zoom at which the tiles actually contain catchment geometry. */
+  /** Lowest zoom at which tiles carry this level's geometry. */
+  minzoom: number;
+  /** Highest zoom this level is tiled at. */
+  maxzoom: number;
+}
+
+/** The catchment vector layers found in the served tileset. */
+export interface CatchmentTileset {
+  /** Every catchment level band, sorted by minzoom. */
+  bands: CatchmentTileBand[];
+  /** Lowest zoom any band covers - below it, the GeoJSON fallback applies. */
   minzoom: number;
   /** Highest zoom generated; MapLibre overzooms beyond it. */
   maxzoom: number;
@@ -55,14 +69,16 @@ interface TileJSONVectorLayer {
 }
 
 /**
- * Find the catchment layer in a TileJSON document.
+ * Find the catchment zoom bands in a TileJSON document.
  *
  * Returns null - meaning "fall back to the GeoJSON path" - unless the tileset
- * declares the catchment layer *and* the zoom range it covers. The zoom range is
- * not optional on purpose: catchments are tiled from zoom 8 up, and rendering a
- * tile source below its minimum zoom shows nothing at all. Guessing the range
- * from the tileset-level minzoom would silently blank the choropleth across the
- * low-zoom range that the grid-aggregated GeoJSON path exists to serve.
+ * declares the full-detail catchment layer *and* the zoom range it covers. The
+ * zoom range is not optional on purpose: rendering a tile source below its
+ * minimum zoom shows nothing at all, and guessing would silently blank the
+ * choropleth across whatever range the guess got wrong. Coarser level bands
+ * (lev04/06/08) are included when declared with their zoom ranges; a datapack
+ * tiled before they existed simply yields a lev12-only tileset, and every
+ * zoom below its band stays on the GeoJSON path exactly as before.
  */
 export function resolveCatchmentTileset(tilejson: unknown): CatchmentTileset | null {
   if (!tilejson || typeof tilejson !== 'object') return null;
@@ -74,16 +90,44 @@ export function resolveCatchmentTileset(tilejson: unknown): CatchmentTileset | n
   if (tiles.length === 0) return null;
 
   if (!Array.isArray(doc.vector_layers)) return null;
+  const bands: CatchmentTileBand[] = [];
   for (const raw of doc.vector_layers) {
     const layer = raw as TileJSONVectorLayer;
-    if (layer?.id !== CATCHMENT_TILE_SOURCE_LAYER) continue;
-    if (typeof layer.minzoom !== 'number' || typeof layer.maxzoom !== 'number') return null;
-    return {
-      sourceLayer: CATCHMENT_TILE_SOURCE_LAYER,
-      minzoom: layer.minzoom,
-      maxzoom: layer.maxzoom,
-      tiles,
-    };
+    if (typeof layer?.id !== 'string' || !CATCHMENT_LAYER_PATTERN.test(layer.id)) continue;
+    if (typeof layer.minzoom !== 'number' || typeof layer.maxzoom !== 'number') {
+      // A catchment layer with no usable zoom range: unusable if it is the
+      // detail layer, ignorable otherwise.
+      if (layer.id === CATCHMENT_TILE_SOURCE_LAYER) return null;
+      continue;
+    }
+    bands.push({ sourceLayer: layer.id, minzoom: layer.minzoom, maxzoom: layer.maxzoom });
+  }
+
+  if (!bands.some((b) => b.sourceLayer === CATCHMENT_TILE_SOURCE_LAYER)) return null;
+  bands.sort((a, b) => a.minzoom - b.minzoom);
+
+  return {
+    bands,
+    minzoom: bands[0].minzoom,
+    maxzoom: Math.max(...bands.map((b) => b.maxzoom)),
+    tiles,
+  };
+}
+
+/**
+ * The band whose geometry the tiles carry at this zoom, or null when no band
+ * covers it (below the tiled range, or in a gap between bands - either way
+ * the GeoJSON fallback applies there). Past the last band's maxzoom the last
+ * band keeps winning: that is the overzoom range, where MapLibre reuses its
+ * deepest tiles rather than requesting more.
+ */
+export function bandForZoom(tileset: CatchmentTileset, zoom: number): CatchmentTileBand | null {
+  const last = tileset.bands[tileset.bands.length - 1];
+  if (zoom >= last.minzoom) return last;
+  for (const band of tileset.bands) {
+    // maxzoom + 1 exclusive: a display zoom of 5.9 renders z5 tiles, which
+    // carry the band whose maxzoom is 5.
+    if (zoom >= band.minzoom && zoom < band.maxzoom + 1) return band;
   }
   return null;
 }
@@ -121,33 +165,42 @@ export function resetCatchmentTilesetCache(): void {
  * choropleth has to keep working underneath either one.
  *
  * `tiles` is inlined from the already-fetched TileJSON so MapLibre does not
- * re-request it once per map instance, and minzoom bounds tile requests to the
- * range that actually contains catchments.
+ * re-request it once per map instance. minzoom/maxzoom span the banded range:
+ * no tile request below the lowest band, and past the highest band MapLibre
+ * overzooms rather than requesting deeper tiles. Every band's layer promotes
+ * HYBAS_ID so feature state can be keyed by it at any zoom.
  */
 export function catchmentTileSourceSpec(tileset: CatchmentTileset): VectorSourceSpecification {
+  const promoteId: Record<string, string> = {};
+  for (const band of tileset.bands) {
+    promoteId[band.sourceLayer] = CATCHMENT_TILE_ID_PROPERTY;
+  }
   return {
     type: 'vector',
     tiles: tileset.tiles,
     minzoom: tileset.minzoom,
     maxzoom: tileset.maxzoom,
-    promoteId: { [tileset.sourceLayer]: CATCHMENT_TILE_ID_PROPERTY },
+    promoteId,
   };
 }
 
 /**
  * Which catchment ids currently carry a value, per map and source.
  *
- * Kept so that a change of attribute or scenario can clear exactly the ids it
- * previously set. The obvious alternative, `map.removeFeatureState({source,
- * sourceLayer})`, is quadratic: MapLibre marks the whole layer for deletion and
- * then, on *each* subsequent setFeatureState, walks every already-known feature
- * to re-queue its deletion. With tens of thousands of catchments in view that is
- * hundreds of millions of operations on the main thread - the exact cost this
- * whole change exists to remove.
+ * Kept so that a change of attribute, scenario or zoom band can clear exactly
+ * the ids it previously set, on the source layer it set them on. The obvious
+ * alternative, `map.removeFeatureState({source, sourceLayer})`, is quadratic:
+ * MapLibre marks the whole layer for deletion and then, on *each* subsequent
+ * setFeatureState, walks every already-known feature to re-queue its deletion.
+ * With tens of thousands of catchments in view that is hundreds of millions of
+ * operations on the main thread - the exact cost this whole change exists to
+ * remove.
  */
 interface AppliedValues {
-  /** scenario+attribute the ids were set for. */
+  /** scenario+attribute+band the ids were set for. */
   key: string;
+  /** The source layer they were set on - clearing must target the same one. */
+  sourceLayer: string;
   ids: number[];
 }
 const appliedByMap = new WeakMap<maplibregl.Map, Map<string, AppliedValues>>();
@@ -161,13 +214,13 @@ export interface ValueApplication {
 /**
  * Join a viewport's attribute values onto the catchment tiles as feature state.
  *
- * `key` identifies what the values mean (scenario and attribute). When it
- * changes, ids set for the previous key are nulled first - feature state
- * survives the switch otherwise, and a catchment that scrolled out of view
- * would keep the previous indicator's colour. When it does not change, nothing
- * is cleared: a catchment's value for a given attribute does not depend on the
- * viewport, so values accumulate as the user pans and re-panning over ground
- * already covered sets nothing new.
+ * `key` identifies what the values mean (scenario, attribute and zoom band).
+ * When it changes, ids set for the previous key are nulled first - feature
+ * state survives the switch otherwise, and a catchment that scrolled out of
+ * view would keep the previous indicator's colour. When it does not change,
+ * nothing is cleared: a catchment's value for a given attribute does not depend
+ * on the viewport, so values accumulate as the user pans and re-panning over
+ * ground already covered sets nothing new.
  */
 export function applyCatchmentValues(
   map: maplibregl.Map,
@@ -191,8 +244,13 @@ export function applyCatchmentValues(
     // null rather than removeFeatureState: the paint expression coalesces a
     // null value to the domain minimum, which is what an unknown catchment
     // should look like, and it costs one flat pass instead of a quadratic one.
+    // Cleared on the layer the ids were set on - after a zoom band switch that
+    // is not the layer being set now.
     for (const id of previous.ids) {
-      map.setFeatureState({ source: sourceId, sourceLayer, id }, { [CHOROPLETH_VALUE_STATE_KEY]: null });
+      map.setFeatureState(
+        { source: sourceId, sourceLayer: previous.sourceLayer, id },
+        { [CHOROPLETH_VALUE_STATE_KEY]: null },
+      );
     }
     cleared = previous.ids.length;
   }
@@ -207,7 +265,7 @@ export function applyCatchmentValues(
     applied.add(ids[i]);
   }
 
-  perSource.set(sourceId, { key, ids: Array.from(applied) });
+  perSource.set(sourceId, { key, sourceLayer, ids: Array.from(applied) });
   return { set: count, cleared };
 }
 

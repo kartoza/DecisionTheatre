@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The choropleth now renders from vector tiles at every zoom.** The
+  multi-resolution catchment tilesets (`catchments_lev04/06/08/12`, one
+  HydroBASINS level per zoom band, overzoomed past z12) were already in the
+  datapack; the frontend now consumes all four bands instead of only lev12,
+  and `/api/catchment-values` gained a `zoom` parameter that serves the
+  matching level's precomputed aggregate values for the feature-state join.
+  The GeoJSON render path survives only as a fallback for datapacks tiled
+  before the multires levels existed. Measured on a local server
+  (`benchmarks/reports/map-load-multires-2026-09-30.md`): the ~4.9 MiB-per-
+  pane-per-zoom-step GeoJSON fetches are gone entirely, replaced by one
+  2–243 KiB values request per zoom band — coarse-band requests use a fixed
+  full-domain bbox and a canonical zoom, so panes and pans share one URL and
+  the request memo and HTTP cache actually hit.
+- **The catchment choropleth now paints before the basemap, not after it.**
+  Overlay application used to defer behind `map.loaded()`/`once('idle')` and
+  the maps' `load` events — all of which wait for every basemap tile — so the
+  choropleth appeared seconds after its own data was ready. It now applies as
+  soon as each map's style is in (`style.load` trigger + `whenStyleReady`
+  deferral), and the basemap streams in beneath it. The zoom floor also
+  yields to the tile bands, so the initial continental view now renders the
+  lev04 basin choropleth instead of nothing.
+- `scripts/map-load-timeline.mjs`: a zero-dependency browser-side measurement
+  harness (headless Chromium over the DevTools protocol) that records the
+  map's full network waterfall — including MapLibre's web-worker tile
+  fetches — console output and periodic screenshots, with optional network
+  throttling and scripted zooming. Complements `dtbench.py`, which measures
+  the server side only.
+
 ### Fixed
 
 - **Grid view no longer overflows the viewport.** It sized every row as if

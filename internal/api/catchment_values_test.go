@@ -186,3 +186,88 @@ func TestCatchmentValuesWithoutStoreIsUnavailable(t *testing.T) {
 		t.Errorf("status %d, want 503", w.Code)
 	}
 }
+
+// newLevelledValuesTestHandler is newValuesTestHandler plus the
+// multi-resolution basin tables, so the zoom parameter's level dispatch is
+// exercised through the real SQL.
+func newLevelledValuesTestHandler(t *testing.T) *mux.Router {
+	t.Helper()
+
+	dir := t.TempDir()
+	gpkgtest.Build(t, dir, []gpkgtest.Catchment{
+		{ID: 1000000001, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+		{ID: 1000000002, Lat: 0, Long: 1, SizeDeg: 0.5, Current: gpkgtest.Float(20), Reference: gpkgtest.Float(2)},
+	}, 0, 100)
+	gpkgtest.AddBasinLevels(t, dir, map[string][]gpkgtest.Basin{
+		"04": {{ID: 4000000001, Current: gpkgtest.Float(15), Reference: gpkgtest.Float(1.5)}},
+		"06": {
+			{ID: 6000000001, Current: gpkgtest.Float(12), Reference: gpkgtest.Float(1.2)},
+			{ID: 6000000002, Current: gpkgtest.Float(18), Reference: gpkgtest.Float(1.8)},
+		},
+	})
+
+	store, err := geodata.NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test"}, nil)
+	r := mux.NewRouter()
+	handler.RegisterRoutes(r)
+	return r
+}
+
+// The tiles carry catchments_lev04 in the z2-z5 band and lev06 in z6-z8, so a
+// zoom in those bands must return that level's basin ids — lev12 ids would
+// never match the tiles' feature ids and the choropleth would paint nothing.
+func TestCatchmentValuesZoomSelectsBasinLevel(t *testing.T) {
+	r := newLevelledValuesTestHandler(t)
+
+	_, low := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=2")
+	if len(low.IDs) != 1 || low.IDs[0] != 4000000001 || low.Values[0] != 15 {
+		t.Fatalf("zoom=2 should serve lev04 basins, got ids %v values %v", low.IDs, low.Values)
+	}
+
+	_, mid := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=6.5")
+	if len(mid.IDs) != 2 || mid.IDs[0] != 6000000001 || mid.IDs[1] != 6000000002 {
+		t.Fatalf("zoom=6.5 should serve lev06 basins, got ids %v", mid.IDs)
+	}
+}
+
+// From zoom 11 the tiles carry full lev12 detail, so the zoom parameter must
+// change nothing: same ids, same bbox filtering as a request without it.
+func TestCatchmentValuesZoomAboveBandsIsDetail(t *testing.T) {
+	r := newLevelledValuesTestHandler(t)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-0.4&miny=-0.4&maxx=0.4&maxy=0.4&zoom=11.5")
+	if len(resp.IDs) != 1 || resp.IDs[0] != 1000000001 {
+		t.Fatalf("zoom=11.5 should serve bbox-filtered lev12 catchments, got %v", resp.IDs)
+	}
+}
+
+// A datapack tiled before the multi-resolution levels existed has no basin
+// tables; a zoomed request must fall back to lev12 values rather than erroring,
+// exactly as the GeoJSON path does.
+func TestCatchmentValuesZoomWithoutBasinTablesFallsBack(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=3")
+	if len(resp.IDs) != 2 {
+		t.Fatalf("expected lev12 fallback with 2 catchments, got %v", resp.IDs)
+	}
+}
+
+func TestCatchmentValuesRejectsUnparseableZoom(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	w, _ := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=deep")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}

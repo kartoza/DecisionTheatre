@@ -923,7 +923,11 @@ type CatchmentValuesResponse struct {
 // geometry again on an attribute switch is exactly the cost the tile path is
 // there to remove.
 //
-// Query params: scenario, attribute, minx, miny, maxx, maxy, siteId (optional).
+// Query params: scenario, attribute, minx, miny, maxx, maxy, siteId
+// (optional), zoom (optional). With zoom, the values come from the catchment
+// level the tiles carry in that zoom band (see basinLevelForZoom) so the
+// feature-state join keys match; without it, behaviour is unchanged: lev12
+// values for the bbox.
 func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	q := r.URL.Query()
@@ -934,7 +938,7 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 	attribute := q.Get("attribute")
 	count := 0
 	defer func() {
-		log.Printf("[perf] handleCatchmentValues scenario=%s attribute=%s values=%d duration_ms=%d", scenario, attribute, count, time.Since(start).Milliseconds())
+		log.Printf("[perf] handleCatchmentValues scenario=%s attribute=%s zoom=%s values=%d duration_ms=%d", scenario, attribute, q.Get("zoom"), count, time.Since(start).Milliseconds())
 	}()
 
 	if h.gpkgStore == nil {
@@ -960,7 +964,18 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 		queryScenario = "reference"
 	}
 
-	values, err := h.gpkgStore.QueryCatchmentValueArrays(r.Context(), queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	var values *geodata.CatchmentValues
+	var err error
+	if zoomParam := q.Get("zoom"); zoomParam != "" {
+		zoom, parseErr := strconv.ParseFloat(zoomParam, 64)
+		if parseErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid zoom parameter")
+			return
+		}
+		values, err = h.gpkgStore.QueryCatchmentValueArraysForZoom(r.Context(), queryScenario, attribute, zoom, bbox[0], bbox[1], bbox[2], bbox[3])
+	} else {
+		values, err = h.gpkgStore.QueryCatchmentValueArrays(r.Context(), queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	}
 	if err != nil {
 		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return

@@ -134,7 +134,15 @@ class FakeMap {
 
 vi.mock('maplibre-gl', () => {
   class NavigationControl {}
-  const api = { Map: FakeMap, NavigationControl, setWorkerUrl: () => {} };
+  // MapView constructs one at module scope (FULL_DOMAIN_VALUE_BOUNDS), so the
+  // mock must carry the class even though nothing here asserts on it.
+  class LngLatBounds {
+    sw: unknown; ne: unknown;
+    constructor(sw: unknown, ne: unknown) { this.sw = sw; this.ne = ne; }
+    getSouthWest() { return { lng: -180, lat: -90 }; }
+    getNorthEast() { return { lng: 180, lat: 90 }; }
+  }
+  const api = { Map: FakeMap, NavigationControl, LngLatBounds, setWorkerUrl: () => {} };
   return { ...api, default: api };
 });
 

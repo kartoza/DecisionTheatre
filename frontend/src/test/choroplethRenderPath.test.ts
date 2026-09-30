@@ -37,19 +37,39 @@ describe('choropleth vector-tile render path', () => {
     // the call ends immediately after the URL — only that the URL is the
     // values endpoint and that a signal is threaded through it.
     expect(mapView).toMatch(/fetch\(`\/api\/catchment-values\?\$\{params\}`, \{ signal: requestSignal \}\)/);
-    // The values request carries no zoom: the server's detailed-vs-aggregated
-    // choice does not apply when geometry comes from tiles.
+    // The values request carries the band's canonical zoom: the tiles hold a
+    // different catchment level per zoom band, and the server must serve the
+    // level whose HYBAS_IDs match or the feature-state join paints nothing.
     const valuesFetch = mapView.slice(
       mapView.indexOf('async function fetchChoroplethValues('),
       mapView.indexOf('async function fetchChoroplethData('),
     );
-    expect(valuesFetch).not.toMatch(/zoom:/);
+    expect(valuesFetch).toMatch(/zoom: zoom\.toString\(\)/);
+    expect(mapView).toMatch(/fetchChoroplethValues\(c\.leftScenario, c\.attribute, valueBounds, band\.minzoom/);
   });
 
-  it('keeps the GeoJSON path for the zoom range the tiles do not cover', () => {
-    // Catchments are tiled from zoom 8 up; below that the backend serves
-    // grid-aggregated cells, which have no tiled equivalent.
-    expect(mapView).toMatch(/currentZoom >= tileset\.minzoom/);
+  it('renders whichever band covers the zoom, from tiles', () => {
+    // Which level the tiles carry at this zoom is bandForZoom's single
+    // decision; the GeoJSON path survives only as the fallback for zooms no
+    // band covers (a pre-multires datapack, or below the tiled range).
+    expect(mapView).toMatch(/bandForZoom\(tileset, currentZoom\)/);
     expect(mapView).toMatch(/kind: 'geojson', data: leftDisplay/);
+  });
+
+  it('paints when the style is ready, not when the basemap goes idle', () => {
+    // 'idle' fires only after every basemap tile has streamed in, which held
+    // the choropleth back seconds past its own data being ready. Style-ready
+    // is the real precondition for addSource/addLayer: the overlay draws
+    // first and the basemap fills in beneath it.
+    expect(mapView).toMatch(/whenStyleReady\(map, \(\) => \{/);
+    expect(mapView).toMatch(/whenStyleReady\(leftMap, \(\) => \{/);
+    expect(mapView).not.toMatch(/once\('idle', apply\)/);
+  });
+
+  it('asks for coarse-band values with a stable full-domain bbox', () => {
+    // Coarse-band answers are bbox-independent server-side; sending the raw
+    // viewport floats instead would give every pan a unique URL and a 0% hit
+    // rate on the request memo and the HTTP cache.
+    expect(mapView).toMatch(/valueBounds = isDetailBand \? bounds : FULL_DOMAIN_VALUE_BOUNDS/);
   });
 });

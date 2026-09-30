@@ -919,6 +919,72 @@ func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, att
 	return result, nil
 }
 
+// QueryCatchmentValueArraysForZoom is the zoom-aware entry point for the
+// vector-tile choropleth's value join. The tiles carry a different catchment
+// level per zoom band (catchments_lev04/06/08/12, see basinLevelForZoom), so
+// the values joined onto them by feature state must come from the matching
+// level's aggregate table or the HYBAS_IDs would never line up. Above the
+// banded range — or on a datapack without the multi-resolution tables — it is
+// exactly QueryCatchmentValueArrays.
+func (s *GpkgStore) QueryCatchmentValueArraysForZoom(ctx context.Context, scenario, attribute string, zoom, minx, miny, maxx, maxy float64) (*CatchmentValues, error) {
+	if level, ok := basinLevelForZoom(zoom); ok && s.hasBasinLevels {
+		return s.queryBasinValueArrays(ctx, level, scenario, attribute)
+	}
+	return s.QueryCatchmentValueArrays(ctx, scenario, attribute, minx, miny, maxx, maxy)
+}
+
+// queryBasinValueArrays returns every basin's precomputed aggregate value at
+// the given HydroBASINS level, geometry-free. Unfiltered by bbox for the same
+// reason queryCatchmentsBasinAggregated is: at the zooms these levels serve
+// the viewport typically covers most of the study area, the largest level is
+// a few tens of thousands of rows, and a bbox-free query gives every caller
+// (and every cache between here and the map) one stable answer per
+// scenario+attribute+level.
+func (s *GpkgStore) queryBasinValueArrays(ctx context.Context, level, scenario, attribute string) (*CatchmentValues, error) {
+	start := time.Now()
+	count := 0
+	defer func() {
+		log.Printf("[perf] queryBasinValueArrays level=%s scenario=%s attribute=%s values=%d duration_ms=%d", level, scenario, attribute, count, time.Since(start).Milliseconds())
+	}()
+
+	if !s.isValidColumn(attribute) {
+		return nil, fmt.Errorf("invalid attribute: %s", attribute)
+	}
+	scenarioTable := fmt.Sprintf("%s_lev%s", resolveScenarioTable(scenario), level)
+	catchmentsTable := fmt.Sprintf("catchments_lev%s", level)
+
+	query := fmt.Sprintf(`
+		SELECT c.HYBAS_ID_int, s."%s"
+		FROM %s c
+		JOIN %s s ON s.catchment_id_int = c.HYBAS_ID_int
+		WHERE s."%s" IS NOT NULL
+	`, attribute, catchmentsTable, scenarioTable, attribute)
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := &CatchmentValues{IDs: []int64{}, Values: []float64{}}
+	for rows.Next() {
+		var id int64
+		var value float64
+		if err := rows.Scan(&id, &value); err != nil {
+			log.Printf("Warning: failed to scan row: %v", err)
+			continue
+		}
+		result.IDs = append(result.IDs, id)
+		result.Values = append(result.Values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	count = len(result.IDs)
+
+	return result, nil
+}
+
 // ensureGridGeometryCache starts the grid geometry build if it is not already
 // running or already done. Safe to call from every request; at most one build
 // runs at a time.

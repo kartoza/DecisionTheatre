@@ -313,8 +313,14 @@ a strobe.
   `groupingvariables`, `groupingvalues`, `dial0middle`
 - `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
 - `GET /api/catchment-values` - catchment ids and values for a viewport, no geometry; the
-  join payload for the vector-tile choropleth, which sources geometry from
-  `catchments_lev12` in the tile pipeline and applies values as MapLibre feature state
+  join payload for the vector-tile choropleth, which sources geometry from the
+  multi-resolution catchment tiles (`catchments_lev04/06/08/12`, one level per
+  zoom band) and applies values as MapLibre feature state. An optional `zoom`
+  parameter selects the level whose ids match the tiles in that band
+  (z2–5 → lev04, z6–8 → lev06, z9–10 → lev08, z11+ → lev12 detail); coarse
+  levels return the precomputed basin aggregates, bbox-independent, so the
+  response is cacheable per scenario+attribute+level. Without `zoom` the
+  endpoint serves lev12 values for the bbox, unchanged.
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
