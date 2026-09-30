@@ -84,7 +84,7 @@ func TestCatchmentsTileJSONSplitTilesets(t *testing.T) {
 		t.Fatalf("expected 4 level tilesets, got %d", len(levels))
 	}
 	wantZooms := map[string]int{
-		"catchments_lev04": 2, "catchments_lev06": 6,
+		"catchments_lev04": 0, "catchments_lev06": 6,
 		"catchments_lev08": 9, "catchments_lev12": 11,
 	}
 	for _, l := range levels {

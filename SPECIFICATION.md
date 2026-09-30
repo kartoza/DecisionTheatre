@@ -333,7 +333,7 @@ a strobe.
   response is cacheable per scenario+attribute+level. Without `zoom` the
   endpoint serves lev12 values for the bbox, unchanged. On current datapacks
   each level ships as its own standalone tileset tiled at exactly one zoom
-  (z2/6/9/11) and overzoomed across its display band —
+  (z0/6/9/11) and overzoomed across its display band —
   `/data/catchments-tiles.json` then serves a `tilesets` array (per-level
   tile URLs + `tilezoom`) and the client builds one MapLibre source per band
   with `minzoom = maxzoom = tilezoom`; legacy combined tilesets keep the old

@@ -93,6 +93,35 @@ Remaining opportunities noted in the baseline (satellite-fallback stall before
 any basemap tile, `once('idle')` gating of overlay application, CORS-less 404s
 on empty context tiles) are unchanged by this work and still stand.
 
+## Single-zoom tilesets: tile each level once, overzoom the rest — 2026-09-30
+
+Follow-up to the band scheme above: each catchment level was still being
+tiled at *every* zoom of its display band, because the four levels shared one
+tileset and MapLibre only overzooms past a source's own maxzoom. The levels
+are now standalone tilesets (`catchments-lev04/06/08/12`), each tiled at
+exactly one zoom (z2/6/9/11) with raised coordinate detail
+(`--full-detail=14`), and the client gives each band its own MapLibre source
+with `minzoom = maxzoom = tilezoom` — which makes MapLibre overzoom that
+single tiled zoom across the band's whole display range.
+
+Measured on the production datapack (147,835 catchments):
+
+| | Combined tileset (before) | Split single-zoom tilesets (after) |
+|---|---:|---:|
+| Tiled zoom levels | 11 (z2–z12) | **4** (z2, z6, z9, z11) |
+| Catchments tile store | 425 MiB | **173 MiB** (z11 detail: 55,504 tiles, 155 MiB) |
+| Retile wall-clock | tens of minutes | **~4 minutes** |
+| Browser zoom traverse (z2.9→z11.9) | 118 tile req / 763 KiB | 133 tile req / 452 KiB |
+| GeoJSON render fetches | 0 | 0 |
+
+Browser-side traffic was already tile-shaped, so it barely moves; the wins
+are the store (−59 %), the build time, and the deploy size. Overzoom quality
+was verified from harness screenshots at the worst cases — lev04 stretched
+8× to z5 and lev06 8× to z8.5 — with no visible coordinate-grid stepping;
+the detail bump keeps the tile grid sub-pixel throughout each band. A
+datapack with the legacy combined tileset keeps the old TileJSON document,
+shared source and rendering behaviour unchanged.
+
 ## Overlay-first painting — 2026-09-30, follow-up change
 
 Desktop testing of the multires change surfaced the ordering problem the

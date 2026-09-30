@@ -655,7 +655,12 @@ var catchmentLevelTilesets = []struct {
 	sourceLayer string
 	tilezoom    int
 }{
-	{"catchments-lev04", "catchments_lev04", 2},
+	// lev04 is floored at z0 rather than z2: a small grid-view pane fits the
+	// whole study area below z2, and a band floor above the pane's zoom
+	// leaves the choropleth blank until the user happens to zoom across it.
+	// One z0 tile covers the domain; detail=16 keeps its coordinate grid
+	// sub-pixel through the band's deepest display zoom.
+	{"catchments-lev04", "catchments_lev04", 0},
 	{"catchments-lev06", "catchments_lev06", 6},
 	{"catchments-lev08", "catchments_lev08", 9},
 	{"catchments-lev12", "catchments_lev12", 11},

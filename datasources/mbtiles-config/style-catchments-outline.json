@@ -430,7 +430,7 @@
       "type": "line",
       "source": "Catchments",
       "source-layer": "catchments_lev04",
-      "minzoom": 2,
+      "minzoom": 0,
       "maxzoom": 6,
       "layout": {
         "visibility": "visible",

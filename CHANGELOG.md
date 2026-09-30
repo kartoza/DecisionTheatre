@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Each catchment level is now tiled exactly once and overzoomed across its
   whole display band.** The four levels become standalone tilesets
-  (`catchments-lev04/06/08/12`) tiled at a single zoom each (z2/6/9/11) with
-  raised tile detail (`--full-detail=14`, a new `detail` column in
+  (`catchments-lev04/06/08/12`) tiled at a single zoom each (z0/6/9/11 —
+  lev04 floored at z0 so small grid-view panes, which fit the study area
+  below z2, still get a choropleth at boot) with raised tile detail
+  (`--full-detail` 16/14/14/14 via a new `detail` column in
   `layer-treatment.csv`), and the client gives each band its own MapLibre
   source whose `minzoom = maxzoom = tilezoom` — the per-source ceiling that
   makes MapLibre overzoom the band instead of requesting zooms that were

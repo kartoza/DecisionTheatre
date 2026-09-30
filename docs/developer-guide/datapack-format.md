@@ -20,7 +20,11 @@ decision-theatre-data-v{VERSION}/
     ├── datapack.gpkg           # GeoPackage: catchment geometries + all scenario data
     ├── catchments.gpkg         # Standalone catchment geometry — shipped, never read by the server
     └── mbtiles/
-        ├── context.mbtiles     # Vector tile archive for the background map
+        ├── context.mbtiles             # Vector tile archive for the background map
+        ├── catchments-lev04.mbtiles    # Per-level catchment tilesets, each tiled at a
+        ├── catchments-lev06.mbtiles    #   single zoom (z0/6/9/11) and overzoomed by
+        ├── catchments-lev08.mbtiles    #   MapLibre across its display band — see the
+        ├── catchments-lev12.mbtiles    #   Data Preparation guide
         └── style.json          # MapLibre GL style config for map rendering
 ```
 

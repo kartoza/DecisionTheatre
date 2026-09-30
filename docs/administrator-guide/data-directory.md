@@ -32,7 +32,7 @@ is stated — those files cannot be renamed.
 |---|---|---|
 | `datapack.gpkg` | `internal/geodata/gpkg_store.go` | **Filename is hardcoded.** No other name is discovered. |
 | `mbtiles/context.mbtiles` | `internal/tiles/mbtiles.go` | **Must be named `context`** — see the warning below. |
-| `mbtiles/catchments.mbtiles` | `internal/tiles/mbtiles.go` | Optional. If present, must be named `catchments` — see the warning below. |
+| `mbtiles/catchments-lev04/06/08/12.mbtiles` | `internal/tiles/mbtiles.go` | Optional. The per-level catchment tilesets, each tiled at a single zoom — see the note below. A legacy pack may instead carry one combined `catchments.mbtiles`; either spelling works, names are load-bearing. |
 | `mbtiles/style.json` | `internal/server/server.go` | Required — see the note below. |
 | `metadata.csv` | `internal/api/metadata_cache.go` | Indicator display metadata. |
 | `NPP_by_treecover.csv` | `internal/api/lookups.go` | Needs a `catchID` column. |
@@ -76,13 +76,17 @@ Also shipped, but **never opened by the running server** — see [Shipped but no
     mv data/mbtiles/context-002.mbtiles data/mbtiles/context.mbtiles
     ```
 
-    `catchments.mbtiles` is optional: `scripts/gpkg_to_mbtiles.sh` ships
-    `catchments_lev04`/`_lev06`/`_lev08`/`_lev12` as their own tileset (rather than folded
-    into `context.mbtiles`), zoom-gated to non-overlapping bands so `catchments_lev12` can
-    stop tiling once fully unsimplified and let MapLibre overzoom the rest — one TileJSON's
-    maxzoom applies to every layer bundled into it, so a layer that wants to do this can't
-    share a tileset with layers that tile deeper. Its absence is not an error: the
-    choropleth's `fetchCatchmentTileset` falls back to its GeoJSON path.
+    The catchment tilesets are optional: `scripts/gpkg_to_mbtiles.sh` ships
+    `catchments_lev04`/`_lev06`/`_lev08`/`_lev12` each as its **own standalone tileset**
+    (`catchments-lev04.mbtiles` … `catchments-lev12.mbtiles`), tiled at exactly one zoom
+    (z0/6/9/11) and overzoomed by MapLibre across that level's whole display band — one
+    TileJSON's maxzoom applies to every layer bundled into it, so a layer that wants to
+    stop tiling early and rely on overzoom can't share a tileset with layers that tile
+    deeper. A datapack from before this split may instead carry one combined
+    `catchments.mbtiles` (all four levels zoom-banded inside it); the server detects which
+    generation is present and serves the matching `/data/catchments-tiles.json`. Absence of
+    either is not an error: the choropleth's `fetchCatchmentTileset` falls back to its
+    GeoJSON path.
 
     Tile files are searched for in both `data/` and `data/mbtiles/`.
 
@@ -264,7 +268,10 @@ data/                               # the data pack — exactly what pack-data z
 ├── herb_traits_ready.csv          # REQUIRED — herbivore traits
 ├── mbtiles/
 │   ├── context.mbtiles            # REQUIRED — must be named "context"
-│   ├── catchments.mbtiles         # optional — must be named "catchments" if present
+│   ├── catchments-lev04.mbtiles   # optional — per-level catchment tilesets,
+│   ├── catchments-lev06.mbtiles   #   each tiled at one zoom and overzoomed
+│   ├── catchments-lev08.mbtiles   #   (a legacy pack may instead carry one
+│   ├── catchments-lev12.mbtiles   #   combined catchments.mbtiles)
 │   └── style.json                 # map style, served via /data/style.json
 ├── sites/                         # runtime: site JSON (desktop runtime)
 ├── images/                        # runtime: site thumbnails
