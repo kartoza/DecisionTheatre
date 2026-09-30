@@ -56,6 +56,17 @@ startup.
   - GeoPackage (SQLite with spatial extensions) for catchment data
   - MBTiles for vector tiles
   - JSON files for sites
+- **Data architecture**: two directories with a strict contract.
+  `data/` holds only processed artefacts the deployed server reads at
+  runtime (datapack GeoPackage, tilesets, `metadata.csv`, runtime lookup
+  CSVs, walkthroughs) and is untracked, distributed as a data pack.
+  `datasources/` holds every input the generation pipeline consumes
+  (scenario CSVs, source GeoPackages, R analysis scripts, tiling
+  configuration), is version-controlled, and never ships. A file read only
+  by `scripts/build-*` belongs in `datasources/`; a file the running
+  server opens belongs in `data/`. See
+  `docs/administrator-guide/data-directory.md` and
+  `docs/developer-guide/data-preparation.md`.
 
 ### Frontend (React + TypeScript)
 

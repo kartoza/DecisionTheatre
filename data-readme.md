@@ -5,6 +5,14 @@ distributed separately as a data pack, not through version control. This file is
 so the directory's expected contents are documented even though the contents themselves
 are not.
 
+**The contract, in one sentence:** `data/` holds only the *processed* artefacts the
+deployed application reads at runtime (the datapack GeoPackage, the tilesets,
+`metadata.csv`, the runtime lookup CSVs, walkthroughs, demo data); everything that is an
+*input* to the generation pipeline — scenario CSVs, source GeoPackages, the R analysis
+scripts, tiling configuration — lives under version control in `datasources/` and never
+ships. If a file is only ever read by a `scripts/build-*` step, it belongs in
+`datasources/`; if the running server opens it, it belongs here.
+
 **Full documentation:
 [Administrator Guide → The Data Directory](https://kartoza.github.io/DecisionTheatre/administrator-guide/data-directory/)**
 (also available offline in the running application at `/docs/administrator-guide/data-directory/`,

@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching level's precomputed aggregate values for the feature-state join.
   The GeoJSON render path survives only as a fallback for datapacks tiled
   before the multires levels existed. Measured on a local server
-  (`benchmarks/reports/map-load-multires-2026-09-30.md`): the ~4.9 MiB-per-
+  (`benchmarks/map-load-multires-2026-09-30.md`): the ~4.9 MiB-per-
   pane-per-zoom-step GeoJSON fetches are gone entirely, replaced by one
   2–243 KiB values request per zoom band — coarse-band requests use a fixed
   full-domain bbox and a canonical zoom, so panes and pans share one URL and
