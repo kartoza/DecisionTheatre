@@ -315,6 +315,9 @@ a strobe.
 - `GET /api/catchment-values` - catchment ids and values for a viewport, no geometry; the
   join payload for the vector-tile choropleth, which sources geometry from
   `catchments_lev12` in the tile pipeline and applies values as MapLibre feature state
+- `GET /api/stats/full` - full-dataset min/max/mean/count for one scenario and
+  attribute, computed server-side in a single aggregate scan; what the "Full"
+  range mode reads instead of downloading every raw value
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
 - `GET /api/catchment/{id}` - Catchment details
 - `GET /api/aggregate` - Area-weighted aggregates for an extent

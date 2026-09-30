@@ -49,7 +49,39 @@ type GpkgStore struct {
 	gridGeometryReady    map[float64]chan struct{}
 	gridGeometryBuilding bool
 	gridGeometryErr      error
+
+	// gridRowsCache holds the full-domain gridRow set per scenario table and
+	// attribute (key "table|attribute"), because those rows are static for
+	// the life of the datapack while every low-zoom choropleth request was
+	// re-running the same 147k-row scan to rebuild them (~4 s per request on
+	// the production datapack). Guarded by mu; each entry's ready channel is
+	// closed when its background build finishes, so concurrent requests for
+	// the same attribute share one build instead of racing three. Failed
+	// builds are removed rather than cached, so a transient read error does
+	// not poison the attribute until restart. gridRowsOrder is insertion
+	// order for the LRU bound.
+	gridRowsCache map[string]*gridRowsEntry
+	gridRowsOrder []string
 }
+
+// gridRowsEntry is one gridRowsCache slot; rows and err are valid only after
+// ready is closed.
+type gridRowsEntry struct {
+	ready chan struct{}
+	rows  []gridRow
+	err   error
+}
+
+// gridRowsCacheLimit bounds gridRowsCache. Each entry is ~5 MB on the
+// production datapack (147k rows), so this caps the cache near 30 MB while
+// still covering every attribute a session realistically flips between
+// before the oldest is wanted again.
+const gridRowsCacheLimit = 6
+
+// gridRowsMarginDeg pads the bbox filter on the aggregated path by the
+// coarsest tier size, so cells straddling the viewport edge aggregate their
+// full membership rather than only the members inside the bbox.
+const gridRowsMarginDeg = 0.5
 
 // gridGeometryWaitTimeout bounds how long a request waits for a tier's geometry.
 //
@@ -541,27 +573,120 @@ func (s *GpkgStore) QueryCatchments(ctx context.Context, scenario, attribute str
 		return nil, fmt.Errorf("invalid attribute: %s", attribute)
 	}
 
-	// A single lightweight query (lat/long/area/value - no geometry blob)
-	// both decides the render path and, if aggregated, supplies the rows the
-	// aggregation itself needs. This used to be two separate queries - a
-	// COUNT(*) just to pick the path, then this same fetch again in
-	// queryCatchmentsGridAggregated - each doing the identical rtree-bbox
-	// join scan. For a continent-scale bbox (tens of thousands of matched
-	// catchments) that duplicated scan cost ~400ms on its own; merging them
-	// removes it entirely for the aggregated path, which is the one this
-	// budget check exists for in the first place.
-	catchmentRows, err := s.fetchCatchmentGridRows(ctx, tableName, attribute, minx, miny, maxx, maxy)
+	// Both the render-path decision and the aggregation itself work from the
+	// lightweight rows (lat/long/area/value - no geometry blob). Those rows
+	// are static for the life of the datapack, so they are fetched once per
+	// scenario+attribute (full domain, cached) and filtered by bbox here in
+	// memory - this used to re-run the same full-table scan on every single
+	// low-zoom request, which at 147k catchments was ~4 s of the ~4 s those
+	// requests took. The count filters by centroid where the old SQL
+	// filtered by geometry envelope; the handful of edge catchments that
+	// distinguishes only matters within a whisker of maxDetailedFeatures,
+	// where either render path is correct.
+	allRows, err := s.getFullDomainGridRows(ctx, tableName, attribute)
 	if err != nil {
 		return nil, err
 	}
-	matched = len(catchmentRows)
+	inBBox := 0
+	for _, r := range allRows {
+		if r.long >= minx && r.long <= maxx && r.lat >= miny && r.lat <= maxy {
+			inBBox++
+		}
+	}
+	matched = inBBox
 
-	if matched <= maxDetailedFeatures {
+	if inBBox <= maxDetailedFeatures {
 		path = "detailed"
 		return s.queryCatchmentsDetailed(ctx, tableName, attribute, minx, miny, maxx, maxy)
 	}
 	path = "aggregated"
-	return s.queryCatchmentsGridAggregated(ctx, attribute, catchmentRows)
+	// The margin keeps edge cells aggregating their full membership (and
+	// fringe cells whose centroid sits just outside the viewport rendering,
+	// as the envelope-based SQL filter used to include them).
+	filtered := make([]gridRow, 0, inBBox)
+	for _, r := range allRows {
+		if r.long >= minx-gridRowsMarginDeg && r.long <= maxx+gridRowsMarginDeg &&
+			r.lat >= miny-gridRowsMarginDeg && r.lat <= maxy+gridRowsMarginDeg {
+			filtered = append(filtered, r)
+		}
+	}
+	return s.queryCatchmentsGridAggregated(ctx, attribute, filtered)
+}
+
+// getFullDomainGridRows returns the cached full-domain gridRow set for a
+// scenario table and attribute, building it (once, shared between concurrent
+// callers) on first use. The build runs on a background context so a caller
+// that pans away does not abort it for everyone else; the wait respects the
+// caller's own context.
+func (s *GpkgStore) getFullDomainGridRows(ctx context.Context, tableName, attribute string) ([]gridRow, error) {
+	key := tableName + "|" + attribute
+
+	s.mu.Lock()
+	if s.gridRowsCache == nil {
+		s.gridRowsCache = make(map[string]*gridRowsEntry)
+	}
+	entry, ok := s.gridRowsCache[key]
+	if !ok {
+		entry = &gridRowsEntry{ready: make(chan struct{})}
+		s.gridRowsCache[key] = entry
+		s.gridRowsOrder = append(s.gridRowsOrder, key)
+
+		// Evict the oldest finished entries beyond the bound. In-flight
+		// builds are skipped: removing one would strand its waiters.
+		for len(s.gridRowsOrder) > gridRowsCacheLimit {
+			evicted := false
+			for i, oldKey := range s.gridRowsOrder {
+				if oldKey == key {
+					continue
+				}
+				old := s.gridRowsCache[oldKey]
+				select {
+				case <-old.ready:
+					delete(s.gridRowsCache, oldKey)
+					s.gridRowsOrder = append(s.gridRowsOrder[:i], s.gridRowsOrder[i+1:]...)
+					evicted = true
+				default:
+				}
+				if evicted {
+					break
+				}
+			}
+			if !evicted {
+				break
+			}
+		}
+
+		go func() {
+			start := time.Now()
+			rows, err := s.fetchCatchmentGridRows(context.Background(), tableName, attribute, -180, -90, 180, 90)
+			log.Printf("[perf] grid rows cache build table=%s attribute=%s rows=%d err=%v duration_ms=%d",
+				tableName, attribute, len(rows), err, time.Since(start).Milliseconds())
+			s.mu.Lock()
+			entry.rows = rows
+			entry.err = err
+			if err != nil {
+				// A failed build must not poison the attribute: drop the
+				// entry so the next request starts a fresh attempt.
+				delete(s.gridRowsCache, key)
+				for i, k := range s.gridRowsOrder {
+					if k == key {
+						s.gridRowsOrder = append(s.gridRowsOrder[:i], s.gridRowsOrder[i+1:]...)
+						break
+					}
+				}
+			}
+			s.mu.Unlock()
+			close(entry.ready)
+		}()
+	}
+	s.mu.Unlock()
+
+	select {
+	case <-entry.ready:
+		return entry.rows, entry.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // coordinateRe matches a JSON floating-point coordinate value (GeoJSON never
@@ -1282,6 +1407,56 @@ func (s *GpkgStore) queryCatchmentsGridAggregated(ctx context.Context, attribute
 type DomainRange struct {
 	Min float64 `json:"min"`
 	Max float64 `json:"max"`
+}
+
+// FullDomainStats summarises every non-null value of one attribute in one
+// scenario: the numbers the client's "Full" range mode needs. Count of zero
+// means the attribute has no data in that scenario — the client renders
+// that as "no stats", and Min/Max/Mean are meaningless.
+type FullDomainStats struct {
+	Min   float64 `json:"min"`
+	Max   float64 `json:"max"`
+	Mean  float64 `json:"mean"`
+	Count int64   `json:"count"`
+}
+
+// QueryFullDomainStats computes FullDomainStats with one aggregate scan.
+//
+// This replaces the client fetching every catchment's raw value (14 MB and
+// ~4 s per scenario on the production datapack) to derive the same four
+// numbers in JavaScript. The arithmetic matches the client's
+// zoneStatsFromValues exactly: plain (unweighted) min/max/mean over non-null
+// values, count of the values used.
+func (s *GpkgStore) QueryFullDomainStats(ctx context.Context, scenario, attribute string) (*FullDomainStats, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("[perf] QueryFullDomainStats scenario=%s attribute=%s duration_ms=%d", scenario, attribute, time.Since(start).Milliseconds())
+	}()
+
+	if !s.isValidColumn(attribute) {
+		return nil, fmt.Errorf("invalid attribute: %s", attribute)
+	}
+	tableName := resolveScenarioTable(scenario)
+
+	query := fmt.Sprintf(`
+		SELECT MIN("%s"), MAX("%s"), AVG("%s"), COUNT("%s")
+		FROM %s
+		WHERE "%s" IS NOT NULL
+	`, attribute, attribute, attribute, attribute, tableName, attribute)
+
+	var minV, maxV, mean sql.NullFloat64
+	var count int64
+	if err := s.db.QueryRowContext(ctx, query).Scan(&minV, &maxV, &mean, &count); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+
+	stats := &FullDomainStats{Count: count}
+	if count > 0 {
+		stats.Min = minV.Float64
+		stats.Max = maxV.Float64
+		stats.Mean = mean.Float64
+	}
+	return stats, nil
 }
 
 // isValidColumn checks if the given attribute name is in the allowed columns list

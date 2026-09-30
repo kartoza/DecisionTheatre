@@ -720,6 +720,46 @@ interface ChoroplethValues {
 // of them.
 const _choroplethValuesCache: SharedCache<ChoroplethValues> = new Map();
 
+/** 'unsupported' = the server predates /api/stats/full; ask the old way. */
+type FullStatsResult = ZoneStats | null | 'unsupported';
+const _fullStatsCache: SharedCache<FullStatsResult> = new Map();
+
+/**
+ * Full-dataset statistics for one scenario+attribute, computed server-side.
+ *
+ * The four numbers the "Full" range mode needs used to be derived client-side
+ * from a valuesOnly download of every catchment's raw value — 14 MB and ~4 s
+ * per scenario on the production datapack, twice at every boot. The server
+ * computes the identical plain min/max/mean/count in one aggregate scan.
+ */
+async function fetchFullDomainStats(
+  scenario: Scenario,
+  attribute: string,
+  signal?: AbortSignal,
+): Promise<FullStatsResult> {
+  const params = new URLSearchParams({ scenario, attribute });
+  const run = async (requestSignal: AbortSignal): Promise<FullStatsResult> => {
+    const resp = await fetch(`/api/stats/full?${params}`, { signal: requestSignal });
+    // A server from before this endpoint has no such route, and its SPA
+    // catch-all answers 200 with HTML — so "unsupported" is anything that
+    // is not an OK JSON response, not just an error status.
+    if (!resp.ok || !(resp.headers.get('content-type') ?? '').includes('application/json')) {
+      return 'unsupported';
+    }
+    const data = await resp.json() as { min: number; max: number; mean: number; count: number };
+    if (typeof data?.count !== 'number' || data.count <= 0) return null;
+    return { min: data.min, max: data.max, mean: data.mean, count: data.count };
+  };
+  try {
+    return await sharedRequest(_fullStatsCache, params.toString(), CHOROPLETH_CACHE_TTL_MS, run, signal);
+  } catch (err) {
+    if (isAbortError(err)) throw err;
+    // A network failure is indistinguishable from an old server here; the
+    // legacy path gets to try (and to report loudly if it also fails).
+    return 'unsupported';
+  }
+}
+
 /**
  * Fetch the attribute values for the current viewport, for the vector-tile
  * path. Geometry comes from the tiles, so this is the only thing a pan or an
@@ -1205,9 +1245,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     const tileset = catchmentTilesetRef.current;
     if (tileset && currentZoom >= tileset.minzoom) {
       try {
+        // The right scenario is only fetched when there is a compare map to
+        // paint with it. Fetching it regardless doubled the choropleth
+        // traffic for single-map users purely to feed the right-scenario
+        // extent statistics — which every consumer already null-guards (the
+        // dial and chart fallbacks drop to the left-scenario branch).
         const [leftValues, rightValues] = await Promise.all([
           fetchChoroplethValues(c.leftScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
-          fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal),
+          rightMap
+            ? fetchChoroplethValues(c.rightScenario, c.attribute, bounds, siteId, browserIdealOverrides, abort.signal)
+            : Promise.resolve(null),
         ]);
 
         // These answers describe the viewport, scenario and attribute captured
@@ -1266,10 +1313,16 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     }
 
     try {
-      // Fetch data for both scenarios in parallel
+      // Fetch data for both scenarios in parallel — but the right scenario
+      // only when there is a compare map to paint with it (see the identical
+      // choice on the tile path above). At low zoom these are the megabyte
+      // requests, so single-map users were downloading half of it for
+      // nothing but a fallback statistic.
       const [leftData, rightData] = await Promise.all([
         fetchChoroplethData(c.leftScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
-        fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal),
+        rightMap
+          ? fetchChoroplethData(c.rightScenario, c.attribute, bounds, currentZoom, siteId, browserIdealOverrides, false, abort.signal)
+          : Promise.resolve(null),
       ]);
 
       if (superseded()) return;
@@ -1448,18 +1501,33 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     const fetchFullStats = async () => {
       try {
-        // These stats must reflect the true full dataset, not a render-sized
-        // sample/aggregate, so fetch every catchment's raw value regardless of
-        // viewport zoom (zoom argument is ignored server-side in this mode).
-        const [leftData, rightData] = await Promise.all([
-          fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
-          fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
+        // Server-computed first: four numbers instead of every catchment's
+        // raw value. The valuesOnly download below survives only as the
+        // fallback for servers that predate /api/stats/full.
+        const [leftServer, rightServer] = await Promise.all([
+          fetchFullDomainStats(c.leftScenario, c.attribute, abort.signal),
+          fetchFullDomainStats(c.rightScenario, c.attribute, abort.signal),
         ]);
-
         if (cancelled) return;
 
-        const leftFullStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
-        const rightFullStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+        let leftFullStats: ZoneStats | null;
+        let rightFullStats: ZoneStats | null;
+        if (leftServer !== 'unsupported' && rightServer !== 'unsupported') {
+          leftFullStats = leftServer;
+          rightFullStats = rightServer;
+        } else {
+          // These stats must reflect the true full dataset, not a
+          // render-sized sample/aggregate, so fetch every catchment's raw
+          // value regardless of viewport zoom (zoom argument is ignored
+          // server-side in this mode).
+          const [leftData, rightData] = await Promise.all([
+            fetchChoroplethData(c.leftScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
+            fetchChoroplethData(c.rightScenario, c.attribute, fullBounds, 0, undefined, undefined, true, abort.signal),
+          ]);
+          if (cancelled) return;
+          leftFullStats = leftData ? computeZoneStats(leftData, c.attribute) : null;
+          rightFullStats = rightData ? computeZoneStats(rightData, c.attribute) : null;
+        }
         fullZoneStatsRef.current = { left: leftFullStats, right: rightFullStats };
 
         if (onStatisticsChangeRef.current) {

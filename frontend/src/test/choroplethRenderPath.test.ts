@@ -53,6 +53,15 @@ describe('choropleth vector-tile render path', () => {
     expect(mapView).toMatch(/kind: 'geojson', data: leftDisplay/);
   });
 
+  it('fetches the right scenario only when a compare map exists', () => {
+    // With the swiper off there is nothing to paint the right scenario on,
+    // and at low zoom its GeoJSON is the megabyte half of every viewport
+    // change. The right-scenario extent stats it used to feed are
+    // null-guarded by every consumer.
+    expect(mapView).toMatch(/rightMap\s*\n?\s*\? fetchChoroplethValues\(c\.rightScenario/);
+    expect(mapView).toMatch(/rightMap\s*\n?\s*\? fetchChoroplethData\(c\.rightScenario/);
+  });
+
   it('paints when the style is ready, not when the basemap goes idle', () => {
     // 'idle' fires only after every basemap tile has streamed in, which held
     // the choropleth back seconds past its own data being ready. Style-ready

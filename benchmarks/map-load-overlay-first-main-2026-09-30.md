@@ -2,12 +2,19 @@
 
 Backport of the overlay-ordering fix from the multires branch (see
 `feat/datasources-reorg-multires-catchments` and its
-`benchmarks/map-load-multires-2026-09-30.md`) onto `main`, which still
-uses the legacy data layout: a single `africa.mbtiles` whose tileset carries
-**no catchment layer**, so the choropleth renders via `/api/choropleth`
-GeoJSON at every zoom. The multires layer scheme is deliberately **not** part
-of this branch — only the painting-order fix, so it can deploy to production
-against the existing data.
+`benchmarks/map-load-multires-2026-09-30.md`) onto `main`, which still uses
+the legacy data layout: a single `africa.mbtiles` tileset. The multires layer
+scheme is deliberately **not** part of this branch — only the painting-order
+fix, so it can deploy to production against the existing data.
+
+A caveat on the measurement data: the local `data_mainbranch/` copy used for
+these runs carries **no catchment layer at all**, so locally the choropleth
+rendered via `/api/choropleth` GeoJSON at every zoom. The **production**
+tileset does carry `catchments_lev12` at z8–15 (verified against the live
+`/data/tiles.json`), so in production the tile path already serves zoom ≥ 8
+and the GeoJSON path only covers z3–8. The ordering findings below apply to
+both paths identically — the gates being measured sit above the path choice —
+but the volume of GeoJSON traffic in these runs overstates production's.
 
 ## The problem
 
@@ -74,3 +81,52 @@ and are superseded less often.
 The full frontend suite passes (416 tests), plus a new structural guard in
 `choroplethRenderPath.test.ts` asserting the render path defers on
 style-readiness and never on `idle`.
+
+# Round two: server and fetch-economy fixes — 2026-09-30
+
+Profiling the refreshed **production datapack** (147,835 catchments, 1.9 GB
+GeoPackage) with dtbench (run 14) and the browser harness surfaced three
+fixable bottlenecks; all three are now in this branch. dtbench run 15 and
+browser runs on the same datapack measure the outcome.
+
+## 1. Aggregated choropleth: 3,985 ms → 96 ms p50 (41×)
+
+Every low-zoom request re-ran the same full-table scan (147k rows) to
+rebuild rows that are static for the life of the datapack. The full-domain
+row set is now cached per scenario+attribute (`getFullDomainGridRows`:
+shared in-flight builds, LRU-bounded ~30 MB, failed builds not cached) and
+each request filters it in memory. Side effect visible in the browser runs:
+zoom-step fetches now complete instead of being perpetually superseded, so
+the choropleth actually updates while zooming — previously, in the default
+dual-map configuration at production latency, an 8-step zoom delivered
+nothing to the map at all.
+
+## 2. Boot stats: 2 × 14.4 MB / 4,097 ms → 2 × 105 B / 195 ms
+
+The "Full" range statistics were derived client-side from a valuesOnly
+download of every catchment's raw value, per scenario, at every boot. New
+`GET /api/stats/full` computes the identical plain min/max/mean/count in one
+aggregate scan (dtbench `stats-full`: 194.5 ms p50, 105 bytes). The client
+prefers it and falls back to the legacy download for servers that predate
+the endpoint (detected by content type — an old server's SPA catch-all
+answers unknown /api paths with HTML 200, not 404).
+
+## 3. Single-map mode no longer downloads the unpainted scenario
+
+`applyColors` fetched both scenarios even with the compare map off, purely
+to feed right-scenario extent statistics that every consumer null-guards.
+The right scenario is now fetched only when a compare map exists. Measured:
+every choropleth phase exactly halves (low-zoom pan 4,437 → 2,215 KiB; zoom
+6,116 → 3,058 KiB; values 12 → 6 requests).
+
+## Browser totals on the production datapack (dual-map)
+
+| Phase | Before fixes | After |
+|---|---|---|
+| Initial load | 7,270 KiB (95 req) | **4,850 KiB** — the 2.5 MiB stats pair became 0.5 KiB |
+| Pan, low zoom | 2,164 KiB, ~3.4 s server time per pair | same bytes, **~0.1 s** server time, no longer aborted |
+| Pan, high zoom | 6 KiB | 6 KiB (3 KiB single-map) |
+
+What remains is the GeoJSON transfer itself in the z3–8 band (~1–1.4 MiB
+gzipped per pane per viewport) — inherent to the geometry-per-viewport API
+and retired for every zoom by the multires branch.
