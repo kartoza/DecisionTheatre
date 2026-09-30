@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The control panel is always collapsible, with a guaranteed way back.**
+  The collapse chevron now shows in every layout (it was quad-view only,
+  because single-pane collapse used to be a dead end), and while the panel
+  is collapsed a matching expand chevron sits pinned at the screen edge to
+  bring it straight back — the same styled control facing the other way.
+- **`dt serve-debug`: server mode with a map debug overlay.** One info box
+  (however many panes are mounted — cameras are synced, so one speaks for
+  all) shows the live zoom and centre, which catchment band is active and
+  how it renders (split-tileset overzoom factor, legacy tiles, or the
+  GeoJSON fallback), and which style layers are visible at that zoom; every
+  pane additionally draws a plainly visible white outline per catchment on
+  top of the unchanged fills, so band extents and overzoomed geometry can
+  be judged by eye, and each catchment carries a centre label naming its
+  level and number (`L04 1040000010`). A toolbar toggle — present only in
+  debug sessions — switches all of it on and off mid-session; the info box
+  sits lower-left beside the zoom control and includes a live localStorage
+  meter (usage, percent of the nominal quota, and a two-minute sparkline,
+  polled every two seconds) so site-state writes are visible as they
+  happen. Server-driven
+  (`--debug-overlay` → `/api/info`'s `debug_overlay`), so a debug session
+  is explicit and can never ship enabled by accident.
+
 - **Each catchment level is now tiled exactly once and overzoomed across its
   whole display band.** The four levels become standalone tilesets
   (`catchments-lev04/06/08/12`) tiled at a single zoom each (z0/6/9/11 —
@@ -76,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Map text renders without a configured MapTiler key.** The glyph proxy
+  built its upstream URL from `DT_MAPTILER_API_KEY` alone; with no key the
+  CDN call failed and every glyph range came back as an empty 200, so the
+  map drew no text at all — no place names, and no debug catchment labels.
+  It now falls back to the glyphs URL the datapack's own `style.json`
+  ships (which carries its own key), keeping the keyless-degradation
+  behaviour only when neither source is available.
 - **Grid view no longer overflows the viewport.** It sized every row as if
   there were only two, no matter how many the pane count actually needed —
   so a default six-pane grid already needed three rows and pushed the third

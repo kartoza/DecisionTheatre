@@ -3,6 +3,8 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
+import { PanelExpandButton } from './components/PanelCollapseButton';
+import { useHeaderOffset } from './hooks/useHeaderOffset';
 import ChartDetailsPanel from './components/ChartDetailsPanel';
 import IdentifyDock from './components/IdentifyDock';
 import Header from './components/Header';
@@ -69,6 +71,7 @@ function App() {
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
+  const headerOffset = useHeaderOffset();
   const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
     // Auto-open filter panel for the focused pane when starting in single mode
     const mode = loadLayoutMode();
@@ -1507,14 +1510,36 @@ function App() {
           isSlotBOpen={isSlotBOpen}
         />
 
+        {/* The way back from a collapsed control panel: an expand chevron
+            pinned to the screen edge where the panel was. Rendered only when
+            the whole right-hand slot is empty — the target editor and chart
+            details share those pixels, and a stray chevron over them would
+            read as theirs. */}
+        {!isSlotBOpen && (
+          <Box
+            position="fixed"
+            // Fitts's law: land exactly where the panel's collapse button
+            // was — headerOffset is the panel's top (shared measurement,
+            // see useHeaderOffset) and 8px is that button's own top={2}.
+            top={`${headerOffset + 8}px`}
+            right={2}
+            zIndex={15}
+          >
+            <PanelExpandButton
+              label="Expand control panel"
+              onClick={() => setIndicatorPaneIndex(focusedPane)}
+            />
+          </Box>
+        )}
+
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
-          // Single pane keeps this panel open for the one pane on screen —
-          // there is no grid of other panes to switch attention to, so a
-          // collapse control here would leave the user unable to get it back.
-          canCollapse={layoutMode === 'quad'}
+          // Always collapsible: the expand chevron above is the guaranteed
+          // way back, which is what used to make single-pane collapse a
+          // dead end.
+          canCollapse
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
