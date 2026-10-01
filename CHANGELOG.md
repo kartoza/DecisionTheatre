@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The identify tool always reports the real lev12 catchment now, not
+  whichever coarser basin happens to be rendered at the current zoom.** The
+  previous fix resolved a click against whatever band (lev04/06/08/12) was
+  on screen, which correctly stopped the 404 but meant a click away from
+  the detail zoom reported a coarse basin's aggregate rather than the
+  actual catchment under the cursor. New `GET /api/catchments/at-point`
+  resolves a clicked point against real lev12 geometry server-side
+  (rtree-pruned candidates, then an exact point-in-polygon test, not a
+  bounding-box guess) — GOLDEN RULE: catchment identification always reads
+  lev12, matching site creation's own catchment selection, so the result
+  can never depend on which band happens to be on screen. The level-aware
+  `?level=` identify path this replaces is removed along with it.
+
 ### Added
 
 - **The control panel is always collapsible, with a guaranteed way back.**

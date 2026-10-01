@@ -162,7 +162,7 @@ log line rather than failing.
 <figure markdown>
   ![HydroBASINS levels feed a lev12-to-parent crosswalk, aggregated scenario tables, and the zoom-gated choropleth query](../assets/diagrams/generated/multires-catchments.svg)
   <figcaption class="static">
-    GOLDEN RULE: site analysis and catchment selection always read lev12. These tables exist only for this rendering path.
+    GOLDEN RULE: site analysis, catchment selection, and the identify tool (`/api/catchments/at-point`) always read lev12. These tables exist only for this rendering path.
   </figcaption>
 </figure>
 

@@ -19,7 +19,6 @@ afterEach(() => {
 
 const catchmentResult: IdentifyResult = {
   catchmentID: '1234',
-  granularity: 'Catchment',
   leftLabel: 'Ecological Reference',
   rightLabel: 'Current State',
   rows: [{ label: 'Above-ground woody biomass', left: '12.30', right: '15.10', trend: 'up', delta: 2.8, trendWidthPx: 10 }],

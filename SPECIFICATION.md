@@ -346,11 +346,16 @@ a strobe.
   attribute, computed server-side in a single aggregate scan; what the "Full"
   range mode reads instead of downloading every raw value
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
-- `GET /api/catchment/{id}` - Catchment details. An optional `level` parameter
-  (`04`, `06`, or `08`) looks the id up in the matching lev04/06/08 basin
-  aggregate tables instead of the lev12 detail tables — used when identifying
-  a feature clicked from a coarse-zoom catchment band, whose id belongs to
-  that band's own basin, not a lev12 catchment.
+- `GET /api/catchment/{id}` - Catchment details, always read from the lev12
+  detail tables.
+- `GET /api/catchments/at-point?lng={lng}&lat={lat}` - resolves the lev12
+  catchment containing a point to its id (`{"id": "..."}`), 404 if none
+  does. GOLDEN RULE: catchment identification always reads lev12, regardless
+  of which multi-resolution band (lev04/06/08/12) happens to be rendered at
+  the caller's current zoom — the identify tool calls this first to get an
+  id, then `/api/catchment/{id}` above for that id's attributes, so a click
+  always reports the real lev12 catchment under the cursor rather than
+  whichever coarser basin happens to be on screen.
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
 - `GET /api/precalculate/full` - Precomputed full-domain means (cached server-side)
 - `GET /api/compare` - Scenario comparison data

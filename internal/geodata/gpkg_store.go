@@ -2190,85 +2190,94 @@ func (s *GpkgStore) GetCatchmentAttributes(ctx context.Context, catchmentID stri
 	return result, nil
 }
 
-// GetCatchmentAttributesForLevel is GetCatchmentAttributes for a coarse
-// HydroBASINS level (lev04/06/08) instead of lev12 detail.
+// FindCatchmentIDAtPoint returns the lev12 catchment containing the given
+// point (lng, lat), or "" if none does.
 //
-// The identify tool used to have nothing to query below the detail zoom: the
-// grid-aggregated GeoJSON those zooms rendered carried no catchment id at
-// all, so a click there did nothing by design. Once the multi-resolution
-// tiles started rendering real basin geometry at those zooms (see
-// choroplethTiles.ts's zoom bands), a click there does carry a real
-// HYBAS_ID - but it names a basin, not a lev12 catchment, and
-// GetCatchmentAttributes's scenario_current/scenario_reference lookup would
-// never find it. This is the level-aware counterpart: it reads the
-// precomputed SUB_AREA-weighted aggregate for that basin from
-// scenario_current_lev{level}/scenario_reference_lev{level} - the same
-// tables and the same numbers the coarse-zoom choropleth itself is
-// painted from (see queryCatchmentsBasinAggregated), so identify agrees
-// with what the user is looking at.
+// GOLDEN RULE: catchment identification always reads lev12, matching site
+// creation's own catchment selection (see data-preparation.md's "Multi-
+// Resolution Catchments" section) - regardless of which multi-resolution
+// band (lev04/06/08/12) happens to be rendered on the map at the caller's
+// current zoom. A click resolved against whatever band is on screen used
+// to return a coarse basin's aggregate rather than the actual lev12
+// catchment under the cursor; this resolves the point against the real
+// geometry instead; so the zoom the user happens to be at never changes
+// what identify reports.
 //
-// Unlike GetCatchmentAttributes, there is no catchment_id/catchment_id_int
-// dual attempt: the basin aggregate tables only ever have catchment_id_int
-// (see queryCatchmentsBasinAggregated's join), because
-// build-catchment-hierarchy.sh always builds them with that column.
-func (s *GpkgStore) GetCatchmentAttributesForLevel(ctx context.Context, catchmentID, level string) (map[string]map[string]float64, error) {
-	result := make(map[string]map[string]float64)
+// rtree_catchments_lev12_geom bbox-prunes candidates first - there are
+// rarely more than one or two whose bounding box contains a given point -
+// then each candidate's full-precision geojson (not geojson_simplified,
+// which can shift a boundary enough to misclassify a point near one) gets
+// an exact point-in-polygon test, since a bbox match alone cannot tell a
+// point truly inside a catchment from one merely inside its corner.
+func (s *GpkgStore) FindCatchmentIDAtPoint(ctx context.Context, lng, lat float64) (string, error) {
+	const query = `
+		SELECT CAST(c.HYBAS_ID AS TEXT), c.geojson
+		FROM rtree_catchments_lev12_geom r
+		JOIN catchments_lev12 c ON c.fid = r.id
+		WHERE r.minx <= ? AND r.maxx >= ? AND r.miny <= ? AND r.maxy >= ?
+		  AND c.geojson IS NOT NULL
+	`
 
-	idInt, err := strconv.ParseInt(catchmentID, 10, 64)
+	rows, err := s.db.QueryContext(ctx, query, lng, lng, lat, lat)
 	if err != nil {
-		// Not a number at all: this can never match a catchment_id_int
-		// column, so it is "not found" rather than a query failure.
-		return result, nil
+		return "", fmt.Errorf("failed to query catchment at point: %w", err)
 	}
+	defer rows.Close()
 
-	s.mu.RLock()
-	columns := s.columns
-	s.mu.RUnlock()
-	if len(columns) == 0 {
-		return result, nil
-	}
-	quotedCols := make([]string, len(columns))
-	for i, col := range columns {
-		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
-	}
-
-	scenarios := []string{"current", "reference"}
-	for _, scenario := range scenarios {
-		tableName := fmt.Sprintf("scenario_%s_lev%s", scenario, level)
-
-		query := fmt.Sprintf(`SELECT %s FROM %s WHERE catchment_id_int = ?`,
-			strings.Join(quotedCols, ", "), tableName)
-
-		values := make([]sql.NullFloat64, len(columns))
-		scanArgs := make([]interface{}, len(columns))
-		for i := range values {
-			scanArgs[i] = &values[i]
+	point := polyclip.Point{X: lng, Y: lat}
+	for rows.Next() {
+		var id, geojsonStr string
+		if err := rows.Scan(&id, &geojsonStr); err != nil {
+			continue
 		}
+		polys, err := geometryRawToPolygons(json.RawMessage(geojsonStr))
+		if err != nil {
+			continue
+		}
+		if polygonsContainPoint(polys, point) {
+			return normalizeCatchmentID(id), nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("failed to query catchment at point: %w", err)
+	}
 
-		row := s.db.QueryRowContext(ctx, query, idInt)
-		if err := row.Scan(scanArgs...); err != nil {
-			// No such table means this datapack predates the multi-resolution
-			// levels: that is "not found" for this basin, not a server error -
-			// the frontend already falls back to the GeoJSON path for such a
-			// datapack, so it should never even ask.
-			if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no such table") {
-				continue
+	return "", nil
+}
+
+// polygonsContainPoint reports whether pt lies inside any polygon in polys
+// - each element is one MultiPolygon part, or the single element of a
+// plain Polygon.
+func polygonsContainPoint(polys []polyclip.Polygon, pt polyclip.Point) bool {
+	for _, poly := range polys {
+		if polygonContainsPoint(poly, pt) {
+			return true
+		}
+	}
+	return false
+}
+
+// polygonContainsPoint applies the ray-casting even-odd rule across every
+// contour of poly (exterior ring plus any holes) in a single pass: a
+// hole's edges contribute additional crossings that correctly cancel the
+// exterior ring's, so a point inside a hole comes out as outside the
+// polygon with no special-casing of which contour is the hole.
+func polygonContainsPoint(poly polyclip.Polygon, pt polyclip.Point) bool {
+	crossings := 0
+	for _, contour := range poly {
+		n := len(contour)
+		for i := 0; i < n; i++ {
+			a := contour[i]
+			b := contour[(i+1)%n]
+			if (a.Y > pt.Y) != (b.Y > pt.Y) {
+				xIntersect := a.X + (pt.Y-a.Y)/(b.Y-a.Y)*(b.X-a.X)
+				if pt.X < xIntersect {
+					crossings++
+				}
 			}
-			return nil, fmt.Errorf("failed to read %s for basin %s: %w", tableName, catchmentID, err)
-		}
-
-		attrs := make(map[string]float64)
-		for i, col := range columns {
-			if values[i].Valid {
-				attrs[col] = values[i].Float64
-			}
-		}
-		if len(attrs) > 0 {
-			result[scenario] = attrs
 		}
 	}
-
-	return result, nil
+	return crossings%2 == 1
 }
 
 // CatchmentIndicators represents indicator values for a single catchment

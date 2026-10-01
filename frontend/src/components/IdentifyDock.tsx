@@ -50,7 +50,7 @@ function IdentifyDock({ identifyResult, siteIdentifyResult, onClose, isSlotBOpen
 
   const content = identifyResult
     ? {
-      title: `${identifyResult.granularity} ${identifyResult.catchmentID}`,
+      title: `Catchment ${identifyResult.catchmentID}`,
       leftLabel: identifyResult.leftLabel,
       rightLabel: identifyResult.rightLabel,
       rows: identifyResult.rows,

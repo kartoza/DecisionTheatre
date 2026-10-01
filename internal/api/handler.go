@@ -135,6 +135,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
 
+	// Resolves a clicked map point to the lev12 catchment containing it,
+	// regardless of which multi-resolution band is rendered at that zoom.
+	r.HandleFunc("/catchments/at-point", h.handleCatchmentAtPoint).Methods("GET")
+
 	// Choropleth endpoint - returns GeoJSON filtered by bbox
 	r.HandleFunc("/choropleth", h.handleChoropleth).Methods("GET")
 
@@ -705,22 +709,7 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// The identify click carries the HydroBASINS level of whatever it
-	// actually clicked on (see MapView.tsx's handleIdentifyClick, which
-	// reads it off the clicked feature's own source-layer). Below lev12
-	// detail that id names a basin, not a catchment, and lives in a
-	// different table - see GetCatchmentAttributesForLevel.
-	var data map[string]map[string]float64
-	var err error
-	if level := r.URL.Query().Get("level"); level != "" {
-		if level != "04" && level != "06" && level != "08" {
-			respondError(w, http.StatusBadRequest, "invalid level parameter")
-			return
-		}
-		data, err = h.gpkgStore.GetCatchmentAttributesForLevel(r.Context(), catchmentID, level)
-	} else {
-		data, err = h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
-	}
+	data, err := h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
 	if err != nil {
 		// A failed read is reported as a failure. It used to arrive here as an
 		// empty map and be answered with "catchment not found", which told the
@@ -742,6 +731,42 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 	}
 
 	respondJSON(w, http.StatusOK, data)
+}
+
+// handleCatchmentAtPoint resolves the lev12 catchment containing a clicked
+// map point. GOLDEN RULE: catchment identification always reads lev12,
+// regardless of which multi-resolution band (lev04/06/08/12) happens to be
+// rendered at the caller's current zoom - see FindCatchmentIDAtPoint. The
+// frontend's identify click calls this first to get an id, then
+// handleCatchmentIdentify above for that id's attributes.
+func (h *Handler) handleCatchmentAtPoint(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	lng, errLng := strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+	lat, errLat := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
+	if errLng != nil || errLat != nil {
+		respondError(w, http.StatusBadRequest, "lng and lat query parameters are required")
+		return
+	}
+
+	id, err := h.gpkgStore.FindCatchmentIDAtPoint(r.Context(), lng, lat)
+	if err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if id == "" {
+		if clientGone(r) {
+			respondCancelled(w, r)
+			return
+		}
+		respondError(w, http.StatusNotFound, "no catchment at that point")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"id": id})
 }
 
 // ChoroplethResponse wraps a FeatureCollection with domain range for consistent color scaling

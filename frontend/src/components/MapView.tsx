@@ -2629,33 +2629,30 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     if (features.length === 0) return;
 
-    const feature = features[0];
-    const catchId = feature.properties?.[CATCHMENT_ID_PROP];
-    if (catchId == null) return;
+    // GOLDEN RULE: catchment identification always reads lev12, regardless
+    // of which multi-resolution band (lev04/06/08/12) happens to be
+    // rendered at the current zoom — matching site creation's own
+    // catchment selection (see data-preparation.md's "Multi-Resolution
+    // Catchments" section). The queryRenderedFeatures hit above only
+    // confirms a catchment exists under the cursor; the id itself comes
+    // from a server-side point lookup against real lev12 geometry, since
+    // lev12 tiles aren't even loaded client-side below their own zoom band
+    // — there is nothing here to read an id or a source-layer off.
+    const { lng, lat } = e.lngLat;
+    const lookupUrl = `/api/catchments/at-point?lng=${lng}&lat=${lat}`;
 
-    const catchIdStr = String(catchId);
-
-    // Below lev12 detail zoom the clicked feature is a coarse HydroBASINS
-    // basin, not a lev12 catchment (see the multi-resolution tile bands in
-    // choroplethTiles.ts) — the id namespace differs, so the backend needs
-    // to know which table to look it up in. The feature's own sourceLayer
-    // says exactly that; reading it off the feature (rather than
-    // recomputing "which band is active" from zoom) can never drift from
-    // what was actually clicked.
-    const sourceLayer = feature.sourceLayer;
-    const basinLevel = sourceLayer && sourceLayer !== CATCHMENT_TILE_SOURCE_LAYER
-      ? sourceLayer.match(/^catchments_lev(\d+)$/)?.[1]
-      : undefined;
-    const identifyUrl = basinLevel
-      ? `/api/catchment/${catchIdStr}?level=${basinLevel}`
-      : `/api/catchment/${catchIdStr}`;
-    const granularity = basinLevel ? `Basin (lev${basinLevel})` : 'Catchment';
-
-    // Fetch full attributes from API
-    fetch(identifyUrl)
+    fetch(lookupUrl)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!data || !onIdentifyRef.current) return;
+      .then((lookup: { id?: string | number } | null) => {
+        const catchIdStr = lookup?.id != null ? String(lookup.id) : null;
+        if (!catchIdStr) return null;
+        return fetch(`/api/catchment/${catchIdStr}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => (data ? { catchIdStr, data } : null));
+      })
+      .then((result) => {
+        if (!result || !onIdentifyRef.current) return;
+        const { catchIdStr, data } = result;
 
         const currentComparison = comparisonRef.current;
         const leftScenario = currentComparison.leftScenario;
@@ -2706,7 +2703,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
           })
           .filter((row): row is IdentifyRow => row !== null);
 
-        onIdentifyRef.current({ catchmentID: catchIdStr, granularity, leftLabel, rightLabel, rows });
+        onIdentifyRef.current({ catchmentID: catchIdStr, leftLabel, rightLabel, rows });
       })
       .catch((err) => console.error('Identify error:', err));
   }, []);
