@@ -117,6 +117,44 @@ That's what the `tileset` column is for -- and the catchment levels take it to i
 
 Splitting a layer out this way touches more than the treatment table -- it needs TileJSON handling in `internal/server/server.go` (for a catchment level, just add it to `catchmentLevelTilesets` there), a source or client-side source spec pointing at that handler's URL, and (to avoid `dt check-data` flagging it as dead weight) an entry in `internal/datacheck/spec.go`. Reach for `tileset` only when a layer's own top zoom is meaningfully lower than the rest of the bundle's, the way catchments' is.
 
+### `dt serve-legacy`: lev12 geometry at every zoom
+
+`dt serve-legacy` asks the server to render lev12 catchment boundaries at every
+zoom instead of handing off through the lev04/06/08 bands above -- useful when a
+reviewer wants to see the real, unaggregated basin shapes continent-wide rather
+than the coarser stand-ins. Don't confuse this with a "legacy datapack" elsewhere
+in this document, which means a pack built *before* the multi-resolution tables
+existed at all; `--legacy` is a rendering choice on a fully multi-resolution
+datapack, not a statement about how old the data is.
+
+The flag only changes what `handleCatchmentsTileJSON` serves at
+`/data/catchments-tiles.json`: with `--legacy` set and a `catchments-lev12-full`
+tileset present, it serves that tileset's own single-tileset TileJSON (`minzoom`
+2, `maxzoom` 12) instead of the four-level `tilesets` array -- the same
+single-band document shape a legacy datapack has always produced, so nothing else
+in the frontend needs to know this mode exists. Without `--legacy`, or on a
+datapack that hasn't built the wide tileset, behaviour is exactly as described
+above. `/api/info` reports the active choice as `legacy_catchments`.
+
+`catchments-lev12-full` is `catchments_lev12` duplicated as its own GeoPackage
+table (`catchments_lev12_full`, same geometry and `HYBAS_ID`) and tiled across
+the full z2-z12 range via its own `layer-treatment.csv` row, built with:
+
+```bash
+./scripts/gpkg_to_mbtiles.sh datasources/catchments/catchments.gpkg --tileset catchments-lev12-full
+```
+
+147,837 individual polygons cannot fit a low-zoom tile's byte budget through
+line-simplification alone -- that reduces per-feature vertex density, not feature
+*count* -- so `gpkg_to_mbtiles.sh`'s tippecanoe invocation always carries
+`--drop-densest-as-needed`, a last-resort, tile-by-tile thinning pass that only
+activates when a tile would otherwise overflow. It cost nothing for the existing
+single-zoom catchment bands (none of their tiles are big enough to trigger it) and
+is what makes building this one possible at all. The resulting mbtiles file is
+~600 MB and optional: a datapack that never runs this build simply can't be put
+into `--legacy` mode, and the server falls back to the normal split bands with a
+log line rather than failing.
+
 ## Multi-Resolution Catchments
 
 147,837 lev12 catchment polygons don't need to render at z3. `scripts/build-catchment-hierarchy.sh` builds three coarser HydroBASINS levels — real drainage-basin boundaries, not an arbitrary grid — plus scenario data aggregated up to each one, so both the per-level catchment tilesets above and the live choropleth (`internal/geodata/gpkg_store.go`'s `QueryCatchments`) can render something proportionate to the zoom level.

@@ -33,6 +33,7 @@ is stated — those files cannot be renamed.
 | `datapack.gpkg` | `internal/geodata/gpkg_store.go` | **Filename is hardcoded.** No other name is discovered. |
 | `mbtiles/context.mbtiles` | `internal/tiles/mbtiles.go` | **Must be named `context`** — see the warning below. |
 | `mbtiles/catchments-lev04/06/08/12.mbtiles` | `internal/tiles/mbtiles.go` | Optional. The per-level catchment tilesets, each tiled at a single zoom — see the note below. A legacy pack may instead carry one combined `catchments.mbtiles`; either spelling works, names are load-bearing. |
+| `mbtiles/catchments-lev12-full.mbtiles` | `internal/tiles/mbtiles.go` | Optional. lev12 geometry tiled across the full z2-z12 range, used only when the server is launched with `--legacy` — see the note below. Absence is not an error: `--legacy` without this file falls back to the normal per-level bands. |
 | `mbtiles/style.json` | `internal/server/server.go` | Required — see the note below. |
 | `metadata.csv` | `internal/api/metadata_cache.go` | Indicator display metadata. |
 | `NPP_by_treecover.csv` | `internal/api/lookups.go` | Needs a `catchID` column. |
@@ -89,6 +90,18 @@ Also shipped, but **never opened by the running server** — see [Shipped but no
     GeoJSON path.
 
     Tile files are searched for in both `data/` and `data/mbtiles/`.
+
+    A further optional tileset, `catchments-lev12-full.mbtiles`, carries lev12
+    geometry across the whole z2-z12 range instead of a single overzoomed band.
+    It changes nothing by default — it is only read when the server is launched
+    with `--legacy` (`dt serve-legacy`), which then serves it in place of the
+    four-level split document so lev12's real basin shapes render at every zoom
+    instead of handing off to the coarser lev04/06/08 aggregates. Don't confuse
+    this with "a legacy pack" above: that phrase means a pack built before the
+    per-level split existed; `--legacy` is a rendering choice available on a
+    fully current, multi-resolution pack. See
+    [Data Preparation](../developer-guide/data-preparation.md#dt-serve-legacy-lev12-geometry-at-every-zoom)
+    for how the file is built.
 
 ### GeoPackage structure
 
@@ -272,6 +285,8 @@ data/                               # the data pack — exactly what pack-data z
 │   ├── catchments-lev06.mbtiles   #   each tiled at one zoom and overzoomed
 │   ├── catchments-lev08.mbtiles   #   (a legacy pack may instead carry one
 │   ├── catchments-lev12.mbtiles   #   combined catchments.mbtiles)
+│   ├── catchments-lev12-full.mbtiles  # optional — lev12 at every zoom,
+│   │                               #   used only by `dt serve-legacy`
 │   └── style.json                 # map style, served via /data/style.json
 ├── sites/                         # runtime: site JSON (desktop runtime)
 ├── images/                        # runtime: site thumbnails

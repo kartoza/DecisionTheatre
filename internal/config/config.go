@@ -53,6 +53,16 @@ type Config struct {
 	// explicit and never ships enabled by accident.
 	DebugOverlay bool
 
+	// LegacyCatchments serves lev12 catchment geometry at every zoom
+	// (the wide-range catchments-lev12-full tileset) instead of the
+	// multi-resolution lev04/06/08/12 bands. Set by --legacy, which is
+	// what `dt serve-legacy` passes. A launch-time choice, not a
+	// runtime toggle: the frontend's existing tileset resolution already
+	// treats a single-band TileJSON as spanning its whole declared range,
+	// so handleCatchmentsTileJSON choosing which document to serve is the
+	// entire mechanism - nothing else needs to know which mode is active.
+	LegacyCatchments bool
+
 	// SatelliteStyleURL is the upstream MapLibre style document — satellite
 	// imagery plus roads and place labels, not a single raster tile type. The
 	// server fetches and rewrites it, not the browser: see

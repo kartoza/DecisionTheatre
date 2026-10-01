@@ -628,6 +628,17 @@ for LAYER in "${MAP_LAYERS[@]}"; do
   [[ "$MTP" != true ]] && COMMON+=(--no-tiny-polygon-reduction)
   DET="${T_DETAIL[$LAYER]:-}"
   [[ -n "$DET" ]] && COMMON+=(--full-detail="$DET")
+  # Last-resort safety net: a tile that still exceeds tippecanoe's 500KB
+  # budget after line-simplification is a FEATURE COUNT problem, not a
+  # vertex-density one -- simplification thins individual shapes, it never
+  # drops whole features, so a layer with tens of thousands of small
+  # features clustered in one low-zoom tile (a basin or catchment layer
+  # spanning a wide zoom range, say) can fail to build at all otherwise.
+  # --drop-densest-as-needed only ever activates when a tile would
+  # otherwise overflow, and prefers to thin visually-redundant dense
+  # clusters over isolated features -- a safe default for every layer,
+  # not a per-layer opt-in.
+  COMMON+=(--drop-densest-as-needed)
 
   SIMP=(--simplification="$TOL")
   [[ "$VV" == true ]] && SIMP+=(--visvalingam)

@@ -67,12 +67,12 @@ type Server struct {
 	// In-process glyph cache: key = "fontstack/range", value = []byte.
 	// Glyphs fetched from the external CDN on first use are served locally
 	// for all subsequent requests, eliminating external HTTPS latency in grid view.
-	glyphCache      sync.Map
+	glyphCache sync.Map
 	// The datapack style's own glyphs URL, the no-key fallback for the glyph
 	// proxy — see datapackGlyphTemplate.
 	glyphTemplateOnce sync.Once
 	glyphTemplate     string
-	glyphCacheSizeB atomic.Int64
+	glyphCacheSizeB   atomic.Int64
 
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
 	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
@@ -638,6 +638,26 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 // visual-tuning question, not a fixed constant — adjust the treatment
 // table and this call together.
 func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
+	// --legacy (`dt serve-legacy`): always lev12 detail, at every zoom,
+	// never the coarser multi-resolution bands. catchments-lev12-full is a
+	// second, separately-tiled lev12 output (datasources/catchments.gpkg's
+	// catchments_lev12 duplicated as catchments_lev12_full and tiled across
+	// z2-z12 with generalisation at the low end — see layer-treatment.csv)
+	// built specifically for this mode; the narrow single-zoom
+	// catchments-lev12 tileset the default mode uses has no data below z11
+	// at all. Writing it with the plain single-tileset TileJSON shape (not
+	// the split-tileset document below) needs no frontend awareness of this
+	// mode whatsoever: resolveCatchmentTileset already treats one band's
+	// declared [minzoom, maxzoom] as its whole display range, so a document
+	// spanning z2-z12 renders lev12 detail from the lowest zoom up, exactly
+	// as a legacy single-band tileset always has. Falls through to the
+	// normal multires behaviour if the wide tileset hasn't been built for
+	// this datapack, rather than taking the flag down with it.
+	if s.cfg.LegacyCatchments && s.hasTileset("catchments-lev12-full") {
+		s.writeTileJSON(w, r, "catchments-lev12-full", 2, 12)
+		return
+	}
+
 	// Preferred: one standalone tileset per level, each tiled at exactly one
 	// zoom and overzoomed through its whole display band (tile once, draw
 	// all the way in). Present iff the datapack was tiled with the

@@ -197,6 +197,9 @@ ARGS=()
 # Set by `make serve-debug`/`dt serve-debug`: the frontend draws its map
 # debug overlay (live zoom, active catchment band, rendered layers).
 [ -n "${DT_DEBUG_OVERLAY:-}" ] && ARGS+=(--debug-overlay)
+# Set by `make serve-legacy`/`dt serve-legacy`: lev12 catchment geometry at
+# every zoom instead of the multi-resolution lev04/06/08/12 bands.
+[ -n "${DT_LEGACY_CATCHMENTS:-}" ] && ARGS+=(--legacy)
 
 # Not a flag (see the comment on DT_MAPTILER_API_KEY above) — exported instead
 # so the exec'd binary picks it up via os.Getenv. `. "$env_file"` above sets

@@ -33,7 +33,7 @@ GOFMT := gofmt
 GOLINT := golangci-lint
 
 .PHONY: all app build build-backend build-frontend clean
-.PHONY: run serve serve-debug dev dev-backend dev-frontend dev-all
+.PHONY: run serve serve-debug serve-legacy dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
 .PHONY: benchmark benchmark-quick benchmark-report benchmark-list benchmark-regressions
 .PHONY: container
@@ -106,6 +106,14 @@ serve:
 # draws the overlay.
 serve-debug:
 	DT_DEBUG_OVERLAY=1 ./scripts/run-app.sh --server $(ARGS)
+
+# Server mode with lev12 catchment geometry visible at every zoom instead of
+# handing off through the lev04/06/08 aggregate bands. Needs the wide
+# catchments-lev12-full tileset to have been built (see "The --legacy flag"
+# in docs/developer-guide/data-preparation.md); falls back to the normal
+# bands otherwise.
+serve-legacy:
+	DT_LEGACY_CATCHMENTS=1 ./scripts/run-app.sh --server $(ARGS)
 
 # ============================
 # Development
