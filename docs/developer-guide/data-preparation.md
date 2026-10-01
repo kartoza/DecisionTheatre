@@ -150,20 +150,25 @@ as `legacy_catchments`.
 
 #### The hex band
 
-`scripts/generate_catchment_hexagons.py` snaps every catchment onto a real,
-shared hexagonal grid -- flat-top axial coordinates, the same construction H3
-and every other hex-grid system use (hand-rolled here rather than taking on
-the H3 library and its icosahedral-projection machinery for what this needs).
-One fixed cell size for the whole grid means neighbouring cells tile edge to
-edge, no overlap and no gap; a hexagon drawn independently around each
-catchment's own centroid was tried first and looked exactly as bad as the
-mesh it replaced (reported back: "not what H3 means" -- wildly different
-sized hexagons overlapping with no shared structure is not a grid). Reads
-only `lat`/`long`/`SUB_AREA`/`HYBAS_ID` from `catchments_lev12` (no geometry)
-and writes the grid cells to a GeoJSON file; `ogr2ogr` imports that into
-`datasources/catchments/catchments.gpkg` as a new layer,
-`catchments_lev12_hex` -- the same GeoPackage-write tool every other step of
-this pipeline uses, rather than hand-encoding GPKG's binary geometry format:
+`scripts/generate_catchment_hexagons.py` snaps every catchment onto a real H3
+grid -- nixpkgs carries the upstream Python bindings directly
+(`python3Packages.h3`, wired into `dataToolsEnv` in `flake.nix`), so there is
+no reason to reimplement the icosahedral-projection grid math by hand. (A
+hand-rolled flat-top axial grid was built first, before checking nixpkgs for
+the real thing -- the project's own dependency-sourcing order puts "an
+existing nixpkgs package" ahead of writing the equivalent math from scratch,
+and H3 already had one, so it replaced the custom implementation once that was
+confirmed. Before either of those, a hexagon drawn independently around each
+catchment's own centroid was tried and looked exactly as bad as the mesh it
+replaced -- reported back: "not what H3 means", wildly different sized
+hexagons overlapping with no shared structure is not a grid.) One fixed H3
+resolution for the whole grid means neighbouring cells tile edge to edge, no
+overlap and no gap. Reads only `lat`/`long`/`SUB_AREA`/`HYBAS_ID` from
+`catchments_lev12` (no geometry) and writes the grid cells to a GeoJSON file;
+`ogr2ogr` imports that into `datasources/catchments/catchments.gpkg` as a new
+layer, `catchments_lev12_hex` -- the same GeoPackage-write tool every other
+step of this pipeline uses, rather than hand-encoding GPKG's binary geometry
+format:
 
 ```bash
 python3 scripts/generate_catchment_hexagons.py \
@@ -183,14 +188,10 @@ would be exactly the aggregation `--legacy` exists to avoid, just hidden
 inside a grid cell instead of a basin boundary. The grid still keeps a
 catchment's own identity and rough position at every cell it does draw —
 neighbouring catchments stay neighbouring cells ("topologically correct") —
-without claiming detail nothing could render legibly at that density. It is a
-stylised, low-zoom-only shape, not a survey product: the grid math treats
-longitude and latitude degrees as equal-area (no `cos(lat)` correction),
-which is plenty accurate for "legible at a glance" over the African latitude
-range and far simpler than getting a precise projection right. `--hex-size-deg`
-(default 0.09°, close to the average lev12 catchment's own footprint) tunes
-the collision rate against legibility if the production datapack's own
-catchment density ever needs a different balance.
+without claiming detail nothing could render legibly at that density.
+`--h3-resolution` (default 5, ~253 km² per cell -- close to the average lev12
+catchment's own footprint) tunes the collision rate against legibility if the
+production datapack's own catchment density ever needs a different balance.
 
 #### Both tilesets, built from the same duplicated layer
 

@@ -38,6 +38,11 @@
             pandas
             geopandas
             shapely
+            # Real H3 hex-grid indexing for
+            # scripts/generate_catchment_hexagons.py (--legacy's low-zoom
+            # band) - nixpkgs carries the upstream bindings directly, so
+            # there is no reason to hand-roll axial hex-grid math instead.
+            h3
           ]
         );
 

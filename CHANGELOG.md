@@ -49,19 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catchments in one viewport reads as a dense white mesh, not a map
   (reported from a screen recording at z5.7-z6.12). `scripts/
   generate_catchment_hexagons.py` snaps each catchment's centroid onto a
-  shared flat-top hex grid (the same axial-coordinate construction H3 and
-  every other hex-grid system use, hand-rolled rather than taking on the
-  H3 library for what this needs) and keeps a cell's largest catchment by
-  `SUB_AREA` when more than one lands in the same cell — about half of
-  them on the production datapack, at the grid's default resolution — so
-  the result is a clean tessellation, not the overlapping, independently-
-  sized hexagons a first attempt (one hexagon per catchment's own
-  centroid, no shared grid) produced. A collided catchment is simply not
-  drawn in this band rather than blended into its neighbour's cell;
-  averaging would be the exact aggregation `--legacy` exists to avoid,
-  just hidden inside a grid cell instead of a basin boundary. Real detail
-  still takes over from z9, the same cutover the default mode's own
-  lev08→lev12 handoff uses.
+  real H3 grid (`python3Packages.h3`, now in `dataToolsEnv` in
+  `flake.nix` — nixpkgs carries the upstream bindings directly, so a
+  hand-rolled axial-grid reimplementation that shipped briefly ahead of
+  this was replaced with the real library instead of kept) and keeps a
+  cell's largest catchment by `SUB_AREA` when more than one lands in the
+  same cell — about half of them on the production datapack, at the
+  grid's default resolution — so the result is a clean tessellation, not
+  the overlapping, independently-sized hexagons a first attempt (one
+  hexagon per catchment's own centroid, no shared grid) produced. A
+  collided catchment is simply not drawn in this band rather than
+  blended into its neighbour's cell; averaging would be the exact
+  aggregation `--legacy` exists to avoid, just hidden inside a grid cell
+  instead of a basin boundary. Real detail still takes over from z9, the
+  same cutover the default mode's own lev08→lev12 handoff uses.
 - **`dt serve-legacy-debug`: the debug overlay, outlines, and labels for
   `--legacy` mode.** Combines `serve-legacy` and `serve-debug`'s env
   knobs — no new plumbing, both already existed independently. Every
