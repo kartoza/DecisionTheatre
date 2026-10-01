@@ -33,7 +33,7 @@ GOFMT := gofmt
 GOLINT := golangci-lint
 
 .PHONY: all app build build-backend build-frontend clean
-.PHONY: run serve serve-debug serve-legacy dev dev-backend dev-frontend dev-all
+.PHONY: run serve serve-debug serve-legacy serve-legacy-debug dev dev-backend dev-frontend dev-all
 .PHONY: test test-frontend test-all test-scripts
 .PHONY: benchmark benchmark-quick benchmark-report benchmark-list benchmark-regressions
 .PHONY: container
@@ -114,6 +114,12 @@ serve-debug:
 # bands otherwise.
 serve-legacy:
 	DT_LEGACY_CATCHMENTS=1 ./scripts/run-app.sh --server $(ARGS)
+
+# Both at once: lev12 geometry at every zoom AND the debug overlay/outlines/
+# labels on top of it, so the --legacy render path can be inspected the same
+# way the normal multi-resolution one can with dt serve-debug.
+serve-legacy-debug:
+	DT_LEGACY_CATCHMENTS=1 DT_DEBUG_OVERLAY=1 ./scripts/run-app.sh --server $(ARGS)
 
 # ============================
 # Development

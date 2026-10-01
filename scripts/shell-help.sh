@@ -39,6 +39,7 @@ COMMANDS=(
     "RUN|dt serve|Web server only; open http://localhost:8080 in a browser"
     "RUN|dt serve-debug|Web server with the map debug overlay (zoom, band, layers)"
     "RUN|dt serve-legacy|Web server with lev12 catchments visible at every zoom"
+    "RUN|dt serve-legacy-debug|serve-legacy plus the debug overlay, outlines, and value labels"
     "RUN|dt run --port 9090|Extra arguments are passed through to the binary"
     "RUN|nix run|Desktop app from a reproducible build"
     "RUN|nix run .#serve|Web server from a reproducible build"
