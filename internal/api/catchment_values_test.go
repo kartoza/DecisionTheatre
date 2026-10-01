@@ -272,6 +272,46 @@ func TestCatchmentValuesRejectsUnparseableZoom(t *testing.T) {
 	}
 }
 
+// GOLDEN RULE: --legacy renders lev12 geometry at every zoom, so its values
+// must stay lev12 too. The client still sends the wide band's own canonical
+// zoom (its minzoom, e.g. 2) as the zoom param - indistinguishable, on this
+// endpoint alone, from a genuinely coarse multi-resolution request. Without
+// the LegacyCatchments check this returns the single lev04 basin aggregate
+// (id 4000000001) for the whole viewport instead of each lev12 catchment's
+// own value - every catchment painted identically, which is exactly the "no
+// spatial variation" --legacy was reported showing.
+func TestCatchmentValuesLegacyModeIgnoresZoomAggregation(t *testing.T) {
+	dir := t.TempDir()
+	gpkgtest.Build(t, dir, []gpkgtest.Catchment{
+		{ID: 1000000001, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+		{ID: 1000000002, Lat: 0, Long: 1, SizeDeg: 0.5, Current: gpkgtest.Float(20), Reference: gpkgtest.Float(2)},
+	}, 0, 100)
+	gpkgtest.AddBasinLevels(t, dir, map[string][]gpkgtest.Basin{
+		"04": {{ID: 4000000001, Current: gpkgtest.Float(15), Reference: gpkgtest.Float(1.5)}},
+	})
+
+	store, err := geodata.NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test", LegacyCatchments: true}, nil)
+	r := mux.NewRouter()
+	handler.RegisterRoutes(r)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=2")
+	if len(resp.IDs) != 2 {
+		t.Fatalf("--legacy at zoom=2 should still serve both lev12 catchments individually, got %v", resp.IDs)
+	}
+	for _, id := range resp.IDs {
+		if id == 4000000001 {
+			t.Fatalf("--legacy at zoom=2 returned the lev04 basin aggregate instead of lev12 catchments: %v", resp.IDs)
+		}
+	}
+}
+
 // The four numbers the "Full" range mode needs, computed where the data
 // lives. Must match what the client's zoneStatsFromValues derived from the
 // raw payload: plain min/max/mean over non-null values, count of values used.

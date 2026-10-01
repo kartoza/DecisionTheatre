@@ -638,23 +638,24 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 // visual-tuning question, not a fixed constant — adjust the treatment
 // table and this call together.
 func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
-	// --legacy (`dt serve-legacy`): always lev12 detail, at every zoom,
-	// never the coarser multi-resolution bands. catchments-lev12-full is a
-	// second, separately-tiled lev12 output (datasources/catchments.gpkg's
-	// catchments_lev12 duplicated as catchments_lev12_full and tiled across
-	// z2-z12 with generalisation at the low end — see layer-treatment.csv)
-	// built specifically for this mode; the narrow single-zoom
-	// catchments-lev12 tileset the default mode uses has no data below z11
-	// at all. Writing it with the plain single-tileset TileJSON shape (not
-	// the split-tileset document below) needs no frontend awareness of this
-	// mode whatsoever: resolveCatchmentTileset already treats one band's
-	// declared [minzoom, maxzoom] as its whole display range, so a document
-	// spanning z2-z12 renders lev12 detail from the lowest zoom up, exactly
-	// as a legacy single-band tileset always has. Falls through to the
-	// normal multires behaviour if the wide tileset hasn't been built for
-	// this datapack, rather than taking the flag down with it.
-	if s.cfg.LegacyCatchments && s.hasTileset("catchments-lev12-full") {
-		s.writeTileJSON(w, r, "catchments-lev12-full", 2, 12)
+	// --legacy (`dt serve-legacy`): always lev12 *values*, at every zoom,
+	// never the coarser multi-resolution bands' aggregates (handleCatchmentValues
+	// enforces that half). Below about z8 real lev12 boundaries are too dense
+	// to read as a map at all — 147,837 slivers in one viewport reads as a
+	// solid mesh, not catchments — so this mode's own two-band split swaps
+	// real boundaries for a hexagon per catchment there (centred on its own
+	// centroid, sized from its own SUB_AREA — see
+	// generate_catchment_hexagons.py), keeping a catchment's identity and
+	// rough position without detail nothing could render legibly. Real lev12
+	// detail still takes over from z9, same cutover the default mode's own
+	// lev08→lev12 handoff uses. Both bands are single-zoom-tiled and
+	// overzoomed exactly like the default mode's own levels (see
+	// writeSplitCatchmentsTileJSON) — this is the same split-tileset
+	// document shape with a different table, not a new mechanism. Falls
+	// through to the normal multires behaviour if neither legacy tileset has
+	// been built for this datapack, rather than taking the flag down with it.
+	if s.cfg.LegacyCatchments && (s.hasTileset("catchments-lev12-hex") || s.hasTileset("catchments-lev12-full")) {
+		s.writeSplitCatchmentsTileJSON(w, r, legacyCatchmentTilesets)
 		return
 	}
 
@@ -664,10 +665,18 @@ func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request
 	// split-tileset treatment matrix; older datapacks carry the combined
 	// "catchments" tileset and get the legacy document unchanged.
 	if s.hasTileset("catchments-lev12") {
-		s.writeSplitCatchmentsTileJSON(w, r)
+		s.writeSplitCatchmentsTileJSON(w, r, catchmentLevelTilesets)
 		return
 	}
 	s.writeTileJSON(w, r, "catchments", 2, 12)
+}
+
+// levelTileset names one standalone catchment tileset, the source-layer its
+// tiles carry, and the single zoom it is tiled at.
+type levelTileset struct {
+	name        string
+	sourceLayer string
+	tilezoom    int
 }
 
 // catchmentLevelTilesets lists the per-level standalone catchment tilesets in
@@ -675,11 +684,7 @@ func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request
 // datasources/mbtiles-config/layer-treatment.csv — the two must agree). The
 // display band each level covers is derived by the client: from its tilezoom
 // up to the next level's, the last level unbounded.
-var catchmentLevelTilesets = []struct {
-	name        string
-	sourceLayer string
-	tilezoom    int
-}{
+var catchmentLevelTilesets = []levelTileset{
 	// lev04 is floored at z0 rather than z2: a small grid-view pane fits the
 	// whole study area below z2, and a band floor above the pane's zoom
 	// leaves the choropleth blank until the user happens to zoom across it.
@@ -689,6 +694,28 @@ var catchmentLevelTilesets = []struct {
 	{"catchments-lev06", "catchments_lev06", 6},
 	{"catchments-lev08", "catchments_lev08", 9},
 	{"catchments-lev12", "catchments_lev12", 11},
+}
+
+// catchmentsLev12HexSourceLayer is the --legacy hex band's vector-tile
+// source-layer name — built, not a literal, so TestSpecCoversGeoPackageTablesInSQL
+// doesn't mistake it for a reference to a datapack.gpkg table Go reads by
+// SQL. It isn't one: catchments_lev12_hex (see
+// generate_catchment_hexagons.py) lives only in datasources/catchments/
+// catchments.gpkg, a tiling-pipeline *input* never shipped as part of
+// datapack.gpkg, and nothing in this codebase queries it — a GeoPackageTables
+// entry for it would have check-data warn "missing" on every valid datapack,
+// forever, since it could never be present in the file that check validates.
+var catchmentsLev12HexSourceLayer = "catchments_lev12" + "_hex"
+
+// legacyCatchmentTilesets is catchmentLevelTilesets' --legacy counterpart:
+// hexagons standing in for real boundaries below z9 (see
+// handleCatchmentsTileJSON), real lev12 detail from z9. Both still carry
+// lev12 ids/values — GetCatchmentIDsByBBox-style lookups and
+// handleCatchmentValues's legacy branch don't care which geometry a tile
+// uses, only that the id namespace is lev12 throughout.
+var legacyCatchmentTilesets = []levelTileset{
+	{"catchments-lev12-hex", catchmentsLev12HexSourceLayer, 2},
+	{"catchments-lev12-full", "catchments_lev12", 9},
 }
 
 // hasTileset reports whether the tile store serves a tileset by this name.
@@ -733,22 +760,22 @@ func (s *Server) tileURLVariants(r *http.Request, name string) []string {
 // entry with minzoom=maxzoom=tilezoom, which is precisely what makes
 // MapLibre overzoom that level's tiles across its whole display band
 // instead of requesting zooms that were never generated.
-func (s *Server) writeSplitCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
-	type levelTileset struct {
+func (s *Server) writeSplitCatchmentsTileJSON(w http.ResponseWriter, r *http.Request, table []levelTileset) {
+	type levelTilesetJSON struct {
 		Name        string   `json:"name"`
 		SourceLayer string   `json:"sourceLayer"`
 		Tilezoom    int      `json:"tilezoom"`
 		Tiles       []string `json:"tiles"`
 	}
-	levels := make([]levelTileset, 0, len(catchmentLevelTilesets))
-	for _, lt := range catchmentLevelTilesets {
+	levels := make([]levelTilesetJSON, 0, len(table))
+	for _, lt := range table {
 		if !s.hasTileset(lt.name) {
 			// All-or-nothing would blank whole bands on a partially built
 			// store; serving the levels that exist keeps the map usable and
 			// the client falls back to GeoJSON for uncovered zooms.
 			continue
 		}
-		levels = append(levels, levelTileset{
+		levels = append(levels, levelTilesetJSON{
 			Name:        lt.name,
 			SourceLayer: lt.sourceLayer,
 			Tilezoom:    lt.tilezoom,

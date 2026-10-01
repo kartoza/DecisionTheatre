@@ -1077,7 +1077,16 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 
 	var values *geodata.CatchmentValues
 	var err error
-	if zoomParam := q.Get("zoom"); zoomParam != "" {
+	// GOLDEN RULE: --legacy serves lev12 geometry at every zoom, so its
+	// values must stay lev12 too, never aggregated. The band it renders
+	// from spans z2-z12 in one piece, but the client still sends that
+	// band's own canonical zoom (its minzoom, e.g. 2) as the zoom param -
+	// indistinguishable, on this endpoint alone, from a genuinely coarse
+	// multi-resolution request, which basinLevelForZoom would otherwise
+	// read as "aggregate to lev04". Skipping straight to the unaggregated
+	// query here is what keeps a lev12 catchment's own value on its own
+	// polygon instead of smearing its parent basin's aggregate across it.
+	if zoomParam := q.Get("zoom"); zoomParam != "" && !h.cfg.LegacyCatchments {
 		zoom, parseErr := strconv.ParseFloat(zoomParam, 64)
 		if parseErr != nil {
 			respondError(w, http.StatusBadRequest, "invalid zoom parameter")

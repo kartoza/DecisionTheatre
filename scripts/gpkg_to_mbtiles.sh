@@ -161,13 +161,13 @@ mkdir -p "$CACHE_DIR"
 TREATMENT_CSV="$PROJECT_ROOT/datasources/mbtiles-config/layer-treatment.csv"
 [[ -f "$TREATMENT_CSV" ]] || error "Treatment table not found: $TREATMENT_CSV"
 
-declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET T_DETAIL
+declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET T_DETAIL T_OUTPUT_LAYER
 CSV_LAYER_ORDER=()
 
 load_treatment_csv() {
   T_MINZOOM=(); T_SIMPLIFIED_END=(); T_MAXZOOM=(); T_GENERALISE=()
   T_VISVALINGAM=(); T_TOLERANCE=(); T_PRESERVE_SHARED_NODES=(); T_MERGE_TINY_POLYGONS=()
-  T_TILESET=(); T_DETAIL=()
+  T_TILESET=(); T_DETAIL=(); T_OUTPUT_LAYER=()
   CSV_LAYER_ORDER=()
 
   local line header_skipped=false
@@ -178,7 +178,7 @@ load_treatment_csv() {
       header_skipped=true
       continue
     fi
-    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset detail <<< "$line"
+    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset detail output_layer <<< "$line"
     [[ -z "$layer" ]] && continue
     CSV_LAYER_ORDER+=("$layer")
     T_MINZOOM[$layer]="$minz"
@@ -196,6 +196,16 @@ load_treatment_csv() {
     # so a layer tiled once and displayed several zooms deeper needs the
     # finer grid to stay sub-pixel at its deepest display zoom.
     T_DETAIL[$layer]="$detail"
+    # The vector tile's own internal layer name (tippecanoe --layer). Blank
+    # means "same as the GPKG table name" (the overwhelmingly common case).
+    # Only needed when a layer is tiled from a table that was deliberately
+    # named differently from what the layer actually *is* -- see
+    # catchments_lev12_full below, duplicated from catchments_lev12 purely
+    # so the two tables can coexist in the same gpkg, but which must still
+    # read back as plain catchments_lev12 on the wire or every piece of
+    # frontend code that recognises lev12 detail geometry (CATCHMENT_TILE_
+    # SOURCE_LAYER in choroplethTiles.ts) silently fails to find it.
+    T_OUTPUT_LAYER[$layer]="$output_layer"
   done < "$TREATMENT_CSV"
 }
 
@@ -212,7 +222,7 @@ append_missing_layers() {
   for layer in "${MAP_LAYERS[@]}"; do
     if ! layer_in_csv "$layer"; then
       warn "'$layer' not in $(basename "$TREATMENT_CSV") — appending defaults (z6-z15, generalised, merged into the combined tileset)"
-      echo "$layer,6,14,15,true,true,10,true,false,," >> "$TREATMENT_CSV"
+      echo "$layer,6,14,15,true,true,10,true,false,,," >> "$TREATMENT_CSV"
     fi
   done
 }
@@ -273,7 +283,7 @@ validate_treatment() {
 # have happened *while* writing exactly the layer being resumed.
 layer_fingerprint() {
   local layer="$1"
-  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}|${T_DETAIL[$layer]:-}" \
+  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}|${T_DETAIL[$layer]:-}|${T_OUTPUT_LAYER[$layer]:-}" \
     | sha256sum | cut -d' ' -f1
 }
 
@@ -624,7 +634,8 @@ for LAYER in "${MAP_LAYERS[@]}"; do
   PSN="${T_PRESERVE_SHARED_NODES[$LAYER]}"
   MTP="${T_MERGE_TINY_POLYGONS[$LAYER]}"
 
-  COMMON=(--force --read-parallel --layer="$LAYER")
+  OUTPUT_LAYER_NAME="${T_OUTPUT_LAYER[$LAYER]:-$LAYER}"
+  COMMON=(--force --read-parallel --layer="$OUTPUT_LAYER_NAME")
   [[ "$MTP" != true ]] && COMMON+=(--no-tiny-polygon-reduction)
   DET="${T_DETAIL[$LAYER]:-}"
   [[ -n "$DET" ]] && COMMON+=(--full-detail="$DET")

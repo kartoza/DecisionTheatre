@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -98,18 +97,61 @@ func TestCatchmentsTileJSONSplitTilesets(t *testing.T) {
 	}
 }
 
-// `dt serve-legacy`: with the wide-range catchments-lev12-full tileset
-// present, the endpoint serves it with the plain single-tileset TileJSON
-// shape (no "tilesets" array) spanning its full declared zoom range - which
-// is the entire mechanism: the frontend's existing single-band tileset
-// handling renders lev12 detail from the lowest zoom up with no further
-// awareness that this mode exists at all.
-func TestCatchmentsTileJSONLegacyFlagServesWideLev12(t *testing.T) {
+// `dt serve-legacy`: with both of --legacy's own tilesets present, the
+// endpoint serves them as a two-band split document - a hexagon per
+// catchment below z9 (where real lev12 boundaries are too dense to render
+// legibly), real lev12 detail from z9. Same split-tileset document shape
+// the default multi-resolution mode uses, a different table.
+func TestCatchmentsTileJSONLegacyFlagServesHexAndDetailSplit(t *testing.T) {
 	dataDir := t.TempDir()
 	mbtilesDir := filepath.Join(dataDir, "mbtiles")
 	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12", "catchments-lev12-hex", "catchments-lev12-full"} {
+		minimalMBTiles(t, mbtilesDir, name)
+	}
+
+	srv, err := New(config.Config{Port: 0, DataDir: dataDir, Version: "test", LegacyCatchments: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	doc := catchmentsTileJSON(t, srv)
+
+	var levels []struct {
+		Name        string   `json:"name"`
+		SourceLayer string   `json:"sourceLayer"`
+		Tilezoom    int      `json:"tilezoom"`
+		Tiles       []string `json:"tiles"`
+	}
+	if err := json.Unmarshal(doc["tilesets"], &levels); err != nil {
+		t.Fatalf("no usable tilesets array: %v (doc keys: %v)", err, doc)
+	}
+	if len(levels) != 2 {
+		t.Fatalf("expected 2 legacy bands (hex, detail), got %d", len(levels))
+	}
+	wantZooms := map[string]int{"catchments_lev12_hex": 2, "catchments_lev12": 9}
+	for _, l := range levels {
+		if wantZooms[l.SourceLayer] != l.Tilezoom {
+			t.Errorf("%s: tilezoom %d, want %d", l.SourceLayer, l.Tilezoom, wantZooms[l.SourceLayer])
+		}
+		if len(l.Tiles) == 0 {
+			t.Errorf("%s: no tile URLs", l.SourceLayer)
+		}
+	}
+}
+
+// A partially built --legacy store (only one of the two tilesets exists)
+// still serves what it has rather than falling all the way back - the same
+// resilience the default mode's own split document already has for a
+// missing level.
+func TestCatchmentsTileJSONLegacyFlagServesWhicheverLegacyTilesetExists(t *testing.T) {
+	dataDir := t.TempDir()
+	mbtilesDir := filepath.Join(dataDir, "mbtiles")
+	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the detail tileset built yet, not the hex one.
 	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12", "catchments-lev12-full"} {
 		minimalMBTiles(t, mbtilesDir, name)
 	}
@@ -120,32 +162,22 @@ func TestCatchmentsTileJSONLegacyFlagServesWideLev12(t *testing.T) {
 	}
 	doc := catchmentsTileJSON(t, srv)
 
-	if _, hasSplit := doc["tilesets"]; hasSplit {
-		t.Error("--legacy served the split multi-resolution document instead of the wide lev12 tileset")
+	var levels []struct {
+		SourceLayer string `json:"sourceLayer"`
 	}
-	var tiles []string
-	if err := json.Unmarshal(doc["tiles"], &tiles); err != nil || len(tiles) == 0 {
-		t.Fatalf("legacy document missing tiles URLs: %v", err)
+	if err := json.Unmarshal(doc["tilesets"], &levels); err != nil || len(levels) != 1 {
+		t.Fatalf("expected the one built legacy band, got %v (err %v)", doc["tilesets"], err)
 	}
-	for _, u := range tiles {
-		if !strings.Contains(u, "/tiles/catchments-lev12-full/") {
-			t.Errorf("tile URL %q does not reference catchments-lev12-full", u)
-		}
-	}
-	var minz, maxz float64
-	if err := json.Unmarshal(doc["minzoom"], &minz); err != nil || minz != 2 {
-		t.Errorf("minzoom = %v, want 2", minz)
-	}
-	if err := json.Unmarshal(doc["maxzoom"], &maxz); err != nil || maxz != 12 {
-		t.Errorf("maxzoom = %v, want 12", maxz)
+	if levels[0].SourceLayer != "catchments_lev12" {
+		t.Errorf("sourceLayer = %q, want catchments_lev12", levels[0].SourceLayer)
 	}
 }
 
-// The flag must not take the map down with it when the wide tileset hasn't
-// actually been built for this datapack - fall back to whatever the normal
-// (non-legacy) resolution would have served, same as any other optional
-// tileset's absence.
-func TestCatchmentsTileJSONLegacyFlagWithoutWideTilesetFallsBack(t *testing.T) {
+// The flag must not take the map down with it when neither legacy tileset
+// has actually been built for this datapack - fall back to whatever the
+// normal (non-legacy) resolution would have served, same as any other
+// optional tileset's absence.
+func TestCatchmentsTileJSONLegacyFlagWithoutEitherLegacyTilesetFallsBack(t *testing.T) {
 	dataDir := t.TempDir()
 	mbtilesDir := filepath.Join(dataDir, "mbtiles")
 	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
