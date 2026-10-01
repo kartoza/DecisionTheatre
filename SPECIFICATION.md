@@ -337,12 +337,20 @@ a strobe.
   `/data/catchments-tiles.json` then serves a `tilesets` array (per-level
   tile URLs + `tilezoom`) and the client builds one MapLibre source per band
   with `minzoom = maxzoom = tilezoom`; legacy combined tilesets keep the old
-  TileJSON document and shared-source behaviour.
+  TileJSON document and shared-source behaviour. Launching the server with
+  `--legacy` serves lev12 geometry across the whole range instead (a separate
+  `catchments-lev12-full` tileset, z2-z12), when that tileset has been built;
+  the document shape is the same single-band form a pre-multires datapack has
+  always produced, so no other endpoint or client behaviour changes.
 - `GET /api/stats/full` - full-dataset min/max/mean/count for one scenario and
   attribute, computed server-side in a single aggregate scan; what the "Full"
   range mode reads instead of downloading every raw value
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
-- `GET /api/catchment/{id}` - Catchment details
+- `GET /api/catchment/{id}` - Catchment details. An optional `level` parameter
+  (`04`, `06`, or `08`) looks the id up in the matching lev04/06/08 basin
+  aggregate tables instead of the lev12 detail tables — used when identifying
+  a feature clicked from a coarse-zoom catchment band, whose id belongs to
+  that band's own basin, not a lev12 catchment.
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
 - `GET /api/precalculate/full` - Precomputed full-domain means (cached server-side)
 - `GET /api/compare` - Scenario comparison data

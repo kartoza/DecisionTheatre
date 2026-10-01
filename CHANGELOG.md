@@ -74,6 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fetches — console output and periodic screenshots, with optional network
   throttling and scripted zooming. Complements `dtbench.py`, which measures
   the server side only.
+- **`dt serve-legacy`: lev12 catchment geometry at every zoom, for
+  reviewers who want to see real basin shapes continent-wide instead of the
+  coarser lev04/06/08 stand-ins.** A new standalone tileset,
+  `catchments-lev12-full` (lev12 duplicated into its own GeoPackage table and
+  tiled z2-z12), is served in place of the usual four-level split document
+  when both the flag and the tileset are present; everything else — the
+  frontend, the identify tool, site creation — needs no awareness that this
+  mode exists, because the TileJSON it gets back has the same single-band
+  shape a pre-multires datapack has always produced. Building the wide
+  tileset needed `gpkg_to_mbtiles.sh` to gain `--drop-densest-as-needed`:
+  147,837 individual polygons can't fit a low-zoom tile's byte budget through
+  simplification alone (that reduces vertex density, not feature count), so
+  tippecanoe now thins the sparsest tiles as a last resort rather than
+  failing outright. Absence of the wide tileset is not an error — `--legacy`
+  falls back to the normal split bands.
 
 ### Changed
 
@@ -120,6 +135,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current cap are never discarded — only their rendering is — so
   switching a capped grid back to belt charts brings the rest back exactly
   as they were. Fixes #204.
+- **The identify tool works again at every zoom, not just the finest one.**
+  Clicking a catchment at a coarse zoom returns a real lev04/06/08 basin ID,
+  but the identify endpoint only ever looked it up against the lev12-only
+  attribute tables, so every coarse-zoom click 404'd silently and the dock
+  never opened. The click handler now reads the clicked feature's own
+  source-layer, asks `/api/catchment/{id}?level={04,06,08}` when it isn't
+  the lev12 detail layer, and the server answers from the matching
+  `scenario_current_lev{level}`/`scenario_reference_lev{level}` aggregate
+  tables; the dock labels the result "Basin (lev04)" etc. instead of
+  "Catchment" so it's clear which granularity is showing. A second,
+  independent bug in the same area — the highlight outline hardcoded the
+  lev12 source-layer regardless of which band was actually clicked, so
+  highlighting silently drew nothing on a coarse band — is fixed alongside
+  it.
+- **Site creation's catchment-selection map pointed at a source-layer that
+  no longer exists.** It hardcoded `catchments_lev12` inside the combined
+  "UoW Tiles" source from before the multi-resolution split, which moved
+  `catchments_lev12` out into its own standalone tileset — so every layer
+  that depended on it rendered nothing and catchment selection during site
+  creation was silently broken. It now resolves the same tileset the main
+  map choropleth uses, with the original combined-source lookup kept only as
+  a fallback for datapacks that predate the split.
 
 ### Changed
 
