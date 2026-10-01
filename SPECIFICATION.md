@@ -331,7 +331,12 @@ a strobe.
   (z2–5 → lev04, z6–8 → lev06, z9–10 → lev08, z11+ → lev12 detail); coarse
   levels return the precomputed basin aggregates, bbox-independent, so the
   response is cacheable per scenario+attribute+level. Without `zoom` the
-  endpoint serves lev12 values for the bbox, unchanged. On current datapacks
+  endpoint serves lev12 values for the bbox, unchanged. With `--legacy`
+  (`LegacyCatchments`), `zoom` is ignored outright and lev12 values are
+  always served — GOLDEN RULE: `--legacy` geometry is lev12 at every zoom,
+  so its values must stay lev12 too, never aggregated up to a basin just
+  because the request's zoom number happens to fall in a coarse band's
+  range. On current datapacks
   each level ships as its own standalone tileset tiled at exactly one zoom
   (z0/6/9/11) and overzoomed across its display band —
   `/data/catchments-tiles.json` then serves a `tilesets` array (per-level

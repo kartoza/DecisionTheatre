@@ -22,19 +22,31 @@ dt serve-debug        # or: make serve-debug
 
 starts the server with `--debug-overlay`. One pane (exactly one, however
 many are mounted — the cameras are synced) draws a small info box showing
-the live zoom and centre, the active catchment band and how it is
-rendering — `tiles catchments_lev04 @z0 split, overzoom x11.8`,
-`tiles … legacy`, or the GeoJSON fallback — plus how many style layers are
-visible at that zoom and which of the app's own layers (choropleth,
-boundary, outlines) they include. Every pane additionally outlines each
+the live zoom and centre, and which catchment level is rendering at that
+zoom as one big-text line (`Catchments Level 08`, or `Catchments: GeoJSON
+fallback` when there's no catchment tileset) — the one fact that answers
+"what am I looking at", not a dump of every matching style layer and its
+source-layer. Every pane additionally outlines each
 catchment in white on top of the unchanged fills and labels it at its
-centre with its level and number (`L04 1040000010`), so band extents,
-overzoomed geometry and basin identity can all be judged by eye. A
-wrench toggle in the map toolbar — present only in debug sessions —
-switches all of this on and off without a restart. The offer itself is
-server-side (`/api/info`'s `debug_overlay`): without `--debug-overlay`
-neither the features nor the toggle exist, so none of this can ever ship
-enabled by accident.
+centre with its level, number, and the current indicator's joined value
+on a second line (`L04 1040000010` / `243.7`) — the same number the fill
+colour is painted from, so a label and its colour can be cross-checked by
+eye — so band extents, overzoomed geometry and basin identity can all be
+judged by eye. A wrench toggle in the map toolbar — present only in debug
+sessions — switches all of this on and off without a restart. The offer
+itself is server-side (`/api/info`'s `debug_overlay`): without
+`--debug-overlay` neither the features nor the toggle exist, so none of
+this can ever ship enabled by accident.
+
+```bash
+dt serve-legacy-debug  # or: make serve-legacy-debug
+```
+
+combines this with `--legacy` (lev12 geometry at every zoom — see "The
+`--legacy` flag" in data-preparation.md): the one command for checking
+that mode's own rendering, since its real basin shapes and per-catchment
+values are exactly what the debug overlay's outline and label are built
+to make visible.
 
 ## Quick start
 

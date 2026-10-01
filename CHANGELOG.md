@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--legacy` mode actually shows per-catchment spatial variation now —
+  two separate bugs, both fixed.** First: `catchments-lev12-full`'s
+  tileset was tiled with its vector layer named after its GeoPackage
+  source table, `catchments_lev12_full` — one character different from
+  `catchments_lev12`, which is all that `resolveCatchmentTileset()`'s
+  detail-band recognition checks for. The mismatch meant the frontend
+  treated `--legacy`'s tileset as unusable and fell back to the pre-
+  multires GeoJSON/grid-cell render path entirely, losing real catchment
+  geometry altogether. `gpkg_to_mbtiles.sh` gained an `output_layer`
+  treatment-table column (blank means "same as the table name", the
+  existing behaviour for every other layer) so a layer's vector-tile
+  identity can be set independently of the table it was tiled from;
+  `catchments_lev12_full`'s row sets it to `catchments_lev12`. Second,
+  once that geometry bug was fixed: `/api/catchment-values` still read
+  whichever band was on screen's own canonical zoom as an ordinary
+  multi-resolution request and aggregated every value up to the single
+  lev04 basin covering it — real catchment/cell geometry, but every one
+  painted one smeared-together colour. GOLDEN RULE: `--legacy` values
+  stay lev12 too, never aggregated — `handleCatchmentValues` now skips
+  zoom-based aggregation outright when `LegacyCatchments` is set.
 - **The identify tool always reports the real lev12 catchment now, not
   whichever coarser basin happens to be rendered at the current zoom.** The
   previous fix resolved a click against whatever band (lev04/06/08/12) was
@@ -24,6 +44,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--legacy` below z9 now renders a real hexagonal grid instead of real
+  lev12 boundaries nothing could show legibly at that density.** 147,837
+  catchments in one viewport reads as a dense white mesh, not a map
+  (reported from a screen recording at z5.7-z6.12). `scripts/
+  generate_catchment_hexagons.py` snaps each catchment's centroid onto a
+  shared flat-top hex grid (the same axial-coordinate construction H3 and
+  every other hex-grid system use, hand-rolled rather than taking on the
+  H3 library for what this needs) and keeps a cell's largest catchment by
+  `SUB_AREA` when more than one lands in the same cell — about half of
+  them on the production datapack, at the grid's default resolution — so
+  the result is a clean tessellation, not the overlapping, independently-
+  sized hexagons a first attempt (one hexagon per catchment's own
+  centroid, no shared grid) produced. A collided catchment is simply not
+  drawn in this band rather than blended into its neighbour's cell;
+  averaging would be the exact aggregation `--legacy` exists to avoid,
+  just hidden inside a grid cell instead of a basin boundary. Real detail
+  still takes over from z9, the same cutover the default mode's own
+  lev08→lev12 handoff uses.
+- **`dt serve-legacy-debug`: the debug overlay, outlines, and labels for
+  `--legacy` mode.** Combines `serve-legacy` and `serve-debug`'s env
+  knobs — no new plumbing, both already existed independently. Every
+  debug-session catchment label now carries a second line with the
+  current indicator's joined value (`L04 1040000010` / `243.7`) — the
+  same number the fill colour is painted from, so a label and its colour
+  can be cross-checked by eye — which was the tool this mode's spatial-
+  variation bug (above) needed to be caught in the first place.
 - **The control panel is always collapsible, with a guaranteed way back.**
   The collapse chevron now shows in every layout (it was quad-view only,
   because single-pane collapse used to be a dead end), and while the panel
