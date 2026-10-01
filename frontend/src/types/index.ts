@@ -259,6 +259,11 @@ export interface IdentifyRow {
 // raw per-scenario values for the docked panel to recompute.
 export type IdentifyResult = {
   catchmentID: string;
+  // "Catchment" for a lev12 detail click; "Basin (lev04/06/08)" when the
+  // click landed on a coarse multi-resolution band — the numbers shown are
+  // that basin's precomputed aggregate, not one catchment's own values, and
+  // the panel says so rather than passing off one as the other.
+  granularity: string;
   leftLabel: string;
   rightLabel: string;
   rows: IdentifyRow[];

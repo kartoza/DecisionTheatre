@@ -704,7 +704,22 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	data, err := h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
+	// The identify click carries the HydroBASINS level of whatever it
+	// actually clicked on (see MapView.tsx's handleIdentifyClick, which
+	// reads it off the clicked feature's own source-layer). Below lev12
+	// detail that id names a basin, not a catchment, and lives in a
+	// different table - see GetCatchmentAttributesForLevel.
+	var data map[string]map[string]float64
+	var err error
+	if level := r.URL.Query().Get("level"); level != "" {
+		if level != "04" && level != "06" && level != "08" {
+			respondError(w, http.StatusBadRequest, "invalid level parameter")
+			return
+		}
+		data, err = h.gpkgStore.GetCatchmentAttributesForLevel(r.Context(), catchmentID, level)
+	} else {
+		data, err = h.gpkgStore.GetCatchmentAttributes(r.Context(), catchmentID)
+	}
 	if err != nil {
 		// A failed read is reported as a failure. It used to arrive here as an
 		// empty map and be answered with "catchment not found", which told the

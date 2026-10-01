@@ -68,6 +68,14 @@ describe('choropleth vector-tile render path', () => {
     expect(mapView).toMatch(/rightMap\s*\n?\s*\? fetchChoroplethData\(c\.rightScenario/);
   });
 
+  it('highlights the identified catchment on whichever band installed the source, not a hardcoded lev12', () => {
+    // A split-tileset source below detail zoom carries only its own band's
+    // source-layer (catchments_lev04/06/08) -- filtering a highlight line by
+    // the lev12 constant there references a source-layer with no features
+    // in it and silently draws nothing.
+    expect(mapView).toMatch(/_tileSourceBandByMap\.get\(map\)\?\.\[sourceId\] \?\? CATCHMENT_TILE_SOURCE_LAYER/);
+  });
+
   it('adds the white catchment outline only in debug-overlay sessions', () => {
     // The outline is a diagnosis aid (band extents, overzoomed geometry);
     // outside dt serve-debug the choropleth must keep its soft, outline-free

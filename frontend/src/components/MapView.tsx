@@ -2635,8 +2635,24 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     const catchIdStr = String(catchId);
 
+    // Below lev12 detail zoom the clicked feature is a coarse HydroBASINS
+    // basin, not a lev12 catchment (see the multi-resolution tile bands in
+    // choroplethTiles.ts) — the id namespace differs, so the backend needs
+    // to know which table to look it up in. The feature's own sourceLayer
+    // says exactly that; reading it off the feature (rather than
+    // recomputing "which band is active" from zoom) can never drift from
+    // what was actually clicked.
+    const sourceLayer = feature.sourceLayer;
+    const basinLevel = sourceLayer && sourceLayer !== CATCHMENT_TILE_SOURCE_LAYER
+      ? sourceLayer.match(/^catchments_lev(\d+)$/)?.[1]
+      : undefined;
+    const identifyUrl = basinLevel
+      ? `/api/catchment/${catchIdStr}?level=${basinLevel}`
+      : `/api/catchment/${catchIdStr}`;
+    const granularity = basinLevel ? `Basin (lev${basinLevel})` : 'Catchment';
+
     // Fetch full attributes from API
-    fetch(`/api/catchment/${catchIdStr}`)
+    fetch(identifyUrl)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!data || !onIdentifyRef.current) return;
@@ -2690,7 +2706,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
           })
           .filter((row): row is IdentifyRow => row !== null);
 
-        onIdentifyRef.current({ catchmentID: catchIdStr, leftLabel, rightLabel, rows });
+        onIdentifyRef.current({ catchmentID: catchIdStr, granularity, leftLabel, rightLabel, rows });
       })
       .catch((err) => console.error('Identify error:', err));
   }, []);
@@ -3667,11 +3683,21 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
         return;
       }
 
-      // On the vector-tile path the source has a layer within it, and the tiles
-      // may encode HYBAS_ID as a string — to-number normalises both encodings
-      // so the same filter works whichever transport is in use.
+      // On the vector-tile path the source has a layer within it. Which one
+      // depends on the active catchment band — a split-tileset source below
+      // lev12 detail carries only its own band's source-layer
+      // (catchments_lev04/06/08), not catchments_lev12 — so this reads
+      // whichever layer ensureChoroplethSource actually installed on this
+      // source (_tileSourceBandByMap), falling back to the lev12 constant
+      // for the legacy combined tileset where it is always correct. Getting
+      // this wrong doesn't error, it just silently highlights nothing: the
+      // filter would reference a source-layer with no features in it.
+      //
+      // The tiles may encode HYBAS_ID as a string — to-number normalises
+      // both encodings so the same filter works whichever transport is in
+      // use.
       const sourceLayerSpec = choroplethSource.type === 'vector'
-        ? { 'source-layer': CATCHMENT_TILE_SOURCE_LAYER }
+        ? { 'source-layer': _tileSourceBandByMap.get(map)?.[sourceId] ?? CATCHMENT_TILE_SOURCE_LAYER }
         : {};
       const catchmentIdNum = parseInt(catchmentId, 10);
       const idFilter: FilterSpecification =

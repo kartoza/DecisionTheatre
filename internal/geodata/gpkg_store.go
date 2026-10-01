@@ -2190,6 +2190,87 @@ func (s *GpkgStore) GetCatchmentAttributes(ctx context.Context, catchmentID stri
 	return result, nil
 }
 
+// GetCatchmentAttributesForLevel is GetCatchmentAttributes for a coarse
+// HydroBASINS level (lev04/06/08) instead of lev12 detail.
+//
+// The identify tool used to have nothing to query below the detail zoom: the
+// grid-aggregated GeoJSON those zooms rendered carried no catchment id at
+// all, so a click there did nothing by design. Once the multi-resolution
+// tiles started rendering real basin geometry at those zooms (see
+// choroplethTiles.ts's zoom bands), a click there does carry a real
+// HYBAS_ID - but it names a basin, not a lev12 catchment, and
+// GetCatchmentAttributes's scenario_current/scenario_reference lookup would
+// never find it. This is the level-aware counterpart: it reads the
+// precomputed SUB_AREA-weighted aggregate for that basin from
+// scenario_current_lev{level}/scenario_reference_lev{level} - the same
+// tables and the same numbers the coarse-zoom choropleth itself is
+// painted from (see queryCatchmentsBasinAggregated), so identify agrees
+// with what the user is looking at.
+//
+// Unlike GetCatchmentAttributes, there is no catchment_id/catchment_id_int
+// dual attempt: the basin aggregate tables only ever have catchment_id_int
+// (see queryCatchmentsBasinAggregated's join), because
+// build-catchment-hierarchy.sh always builds them with that column.
+func (s *GpkgStore) GetCatchmentAttributesForLevel(ctx context.Context, catchmentID, level string) (map[string]map[string]float64, error) {
+	result := make(map[string]map[string]float64)
+
+	idInt, err := strconv.ParseInt(catchmentID, 10, 64)
+	if err != nil {
+		// Not a number at all: this can never match a catchment_id_int
+		// column, so it is "not found" rather than a query failure.
+		return result, nil
+	}
+
+	s.mu.RLock()
+	columns := s.columns
+	s.mu.RUnlock()
+	if len(columns) == 0 {
+		return result, nil
+	}
+	quotedCols := make([]string, len(columns))
+	for i, col := range columns {
+		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
+	}
+
+	scenarios := []string{"current", "reference"}
+	for _, scenario := range scenarios {
+		tableName := fmt.Sprintf("scenario_%s_lev%s", scenario, level)
+
+		query := fmt.Sprintf(`SELECT %s FROM %s WHERE catchment_id_int = ?`,
+			strings.Join(quotedCols, ", "), tableName)
+
+		values := make([]sql.NullFloat64, len(columns))
+		scanArgs := make([]interface{}, len(columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+
+		row := s.db.QueryRowContext(ctx, query, idInt)
+		if err := row.Scan(scanArgs...); err != nil {
+			// No such table means this datapack predates the multi-resolution
+			// levels: that is "not found" for this basin, not a server error -
+			// the frontend already falls back to the GeoJSON path for such a
+			// datapack, so it should never even ask.
+			if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read %s for basin %s: %w", tableName, catchmentID, err)
+		}
+
+		attrs := make(map[string]float64)
+		for i, col := range columns {
+			if values[i].Valid {
+				attrs[col] = values[i].Float64
+			}
+		}
+		if len(attrs) > 0 {
+			result[scenario] = attrs
+		}
+	}
+
+	return result, nil
+}
+
 // CatchmentIndicators represents indicator values for a single catchment
 type CatchmentIndicators struct {
 	ID          string             `json:"id"`
