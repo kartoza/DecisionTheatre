@@ -4,9 +4,9 @@ import type * as maplibregl from 'maplibre-gl';
 import { bandForZoom, type CatchmentTileset } from '../lib/choroplethTiles';
 
 /**
- * Developer map debug overlay: live zoom, the active catchment band and how
- * it renders (split-tileset overzoom, legacy tiles, GeoJSON fallback), and
- * which style layers are visible at this zoom.
+ * Developer map debug overlay: live zoom and centre, and which HydroBASINS
+ * catchment level is rendering at this zoom (or the GeoJSON fallback, if
+ * no catchment tileset is in play), as one big-text line.
  *
  * Enabled by the server, not the client: `dt serve-debug` starts the server
  * with --debug-overlay, /api/info reports it, and useDebugOverlayEnabled()
@@ -117,9 +117,7 @@ export function useSoleDebugOverlay(enabled: boolean): boolean {
 interface DebugSnapshot {
   zoom: string;
   center: string;
-  path: string;
-  appLayers: string[];
-  visibleLayers: number;
+  level: string;
 }
 
 // localStorage quota is per-origin and browser-dependent; ~5 MiB is the
@@ -203,41 +201,35 @@ function StorageMeter() {
   );
 }
 
-/** How the choropleth is sourcing geometry at this zoom, as one line. */
-function describePath(tileset: CatchmentTileset | null, zoom: number): string {
-  if (!tileset) return 'geojson fallback (no catchment tileset)';
+/**
+ * Which catchment level is rendering at this zoom, as one big-text label
+ * -- what used to be a multi-line dump of every matching style layer and
+ * its source-layer (`choropleth-left [catchments_lev08]`,
+ * `choropleth-left-edge-blend [catchments_lev08]`, ...) was unreadable at
+ * a glance; a HydroBASINS level number is the one fact that actually
+ * answers "what am I looking at".
+ */
+function describeLevel(tileset: CatchmentTileset | null, zoom: number): string {
+  if (!tileset) return 'Catchments: GeoJSON fallback';
   const band = bandForZoom(tileset, zoom);
-  if (!band) return zoom < tileset.minzoom ? 'none (below banded range)' : 'geojson fallback (band gap)';
-  if (band.tilezoom !== undefined) {
-    const factor = Math.pow(2, Math.max(0, zoom - band.tilezoom));
-    return `tiles ${band.sourceLayer} @z${band.tilezoom} split, overzoom x${factor.toFixed(1)}`;
-  }
-  return `tiles ${band.sourceLayer} legacy z${band.minzoom}-${band.maxzoom}`;
+  if (!band) return zoom < tileset.minzoom ? 'Catchments: none' : 'Catchments: gap';
+  // --legacy's own low-zoom band carries lev12 ids/values under a hexagon
+  // standing in for the real boundary (see generate_catchment_hexagons.py)
+  // -- called out rather than left to read as plain "Level 12", which
+  // would claim real boundary geometry this band doesn't have.
+  const hexMatch = band.sourceLayer.match(/^catchments_lev(\d{2})_hex$/);
+  if (hexMatch) return `Catchments Level ${hexMatch[1]} (hex)`;
+  const level = band.sourceLayer.replace('catchments_lev', '');
+  return `Catchments Level ${level}`;
 }
 
 function snapshot(map: maplibregl.Map, tileset: CatchmentTileset | null): DebugSnapshot {
   const zoom = map.getZoom();
   const center = map.getCenter();
-  const layers = map.getStyle()?.layers ?? [];
-  const visible = layers.filter((l) => {
-    const layout = (l as { layout?: { visibility?: string } }).layout;
-    if (layout?.visibility === 'none') return false;
-    const min = (l as { minzoom?: number }).minzoom ?? 0;
-    const max = (l as { maxzoom?: number }).maxzoom ?? 24;
-    return zoom >= min && zoom < max;
-  });
-  const appLayers = visible
-    .filter((l) => /choropleth|boundary|catchment/i.test(l.id))
-    .map((l) => {
-      const sl = (l as { 'source-layer'?: string })['source-layer'];
-      return sl ? `${l.id} [${sl}]` : l.id;
-    });
   return {
     zoom: zoom.toFixed(2),
     center: `${center.lat.toFixed(3)}, ${center.lng.toFixed(3)}`,
-    path: describePath(tileset, zoom),
-    appLayers,
-    visibleLayers: visible.length,
+    level: describeLevel(tileset, zoom),
   };
 }
 
@@ -308,11 +300,7 @@ function MapDebugOverlay({
       data-testid="map-debug-overlay"
     >
       <Text>z {snap.zoom} · {snap.center}</Text>
-      <Text>{snap.path}</Text>
-      <Text color="whiteAlpha.700">{snap.visibleLayers} layers visible</Text>
-      {snap.appLayers.map((l) => (
-        <Text key={l} color="cyan.200">{l}</Text>
-      ))}
+      <Text fontSize="lg" fontWeight="bold" color="green.200" my={1}>{snap.level}</Text>
       <StorageMeter />
     </Box>
   );

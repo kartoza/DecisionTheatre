@@ -140,6 +140,34 @@ describe('resolveCatchmentTileset (split tilesets)', () => {
   });
 });
 
+// --legacy's own two-band split (server.go's legacyCatchmentTilesets): a
+// hexagon per catchment below z9 standing in for real boundaries nothing
+// could render legibly at that density (see generate_catchment_hexagons.py),
+// real lev12 detail from z9. Both carry the lev12 id namespace; only the
+// detail band's sourceLayer is the literal CATCHMENT_TILE_SOURCE_LAYER.
+const LEGACY_TILESETS = [
+  { name: 'catchments-lev12-hex', sourceLayer: 'catchments_lev12_hex', tilezoom: 2, tiles: ['http://localhost:8080/tiles/catchments-lev12-hex/{z}/{x}/{y}.pbf'] },
+  { name: 'catchments-lev12-full', sourceLayer: CATCHMENT_TILE_SOURCE_LAYER, tilezoom: 9, tiles: ['http://localhost:8080/tiles/catchments-lev12-full/{z}/{x}/{y}.pbf'] },
+];
+
+describe('resolveCatchmentTileset (--legacy hex + detail split)', () => {
+  it('accepts the hex band alongside the detail band', () => {
+    const tileset = resolveCatchmentTileset({ tilesets: LEGACY_TILESETS }) as CatchmentTileset;
+    expect(tileset).not.toBeNull();
+    expect(tileset.bands.map((b) => [b.sourceLayer, b.minzoom, b.maxzoom, b.tilezoom])).toEqual([
+      ['catchments_lev12_hex', 2, 8, 2],
+      [CATCHMENT_TILE_SOURCE_LAYER, 9, 9, 9],
+    ]);
+    expect(bandForZoom(tileset, 5)?.sourceLayer).toBe('catchments_lev12_hex');
+    expect(bandForZoom(tileset, 10)?.sourceLayer).toBe(CATCHMENT_TILE_SOURCE_LAYER);
+  });
+
+  it('still works with only the detail band, if the hex tileset was never built', () => {
+    const tileset = resolveCatchmentTileset({ tilesets: [LEGACY_TILESETS[1]] }) as CatchmentTileset;
+    expect(tileset.bands.map((b) => b.sourceLayer)).toEqual([CATCHMENT_TILE_SOURCE_LAYER]);
+  });
+});
+
 describe('catchmentBandSourceSpec', () => {
   it('pins the source to the single tiled zoom so MapLibre overzooms it', () => {
     const tileset = resolveCatchmentTileset({ tilesets: SPLIT_TILESETS }) as CatchmentTileset;

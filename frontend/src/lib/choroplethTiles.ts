@@ -30,7 +30,12 @@ import { CHOROPLETH_VALUE_STATE_KEY } from './choroplethPaint';
 export const CATCHMENT_TILE_SOURCE_LAYER = 'catchments_lev12';
 
 /** Matches every multi-resolution catchment layer in the tileset. */
-const CATCHMENT_LAYER_PATTERN = /^catchments_lev\d{2}$/;
+// _hex matches --legacy's own low-zoom band (catchments_lev12_hex): a
+// hexagon per catchment standing in for real boundaries below z9 (see
+// generate_catchment_hexagons.py and handleCatchmentsTileJSON) — same id
+// namespace as catchments_lev12, different geometry, so it needs to pass
+// this same recognition check to be treated as a usable catchment band.
+const CATCHMENT_LAYER_PATTERN = /^catchments_lev\d{2}(_hex)?$/;
 
 /**
  * The tile attribute holding a catchment's HYBAS_ID, promoted to the feature id

@@ -68,12 +68,15 @@ describe('choropleth vector-tile render path', () => {
     expect(mapView).toMatch(/rightMap\s*\n?\s*\? fetchChoroplethData\(c\.rightScenario/);
   });
 
-  it('highlights the identified catchment on whichever band installed the source, not a hardcoded lev12', () => {
+  it('highlights the identified catchment by fetching its own lev12 geometry, not by filtering whichever band is rendered', () => {
     // A split-tileset source below detail zoom carries only its own band's
-    // source-layer (catchments_lev04/06/08) -- filtering a highlight line by
-    // the lev12 constant there references a source-layer with no features
-    // in it and silently draws nothing.
-    expect(mapView).toMatch(/_tileSourceBandByMap\.get\(map\)\?\.\[sourceId\] \?\? CATCHMENT_TILE_SOURCE_LAYER/);
+    // source-layer (catchments_lev04/06/08) -- filtering a highlight line
+    // against that source by id used to reference a source-layer with no
+    // features in it and silently draw nothing. GOLDEN RULE: identify
+    // always resolves lev12, so the highlight fetches that one catchment's
+    // real geometry directly instead of depending on the active band.
+    expect(mapView).toContain("fetch(`/api/catchments/geometry/${catchmentId}`)");
+    expect(mapView).toContain('IDENTIFY_HIGHLIGHT_SOURCE');
   });
 
   it('adds the white catchment outline only in debug-overlay sessions', () => {
@@ -81,6 +84,15 @@ describe('choropleth vector-tile render path', () => {
     // outside dt serve-debug the choropleth must keep its soft, outline-free
     // look exactly as before.
     expect(mapView).toMatch(/if \(isDebugOverlayEnabledRef\.current\) \{[\s\S]{0,200}debugOutlineLayerId/);
+  });
+
+  it('adds the joined indicator value to each catchment\'s debug label, not just its level and id', () => {
+    // The same number the fill colour is painted from (CHOROPLETH_VALUE_STATE_KEY
+    // feature-state), so a label and its colour can be cross-checked by eye --
+    // blank rather than "null"/"NaN" before the join completes or when a
+    // catchment has no data for the current indicator.
+    expect(mapView).toContain("['==', ['feature-state', CHOROPLETH_VALUE_STATE_KEY], null], ''");
+    expect(mapView).toContain("'text-field': ['concat', `L${levelDigits} `, ['to-string', ['get', 'HYBAS_ID']], '\\n', debugValueExpression]");
   });
 
   it('paints when the style is ready, not when the basemap goes idle', () => {

@@ -70,8 +70,8 @@ interface HeaderProps {
     isExtracting?: boolean;
     is3DMode?: boolean;
     onIs3DModeChange?: (enabled: boolean) => void;
-    isChoroplethEnabled?: boolean;
-    onChoroplethEnabledChange?: (enabled: boolean) => void;
+    choroplethOpacity?: number;
+    onChoroplethOpacityChange?: (opacity: number) => void;
     isIdentifyMode?: boolean;
     onIdentifyModeChange?: (enabled: boolean) => void;
     isGoogleBasemap?: boolean;

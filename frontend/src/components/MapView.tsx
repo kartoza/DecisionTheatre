@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiPlus, FiMinus, FiTrash2 } from 'react-icons/fi';
 import * as maplibregl from 'maplibre-gl';
-import type { ExpressionSpecification, FilterSpecification, SourceSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
+import type { ExpressionSpecification, SourceSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { bbox as turfBbox, featureCollection, union, difference, intersect, area as turfArea, simplify as turfSimplify } from '@turf/turf';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '../lib/maplibreWorker';
@@ -29,6 +29,7 @@ import {
   buildOpacityColorExpression,
   buildExtrusionExpression,
   zoneStatsFromValues,
+  CHOROPLETH_VALUE_STATE_KEY,
   type ChoroplethValueAccessor,
 } from '../lib/choroplethPaint';
 import {
@@ -72,7 +73,7 @@ interface MapViewProps {
   // the same value. Only the basemap reports back: the satellite-quota revert
   // below is the one change that originates here.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   /**
@@ -139,9 +140,15 @@ const CHOROPLETH_LAYER_RIGHT = 'choropleth-right';
 const CHOROPLETH_3D_LEFT = 'choropleth-left-3d';
 const CHOROPLETH_3D_RIGHT = 'choropleth-right-3d';
 
-// Layer IDs for identify highlight (neon glow effect)
+// Layer/source IDs for identify highlight (neon glow effect)
 const IDENTIFY_HIGHLIGHT_GLOW = 'identify-highlight-glow';
 const IDENTIFY_HIGHLIGHT_LINE = 'identify-highlight-line';
+// A dedicated GeoJSON source fetched for the one identified catchment,
+// rather than filtering whichever multi-resolution band's vector source
+// happens to be active — that source's own band carries the id only when
+// the band is lev12 detail, so filtering it silently highlighted nothing
+// at any coarser zoom. See addHighlight.
+const IDENTIFY_HIGHLIGHT_SOURCE = 'identify-highlight-source';
 
 // CSS gradient for legend
 export const PRISM_CSS_GRADIENT =
@@ -967,7 +974,7 @@ const EDIT_VERTICES_GLOW = 'edit-vertices-glow';
 const EDIT_VERTICES_OUTER = 'edit-vertices-outer';
 const EDIT_VERTICES_INNER = 'edit-vertices-inner';
 
-function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSiteIdentify, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, isChoroplethEnabled: isChoroplethEnabledProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
+function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSiteIdentify, onMapExtentChange, onStatisticsChange, isPanelOpen, isQuad, siteId, siteBounds, isBoundaryEditMode, siteGeometry, onBoundaryUpdate, isSwiperEnabled: isSwiperEnabledProp, colorScaleMode, colorScaleType, rangeMode = 'domain', swiperPosition, onSwiperPositionChange, is3DMode: is3DModeProp, isIdentifyMode: isIdentifyModeProp, choroplethOpacity: choroplethOpacityProp, isGoogleBasemap: isGoogleBasemapProp, onGoogleBasemapChange, showNavigation = true, refreshKey, onReady, siteIndicators }: MapViewProps) {
   const { colors: attributeColors, loading: attributeColorsLoading } = useAttributeColors();
   const { details: attributeDetails } = useAttributeDetails();
   const { colors: scenarioColors } = useScenarioColors();
@@ -1004,7 +1011,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
   // Identify and choropleth visibility. Owned by App: they act on every pane,
   // so they cannot be pane state.
   const isIdentifyMode = isIdentifyModeProp ?? false;
-  const isChoroplethEnabled = isChoroplethEnabledProp ?? true;
+  // 0-100: 0 is fully hidden (the choropleth layers are removed entirely,
+  // same as the old on/off toggle), 100 is fully opaque. Anywhere between
+  // is a live fill-opacity, driven by the popover slider under the "hide
+  // choropleth" button.
+  const choroplethOpacity = choroplethOpacityProp ?? 100;
+  const choroplethOpacityRef = useRef(choroplethOpacity);
+  choroplethOpacityRef.current = choroplethOpacity;
+  const isChoroplethEnabled = choroplethOpacity > 0;
   const isChoroplethEnabledRef = useRef(isChoroplethEnabled);
   isChoroplethEnabledRef.current = isChoroplethEnabled;
 
@@ -1041,6 +1055,12 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
   isIdentifyModeRef.current = isIdentifyMode;
   const onIdentifyRef = useRef(onIdentify);
   onIdentifyRef.current = onIdentify;
+  // The catchment id the identify highlight's in-flight geometry fetch is
+  // currently for — lets a late-arriving response recognise it has been
+  // superseded (a new click, or the identify dock closing) and discard
+  // itself instead of drawing a stale highlight. See the addHighlight
+  // effect below.
+  const latestHighlightRequestRef = useRef<string | null>(null);
 
   // Store map extent change callback in ref
   const lastExtentSignatureRef = useRef<string>('');
@@ -1303,7 +1323,14 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
         // traffic for single-map users purely to feed the right-scenario
         // extent statistics — which every consumer already null-guards (the
         // dial and chart fallbacks drop to the left-scenario branch).
-        const isDetailBand = band.sourceLayer === CATCHMENT_TILE_SOURCE_LAYER;
+        // The hex band (--legacy's own low-zoom stand-in for real lev12
+        // boundaries — see generate_catchment_hexagons.py) carries the same
+        // per-catchment lev12 values as the detail band, just under a
+        // different geometry/sourceLayer; its values need the same
+        // viewport-scoped bbox fetch, not the bbox-independent full-domain
+        // one the genuinely coarse lev04/06/08 aggregates use.
+        const isDetailBand = band.sourceLayer === CATCHMENT_TILE_SOURCE_LAYER
+          || band.sourceLayer === `${CATCHMENT_TILE_SOURCE_LAYER}_hex`;
         const valueBounds = isDetailBand ? bounds : FULL_DOMAIN_VALUE_BOUNDS;
         const [leftValues, rightValues] = await Promise.all([
           fetchChoroplethValues(c.leftScenario, c.attribute, valueBounds, band.minzoom, siteId, browserIdealOverrides, abort.signal),
@@ -2115,9 +2142,13 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     try {
       const useOpacityScale = Boolean(attributeColor);
-      const fillOpacity = isGoogleBasemapRef.current
+      const baseFillOpacity = isGoogleBasemapRef.current
         ? CHOROPLETH_FILL_OPACITY_SATELLITE
         : CHOROPLETH_FILL_OPACITY_DEFAULT;
+      // The transparency slider scales down from whichever base the basemap
+      // already calls for, rather than overriding it -- satellite's own
+      // reduced opacity and the user's slider compose instead of fighting.
+      const fillOpacity = baseFillOpacity * (choroplethOpacityRef.current / 100);
 
       const sourceLayer = ensureChoroplethSource(map, side, sourceId, source);
       const value: ChoroplethValueAccessor = source.kind === 'tiles'
@@ -2258,7 +2289,22 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
           // Labels only on the tile path: its features are real catchments
           // with a HYBAS_ID; the GeoJSON fallback's aggregated cells are not.
           if (source.kind === 'tiles' && !map.getLayer(debugLabelLayerId)) {
-            const levelDigits = source.band.sourceLayer.replace('catchments_lev', '');
+            // .replace, not .slice: the --legacy hex band's sourceLayer
+            // carries the same lev12 id namespace under a _hex suffix (see
+            // generate_catchment_hexagons.py) -- the label should still say
+            // "L12", the level this catchment actually is, not "L12_hex".
+            const levelDigits = source.band.sourceLayer.replace(/^catchments_lev(\d{2})(?:_hex)?$/, '$1');
+            // The indicator value joined onto this feature as MapLibre
+            // feature-state (see CHOROPLETH_VALUE_STATE_KEY) — the same
+            // number the fill colour is painted from, so a label and its
+            // colour can be cross-checked by eye. Blank rather than "null"
+            // or "NaN" before the join completes or when a catchment has
+            // no data for this indicator.
+            const debugValueExpression: ExpressionSpecification = [
+              'case',
+              ['==', ['feature-state', CHOROPLETH_VALUE_STATE_KEY], null], '',
+              ['number-format', ['feature-state', CHOROPLETH_VALUE_STATE_KEY], { 'max-fraction-digits': 1 }],
+            ];
             map.addLayer({
               id: debugLabelLayerId,
               type: 'symbol',
@@ -2266,7 +2312,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
               ...sourceLayerSpec,
               layout: {
                 'symbol-placement': 'point',
-                'text-field': ['concat', `L${levelDigits} `, ['to-string', ['get', 'HYBAS_ID']]],
+                'text-field': ['concat', `L${levelDigits} `, ['to-string', ['get', 'HYBAS_ID']], '\n', debugValueExpression],
                 // The one font stack the glyph proxy is known to serve (see
                 // handleGlyphProxy); the default stack asks for fonts this
                 // style does not carry.
@@ -2537,6 +2583,28 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     // every render, so depending on it directly would re-run this constantly.
     applyColorsRef.current();
   }, [isChoroplethEnabled]);
+
+  // Live transparency-slider updates: when the choropleth is already
+  // showing, push the new fill-opacity straight onto the existing layers
+  // instead of re-running the whole colour pipeline on every drag tick --
+  // getLayer no-ops harmlessly if a layer isn't there (the isChoroplethEnabled
+  // effect above handles creating/removing it at the 0 crossing).
+  const appliedOpacityRef = useRef(choroplethOpacity);
+  useEffect(() => {
+    if (appliedOpacityRef.current === choroplethOpacity) return;
+    appliedOpacityRef.current = choroplethOpacity;
+    const baseFillOpacity = isGoogleBasemapRef.current
+      ? CHOROPLETH_FILL_OPACITY_SATELLITE
+      : CHOROPLETH_FILL_OPACITY_DEFAULT;
+    const fillOpacity = baseFillOpacity * (choroplethOpacity / 100);
+    for (const [map, side] of [[leftMapRef.current, 'left'], [rightMapRef.current, 'right']] as const) {
+      if (!map || !map.style) continue;
+      const layerId = `choropleth-${side}`;
+      const layer3dId = `${layerId}-3d`;
+      if (map.getLayer(layerId)) map.setPaintProperty(layerId, 'fill-opacity', fillOpacity);
+      if (map.getLayer(layer3dId)) map.setPaintProperty(layer3dId, 'fill-extrusion-opacity', fillOpacity);
+    }
+  }, [choroplethOpacity]);
 
   // Update cursor when identify mode changes
   useEffect(() => {
@@ -3662,72 +3730,65 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       if (map.getLayer(IDENTIFY_HIGHLIGHT_GLOW)) map.removeLayer(IDENTIFY_HIGHLIGHT_GLOW);
     };
 
-    // Helper to add neon blue glow highlight to a catchment
-    const addHighlight = (map: maplibregl.Map, side: 'left' | 'right', catchmentId: string) => {
+    // Helper to add neon blue glow highlight to a catchment. GOLDEN RULE:
+    // identify always resolves lev12 (see handleIdentifyClick), and the
+    // highlight has to show that real lev12 boundary regardless of which
+    // multi-resolution band (lev04/06/08/12) happens to be rendered at the
+    // current zoom — filtering the currently-active choropleth source by
+    // id used to silently draw nothing whenever that source's own band
+    // wasn't lev12 detail, since the id simply isn't present in a coarser
+    // band's tiles. Fetching just this one catchment's geometry and
+    // drawing it as its own GeoJSON source sidesteps the band entirely;
+    // the request is scoped to a single id, so it stays small regardless
+    // of which catchment was clicked.
+    const addHighlight = (map: maplibregl.Map, catchmentId: string) => {
       removeHighlight(map);
 
-      // Use the same per-side choropleth source the color layer already renders
-      // from (always present once a choropleth is showing) rather than the base
-      // style's "UoW Tiles" vector source, which doesn't exist at all when the
-      // Google satellite basemap is active — the default for browser runtime —
-      // leaving the highlight silently missing.
-      const sourceId = `choropleth-source-${side}`;
+      fetch(`/api/catchments/geometry/${catchmentId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((feature: GeoJSON.Feature | null) => {
+          if (!feature || !map.style) return;
+          // The identify target may have changed again, or been cleared,
+          // while this request was in flight — don't draw a stale result.
+          if (latestHighlightRequestRef.current !== catchmentId) return;
 
-      // Check if the source exists
-      const choroplethSource = map.getSource(sourceId);
-      if (!choroplethSource) {
-        console.warn('Identify highlight: source not found:', sourceId);
-        return;
-      }
+          const existingSource = map.getSource(IDENTIFY_HIGHLIGHT_SOURCE) as maplibregl.GeoJSONSource | undefined;
+          if (existingSource) {
+            existingSource.setData(feature);
+          } else {
+            map.addSource(IDENTIFY_HIGHLIGHT_SOURCE, { type: 'geojson', data: feature });
+          }
 
-      // On the vector-tile path the source has a layer within it. Which one
-      // depends on the active catchment band — a split-tileset source below
-      // lev12 detail carries only its own band's source-layer
-      // (catchments_lev04/06/08), not catchments_lev12 — so this reads
-      // whichever layer ensureChoroplethSource actually installed on this
-      // source (_tileSourceBandByMap), falling back to the lev12 constant
-      // for the legacy combined tileset where it is always correct. Getting
-      // this wrong doesn't error, it just silently highlights nothing: the
-      // filter would reference a source-layer with no features in it.
-      //
-      // The tiles may encode HYBAS_ID as a string — to-number normalises
-      // both encodings so the same filter works whichever transport is in
-      // use.
-      const sourceLayerSpec = choroplethSource.type === 'vector'
-        ? { 'source-layer': _tileSourceBandByMap.get(map)?.[sourceId] ?? CATCHMENT_TILE_SOURCE_LAYER }
-        : {};
-      const catchmentIdNum = parseInt(catchmentId, 10);
-      const idFilter: FilterSpecification =
-        ['==', ['to-number', ['get', CATCHMENT_ID_PROP]], catchmentIdNum];
+          // Add outer glow layer (neon blue)
+          if (!map.getLayer(IDENTIFY_HIGHLIGHT_GLOW)) {
+            map.addLayer({
+              id: IDENTIFY_HIGHLIGHT_GLOW,
+              type: 'line',
+              source: IDENTIFY_HIGHLIGHT_SOURCE,
+              paint: {
+                'line-color': '#00BFFF',  // Bright blue
+                'line-width': 12,
+                'line-blur': 8,
+                'line-opacity': 0.7,
+              },
+            });
+          }
 
-      // Add outer glow layer (neon blue)
-      map.addLayer({
-        id: IDENTIFY_HIGHLIGHT_GLOW,
-        type: 'line',
-        source: sourceId,
-        ...sourceLayerSpec,
-        filter: idFilter,
-        paint: {
-          'line-color': '#00BFFF',  // Bright blue
-          'line-width': 12,
-          'line-blur': 8,
-          'line-opacity': 0.7,
-        },
-      });
-
-      // Add inner bright line (pale blue)
-      map.addLayer({
-        id: IDENTIFY_HIGHLIGHT_LINE,
-        type: 'line',
-        source: sourceId,
-        ...sourceLayerSpec,
-        filter: idFilter,
-        paint: {
-          'line-color': '#AEEFFF',  // Pale blue
-          'line-width': 4,
-          'line-opacity': 1,
-        },
-      });
+          // Add inner bright line (pale blue)
+          if (!map.getLayer(IDENTIFY_HIGHLIGHT_LINE)) {
+            map.addLayer({
+              id: IDENTIFY_HIGHLIGHT_LINE,
+              type: 'line',
+              source: IDENTIFY_HIGHLIGHT_SOURCE,
+              paint: {
+                'line-color': '#AEEFFF',  // Pale blue
+                'line-width': 4,
+                'line-opacity': 1,
+              },
+            });
+          }
+        })
+        .catch((err) => console.error('Identify highlight fetch error:', err));
     };
 
     // Remove existing highlights
@@ -3736,8 +3797,11 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     // Add highlight if there's an identify result
     if (identifyResult?.catchmentID) {
-      addHighlight(leftMap, 'left', identifyResult.catchmentID);
-      if (rightMap) addHighlight(rightMap, 'right', identifyResult.catchmentID);
+      latestHighlightRequestRef.current = identifyResult.catchmentID;
+      addHighlight(leftMap, identifyResult.catchmentID);
+      if (rightMap) addHighlight(rightMap, identifyResult.catchmentID);
+    } else {
+      latestHighlightRequestRef.current = null;
     }
   // isSwiperEnabled: the right map is created and destroyed with compare mode,
   // so a highlight raised while it was absent has to be mirrored onto it.

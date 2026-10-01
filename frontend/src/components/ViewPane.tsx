@@ -61,7 +61,7 @@ interface ViewPaneProps {
   is3DMode?: boolean;
   // Global map toggles: one control in the header, every pane reflects it.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   showNavigation?: boolean;
@@ -135,7 +135,7 @@ function ViewPane({
   colorScaleType,
   is3DMode,
   isIdentifyMode,
-  isChoroplethEnabled,
+  choroplethOpacity,
   isGoogleBasemap,
   onGoogleBasemapChange,
   showNavigation,
@@ -841,7 +841,7 @@ function ViewPane({
           rangeMode={rangeMode}
           is3DMode={is3DMode}
           isIdentifyMode={isIdentifyMode}
-          isChoroplethEnabled={isChoroplethEnabled}
+          choroplethOpacity={choroplethOpacity}
           isGoogleBasemap={isGoogleBasemap}
           onGoogleBasemapChange={onGoogleBasemapChange}
           showNavigation={showNavigation}

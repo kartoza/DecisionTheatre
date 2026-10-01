@@ -35,7 +35,7 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('MapDebugOverlay', () => {
-  it('shows the zoom, the active band with its overzoom factor, and the app layers', async () => {
+  it('shows the zoom, centre, and the active catchment level as one big-text line', async () => {
     const mapRef = { current: fakeMap(3) };
     const tilesetRef = { current: SPLIT };
 
@@ -52,12 +52,10 @@ describe('MapDebugOverlay', () => {
 
     const overlay = screen.getByTestId('map-debug-overlay');
     expect(overlay.textContent).toContain('z 3.00');
-    // z3 on a band tiled at z0 is 8x overzoom — the number this overlay
-    // exists to make visible.
-    expect(overlay.textContent).toContain('tiles catchments_lev04 @z0 split, overzoom x8.0');
-    expect(overlay.textContent).toContain('choropleth-left [catchments_lev04]');
-    // 'too-deep' (minzoom 10) is not visible at z3: 2 of 3 layers are.
-    expect(overlay.textContent).toContain('2 layers visible');
+    // z3 falls in the lev04 band (tiled at z0, overzoomed) — the level
+    // number is the one fact this overlay exists to make visible, not the
+    // overzoom factor or a dump of every matching style layer.
+    expect(overlay.textContent).toContain('Catchments Level 04');
   });
 
   it('names the GeoJSON fallback when there is no catchment tileset', async () => {
@@ -72,7 +70,7 @@ describe('MapDebugOverlay', () => {
     await act(async () => { vi.advanceTimersByTime(350); });
     await act(async () => { vi.advanceTimersToNextFrame(); });
 
-    expect(screen.getByTestId('map-debug-overlay').textContent).toContain('geojson fallback (no catchment tileset)');
+    expect(screen.getByTestId('map-debug-overlay').textContent).toContain('Catchments: GeoJSON fallback');
   });
 });
 
