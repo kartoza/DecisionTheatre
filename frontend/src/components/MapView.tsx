@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Box, IconButton, Tooltip, Icon, VStack, Button, Flex, Text } from '@chakra-ui/react';
 import { FiSliders, FiMap, FiPlus, FiMinus, FiTrash2 } from 'react-icons/fi';
@@ -166,11 +169,18 @@ const CATCHMENT_ID_PROP = 'HYBAS_ID';
 // controlled entirely on the backend.
 const MIN_CATCHMENT_ZOOM = 3;
 
-// Choropleth fill-opacity depends on which basemap is showing beneath it:
-// the busier Google satellite imagery needs a touch of transparency to read
-// as an overlay, while the flat vector basemap can take full opacity.
-const CHOROPLETH_FILL_OPACITY_SATELLITE = 0.80;
-const CHOROPLETH_FILL_OPACITY_DEFAULT = 1;
+// The transparency slider is the single source of truth for choropleth
+// fill-opacity: slider = 100 must mean fully opaque (fill-opacity: 1),
+// full stop, regardless of basemap. A previous version of this dimmed the
+// satellite basemap's ceiling to 0.80 for readability, by multiplying it
+// into the slider's own fraction -- which meant slider=100 over satellite
+// rendered at 0.80, not 1 (reported: "transparency slider ... at 100% must
+// make the layer completely opaque"). Resolve both calls through this one
+// helper so the two in-file duplicates (initial paint vs. the opacity-only
+// update effect) can't drift apart again.
+export function choroplethFillOpacity(sliderPercent: number): number {
+  return Math.max(0, Math.min(100, sliderPercent)) / 100;
+}
 const CHOROPLETH_OUTLINE_COLOR = 'rgba(255, 255, 255, 0.005)';
 const CHOROPLETH_EDGE_BLEND_WIDTH = 2.4;
 const CHOROPLETH_EDGE_BLEND_BLUR = 3.4;
@@ -1016,7 +1026,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
   // same as the old on/off toggle), 100 is fully opaque. Anywhere between
   // is a live fill-opacity, driven by the popover slider under the "hide
   // choropleth" button.
-  const choroplethOpacity = choroplethOpacityProp ?? 100;
+  const choroplethOpacity = choroplethOpacityProp ?? 90;
   const choroplethOpacityRef = useRef(choroplethOpacity);
   choroplethOpacityRef.current = choroplethOpacity;
   const isChoroplethEnabled = choroplethOpacity > 0;
@@ -2159,13 +2169,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
 
     try {
       const useOpacityScale = Boolean(attributeColor);
-      const baseFillOpacity = isGoogleBasemapRef.current
-        ? CHOROPLETH_FILL_OPACITY_SATELLITE
-        : CHOROPLETH_FILL_OPACITY_DEFAULT;
-      // The transparency slider scales down from whichever base the basemap
-      // already calls for, rather than overriding it -- satellite's own
-      // reduced opacity and the user's slider compose instead of fighting.
-      const fillOpacity = baseFillOpacity * (choroplethOpacityRef.current / 100);
+      const fillOpacity = choroplethFillOpacity(choroplethOpacityRef.current);
 
       const sourceLayer = ensureChoroplethSource(map, side, sourceId, source);
       const value: ChoroplethValueAccessor = source.kind === 'tiles'
@@ -2610,10 +2614,7 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
   useEffect(() => {
     if (appliedOpacityRef.current === choroplethOpacity) return;
     appliedOpacityRef.current = choroplethOpacity;
-    const baseFillOpacity = isGoogleBasemapRef.current
-      ? CHOROPLETH_FILL_OPACITY_SATELLITE
-      : CHOROPLETH_FILL_OPACITY_DEFAULT;
-    const fillOpacity = baseFillOpacity * (choroplethOpacity / 100);
+    const fillOpacity = choroplethFillOpacity(choroplethOpacity);
     for (const [map, side] of [[leftMapRef.current, 'left'], [rightMapRef.current, 'right']] as const) {
       if (!map || !map.style) continue;
       const layerId = `choropleth-${side}`;

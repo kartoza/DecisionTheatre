@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The map transparency slider didn't reach true opacity at 100%.**
+  Reported directly. The satellite basemap's own fill-opacity dimming
+  (0.80, for readability under busy imagery) multiplied into the user's
+  slider value instead of being capped by it, so slider = 100% over
+  satellite rendered at 0.80, not 1. `choroplethFillOpacity()` is now the
+  slider's own fraction and nothing else, for every basemap. The slider's
+  starting position is 90 rather than a flat 100, by request.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before

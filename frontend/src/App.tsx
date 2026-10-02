@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
@@ -115,8 +117,10 @@ function App() {
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
   // 0-100: 0 is fully hidden, 100 is fully opaque. Replaces what used to be
   // a plain on/off toggle so the "hide choropleth" button's popover slider
-  // has a continuous value to drive, not just two states.
-  const [choroplethOpacity, setChoroplethOpacity] = useState(100);
+  // has a continuous value to drive, not just two states. Starts at 90
+  // rather than fully opaque, by request -- a touch of basemap still
+  // showing through reads better as a starting point than a flat 100.
+  const [choroplethOpacity, setChoroplethOpacity] = useState(90);
   const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
