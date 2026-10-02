@@ -135,6 +135,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/compare", h.handleComparisonData).Methods("GET")
 	r.HandleFunc("/catchment/{id}", h.handleCatchmentIdentify).Methods("GET")
 
+	// Resolves a clicked map point to the lev12 catchment containing it,
+	// regardless of which multi-resolution band is rendered at that zoom.
+	r.HandleFunc("/catchments/at-point", h.handleCatchmentAtPoint).Methods("GET")
+
 	// Choropleth endpoint - returns GeoJSON filtered by bbox
 	r.HandleFunc("/choropleth", h.handleChoropleth).Methods("GET")
 
@@ -430,6 +434,8 @@ func (h *Handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"satellite_attribution":    satelliteAttribution,
 		"satellite_available":      h.cfg.SatelliteAvailable(),
 		"satellite_quota_exceeded": quotaExceeded,
+		"debug_overlay":            h.cfg.DebugOverlay,
+		"legacy_catchments":        h.cfg.LegacyCatchments,
 	}
 	respondJSON(w, http.StatusOK, info)
 }
@@ -727,6 +733,42 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 	respondJSON(w, http.StatusOK, data)
 }
 
+// handleCatchmentAtPoint resolves the lev12 catchment containing a clicked
+// map point. GOLDEN RULE: catchment identification always reads lev12,
+// regardless of which multi-resolution band (lev04/06/08/12) happens to be
+// rendered at the caller's current zoom - see FindCatchmentIDAtPoint. The
+// frontend's identify click calls this first to get an id, then
+// handleCatchmentIdentify above for that id's attributes.
+func (h *Handler) handleCatchmentAtPoint(w http.ResponseWriter, r *http.Request) {
+	if h.gpkgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "geopackage store not available")
+		return
+	}
+
+	lng, errLng := strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+	lat, errLat := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
+	if errLng != nil || errLat != nil {
+		respondError(w, http.StatusBadRequest, "lng and lat query parameters are required")
+		return
+	}
+
+	id, err := h.gpkgStore.FindCatchmentIDAtPoint(r.Context(), lng, lat)
+	if err != nil {
+		respondStoreError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if id == "" {
+		if clientGone(r) {
+			respondCancelled(w, r)
+			return
+		}
+		respondError(w, http.StatusNotFound, "no catchment at that point")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
 // ChoroplethResponse wraps a FeatureCollection with domain range for consistent color scaling
 type ChoroplethResponse struct {
 	Type      string                   `json:"type"`
@@ -992,7 +1034,11 @@ func (h *Handler) handleFullDomainStats(w http.ResponseWriter, r *http.Request) 
 // geometry again on an attribute switch is exactly the cost the tile path is
 // there to remove.
 //
-// Query params: scenario, attribute, minx, miny, maxx, maxy, siteId (optional).
+// Query params: scenario, attribute, minx, miny, maxx, maxy, siteId
+// (optional), zoom (optional). With zoom, the values come from the catchment
+// level the tiles carry in that zoom band (see basinLevelForZoom) so the
+// feature-state join keys match; without it, behaviour is unchanged: lev12
+// values for the bbox.
 func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	q := r.URL.Query()
@@ -1003,7 +1049,7 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 	attribute := q.Get("attribute")
 	count := 0
 	defer func() {
-		log.Printf("[perf] handleCatchmentValues scenario=%s attribute=%s values=%d duration_ms=%d", scenario, attribute, count, time.Since(start).Milliseconds())
+		log.Printf("[perf] handleCatchmentValues scenario=%s attribute=%s zoom=%s values=%d duration_ms=%d", scenario, attribute, q.Get("zoom"), count, time.Since(start).Milliseconds())
 	}()
 
 	if h.gpkgStore == nil {
@@ -1029,7 +1075,27 @@ func (h *Handler) handleCatchmentValues(w http.ResponseWriter, r *http.Request) 
 		queryScenario = "reference"
 	}
 
-	values, err := h.gpkgStore.QueryCatchmentValueArrays(r.Context(), queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	var values *geodata.CatchmentValues
+	var err error
+	// GOLDEN RULE: --legacy serves lev12 geometry at every zoom, so its
+	// values must stay lev12 too, never aggregated. The band it renders
+	// from spans z2-z12 in one piece, but the client still sends that
+	// band's own canonical zoom (its minzoom, e.g. 2) as the zoom param -
+	// indistinguishable, on this endpoint alone, from a genuinely coarse
+	// multi-resolution request, which basinLevelForZoom would otherwise
+	// read as "aggregate to lev04". Skipping straight to the unaggregated
+	// query here is what keeps a lev12 catchment's own value on its own
+	// polygon instead of smearing its parent basin's aggregate across it.
+	if zoomParam := q.Get("zoom"); zoomParam != "" && !h.cfg.LegacyCatchments {
+		zoom, parseErr := strconv.ParseFloat(zoomParam, 64)
+		if parseErr != nil {
+			respondError(w, http.StatusBadRequest, "invalid zoom parameter")
+			return
+		}
+		values, err = h.gpkgStore.QueryCatchmentValueArraysForZoom(r.Context(), queryScenario, attribute, zoom, bbox[0], bbox[1], bbox[2], bbox[3])
+	} else {
+		values, err = h.gpkgStore.QueryCatchmentValueArrays(r.Context(), queryScenario, attribute, bbox[0], bbox[1], bbox[2], bbox[3])
+	}
 	if err != nil {
 		respondStoreError(w, r, http.StatusInternalServerError, err)
 		return

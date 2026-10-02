@@ -32,6 +32,11 @@ import {
   satelliteUnavailable,
   subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
+import {
+  catchmentBandSourceSpec,
+  catchmentTileSourceSpec,
+  fetchCatchmentTileset,
+} from '../lib/choroplethTiles';
 
 const MAX_SEARCH_RESULTS = 8;
 const SEARCH_FLY_ZOOM = 10;
@@ -424,53 +429,15 @@ function SiteCreationMap({
       mapRef.current = map;
       setIsMapReady(true);
 
-      // The shared basemap style doesn't include catchment boundary layers,
-      // so add them here — otherwise catchments are invisible under the
-      // ecoregion/country fills with nothing to select against.
-      if (!map.getLayer('Catchments Fill')) {
-        map.addLayer({
-          id: 'Catchments Fill',
-          type: 'fill',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'fill-color': 'rgba(60, 140, 180, 0.1)',
-            'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
-          },
-        });
-      }
-      if (!map.getLayer('Catchments Outlines')) {
-        map.addLayer({
-          id: 'Catchments Outlines',
-          type: 'line',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'line-color': 'rgba(60, 140, 180, 0.6)',
-            'line-width': 2.5,
-          },
-        });
-      }
-
-      // Add a transparent fill layer for catchment selection (clickable area)
-      // This must be added after the base style loads
-      if (!map.getLayer('catchments-selectable-fill')) {
-        // Check if the Catchments Outlines layer exists in the style
-        const beforeLayer = map.getLayer('Catchments Outlines') ? 'Catchments Outlines' : undefined;
-        map.addLayer({
-          id: 'catchments-selectable-fill',
-          type: 'fill',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'fill-color': 'transparent',
-            'fill-opacity': 0,
-          },
-        }, beforeLayer); // Insert below the outlines if layer exists
-      }
+      // Catchment boundary/selection layers are added separately (see the
+      // addCatchmentSelectionLayers effect below) — they need the real
+      // catchment tileset resolved first, which 'UoW Tiles' (the shared
+      // basemap source) does not carry: catchments ship as their own
+      // tileset, split out so MapLibre can overzoom them independently
+      // (see choroplethTiles.ts). A layer bound to 'UoW Tiles' with
+      // source-layer catchments_lev12 would reference a source-layer the
+      // combined tileset's tiles simply do not have, and render nothing —
+      // which is what made catchment selection here silently unclickable.
 
       // Default to satellite in browser runtime — inject it beneath all vector layers
       if (getAppRuntime() === 'browser') {
@@ -528,6 +495,93 @@ function SiteCreationMap({
   // useEffect has a missing dependency: 'addGeometryToMap'
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [initialGeometry, boundingBox, initialExtent]);
+
+  // Add the catchment boundary/selection layers once the map is ready and
+  // the real catchment tileset has resolved. Split out from the big map-init
+  // effect above because tileset resolution is async (fetchCatchmentTileset
+  // hits the network, or — the common case once anything else on the page
+  // has already asked — resolves from its module-level cache on the next
+  // microtask) and the rest of that effect's sequencing (satellite basemap,
+  // initial geometry fit) does not need to wait on it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady) return;
+    if (map.getLayer('catchments-selectable-fill')) return; // already added
+
+    let cancelled = false;
+    void fetchCatchmentTileset().then((tileset) => {
+      if (cancelled || !mapRef.current || mapRef.current !== map) return;
+
+      // The detail (finest) band is always last once bands are sorted by
+      // minzoom — see bandForZoom in choroplethTiles.ts. Falls back to the
+      // legacy combined-tileset source when no separate catchments tileset
+      // exists at all (a datapack from before catchments were split out),
+      // in which case source-layer catchments_lev12 on 'UoW Tiles' really
+      // is correct, exactly as this code originally assumed.
+      const detailBand = tileset?.bands[tileset.bands.length - 1] ?? null;
+      const sourceSpec = detailBand && tileset
+        ? (catchmentBandSourceSpec(detailBand) ?? catchmentTileSourceSpec(tileset))
+        : null;
+      const sourceId = sourceSpec ? 'site-catchments' : 'UoW Tiles';
+      const sourceLayer = detailBand?.sourceLayer ?? 'catchments_lev12';
+
+      if (sourceSpec && !map.getSource('site-catchments')) {
+        map.addSource('site-catchments', sourceSpec);
+      }
+
+      if (!map.getLayer('Catchments Fill')) {
+        map.addLayer({
+          id: 'Catchments Fill',
+          type: 'fill',
+          source: sourceId,
+          'source-layer': sourceLayer,
+          minzoom: 8,
+          paint: {
+            'fill-color': 'rgba(60, 140, 180, 0.1)',
+            'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
+          },
+        });
+        // Match the one-shot satellite-basemap hide pass in the map-init
+        // effect, which already ran by the time this (async) layer exists.
+        if (isGoogleBasemapRef.current) {
+          map.setLayoutProperty('Catchments Fill', 'visibility', 'none');
+          hiddenLayersRef.current = [...hiddenLayersRef.current, 'Catchments Fill'];
+        }
+      }
+      if (!map.getLayer('Catchments Outlines')) {
+        map.addLayer({
+          id: 'Catchments Outlines',
+          type: 'line',
+          source: sourceId,
+          'source-layer': sourceLayer,
+          minzoom: 8,
+          paint: {
+            'line-color': 'rgba(60, 140, 180, 0.6)',
+            'line-width': 2.5,
+          },
+        });
+      }
+      // Transparent fill purely for click detection (queryRenderedFeatures
+      // needs a layer to query against; a line layer alone has no hit area
+      // across a polygon's interior).
+      if (!map.getLayer('catchments-selectable-fill')) {
+        const beforeLayer = map.getLayer('Catchments Outlines') ? 'Catchments Outlines' : undefined;
+        map.addLayer({
+          id: 'catchments-selectable-fill',
+          type: 'fill',
+          source: sourceId,
+          'source-layer': sourceLayer,
+          minzoom: 8,
+          paint: {
+            'fill-color': 'transparent',
+            'fill-opacity': 0,
+          },
+        }, beforeLayer);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [isMapReady]);
 
   useEffect(() => {
     if (mode !== 'catchments') {

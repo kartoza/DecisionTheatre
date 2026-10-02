@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Button, HStack, Icon, IconButton, Menu, MenuButton, MenuDivider,
-  MenuItem, MenuList, Spinner, Tooltip, useColorModeValue,
+  MenuItem, MenuList, Popover, PopoverArrow, PopoverBody, PopoverCloseButton,
+  PopoverContent, PopoverTrigger, Slider, SliderFilledTrack, SliderThumb,
+  SliderTrack, Spinner, Text, Tooltip, useColorModeValue,
 } from '@chakra-ui/react';
 import {
   FiBarChart2, FiBox, FiColumns, FiEdit2, FiGlobe, FiInfo, FiMap,
-  FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget,
+  FiMinus, FiMoreHorizontal, FiPlus, FiSquare, FiTable, FiTarget, FiTool,
 } from 'react-icons/fi';
 import { BsSpeedometer2 } from 'react-icons/bs';
 import { colors } from '../styles/colors';
 import type { RangeMode, ViewMode } from '../types';
 import { satelliteUnavailable, subscribeSatelliteUnavailable } from '../lib/satelliteBasemap';
+import { setDebugFeaturesEnabled, useDebugFeaturesToggle, useDebugOverlayEnabled } from './MapDebugOverlay';
 
 /**
  * The controls that act on the whole grid, in one place.
@@ -57,6 +60,11 @@ const STRINGS = {
   view2D: 'Show flat map',
   showChoropleth: 'Show choropleth',
   hideChoropleth: 'Hide choropleth',
+  choroplethTransparency: 'Choropleth transparency',
+  hide: 'Hide',
+  show: 'Show',
+  closeTransparencyPopover: 'Close',
+  choroplethOpacitySlider: 'Choropleth opacity',
   identifyOn: 'Identify catchment',
   identifyOff: 'Stop identifying',
   satelliteOn: 'Switch to satellite',
@@ -64,6 +72,8 @@ const STRINGS = {
   satelliteUnavailable: 'Satellite imagery is unavailable',
   swiperOn: 'Enable map swiper',
   swiperOff: 'Disable map swiper',
+  debugOn: 'Show debug overlay and outlines',
+  debugOff: 'Hide debug overlay and outlines',
   zoomToSite: 'Zoom to site',
 } as const;
 
@@ -171,6 +181,71 @@ function ToggleButton({
   );
 }
 
+/**
+ * The "hide choropleth" button opens a popover with a transparency slider
+ * instead of toggling instantly: the left end is fully hidden, the right
+ * end is fully opaque, and everywhere between is a live fill-opacity, so
+ * the basemap can show through the colour overlay by degrees rather than
+ * only on or off. Pops down from the button like a speech bubble — an
+ * arrow points back at it — so the connection between the two reads at a
+ * glance. The small close button in the corner only dismisses the
+ * popover; the map keeps whatever opacity was last set.
+ */
+function ChoroplethOpacityControl({
+  opacity, onChange,
+}: {
+  opacity: number;
+  onChange?: (value: number) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const offFg = useColorModeValue('gray.600', 'gray.300');
+  const isOn = opacity > 0;
+
+  return (
+    <Popover isOpen={isOpen} onOpen={() => setIsOpen(true)} onClose={() => setIsOpen(false)} placement="bottom">
+      <PopoverTrigger>
+        <IconButton
+          aria-label={STRINGS.choroplethTransparency}
+          aria-pressed={isOn}
+          icon={<FiMap />}
+          size="sm"
+          variant="ghost"
+          minW={8}
+          bg={isOn ? TONE_MAP.selectedBg : 'transparent'}
+          color={isOn ? TONE_MAP.selectedFg : offFg}
+          borderBottom="2px solid"
+          borderColor={isOn ? TONE_MAP.underline : 'transparent'}
+          _hover={{ bg: isOn ? TONE_MAP.selectedBg : 'blackAlpha.100' }}
+        />
+      </PopoverTrigger>
+      <PopoverContent w="220px" bg="gray.800" borderColor="whiteAlpha.300" color="white">
+        <PopoverArrow bg="gray.800" />
+        <PopoverCloseButton aria-label={STRINGS.closeTransparencyPopover} />
+        <PopoverBody pt={3} pb={4}>
+          <Text fontSize="xs" fontWeight="600" mb={3}>{STRINGS.choroplethTransparency}</Text>
+          <Slider
+            aria-label={STRINGS.choroplethOpacitySlider}
+            value={opacity}
+            min={0}
+            max={100}
+            colorScheme="cyan"
+            onChange={(value) => onChange?.(value)}
+          >
+            <SliderTrack bg="whiteAlpha.200">
+              <SliderFilledTrack />
+            </SliderTrack>
+            <SliderThumb />
+          </Slider>
+          <HStack justify="space-between" mt={1}>
+            <Text fontSize="xs" color="gray.400">{STRINGS.hide}</Text>
+            <Text fontSize="xs" color="gray.400">{STRINGS.show}</Text>
+          </HStack>
+        </PopoverBody>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 interface MapToggle {
   key: string;
   label: string;
@@ -189,11 +264,13 @@ interface MapToggle {
  * get two breakpoints would reintroduce the problem one level up.
  */
 function MapToggleCluster({
-  toggles, siteId, dividerColor,
+  toggles, siteId, dividerColor, choroplethOpacity, onChoroplethOpacityChange,
 }: {
   toggles: MapToggle[];
   siteId?: string | null;
   dividerColor: string;
+  choroplethOpacity?: number;
+  onChoroplethOpacityChange?: (opacity: number) => void;
 }) {
   if (toggles.length === 0) return null;
   return (
@@ -206,16 +283,28 @@ function MapToggleCluster({
       role="group"
     >
       {toggles.map((t) => (
-        <ToggleButton
-          key={t.key}
-          label={t.label}
-          icon={t.icon}
-          isOn={t.isOn}
-          onToggle={t.onToggle}
-          isDisabled={t.isDisabled}
-          disabledLabel={t.disabledLabel}
-          tone={TONE_MAP}
-        />
+        // The choropleth toggle opens a transparency popover instead of
+        // flipping instantly — everything else stays a plain on/off button.
+        t.key === 'choropleth'
+          ? (
+            <ChoroplethOpacityControl
+              key={t.key}
+              opacity={choroplethOpacity ?? 100}
+              onChange={onChoroplethOpacityChange}
+            />
+          )
+          : (
+            <ToggleButton
+              key={t.key}
+              label={t.label}
+              icon={t.icon}
+              isOn={t.isOn}
+              onToggle={t.onToggle}
+              isDisabled={t.isDisabled}
+              disabledLabel={t.disabledLabel}
+              tone={TONE_MAP}
+            />
+          )
       ))}
       <Tooltip label={STRINGS.zoomToSite} placement="bottom">
         <Box>
@@ -250,8 +339,8 @@ interface GridControlsProps {
   // once per pane; they are drawn once now.
   is3DMode?: boolean;
   onIs3DModeChange?: (enabled: boolean) => void;
-  isChoroplethEnabled?: boolean;
-  onChoroplethEnabledChange?: (enabled: boolean) => void;
+  choroplethOpacity?: number;
+  onChoroplethOpacityChange?: (opacity: number) => void;
   isIdentifyMode?: boolean;
   onIdentifyModeChange?: (enabled: boolean) => void;
   isGoogleBasemap?: boolean;
@@ -407,8 +496,8 @@ function GridControls({
   isExtracting,
   is3DMode = false,
   onIs3DModeChange,
-  isChoroplethEnabled = true,
-  onChoroplethEnabledChange,
+  choroplethOpacity = 100,
+  onChoroplethOpacityChange,
   isIdentifyMode = false,
   onIdentifyModeChange,
   isGoogleBasemap = false,
@@ -423,18 +512,45 @@ function GridControls({
   // Satellite can become unavailable at runtime — quota spent, or no provider
   // configured once /api/info resolves. The button says so rather than offering
   // a switch that silently fails.
+  // Debug toggle: offered decides whether the button exists at all, the
+  // toggle position is module state shared with every MapView (see
+  // MapDebugOverlay) so no prop needs threading between here and there.
+  const isDebugOffered = useDebugOverlayEnabled();
+  const isDebugToggledOn = useDebugFeaturesToggle();
+
   const [noSatellite, setNoSatellite] = useState(satelliteUnavailable);
   useEffect(() => subscribeSatelliteUnavailable(setNoSatellite), []);
 
   // Only meaningful over a map. In chart, dial or table view they would be
   // controls for something not on screen.
   const showMapToggles = viewMode === 'map';
-  const mapToggles: (MapToggle & { on?: (enabled: boolean) => void })[] = ([
+  const isChoroplethEnabled = choroplethOpacity > 0;
+  // `on` only ever needs checking for truthiness (the .filter below) -- its
+  // signature varies per toggle (most take a boolean, choropleth now takes
+  // the slider's 0-100 opacity), so it's typed loosely rather than forcing
+  // every entry's setter to one shape it doesn't have.
+  const mapToggles: (MapToggle & { on?: unknown })[] = ([
     { key: '3d', label: is3DMode ? STRINGS.view2D : STRINGS.view3D, icon: <FiBox />, isOn: is3DMode, onToggle: () => onIs3DModeChange?.(!is3DMode), on: onIs3DModeChange },
-    { key: 'choropleth', label: isChoroplethEnabled ? STRINGS.hideChoropleth : STRINGS.showChoropleth, icon: <FiMap />, isOn: isChoroplethEnabled, onToggle: () => onChoroplethEnabledChange?.(!isChoroplethEnabled), on: onChoroplethEnabledChange },
+    // The popover slider (ChoroplethOpacityControl, rendered by
+    // MapToggleCluster for this key specifically) replaces this entry's own
+    // button in the two icon-toolbar layouts; label/isOn/onToggle below
+    // still back the narrow-screen Menu fallback, which has no anchor to
+    // pop a bubble under and keeps the plain instant hide/show toggle.
+    { key: 'choropleth', label: isChoroplethEnabled ? STRINGS.hideChoropleth : STRINGS.showChoropleth, icon: <FiMap />, isOn: isChoroplethEnabled, onToggle: () => onChoroplethOpacityChange?.(isChoroplethEnabled ? 0 : 100), on: onChoroplethOpacityChange },
     { key: 'identify', label: isIdentifyMode ? STRINGS.identifyOff : STRINGS.identifyOn, icon: <FiInfo />, isOn: isIdentifyMode, onToggle: () => onIdentifyModeChange?.(!isIdentifyMode), on: onIdentifyModeChange },
     { key: 'satellite', label: isGoogleBasemap ? STRINGS.satelliteOff : STRINGS.satelliteOn, icon: <FiGlobe />, isOn: isGoogleBasemap, onToggle: () => onGoogleBasemapChange?.(!isGoogleBasemap), on: onGoogleBasemapChange, isDisabled: noSatellite && !isGoogleBasemap, disabledLabel: STRINGS.satelliteUnavailable },
     { key: 'swiper', label: isSwiperEnabled ? STRINGS.swiperOff : STRINGS.swiperOn, icon: <FiColumns />, isOn: isSwiperEnabled, onToggle: () => onSwiperEnabledChange?.(!isSwiperEnabled), on: onSwiperEnabledChange },
+    // Present only when the server was started with --debug-overlay
+    // (dt serve-debug): switches the info box, the white catchment outlines
+    // and the catchment labels on and off mid-session, no restart needed.
+    ...(isDebugOffered ? [{
+      key: 'debug',
+      label: isDebugToggledOn ? STRINGS.debugOff : STRINGS.debugOn,
+      icon: <FiTool />,
+      isOn: isDebugToggledOn,
+      onToggle: () => setDebugFeaturesEnabled(!isDebugToggledOn),
+      on: setDebugFeaturesEnabled,
+    }] : []),
   ] as const).filter((t) => t.on && showMapToggles);
 
   return (
@@ -464,7 +580,7 @@ function GridControls({
           </HStack>
         )}
 
-        <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} />
+        <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} choroplethOpacity={choroplethOpacity} onChoroplethOpacityChange={onChoroplethOpacityChange} />
 
         {onAddPane && (
           <Tooltip label={isAddPaneDisabled ? addPaneDisabledLabel ?? STRINGS.addPane : STRINGS.addPane} placement="bottom">
@@ -525,7 +641,7 @@ function GridControls({
           and the menu carries them from there down.
         */}
         <Box display={{ base: 'none', md: 'flex' }}>
-          <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} />
+          <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} choroplethOpacity={choroplethOpacity} onChoroplethOpacityChange={onChoroplethOpacityChange} />
         </Box>
         <Menu>
           <MenuButton

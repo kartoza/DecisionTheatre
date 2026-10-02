@@ -46,6 +46,23 @@ type Config struct {
 	// running the benchmark happens to have checked out.
 	Commit string
 
+	// DebugOverlay asks the frontend to draw its map debug overlay (live
+	// zoom, active catchment band, rendered layers). Reported by /api/info;
+	// set by --debug-overlay, which is what `dt serve-debug` passes. A
+	// server-side switch rather than a client toggle so a debug session is
+	// explicit and never ships enabled by accident.
+	DebugOverlay bool
+
+	// LegacyCatchments serves lev12 catchment geometry at every zoom
+	// (the wide-range catchments-lev12-full tileset) instead of the
+	// multi-resolution lev04/06/08/12 bands. Set by --legacy, which is
+	// what `dt serve-legacy` passes. A launch-time choice, not a
+	// runtime toggle: the frontend's existing tileset resolution already
+	// treats a single-band TileJSON as spanning its whole declared range,
+	// so handleCatchmentsTileJSON choosing which document to serve is the
+	// entire mechanism - nothing else needs to know which mode is active.
+	LegacyCatchments bool
+
 	// SatelliteStyleURL is the upstream MapLibre style document — satellite
 	// imagery plus roads and place labels, not a single raster tile type. The
 	// server fetches and rewrites it, not the browser: see

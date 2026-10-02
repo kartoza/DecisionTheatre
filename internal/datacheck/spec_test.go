@@ -149,6 +149,21 @@ func TestSpecCoversTilesetName(t *testing.T) {
 	}
 }
 
+// TestSpecCoversOptionalTilesetName mirrors TestSpecCoversTilesetName for the
+// catchments tileset, which handleCatchmentsTileJSON serves but does not
+// require.
+func TestSpecCoversOptionalTilesetName(t *testing.T) {
+	root := repoRoot(t)
+	b, err := os.ReadFile(filepath.Join(root, "internal/server/server.go"))
+	if err != nil {
+		t.Fatalf("cannot read server.go: %v", err)
+	}
+	if !strings.Contains(string(b), `"`+OptionalTilesetName+`"`) {
+		t.Errorf("server.go no longer mentions the tileset name %q that spec.go allows;\n"+
+			"if the server now requests a different name, update OptionalTilesetName", OptionalTilesetName)
+	}
+}
+
 // TestKnownEntriesAreWellFormed catches spec typos that would otherwise make
 // the checker quietly classify a real file as extraneous.
 func TestKnownEntriesAreWellFormed(t *testing.T) {

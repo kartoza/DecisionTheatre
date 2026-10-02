@@ -291,7 +291,7 @@ This directory must contain the application's runtime data:
 | File | Description |
 |------|-------------|
 | `datapack.gpkg` | Main scenario GeoPackage — catchment geometries, scenario tables, precomputed GeoJSON, domain min/max for colour scaling |
-| `mbtiles/africa.mbtiles` | Vector tile archive for the base map |
+| `mbtiles/context.mbtiles` | Vector tile archive for the base map |
 | `mbtiles/style.json` | MapLibre style for the base map tiles |
 | `sites/` | Saved site JSON files (written at runtime) |
 | `projects/` | Saved project JSON files (written at runtime) |
@@ -387,9 +387,8 @@ The application will start without data but the UI will show a setup guide promp
 The base map requires an MBTiles file. Convert the source GeoPackage using the helper script:
 
 ```bash
-cd resources/mbtiles
-./gpkg_to_mbtiles.sh UoW_layers.gpkg
-# Output: data/mbtiles/africa.mbtiles
+./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg
+# Output: data/mbtiles/context.mbtiles
 ```
 
 ### 2. Scenario Datapack

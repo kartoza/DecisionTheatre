@@ -187,6 +187,131 @@ func TestCatchmentValuesWithoutStoreIsUnavailable(t *testing.T) {
 	}
 }
 
+// newLevelledValuesTestHandler is newValuesTestHandler plus the
+// multi-resolution basin tables, so the zoom parameter's level dispatch is
+// exercised through the real SQL.
+func newLevelledValuesTestHandler(t *testing.T) *mux.Router {
+	t.Helper()
+
+	dir := t.TempDir()
+	gpkgtest.Build(t, dir, []gpkgtest.Catchment{
+		{ID: 1000000001, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+		{ID: 1000000002, Lat: 0, Long: 1, SizeDeg: 0.5, Current: gpkgtest.Float(20), Reference: gpkgtest.Float(2)},
+	}, 0, 100)
+	gpkgtest.AddBasinLevels(t, dir, map[string][]gpkgtest.Basin{
+		"04": {{ID: 4000000001, Current: gpkgtest.Float(15), Reference: gpkgtest.Float(1.5)}},
+		"06": {
+			{ID: 6000000001, Current: gpkgtest.Float(12), Reference: gpkgtest.Float(1.2)},
+			{ID: 6000000002, Current: gpkgtest.Float(18), Reference: gpkgtest.Float(1.8)},
+		},
+	})
+
+	store, err := geodata.NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test"}, nil)
+	r := mux.NewRouter()
+	handler.RegisterRoutes(r)
+	return r
+}
+
+// The tiles carry catchments_lev04 in the z2-z5 band and lev06 in z6-z8, so a
+// zoom in those bands must return that level's basin ids — lev12 ids would
+// never match the tiles' feature ids and the choropleth would paint nothing.
+func TestCatchmentValuesZoomSelectsBasinLevel(t *testing.T) {
+	r := newLevelledValuesTestHandler(t)
+
+	_, low := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=2")
+	if len(low.IDs) != 1 || low.IDs[0] != 4000000001 || low.Values[0] != 15 {
+		t.Fatalf("zoom=2 should serve lev04 basins, got ids %v values %v", low.IDs, low.Values)
+	}
+
+	_, mid := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=6.5")
+	if len(mid.IDs) != 2 || mid.IDs[0] != 6000000001 || mid.IDs[1] != 6000000002 {
+		t.Fatalf("zoom=6.5 should serve lev06 basins, got ids %v", mid.IDs)
+	}
+}
+
+// From zoom 11 the tiles carry full lev12 detail, so the zoom parameter must
+// change nothing: same ids, same bbox filtering as a request without it.
+func TestCatchmentValuesZoomAboveBandsIsDetail(t *testing.T) {
+	r := newLevelledValuesTestHandler(t)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-0.4&miny=-0.4&maxx=0.4&maxy=0.4&zoom=11.5")
+	if len(resp.IDs) != 1 || resp.IDs[0] != 1000000001 {
+		t.Fatalf("zoom=11.5 should serve bbox-filtered lev12 catchments, got %v", resp.IDs)
+	}
+}
+
+// A datapack tiled before the multi-resolution levels existed has no basin
+// tables; a zoomed request must fall back to lev12 values rather than erroring,
+// exactly as the GeoJSON path does.
+func TestCatchmentValuesZoomWithoutBasinTablesFallsBack(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=3")
+	if len(resp.IDs) != 2 {
+		t.Fatalf("expected lev12 fallback with 2 catchments, got %v", resp.IDs)
+	}
+}
+
+func TestCatchmentValuesRejectsUnparseableZoom(t *testing.T) {
+	r := newValuesTestHandler(t)
+
+	w, _ := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=deep")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400", w.Code)
+	}
+}
+
+// GOLDEN RULE: --legacy renders lev12 geometry at every zoom, so its values
+// must stay lev12 too. The client still sends the wide band's own canonical
+// zoom (its minzoom, e.g. 2) as the zoom param - indistinguishable, on this
+// endpoint alone, from a genuinely coarse multi-resolution request. Without
+// the LegacyCatchments check this returns the single lev04 basin aggregate
+// (id 4000000001) for the whole viewport instead of each lev12 catchment's
+// own value - every catchment painted identically, which is exactly the "no
+// spatial variation" --legacy was reported showing.
+func TestCatchmentValuesLegacyModeIgnoresZoomAggregation(t *testing.T) {
+	dir := t.TempDir()
+	gpkgtest.Build(t, dir, []gpkgtest.Catchment{
+		{ID: 1000000001, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+		{ID: 1000000002, Lat: 0, Long: 1, SizeDeg: 0.5, Current: gpkgtest.Float(20), Reference: gpkgtest.Float(2)},
+	}, 0, 100)
+	gpkgtest.AddBasinLevels(t, dir, map[string][]gpkgtest.Basin{
+		"04": {{ID: 4000000001, Current: gpkgtest.Float(15), Reference: gpkgtest.Float(1.5)}},
+	})
+
+	store, err := geodata.NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	handler := NewHandler(nil, store, nil, config.Config{DataDir: dir, Version: "test", LegacyCatchments: true}, nil)
+	r := mux.NewRouter()
+	handler.RegisterRoutes(r)
+
+	_, resp := getValues(t, r,
+		"/catchment-values?scenario=current&attribute="+gpkgtest.Attribute+"&minx=-5&miny=-5&maxx=5&maxy=5&zoom=2")
+	if len(resp.IDs) != 2 {
+		t.Fatalf("--legacy at zoom=2 should still serve both lev12 catchments individually, got %v", resp.IDs)
+	}
+	for _, id := range resp.IDs {
+		if id == 4000000001 {
+			t.Fatalf("--legacy at zoom=2 returned the lev04 basin aggregate instead of lev12 catchments: %v", resp.IDs)
+		}
+	}
+}
+
 // The four numbers the "Full" range mode needs, computed where the data
 // lives. Must match what the client's zoneStatsFromValues derived from the
 // raw payload: plain min/max/mean over non-null values, count of values used.
@@ -254,5 +379,26 @@ func TestFullDomainStatsValidatesParameters(t *testing.T) {
 				t.Errorf("status %d, want %d (body %s)", w.Code, tc.status, w.Body.String())
 			}
 		})
+	}
+}
+
+// dt serve-debug works by the server reporting the flag and the frontend
+// obeying it — /api/info is the entire contract, so its field is pinned here.
+func TestInfoReportsDebugOverlay(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		handler := NewHandler(nil, nil, nil, config.Config{Version: "test", DebugOverlay: enabled}, nil)
+		r := mux.NewRouter()
+		handler.RegisterRoutes(r)
+
+		req := httptest.NewRequest("GET", "/info", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var info map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if string(info["debug_overlay"]) != map[bool]string{true: "true", false: "false"}[enabled] {
+			t.Errorf("debug_overlay = %s, want %v", info["debug_overlay"], enabled)
+		}
 	}
 }

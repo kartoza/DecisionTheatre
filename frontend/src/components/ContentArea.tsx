@@ -46,7 +46,7 @@ interface ContentAreaProps {
   is3DMode?: boolean;
   // Global map toggles: one control in the header, every pane reflects it.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   // Slider synchronization
@@ -208,7 +208,7 @@ function ContentArea({
   colorScaleType,
   is3DMode,
   isIdentifyMode,
-  isChoroplethEnabled,
+  choroplethOpacity,
   isGoogleBasemap,
   onGoogleBasemapChange,
   swiperPosition,
@@ -666,7 +666,7 @@ function ContentArea({
                   colorScaleType={colorScaleType}
                   is3DMode={is3DMode}
                   isIdentifyMode={isIdentifyMode}
-                  isChoroplethEnabled={isChoroplethEnabled}
+                  choroplethOpacity={choroplethOpacity}
                   isGoogleBasemap={isGoogleBasemap}
                   onGoogleBasemapChange={onGoogleBasemapChange}
                   showNavigation={i === navigationPane}
@@ -722,7 +722,7 @@ function ContentArea({
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             isIdentifyMode={isIdentifyMode}
-            isChoroplethEnabled={isChoroplethEnabled}
+            choroplethOpacity={choroplethOpacity}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={onGoogleBasemapChange}
             showNavigation={visibleIndices[0] === navigationPane}

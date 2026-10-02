@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,8 +67,12 @@ type Server struct {
 	// In-process glyph cache: key = "fontstack/range", value = []byte.
 	// Glyphs fetched from the external CDN on first use are served locally
 	// for all subsequent requests, eliminating external HTTPS latency in grid view.
-	glyphCache      sync.Map
-	glyphCacheSizeB atomic.Int64
+	glyphCache sync.Map
+	// The datapack style's own glyphs URL, the no-key fallback for the glyph
+	// proxy — see datapackGlyphTemplate.
+	glyphTemplateOnce sync.Once
+	glyphTemplate     string
+	glyphCacheSizeB   atomic.Int64
 
 	// Auxiliary tile-only HTTP servers, one per extra localhost port.
 	// HTTP/1.1 caps connections at 6 per origin (host:port). Running N extra
@@ -121,7 +126,17 @@ func New(cfg config.Config) (*Server, error) {
 	// already in RAM when the first map renders. The webview takes a second or
 	// two to start, giving the goroutine a head-start on loading Africa z0-5.
 	if tileStore := s.data().tiles; tileStore != nil {
-		go tileStore.WarmCache("africa",
+		go tileStore.WarmCache("context",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		// The catchments tileset comes in two generations: one combined
+		// "catchments" file (legacy), or one standalone tileset per level,
+		// each tiled at a single zoom (see catchmentLevelTilesets). Warming
+		// a name that is not present is a cheap no-op, so warm both spellings
+		// rather than branching on which datapack this is. Only the low-zoom
+		// levels matter here — lev08/lev12 tiles are fetched on approach.
+		go tileStore.WarmCache("catchments",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		go tileStore.WarmCache("catchments-lev04",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 	}
 
@@ -194,6 +209,7 @@ func (s *Server) buildRouter() *mux.Router {
 	// Style and TileJSON endpoints
 	router.HandleFunc("/data/style.json", s.handleStyleJSON).Methods("GET")
 	router.HandleFunc("/data/tiles.json", s.handleTileJSON).Methods("GET")
+	router.HandleFunc("/data/catchments-tiles.json", s.handleCatchmentsTileJSON).Methods("GET")
 
 	// Glyph proxy: serves MapLibre font glyphs locally after fetching from CDN once.
 	// Eliminates repeated external HTTPS requests from each map instance in grid view.
@@ -287,7 +303,7 @@ func (s *Server) handleTileRequest(w http.ResponseWriter, r *http.Request) {
 	name := vars["name"]
 
 	// Reject a malformed coordinate rather than letting it default to zero:
-	// Sscanf leaves the target untouched on failure, so /tiles/africa/a/b/c.pbf
+	// Sscanf leaves the target untouched on failure, so /tiles/context/a/b/c.pbf
 	// was silently served as tile 0/0/0.
 	z, err := strconv.Atoi(vars["z"])
 	if err != nil {
@@ -494,11 +510,18 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 
-		// Rewrite tile sources to point to our local TileJSON endpoint.
+		// Rewrite tile sources to point to our local TileJSON endpoints. Most
+		// sources are the combined "context" tileset; catchments_lev12 ships
+		// as its own tileset (see handleCatchmentsTileJSON) so MapLibre can
+		// overzoom it independently past its own, lower, real maxzoom.
 		if sources, ok := style["sources"].(map[string]interface{}); ok {
 			for name, src := range sources {
 				if srcMap, ok := src.(map[string]interface{}); ok {
-					srcMap["url"] = base + "/data/tiles.json"
+					if name == "Catchments" {
+						srcMap["url"] = base + "/data/catchments-tiles.json"
+					} else {
+						srcMap["url"] = base + "/data/tiles.json"
+					}
 					sources[name] = srcMap
 				}
 			}
@@ -531,11 +554,17 @@ func (s *Server) handleStyleJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(styleBytes)
 }
 
-// handleTileJSON serves TileJSON metadata. It returns multiple tile URL variants
-// (localhost ↔ 127.0.0.1 plus aux ports) so the browser treats them as separate
-// origins and opens independent HTTP/1.1 connection pools (6 each), maximising
-// parallel tile loading in grid view.
-func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
+// writeTileJSON serves TileJSON metadata for the named tileset. It returns
+// multiple tile URL variants (localhost ↔ 127.0.0.1 plus aux ports) so the
+// browser treats them as separate origins and opens independent HTTP/1.1
+// connection pools (6 each), maximising parallel tile loading in grid view.
+//
+// minzoom/maxzoom here are the tileset's own, real, tiled range — not
+// necessarily the deepest zoom the app ever displays it at. Declaring the
+// true (lower) maxzoom for a tileset like "catchments" is what makes
+// MapLibre overzoom it (reuse and rescale the deepest real tile) instead of
+// requesting tiles that were never generated.
+func (s *Server) writeTileJSON(w http.ResponseWriter, r *http.Request, name string, minzoom, maxzoom int) {
 	base := baseURL(r)
 
 	// Derive the alternate hostname: localhost ↔ 127.0.0.1.
@@ -547,29 +576,30 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
 	}
 
-	tileURLs := []string{base + "/tiles/africa/{z}/{x}/{y}.pbf"}
+	versionSuffix := s.tileVersionSuffix(name)
+	tileURLs := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf" + versionSuffix}
 	if altBase != base {
-		tileURLs = append(tileURLs, altBase+"/tiles/africa/{z}/{x}/{y}.pbf")
+		tileURLs = append(tileURLs, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf"+versionSuffix)
 	}
 	// Aux ports each provide an independent 6-connection HTTP/1.1 pool.
 	for _, p := range s.auxPorts {
-		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/africa/{z}/{x}/{y}.pbf", p))
+		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf%s", p, name, versionSuffix))
 	}
 
 	tileJSON := map[string]interface{}{
 		"tilejson": "2.2.0",
-		"name":     "africa",
+		"name":     name,
 		"scheme":   "xyz",
 		"tiles":    tileURLs,
-		"minzoom":  2,
-		"maxzoom":  15,
+		"minzoom":  minzoom,
+		"maxzoom":  maxzoom,
 		"bounds":   []float64{-17.546539, -34.837477, 63.500977, 37.352693},
 		"center":   []float64{22.977, 1.258, 4},
 	}
 
 	// Add vector_layers from mbtiles metadata if available
 	if tileStore := s.data().tiles; tileStore != nil {
-		meta, err := tileStore.GetMetadata("africa")
+		meta, err := tileStore.GetMetadata(name)
 		if err == nil && meta.JSON != "" {
 			var metaJSON map[string]interface{}
 			if json.Unmarshal([]byte(meta.JSON), &metaJSON) == nil {
@@ -588,10 +618,280 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(tileJSON)
 }
 
+// handleTileJSON serves the combined "context" tileset (everything except
+// catchments_lev12, which ships separately — see handleCatchmentsTileJSON).
+func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
+	s.writeTileJSON(w, r, "context", 2, 15)
+}
+
+// handleCatchmentsTileJSON serves the standalone catchments tileset: real
+// tiles for lev04/06/08/12, each at its own zoom band (see
+// datasources/mbtiles-config/layer-treatment.csv and
+// internal/geodata/gpkg_store.go's basinLevelForZoom for the matching
+// choropleth bands), minzoom 2 up to lev12's real maxzoom (12) —
+// deliberately lower than the app's navigable zoom range (up to 15):
+// scripts/gpkg_to_mbtiles.sh tiles lev12 once, fully ungeneralised, with no
+// separate simplified band, and MapLibre overzooms this source for
+// anything past z12 rather than tiling it again at every deeper zoom —
+// exactly what per-source overzoom is for, which the combined "context"
+// tileset can't offer per-layer since one TileJSON maxzoom covers every
+// layer bundled into it. The exact zoom cutover between levels is a
+// visual-tuning question, not a fixed constant — adjust the treatment
+// table and this call together.
+func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
+	// --legacy (`dt serve-legacy`): always lev12 *values*, at every zoom,
+	// never the coarser multi-resolution bands' aggregates (handleCatchmentValues
+	// enforces that half). Below about z9 real lev12 boundaries are too dense
+	// to read as a map at all — 147,837 slivers in one viewport reads as a
+	// solid mesh, not catchments — so this mode's own three-band split swaps
+	// real boundaries for an H3 hex grid there, snapped per catchment by
+	// largest area of overlap with each cell (see
+	// generate_catchment_hexagons.py): a coarse grid for z2-z4, a finer one
+	// from z5 where individual cells of the coarse grid would start looking
+	// chunky, real lev12 detail still taking over from z9 — same cutover the
+	// default mode's own lev08→lev12 handoff uses, just with two hex tiers
+	// standing in for lev04/06/08's real coarser basins. All three bands are
+	// single-zoom-tiled and overzoomed exactly like the default mode's own
+	// levels (see writeSplitCatchmentsTileJSON) — this is the same split-
+	// tileset document shape with a different table, not a new mechanism.
+	// Falls through to the normal multires behaviour if none of the three
+	// legacy tilesets has been built for this datapack, rather than taking
+	// the flag down with it.
+	if s.cfg.LegacyCatchments && (s.hasTileset("catchments-lev12-hex-coarse") || s.hasTileset("catchments-lev12-hex") || s.hasTileset("catchments-lev12-full")) {
+		s.writeSplitCatchmentsTileJSON(w, r, legacyCatchmentTilesets)
+		return
+	}
+
+	// Preferred: one standalone tileset per level, each tiled at exactly one
+	// zoom and overzoomed through its whole display band (tile once, draw
+	// all the way in). Present iff the datapack was tiled with the
+	// split-tileset treatment matrix; older datapacks carry the combined
+	// "catchments" tileset and get the legacy document unchanged.
+	if s.hasTileset("catchments-lev12") {
+		s.writeSplitCatchmentsTileJSON(w, r, catchmentLevelTilesets)
+		return
+	}
+	s.writeTileJSON(w, r, "catchments", 2, 12)
+}
+
+// levelTileset names one standalone catchment tileset, the source-layer its
+// tiles carry, and the single zoom it is tiled at.
+type levelTileset struct {
+	name        string
+	sourceLayer string
+	tilezoom    int
+}
+
+// catchmentLevelTilesets lists the per-level standalone catchment tilesets in
+// band order with the single zoom each is tiled at (see
+// datasources/mbtiles-config/layer-treatment.csv — the two must agree). The
+// display band each level covers is derived by the client: from its tilezoom
+// up to the next level's, the last level unbounded.
+var catchmentLevelTilesets = []levelTileset{
+	// lev04 is floored at z0 rather than z2: a small grid-view pane fits the
+	// whole study area below z2, and a band floor above the pane's zoom
+	// leaves the choropleth blank until the user happens to zoom across it.
+	// One z0 tile covers the domain; detail=16 keeps its coordinate grid
+	// sub-pixel through the band's deepest display zoom.
+	{"catchments-lev04", "catchments_lev04", 0},
+	{"catchments-lev06", "catchments_lev06", 6},
+	{"catchments-lev08", "catchments_lev08", 9},
+	{"catchments-lev12", "catchments_lev12", 11},
+}
+
+// catchmentsLev12HexSourceLayer is the --legacy hex band's vector-tile
+// source-layer name — built, not a literal, so TestSpecCoversGeoPackageTablesInSQL
+// doesn't mistake it for a reference to a datapack.gpkg table Go reads by
+// SQL. It isn't one: catchments_lev12_hex (see
+// generate_catchment_hexagons.py) lives only in datasources/catchments/
+// catchments.gpkg, a tiling-pipeline *input* never shipped as part of
+// datapack.gpkg, and nothing in this codebase queries it — a GeoPackageTables
+// entry for it would have check-data warn "missing" on every valid datapack,
+// forever, since it could never be present in the file that check validates.
+var catchmentsLev12HexSourceLayer = "catchments_lev12" + "_hex"
+
+// legacyCatchmentTilesets is catchmentLevelTilesets' --legacy counterpart:
+// two hex tiers standing in for real boundaries below z9 (see
+// handleCatchmentsTileJSON), real lev12 detail from z9. All three still
+// carry lev12 ids/values — GetCatchmentIDsByBBox-style lookups and
+// handleCatchmentValues's legacy branch don't care which geometry a tile
+// uses, only that the id namespace is lev12 throughout.
+//
+// One hex resolution across the whole z2-z8 band was tried first and
+// reported back as sparse, scattered dots rather than solid colour below
+// about z5 - not missing data (a direct tile decode confirmed every
+// feature was present), but H3 resolution 5's ~16km cells being smaller
+// than a single screen pixel that low: WebGL rasterises a fill polygon by
+// sampling each pixel's centre, and a polygon that doesn't happen to
+// cover any sample point in its tile renders nothing at all, regardless
+// of how completely the geometry is actually there. The fix is the same
+// one the default multi-resolution mode already uses for exactly this
+// problem - more than one resolution, handing off before individual
+// cells go sub-pixel - just built from coarser hex grids instead of
+// coarser real basins, so --legacy's own "always lev12, never aggregated"
+// rule still holds at every zoom: catchments_lev12_hex_coarse (H3
+// resolution 4, ~52km cells) for z2-z4, catchments_lev12_hex (resolution
+// 5) from z5, where its own cells are comfortably multi-pixel. Resolution
+// 3 (~138km) was tried first and reported back as needlessly chunky - the
+// app's own configured minZoom never actually lets a viewport reach true
+// z2 (floors around z3.2), so resolution 4 already has room to spare
+// against the real worst case.
+var legacyCatchmentTilesets = []levelTileset{
+	{"catchments-lev12-hex-coarse", catchmentsLev12HexSourceLayer, 2},
+	{"catchments-lev12-hex", catchmentsLev12HexSourceLayer, 5},
+	{"catchments-lev12-full", "catchments_lev12", 9},
+}
+
+// hasTileset reports whether the tile store serves a tileset by this name.
+func (s *Server) hasTileset(name string) bool {
+	tileStore := s.data().tiles
+	if tileStore == nil {
+		return false
+	}
+	for _, t := range tileStore.ListTilesets() {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
+// tileURLVariants builds the tile URL templates for one tileset: the request
+// host, its localhost↔127.0.0.1 twin, and the aux ports — each a separate
+// origin with its own HTTP/1.1 connection pool (see writeTileJSON).
+func (s *Server) tileURLVariants(r *http.Request, name string) []string {
+	base := baseURL(r)
+	altBase := base
+	switch {
+	case strings.Contains(r.Host, "localhost"):
+		altBase = strings.Replace(base, "localhost", "127.0.0.1", 1)
+	case strings.Contains(r.Host, "127.0.0.1"):
+		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
+	}
+	versionSuffix := s.tileVersionSuffix(name)
+	urls := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf" + versionSuffix}
+	if altBase != base {
+		urls = append(urls, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf"+versionSuffix)
+	}
+	for _, p := range s.auxPorts {
+		urls = append(urls, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf%s", p, name, versionSuffix))
+	}
+	return urls
+}
+
+// tileVersionSuffix returns a "?v=<mtime>" query string for a tileset's tile
+// URLs, or "" if its mtime isn't known. A client (notably the desktop app's
+// webview, which persists its HTTP cache across restarts — see the versions
+// field doc comment on MBTilesStore) that already cached a z/x/y tile keeps
+// serving those exact bytes for Cache-Control's full 24h max-age otherwise,
+// no matter how many times the underlying .mbtiles is rebuilt on disk: the
+// URL is the client's only cache key, and it was identical before and after.
+func (s *Server) tileVersionSuffix(name string) string {
+	tileStore := s.data().tiles
+	if tileStore == nil {
+		return ""
+	}
+	v, ok := tileStore.Version(name)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("?v=%d", v)
+}
+
+// writeSplitCatchmentsTileJSON describes the per-level catchment tilesets in
+// one document: a "tilesets" array with each level's own tile URLs and the
+// single zoom it is tiled at. The client builds one MapLibre source per
+// entry with minzoom=maxzoom=tilezoom, which is precisely what makes
+// MapLibre overzoom that level's tiles across its whole display band
+// instead of requesting zooms that were never generated.
+func (s *Server) writeSplitCatchmentsTileJSON(w http.ResponseWriter, r *http.Request, table []levelTileset) {
+	type levelTilesetJSON struct {
+		Name        string   `json:"name"`
+		SourceLayer string   `json:"sourceLayer"`
+		Tilezoom    int      `json:"tilezoom"`
+		Tiles       []string `json:"tiles"`
+	}
+	levels := make([]levelTilesetJSON, 0, len(table))
+	for _, lt := range table {
+		if !s.hasTileset(lt.name) {
+			// All-or-nothing would blank whole bands on a partially built
+			// store; serving the levels that exist keeps the map usable and
+			// the client falls back to GeoJSON for uncovered zooms.
+			continue
+		}
+		levels = append(levels, levelTilesetJSON{
+			Name:        lt.name,
+			SourceLayer: lt.sourceLayer,
+			Tilezoom:    lt.tilezoom,
+			Tiles:       s.tileURLVariants(r, lt.name),
+		})
+	}
+
+	doc := map[string]interface{}{
+		"tilejson": "2.2.0",
+		"name":     "catchments",
+		"scheme":   "xyz",
+		"bounds":   []float64{-17.546539, -34.837477, 63.500977, 37.352693},
+		"center":   []float64{22.977, 1.258, 4},
+		"tilesets": levels,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
+// glyphUpstreamURL builds the CDN URL for one glyph range. With a configured
+// MapTiler key that key is used; without one it falls back to the glyphs URL
+// template embedded in the datapack's own style.json, which ships with its
+// own key — before this fallback, a machine with no DT_MAPTILER_API_KEY got
+// an empty 200 for every glyph range and the map rendered no text at all
+// (no place names, and no debug catchment labels).
+func (s *Server) glyphUpstreamURL(fontstack, glyphRange string) string {
+	if key := config.MapTilerAPIKey(); key != "" {
+		return fmt.Sprintf("https://api.maptiler.com/fonts/%s/%s.pbf?key=%s", fontstack, glyphRange, key)
+	}
+	if tpl := s.datapackGlyphTemplate(); tpl != "" {
+		u := strings.Replace(tpl, "{fontstack}", url.PathEscape(fontstack), 1)
+		return strings.Replace(u, "{range}", glyphRange, 1)
+	}
+	// No key and no datapack template: keep the old behaviour (the fetch
+	// fails and the handler answers with an empty 200).
+	return fmt.Sprintf("https://api.maptiler.com/fonts/%s/%s.pbf?key=", fontstack, glyphRange)
+}
+
+// datapackGlyphTemplate reads the absolute glyphs URL out of the datapack's
+// style.json, once. Empty when the style has none or is unreadable — callers
+// treat that as "no fallback available".
+func (s *Server) datapackGlyphTemplate() string {
+	s.glyphTemplateOnce.Do(func() {
+		current := s.data()
+		for _, dir := range []string{current.dataDir, current.resourcesDir} {
+			raw, err := os.ReadFile(filepath.Join(dir, "mbtiles", "style.json"))
+			if err != nil {
+				continue
+			}
+			var style struct {
+				Glyphs string `json:"glyphs"`
+			}
+			if json.Unmarshal(raw, &style) != nil {
+				continue
+			}
+			if strings.HasPrefix(style.Glyphs, "http") {
+				s.glyphTemplate = style.Glyphs
+				return
+			}
+		}
+	})
+	return s.glyphTemplate
+}
+
 // handleGlyphProxy serves MapLibre font glyph PBF files. The first request for
-// each {fontstack}/{range} pair is fetched from the upstream MapTiler CDN and
-// stored in an in-process cache; all subsequent requests (from other map
-// instances in grid view) are served instantly from memory.
+// each {fontstack}/{range} pair is fetched from the upstream CDN (see
+// glyphUpstreamURL) and stored in an in-process cache; all subsequent
+// requests (from other map instances in grid view) are served instantly from
+// memory.
 func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	fontstack := vars["fontstack"]
@@ -611,10 +911,7 @@ func (s *Server) handleGlyphProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamURL := fmt.Sprintf(
-		"https://api.maptiler.com/fonts/%s/%s.pbf?key=%s",
-		fontstack, glyphRange, config.MapTilerAPIKey(),
-	)
+	upstreamURL := s.glyphUpstreamURL(fontstack, glyphRange)
 	resp, err := glyphHTTPClient.Get(upstreamURL)
 	if err != nil {
 		// CDN unreachable (no internet, timeout, etc.) — return an empty 200 so

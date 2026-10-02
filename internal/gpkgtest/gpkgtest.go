@@ -131,3 +131,68 @@ func Build(t *testing.T, dir string, catchments []Catchment, domainMin, domainMa
 
 // Float returns a pointer to v, for populating Catchment's nullable values.
 func Float(v float64) *float64 { return &v }
+
+// Basin is one aggregated basin row for AddBasinLevels: a coarse catchment
+// with one precomputed aggregate value per scenario.
+type Basin struct {
+	ID                 int64
+	Current, Reference *float64
+}
+
+// AddBasinLevels adds the multi-resolution catchment tables
+// (catchments_lev04/06/08 plus their scenario aggregate tables) to a datapack
+// already written by Build. All three levels are created — the store's
+// checkBasinLevelTables treats a partial set as absent — with the given rows
+// per level; levels missing from the map get empty (but present) tables.
+//
+// Must run before NewGpkgStore opens the datapack: table presence is detected
+// once at open.
+func AddBasinLevels(t *testing.T, dir string, basinsByLevel map[string][]Basin) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", filepath.Join(dir, "datapack.gpkg"))
+	if err != nil {
+		t.Fatalf("open synthetic geopackage: %v", err)
+	}
+	defer db.Close()
+
+	for _, level := range []string{"04", "06", "08"} {
+		stmts := []string{
+			fmt.Sprintf(`CREATE TABLE catchments_lev%s (
+				fid INTEGER PRIMARY KEY,
+				HYBAS_ID TEXT,
+				HYBAS_ID_int INTEGER,
+				geojson TEXT
+			)`, level),
+			fmt.Sprintf(`CREATE TABLE scenario_current_lev%s (catchment_id_int INTEGER, "%s" REAL)`, level, Attribute),
+			fmt.Sprintf(`CREATE TABLE scenario_reference_lev%s (catchment_id_int INTEGER, "%s" REAL)`, level, Attribute),
+		}
+		for _, s := range stmts {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("create basin level schema: %v\n%s", err, s)
+			}
+		}
+
+		for i, b := range basinsByLevel[level] {
+			if _, err := db.Exec(
+				fmt.Sprintf(`INSERT INTO catchments_lev%s (fid, HYBAS_ID, HYBAS_ID_int, geojson)
+				 VALUES (?, ?, ?, ?)`, level),
+				int64(i+1), fmt.Sprintf("%d", b.ID), b.ID,
+				`{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}`,
+			); err != nil {
+				t.Fatalf("insert basin: %v", err)
+			}
+			for scenario, value := range map[string]*float64{
+				"current":   b.Current,
+				"reference": b.Reference,
+			} {
+				if _, err := db.Exec(
+					fmt.Sprintf(`INSERT INTO scenario_%s_lev%s (catchment_id_int, "%s") VALUES (?, ?)`, scenario, level, Attribute),
+					b.ID, value,
+				); err != nil {
+					t.Fatalf("insert basin scenario row: %v", err)
+				}
+			}
+		}
+	}
+}

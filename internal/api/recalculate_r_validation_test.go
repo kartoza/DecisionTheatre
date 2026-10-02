@@ -12,7 +12,8 @@ import (
 
 // recalculate_r_validation_test.go checks that recalculateIdeal (the Go
 // reimplementation of the "edit a factor in the model editor" cascade) still
-// agrees with the R model equations in "data/R scripts/validate_cascade.R".
+// agrees with the R model equations in
+// "datasources/r-analysis/validate_cascade.R".
 //
 // This is a dev/CI-only safety net, not something the shipped app runs: it
 // requires Rscript plus the jsonlite package, so it is skipped automatically
@@ -20,7 +21,7 @@ import (
 // R toolchain a hard test failure instead (used by the CI job that installs R
 // specifically to run this check).
 
-const rValidationScript = "../../data/R scripts/validate_cascade.R"
+const rValidationScript = "../../datasources/r-analysis/validate_cascade.R"
 
 // rHerbTrait mirrors HerbTrait using the snake_case field names that
 // validate_cascade.R expects.

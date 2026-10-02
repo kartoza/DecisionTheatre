@@ -58,6 +58,12 @@ func main() {
 		"Interface to listen on. Loopback by default; the API is unauthenticated, "+
 			"so use 0.0.0.0 only where something in front of it controls access.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
+	debugOverlay := flag.Bool("debug-overlay", false,
+		"Ask the frontend to draw its map debug overlay (live zoom, active "+
+			"catchment band, rendered layers). `dt serve-debug` passes this.")
+	legacyCatchments := flag.Bool("legacy", false,
+		"Serve lev12 catchment geometry at every zoom instead of the "+
+			"multi-resolution lev04/06/08/12 bands. `dt serve-legacy` passes this.")
 	flag.Parse()
 
 	if *showVersion {
@@ -144,7 +150,9 @@ func main() {
 		SatelliteAttribution: *satelliteAttribution,
 		SatelliteQuotaLimit:  *satelliteQuotaLimit,
 		// --headless is the server build; anything else opens the window below.
-		DesktopMode: !*headless,
+		DesktopMode:      !*headless,
+		DebugOverlay:     *debugOverlay,
+		LegacyCatchments: *legacyCatchments,
 	}
 
 	log.Printf("Decision Theatre v%s starting on port %d", version, cfg.Port)

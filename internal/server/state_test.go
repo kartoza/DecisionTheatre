@@ -71,7 +71,7 @@ func TestTileRequestsDuringAStoreSwapDoNotPanic(t *testing.T) {
 
 	router := tileRouter(srv)
 	stop := hammer(func() {
-		req := httptest.NewRequest(http.MethodGet, "/tiles/africa/3/4/4.pbf", nil)
+		req := httptest.NewRequest(http.MethodGet, "/tiles/context/3/4/4.pbf", nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
@@ -94,7 +94,7 @@ func TestTileRequestWithNoStoreIsServiceUnavailable(t *testing.T) {
 	srv := newTestServer(t, false)
 	srv.swapStores(&dataStores{dataDir: t.TempDir()})
 
-	req := httptest.NewRequest(http.MethodGet, "/tiles/africa/3/4/4.pbf", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tiles/context/3/4/4.pbf", nil)
 	rec := httptest.NewRecorder()
 	tileRouter(srv).ServeHTTP(rec, req)
 
@@ -337,7 +337,7 @@ func TestAuxTileRouteIsRegisteredRegardlessOfStartupStores(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	tileRouter(srv).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tiles/africa/1/2/3.pbf", nil))
+	tileRouter(srv).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tiles/context/1/2/3.pbf", nil))
 
 	if rec.Code == http.StatusNotFound {
 		t.Error("the tile route is unrouted; a later install could never serve tiles here")

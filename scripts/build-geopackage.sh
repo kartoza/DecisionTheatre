@@ -2,31 +2,42 @@
 #
 # Build the datapack geopackage from input files.
 #
-# Inputs (in data/ directory):
-#   - catchments.gpkg  : Geopackage with catchment geometries
-#   - current.csv      : Current scenario attribute data
-#   - current_lower.csv: Current scenario lower-bound attribute data
-#   - current_upper.csv: Current scenario upper-bound attribute data
-#   - reference.csv    : Reference scenario attribute data
-#   - reference_lower.csv: Reference scenario lower-bound attribute data
-#   - reference_upper.csv: Reference scenario upper-bound attribute data
-#   - medata.csv       : Column metadata
+# Inputs (in SOURCE_DIR, default ./datasources):
+#   - catchments/catchments.gpkg  : Geopackage with catchment geometries
+#   - scenarios/current.csv       : Current scenario attribute data
+#   - scenarios/current_lower.csv : Current scenario lower-bound attribute data
+#   - scenarios/current_upper.csv : Current scenario upper-bound attribute data
+#   - scenarios/reference.csv     : Reference scenario attribute data
+#   - scenarios/reference_lower.csv: Reference scenario lower-bound attribute data
+#   - scenarios/reference_upper.csv: Reference scenario upper-bound attribute data
+#
+# Also reads (in DATA_DIR, default ./data — not a build input, it's the
+# shipped runtime copy that happens to also get embedded as a table):
+#   - metadata.csv     : Column metadata
 #
 # Output:
-#   - data/datapack.gpkg : Combined geopackage with all data
+#   - DATA_DIR/datapack.gpkg : Combined geopackage with all data
 #
+# Usage: ./build-geopackage.sh [DATA_DIR] [SOURCE_DIR]
 
 set -e
 
 DATA_DIR="${1:-./data}"
+SOURCE_DIR="${2:-./datasources}"
 OUTPUT="$DATA_DIR/datapack.gpkg"
+CATCHMENTS_SRC="$SOURCE_DIR/catchments/catchments.gpkg"
+SCENARIOS_DIR="$SOURCE_DIR/scenarios"
 
-echo "Building datapack from $DATA_DIR..."
+echo "Building datapack from $SOURCE_DIR (output: $DATA_DIR)..."
 
 # Check inputs exist
-for f in catchments.gpkg current.csv current_lower.csv current_upper.csv reference.csv reference_lower.csv reference_upper.csv; do
-    if [ ! -f "$DATA_DIR/$f" ]; then
-        echo "Error: Missing $DATA_DIR/$f"
+if [ ! -f "$CATCHMENTS_SRC" ]; then
+    echo "Error: Missing $CATCHMENTS_SRC"
+    exit 1
+fi
+for f in current.csv current_lower.csv current_upper.csv reference.csv reference_lower.csv reference_upper.csv; do
+    if [ ! -f "$SCENARIOS_DIR/$f" ]; then
+        echo "Error: Missing $SCENARIOS_DIR/$f"
         exit 1
     fi
 done
@@ -34,40 +45,48 @@ done
 # Remove existing output
 rm -f "$OUTPUT"
 
+# Ship a standalone copy of the pristine source geopackage alongside
+# datapack.gpkg -- full geometry, full covariate columns, for loading
+# directly into QGIS/GDAL. datapack.gpkg's own catchments_lev12 gets pruned
+# to just what the server reads (see the end of this script); this is where
+# the full attribute set lives now.
+echo "Copying catchments.gpkg to $DATA_DIR for standalone GIS use..."
+cp "$CATCHMENTS_SRC" "$DATA_DIR/catchments.gpkg"
+
 # Copy the catchments geopackage as the base
 echo "Copying catchments.gpkg as base..."
-cp "$DATA_DIR/catchments.gpkg" "$OUTPUT"
+cp "$CATCHMENTS_SRC" "$OUTPUT"
 
 # Import CSV files as tables using ogr2ogr
 echo "Importing current.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_current_raw" \
-    "$DATA_DIR/current.csv"
+    "$SCENARIOS_DIR/current.csv"
 
 echo "Importing reference.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_reference_raw" \
-    "$DATA_DIR/reference.csv"
+    "$SCENARIOS_DIR/reference.csv"
 
 echo "Importing current_lower.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_current_lower_raw" \
-    "$DATA_DIR/current_lower.csv"
+    "$SCENARIOS_DIR/current_lower.csv"
 
 echo "Importing current_upper.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_current_upper_raw" \
-    "$DATA_DIR/current_upper.csv"
+    "$SCENARIOS_DIR/current_upper.csv"
 
 echo "Importing reference_lower.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_reference_lower_raw" \
-    "$DATA_DIR/reference_lower.csv"
+    "$SCENARIOS_DIR/reference_lower.csv"
 
 echo "Importing reference_upper.csv..."
 ogr2ogr -f GPKG -update "$OUTPUT" \
     -nln "scenario_reference_upper_raw" \
-    "$DATA_DIR/reference_upper.csv"
+    "$SCENARIOS_DIR/reference_upper.csv"
 
 # Import metadata if it exists
 if [ -f "$DATA_DIR/medata.csv" ]; then
@@ -494,6 +513,53 @@ FROM (
 SQLDOMAIN
 
 echo "  Created domain_minima and domain_maxima tables with $NUM_COLS columns"
+
+# -----------------------------------------------------------------------------
+# PRUNE UNUSED COLUMNS FROM catchments_lev12
+# -----------------------------------------------------------------------------
+# The server (internal/geodata/gpkg_store.go) never reads catchments_lev12's
+# raw "geom" column or its nine static covariates -- every geometry read goes
+# through the precomputed geojson/geojson_simplified columns above, and the
+# spatial index (rtree_catchments_lev12_geom) doesn't need geom present once
+# built. The full attribute set, including geom, lives in the standalone
+# catchments.gpkg copied earlier in this script -- keeping it here too would
+# just be duplication. ALTER TABLE ... DROP COLUMN (SQLite 3.35+) leaves
+# fid/rowid, the rtree, and every other column untouched.
+echo ""
+echo "Pruning unused columns from catchments_lev12 (kept only in catchments.gpkg)..."
+BEFORE_SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || stat -f%z "$OUTPUT")
+
+python3 - "$OUTPUT" <<'PRUNEPY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+
+DROP_COLUMNS = [
+    "geom",
+    "MAR", "MAT", "ecorgns", "Elev_m", "SandPerc", "pH", "TRI",
+    "propTrans", "propRef", "propFor",
+]
+
+for col in DROP_COLUMNS:
+    cur.execute(f'ALTER TABLE catchments_lev12 DROP COLUMN "{col}"')
+
+# The dropped geom column is no longer a real geometry column -- deregister
+# it so nothing that reads gpkg_geometry_columns expects a column that no
+# longer exists.
+cur.execute("DELETE FROM gpkg_geometry_columns WHERE table_name = 'catchments_lev12'")
+
+conn.commit()
+conn.close()
+print("  Dropped: " + ", ".join(DROP_COLUMNS))
+PRUNEPY
+
+echo "Reclaiming space (VACUUM)..."
+sqlite3 "$OUTPUT" "VACUUM;"
+
+AFTER_SIZE=$(stat -c%s "$OUTPUT" 2>/dev/null || stat -f%z "$OUTPUT")
+echo "  $OUTPUT: $(( (BEFORE_SIZE - AFTER_SIZE) / 1024 / 1024 )) MiB reclaimed"
 
 # Check the result
 echo ""

@@ -3,6 +3,8 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
+import { PanelExpandButton } from './components/PanelCollapseButton';
+import { useHeaderOffset } from './hooks/useHeaderOffset';
 import ChartDetailsPanel from './components/ChartDetailsPanel';
 import IdentifyDock from './components/IdentifyDock';
 import Header from './components/Header';
@@ -19,7 +21,7 @@ import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
 import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
-import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs, useColumns } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -59,6 +61,9 @@ function App() {
   const { details: attributeDetails, loading: attributeDetailsLoading } = useAttributeDetails();
   const { variableTypes, loading: variableTypesLoading } = useAttributeVariableTypes();
   const { userInputs, loading: userInputsLoading } = useAttributeUserInputs();
+  // Every indicator the app knows about, for handleAddPane's "claim an
+  // unused one" logic below.
+  const { columns } = useColumns();
   const catalogLoadingRef = useRef(true);
   catalogLoadingRef.current = attributeDetailsLoading || variableTypesLoading || userInputsLoading;
   const catalogRef = useRef({ attributeDetails, variableTypes, userInputs });
@@ -69,6 +74,7 @@ function App() {
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
+  const headerOffset = useHeaderOffset();
   const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
     // Auto-open filter panel for the focused pane when starting in single mode
     const mode = loadLayoutMode();
@@ -107,7 +113,10 @@ function App() {
   // stack repeated on each pane — six copies of one setting. They act on the
   // whole grid, so they live here and the header owns the single control.
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
-  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  // 0-100: 0 is fully hidden, 100 is fully opaque. Replaces what used to be
+  // a plain on/off toggle so the "hide choropleth" button's popover slider
+  // has a continuous value to drive, not just two states.
+  const [choroplethOpacity, setChoroplethOpacity] = useState(100);
   const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
@@ -882,9 +891,21 @@ function App() {
       const nextIndex = prev.length;
       setFocusedPane(nextIndex);
       setIndicatorPaneIndex(null);
-      return [...prev, { ...source }];
+      // A new pane claims the first indicator no pane already on screen is
+      // showing, rather than starting on a duplicate of the focused pane's
+      // -- added specifically so "add pane" surfaces something new to look
+      // at by default. "Used" is grid-wide: every pane counts, regardless
+      // of its view type (map, chart, dial, table, belt), since the point
+      // is not showing the same indicator twice anywhere in the grid. Falls
+      // back to mirroring the focused pane, same as before, once every
+      // indicator is already in use -- there is nothing left to avoid
+      // duplicating at that point.
+      const used = new Set(prev.map((p) => p.attribute).filter(Boolean));
+      const nextUnused = columns.find((c) => !used.has(c));
+      const attribute = nextUnused ?? source.attribute;
+      return [...prev, { ...source, attribute }];
     });
-  }, [focusedPane]);
+  }, [focusedPane, columns]);
 
   const handleRemovePane = useCallback((paneIndex: number) => {
     setPaneStates((prev) => {
@@ -1411,8 +1432,8 @@ function App() {
           isExtracting: isExtractingIndicators,
           is3DMode,
           onIs3DModeChange: setIs3DMode,
-          isChoroplethEnabled,
-          onChoroplethEnabledChange: setIsChoroplethEnabled,
+          choroplethOpacity,
+          onChoroplethOpacityChange: setChoroplethOpacity,
           isIdentifyMode,
           onIdentifyModeChange: setIsIdentifyMode,
           isGoogleBasemap,
@@ -1471,7 +1492,7 @@ function App() {
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             isIdentifyMode={isIdentifyMode}
-            isChoroplethEnabled={isChoroplethEnabled}
+            choroplethOpacity={choroplethOpacity}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={setIsGoogleBasemap}
             swiperPosition={swiperPosition}
@@ -1507,14 +1528,42 @@ function App() {
           isSlotBOpen={isSlotBOpen}
         />
 
+        {/* The way back from a collapsed control panel: an expand chevron
+            pinned to the screen edge where the panel was. Rendered only when
+            the whole right-hand slot is empty — the target editor and chart
+            details share those pixels, and a stray chevron over them would
+            read as theirs — and only when the identify dock isn't also
+            flush against that same edge (it sits there whenever slot B is
+            closed; see IdentifyDock's `right: isOpen && isSlotBOpen ?
+            panelWidth : 0`), since the two chevrons would otherwise land on
+            the exact same pixels. The identify dock's own collapse button
+            takes precedence in that case — it closes the panel actually
+            covering the screen, which un-blocks this one again. */}
+        {!isSlotBOpen && !isIdentifyPanelOpen && (
+          <Box
+            position="fixed"
+            // Fitts's law: land exactly where the panel's collapse button
+            // was — headerOffset is the panel's top (shared measurement,
+            // see useHeaderOffset) and 8px is that button's own top={2}.
+            top={`${headerOffset + 8}px`}
+            right={2}
+            zIndex={15}
+          >
+            <PanelExpandButton
+              label="Expand control panel"
+              onClick={() => setIndicatorPaneIndex(focusedPane)}
+            />
+          </Box>
+        )}
+
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
-          // Single pane keeps this panel open for the one pane on screen —
-          // there is no grid of other panes to switch attention to, so a
-          // collapse control here would leave the user unable to get it back.
-          canCollapse={layoutMode === 'quad'}
+          // Always collapsible: the expand chevron above is the guaranteed
+          // way back, which is what used to make single-pane collapse a
+          // dead end.
+          canCollapse
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}
