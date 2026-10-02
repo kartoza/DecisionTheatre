@@ -161,13 +161,13 @@ mkdir -p "$CACHE_DIR"
 TREATMENT_CSV="$PROJECT_ROOT/datasources/mbtiles-config/layer-treatment.csv"
 [[ -f "$TREATMENT_CSV" ]] || error "Treatment table not found: $TREATMENT_CSV"
 
-declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET T_DETAIL T_OUTPUT_LAYER
+declare -A T_MINZOOM T_SIMPLIFIED_END T_MAXZOOM T_GENERALISE T_VISVALINGAM T_TOLERANCE T_PRESERVE_SHARED_NODES T_MERGE_TINY_POLYGONS T_TILESET T_DETAIL T_OUTPUT_LAYER T_MAX_TILE_BYTES
 CSV_LAYER_ORDER=()
 
 load_treatment_csv() {
   T_MINZOOM=(); T_SIMPLIFIED_END=(); T_MAXZOOM=(); T_GENERALISE=()
   T_VISVALINGAM=(); T_TOLERANCE=(); T_PRESERVE_SHARED_NODES=(); T_MERGE_TINY_POLYGONS=()
-  T_TILESET=(); T_DETAIL=(); T_OUTPUT_LAYER=()
+  T_TILESET=(); T_DETAIL=(); T_OUTPUT_LAYER=(); T_MAX_TILE_BYTES=()
   CSV_LAYER_ORDER=()
 
   local line header_skipped=false
@@ -178,7 +178,7 @@ load_treatment_csv() {
       header_skipped=true
       continue
     fi
-    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset detail output_layer <<< "$line"
+    IFS=',' read -r layer minz send maxz gen vv tol psn mtp tileset detail output_layer max_tile_bytes <<< "$line"
     [[ -z "$layer" ]] && continue
     CSV_LAYER_ORDER+=("$layer")
     T_MINZOOM[$layer]="$minz"
@@ -206,6 +206,17 @@ load_treatment_csv() {
     # frontend code that recognises lev12 detail geometry (CATCHMENT_TILE_
     # SOURCE_LAYER in choroplethTiles.ts) silently fails to find it.
     T_OUTPUT_LAYER[$layer]="$output_layer"
+    # Overrides tippecanoe's 500KB-per-tile soft budget, the point at which
+    # --drop-densest-as-needed starts discarding whole features rather than
+    # just simplifying their vertices (see the COMMON= comment below). Blank
+    # means tippecanoe's own default. A layer tiled at a single pinned zoom
+    # and overzoomed across a wide display band (catchments_lev12_hex is the
+    # case this was added for) can have tens of thousands of small, roughly
+    # uniform-density features land in one low-zoom tile — there's no "wide"
+    # tile to thin into, every feature is a separately meaningful catchment,
+    # so dropping shows up as real, visible gaps in an otherwise edge-to-edge
+    # grid rather than the loss-free thinning it's redundant/clustered data.
+    T_MAX_TILE_BYTES[$layer]="$max_tile_bytes"
   done < "$TREATMENT_CSV"
 }
 
@@ -222,7 +233,7 @@ append_missing_layers() {
   for layer in "${MAP_LAYERS[@]}"; do
     if ! layer_in_csv "$layer"; then
       warn "'$layer' not in $(basename "$TREATMENT_CSV") — appending defaults (z6-z15, generalised, merged into the combined tileset)"
-      echo "$layer,6,14,15,true,true,10,true,false,,," >> "$TREATMENT_CSV"
+      echo "$layer,6,14,15,true,true,10,true,false,,,," >> "$TREATMENT_CSV"
     fi
   done
 }
@@ -251,6 +262,11 @@ validate_treatment() {
     local det="${T_DETAIL[$layer]:-}"
     if [[ -n "$det" ]] && ! [[ "$det" =~ ^[0-9]+$ && "$det" -ge 10 && "$det" -le 18 ]]; then
       warn "$layer: detail must be blank (tippecanoe default) or an integer 10-18 (got '$det')"
+      errs=$((errs + 1))
+    fi
+    local mtb="${T_MAX_TILE_BYTES[$layer]:-}"
+    if [[ -n "$mtb" ]] && ! [[ "$mtb" =~ ^[0-9]+$ && "$mtb" -gt 0 ]]; then
+      warn "$layer: max_tile_bytes must be blank (tippecanoe default) or a positive integer (got '$mtb')"
       errs=$((errs + 1))
     fi
     local field name val
@@ -283,7 +299,7 @@ validate_treatment() {
 # have happened *while* writing exactly the layer being resumed.
 layer_fingerprint() {
   local layer="$1"
-  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}|${T_DETAIL[$layer]:-}|${T_OUTPUT_LAYER[$layer]:-}" \
+  printf '%s' "${T_MINZOOM[$layer]}|${T_SIMPLIFIED_END[$layer]}|${T_MAXZOOM[$layer]}|${T_GENERALISE[$layer]}|${T_VISVALINGAM[$layer]}|${T_TOLERANCE[$layer]}|${T_PRESERVE_SHARED_NODES[$layer]}|${T_MERGE_TINY_POLYGONS[$layer]}|${T_DETAIL[$layer]:-}|${T_OUTPUT_LAYER[$layer]:-}|${T_MAX_TILE_BYTES[$layer]:-}" \
     | sha256sum | cut -d' ' -f1
 }
 
@@ -650,6 +666,8 @@ for LAYER in "${MAP_LAYERS[@]}"; do
   # clusters over isolated features -- a safe default for every layer,
   # not a per-layer opt-in.
   COMMON+=(--drop-densest-as-needed)
+  MTB="${T_MAX_TILE_BYTES[$LAYER]:-}"
+  [[ -n "$MTB" ]] && COMMON+=(--maximum-tile-bytes="$MTB")
 
   SIMP=(--simplification="$TOL")
   [[ "$VV" == true ]] && SIMP+=(--visvalingam)
@@ -730,7 +748,22 @@ for TS in "${!TILESET_LAYERS[@]}"; do
   done
 
   info "  → $TS (${TILESET_LAYERS[$TS]})"
-  tile-join -o "$STAGE" --force "${TS_FILES[@]}"
+  if [[ "${#TS_FILES[@]}" -eq 1 ]]; then
+    # tile-join enforces its own hardcoded ~500KB-per-tile ceiling with no
+    # CLI flag to raise it -- independent of, and in addition to, whatever
+    # --maximum-tile-bytes the layer was tiled with above. Worse than
+    # tippecanoe's own --drop-densest-as-needed: it doesn't thin a tile
+    # that's too big, it silently DROPS THE WHOLE TILE (confirmed: a layer
+    # tiled with a raised ceiling specifically so a dense low-zoom tile
+    # would build undropped still lost that exact tile here, re-triggering
+    # the same gap tile-join was never asked to avoid). A single-layer
+    # tileset has nothing to join — the per-layer file tippecanoe already
+    # wrote is the final file; every current catchment level is exactly
+    # this case (one GeoPackage table, one standalone tileset each).
+    cp "${TS_FILES[0]}" "$STAGE"
+  else
+    tile-join -o "$STAGE" --force "${TS_FILES[@]}"
+  fi
 
   mkdir -p "$DATA_MBTILES_DIR"
   mv "$STAGE" "$DEST"

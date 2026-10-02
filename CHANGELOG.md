@@ -9,6 +9,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long pause on page load, usually only fixed by panning — not specific
+  to `--legacy` or the hex band, this affected the choropleth in general.**
+  Reported directly. `style.load` paints the choropleth immediately, before
+  the basemap's own tiles stream in — deliberate, documented behaviour, so
+  the overlay is the first thing on screen. But it fires *before*
+  `resizeAndRefresh`'s own `updateMapSizes`/`resize`/`jumpTo` have finished
+  correcting the map container's real layout, so that first paint's
+  bounds-dependent values fetch could run against a viewport that wasn't
+  the real one yet. The repaint that used to fix this — right after
+  `resizeAndRefresh`, once layout is actually correct — was gated behind
+  `mapsReady.current.right`, true only once a second (compare) map also
+  exists and has loaded. A single-map view, the default, never satisfies
+  that, so the only thing that ever corrected the stale first paint was
+  the user's own pan triggering `moveend`. Both maps' `load` handlers now
+  repaint unconditionally right after their own `resizeAndRefresh`, not
+  gated on the other side's readiness. Verified live: a fresh page load
+  with no interaction beyond dismissing the tour shows a fully populated,
+  correctly coloured choropleth within a few seconds, no pan required.
+- **The coarse hex tier (below) never actually handed off to the fine one —
+  one tier covered the entire z2-z8 range, then jumped straight to real
+  catchment boundaries at z9.** Reported directly, after the two-tier fix
+  below had already shipped: "you never implemented a 2 tier coarse layout
+  you made a 1 tier coarse layout that switched over to catchments." Root
+  cause: the function that decides whether a zoom crossing needs a new
+  MapLibre vector-tile source compared bands by `sourceLayer` alone — and
+  the two hex tiers deliberately share one `sourceLayer` name
+  (`catchments_lev12_hex`, so everything that recognises "a hex band" only
+  needs to know the one name). Crossing from coarse to fine read as
+  "nothing changed," so the source's tile URLs — baked in once at
+  `addSource` — kept pointing at the coarse tileset all the way to z9,
+  where the detail band's genuinely different `sourceLayer` finally
+  triggered a swap. Fixed by keying the comparison on `sourceLayer` +
+  `tilezoom` together; `tilezoom` is unique per band by construction (one
+  real tiled zoom each), so it tells any two bands apart regardless of
+  shared naming. Verified by reading the live MapLibre source definition
+  directly (not screenshots): the active source is
+  `catchments-lev12-hex-coarse` at z3.56 and correctly
+  `catchments-lev12-hex` at z6.21.
+- **The coarse hex tier (H3 resolution 3, ~138km cells) looked needlessly
+  chunky once the handoff bug above was fixed and it was actually visible
+  on its own.** Reported directly, with an explicit ask to keep the
+  existing fine-hex size and just close the gaps, not swap in something
+  bigger. Dropped to H3 resolution 4 (~52km cells, the next step down
+  H3's fixed resolution ladder — roughly 38% of resolution 3's linear
+  size, the closest available approximation to "half"). Checked this
+  wouldn't reopen the sub-pixel gap problem the coarse tier exists to
+  avoid: the app's own configured `minZoom` floors around z3.2, never
+  reaching the z2 this band is nominally tiled for, so the real worst
+  case is ~17km/pixel rather than z2's ~40km/pixel — confirmed with
+  screenshots at that real floor over the equatorial region the original
+  "white mesh" problem was reported from, no gaps.
+- **The hex band looked like more holes below about z5 — scattered dots on
+  solid colour, not the large gaps a prior fix (below) already closed.**
+  Reported from a real screenshot, after that fix had already shipped. A
+  direct MVT decode ruled out missing data immediately: the z2 tile for
+  that exact region held *more* features than the source GeoJSON for that
+  extent. The real cause is screen-space, not data-space: H3 resolution
+  5's cells average ~16km across, smaller than a single screen pixel
+  anywhere below about z5. WebGL fills a polygon by testing whether each
+  pixel's centre falls inside it; a polygon too small to ever contain a
+  pixel centre renders nothing no matter how complete the underlying
+  geometry is, and only the occasional cell that does catch a sample
+  point shows up as an isolated dot — the same mechanism, one resolution
+  tier down, as the real lev12 mesh being unreadable at z5.7-z6.12 in the
+  first place. `--legacy`'s hex band is now itself two tiers, mirroring
+  the default mode's own multi-resolution handoff instead of asking one
+  grid to cover a zoom range wide enough it eventually has to break:
+  `catchments-lev12-hex-coarse` (H3 resolution 4, ~52km cells) for
+  z2-z4, the original resolution-5 grid from z5, where its own cells are
+  comfortably multi-pixel. Both bands share one vector-tile source-layer
+  name (`catchments_lev12_hex`, via the coarse table's own `output_layer`
+  override) — everything that recognises "a hex band" only ever needed
+  to know the one name; the two tiers are told apart by `tilezoom`.
+  Verified live: the exact zoom and location from the report now renders
+  large, solid, edge-to-edge hexagons, and the z5 handoff between tiers
+  shows no visible seam.
+- **Clicking a hex cell to identify it could silently do nothing.**
+  Reported directly. The identify click always resolved a catchment id
+  by sending the exact clicked lng/lat to the server for a point-in-
+  polygon test against real lev12 geometry — correct for every other
+  band, where nothing client-side carries a usable lev12 id, but wrong
+  for the hex band, whose cells are a stylised stand-in shape that
+  doesn't match the real catchment boundary underneath. A click landing
+  inside the hex cell but outside the real polygon's own (differently
+  shaped, often smaller) footprint found no catchment at that exact
+  point and the identify panel simply never opened. The hex band's
+  cells already carry their own representative catchment's real
+  `HYBAS_ID` as a tile property — the same one the choropleth's own
+  colour join reads — so a hex-band click now reads that id straight off
+  the clicked feature instead of re-deriving one via the point lookup.
+  This is not just a workaround: identifying a hex cell should always
+  resolve to the catchment it represents, which is what clicking
+  anywhere else on the cell now reliably does.
+- **Scattered hex cells rendered solid black instead of a real colour.**
+  Reported from a real screenshot. Root cause: a cell's representative
+  catchment was chosen by centroid — among catchments whose own centroid
+  happened to fall inside the cell, keep the largest by `SUB_AREA` — so a
+  cell's colour depended on which catchment's *centroid* landed there, not
+  which catchment actually *covered* it. When that centroid-matched
+  catchment had no value for the indicator on screen, the cell got a
+  `null` feature-state and nothing for the paint expression to
+  interpolate — not white-for-zero (a real, measured value — see below),
+  solid black, MapLibre's fallback for a feature-state with nothing to
+  paint. `scripts/generate_catchment_hexagons.py` now picks each cell's
+  representative by **area of overlap** instead: reads real catchment
+  geometry (not just `lat`/`long`/`SUB_AREA`/`HYBAS_ID` points, as the
+  centroid version did) and, via a spatial index
+  (`geopandas`/`shapely`, already in `dataToolsEnv`), finds whichever
+  catchment's polygon covers the most of each cell's own hexagon area —
+  a strictly better representative regardless of the black-cell symptom,
+  since a catchment can have its centroid fall in a cell while covering
+  almost none of its actual area. A catchment big enough to dominate
+  several adjacent cells now legitimately wins all of them, which is why
+  the GeoJSON's own id property is `source_fid`, not `fid` — a property
+  literally named `fid` is special-cased as the primary key by ogr2ogr's
+  GPKG driver, and the no-longer-guaranteed-unique id aborted the import
+  outright under the old property name.
+- **The hex band (see "Added" below) rendered with large gaps instead of
+  edge-to-edge coverage — two whole z2 tiles were silently missing.**
+  `tile-join`, the step that merges each layer's per-layer `.mbtiles`
+  into the tileset file actually served, enforces its own ~500KB-per-
+  tile ceiling with no CLI flag to raise it, entirely independent of
+  tippecanoe's own `--maximum-tile-bytes`/`--drop-densest-as-needed`
+  (which already applied to this layer — see the `max_tile_bytes`
+  treatment-table column below). Worse than tippecanoe's own dropping:
+  tile-join doesn't thin an oversized tile, it discards the *whole*
+  tile, which is what produced the gaps — two of the three z2 tiles
+  covering the hex grid's dense regions were missing entirely, not
+  thinned. `gpkg_to_mbtiles.sh`'s merge step now skips `tile-join` for
+  any tileset built from exactly one layer — the overwhelmingly common
+  case (every catchment level is its own single-layer tileset) — and
+  uses that layer's own `.mbtiles` directly, since there is nothing to
+  join. Verified live: all three of the hex band's z2 tiles now present
+  at their full, undropped size, and a wide-area screenshot over a
+  catchment-dense region shows a clean, edge-to-edge tessellation with
+  no gaps.
+- **The hex band could still need to drop features at tippecanoe's own
+  tiling step, before the `tile-join` issue above.** 147,837 catchments
+  collapse to one GeoPackage-wide single z2 tile per hemisphere-ish
+  region; a region with enough catchment density could exceed
+  tippecanoe's default 500KB-per-tile budget even after the grid math
+  itself was already correct, triggering `--drop-densest-as-needed` to
+  thin real, individually-meaningful hexagons rather than visually-
+  redundant clutter (the thinning it's actually designed for). New
+  `max_tile_bytes` treatment-table column (`layer-treatment.csv`) passes
+  `--maximum-tile-bytes` through to tippecanoe per layer, raised for
+  `catchments_lev12_hex` alone — every other layer keeps tippecanoe's
+  default, unaffected.
+- **A rebuilt `.mbtiles` could render as stale or visibly wrong data
+  indefinitely, because nothing told an already-running client its
+  cached tiles were outdated.** Tile URLs carried only `{z}/{x}/{y}` —
+  no content version — under `Cache-Control: public, max-age=86400`, so
+  a client that had already cached a tile (notably the desktop app's own
+  webview, which persists its HTTP cache across app restarts) kept
+  serving those exact bytes for up to 24h no matter how many times the
+  underlying file was rebuilt on disk; restarting the *server* process
+  did nothing, since the stale copy lived in the client. Caught when a
+  freshly rebuilt `catchments-lev12-hex.mbtiles` (see "Added" below)
+  kept rendering as the overlapping, wildly-different-sized hexagons an
+  earlier, discarded attempt had produced, long after the file on disk
+  held a clean grid. `MBTilesStore` now records each tileset's source
+  file mtime at load time (`Version()`); every tile URL in
+  `/data/catchments-tiles.json` and `/data/tiles.json` carries that as a
+  `?v=<mtime>` suffix (`tileVersionSuffix`), so a rebuild is a new URL
+  and a guaranteed cache miss, not a 24h wait or a manual cache-clear.
 - **`--legacy` mode actually shows per-catchment spatial variation now —
   two separate bugs, both fixed.** First: `catchments-lev12-full`'s
   tileset was tiled with its vector layer named after its GeoPackage

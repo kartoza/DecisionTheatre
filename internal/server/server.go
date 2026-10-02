@@ -576,13 +576,14 @@ func (s *Server) writeTileJSON(w http.ResponseWriter, r *http.Request, name stri
 		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
 	}
 
-	tileURLs := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf"}
+	versionSuffix := s.tileVersionSuffix(name)
+	tileURLs := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf" + versionSuffix}
 	if altBase != base {
-		tileURLs = append(tileURLs, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf")
+		tileURLs = append(tileURLs, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf"+versionSuffix)
 	}
 	// Aux ports each provide an independent 6-connection HTTP/1.1 pool.
 	for _, p := range s.auxPorts {
-		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf", p, name))
+		tileURLs = append(tileURLs, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf%s", p, name, versionSuffix))
 	}
 
 	tileJSON := map[string]interface{}{
@@ -640,21 +641,23 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request) {
 	// --legacy (`dt serve-legacy`): always lev12 *values*, at every zoom,
 	// never the coarser multi-resolution bands' aggregates (handleCatchmentValues
-	// enforces that half). Below about z8 real lev12 boundaries are too dense
+	// enforces that half). Below about z9 real lev12 boundaries are too dense
 	// to read as a map at all — 147,837 slivers in one viewport reads as a
-	// solid mesh, not catchments — so this mode's own two-band split swaps
-	// real boundaries for a hexagon per catchment there (centred on its own
-	// centroid, sized from its own SUB_AREA — see
-	// generate_catchment_hexagons.py), keeping a catchment's identity and
-	// rough position without detail nothing could render legibly. Real lev12
-	// detail still takes over from z9, same cutover the default mode's own
-	// lev08→lev12 handoff uses. Both bands are single-zoom-tiled and
-	// overzoomed exactly like the default mode's own levels (see
-	// writeSplitCatchmentsTileJSON) — this is the same split-tileset
-	// document shape with a different table, not a new mechanism. Falls
-	// through to the normal multires behaviour if neither legacy tileset has
-	// been built for this datapack, rather than taking the flag down with it.
-	if s.cfg.LegacyCatchments && (s.hasTileset("catchments-lev12-hex") || s.hasTileset("catchments-lev12-full")) {
+	// solid mesh, not catchments — so this mode's own three-band split swaps
+	// real boundaries for an H3 hex grid there, snapped per catchment by
+	// largest area of overlap with each cell (see
+	// generate_catchment_hexagons.py): a coarse grid for z2-z4, a finer one
+	// from z5 where individual cells of the coarse grid would start looking
+	// chunky, real lev12 detail still taking over from z9 — same cutover the
+	// default mode's own lev08→lev12 handoff uses, just with two hex tiers
+	// standing in for lev04/06/08's real coarser basins. All three bands are
+	// single-zoom-tiled and overzoomed exactly like the default mode's own
+	// levels (see writeSplitCatchmentsTileJSON) — this is the same split-
+	// tileset document shape with a different table, not a new mechanism.
+	// Falls through to the normal multires behaviour if none of the three
+	// legacy tilesets has been built for this datapack, rather than taking
+	// the flag down with it.
+	if s.cfg.LegacyCatchments && (s.hasTileset("catchments-lev12-hex-coarse") || s.hasTileset("catchments-lev12-hex") || s.hasTileset("catchments-lev12-full")) {
 		s.writeSplitCatchmentsTileJSON(w, r, legacyCatchmentTilesets)
 		return
 	}
@@ -708,13 +711,34 @@ var catchmentLevelTilesets = []levelTileset{
 var catchmentsLev12HexSourceLayer = "catchments_lev12" + "_hex"
 
 // legacyCatchmentTilesets is catchmentLevelTilesets' --legacy counterpart:
-// hexagons standing in for real boundaries below z9 (see
-// handleCatchmentsTileJSON), real lev12 detail from z9. Both still carry
-// lev12 ids/values — GetCatchmentIDsByBBox-style lookups and
+// two hex tiers standing in for real boundaries below z9 (see
+// handleCatchmentsTileJSON), real lev12 detail from z9. All three still
+// carry lev12 ids/values — GetCatchmentIDsByBBox-style lookups and
 // handleCatchmentValues's legacy branch don't care which geometry a tile
 // uses, only that the id namespace is lev12 throughout.
+//
+// One hex resolution across the whole z2-z8 band was tried first and
+// reported back as sparse, scattered dots rather than solid colour below
+// about z5 - not missing data (a direct tile decode confirmed every
+// feature was present), but H3 resolution 5's ~16km cells being smaller
+// than a single screen pixel that low: WebGL rasterises a fill polygon by
+// sampling each pixel's centre, and a polygon that doesn't happen to
+// cover any sample point in its tile renders nothing at all, regardless
+// of how completely the geometry is actually there. The fix is the same
+// one the default multi-resolution mode already uses for exactly this
+// problem - more than one resolution, handing off before individual
+// cells go sub-pixel - just built from coarser hex grids instead of
+// coarser real basins, so --legacy's own "always lev12, never aggregated"
+// rule still holds at every zoom: catchments_lev12_hex_coarse (H3
+// resolution 4, ~52km cells) for z2-z4, catchments_lev12_hex (resolution
+// 5) from z5, where its own cells are comfortably multi-pixel. Resolution
+// 3 (~138km) was tried first and reported back as needlessly chunky - the
+// app's own configured minZoom never actually lets a viewport reach true
+// z2 (floors around z3.2), so resolution 4 already has room to spare
+// against the real worst case.
 var legacyCatchmentTilesets = []levelTileset{
-	{"catchments-lev12-hex", catchmentsLev12HexSourceLayer, 2},
+	{"catchments-lev12-hex-coarse", catchmentsLev12HexSourceLayer, 2},
+	{"catchments-lev12-hex", catchmentsLev12HexSourceLayer, 5},
 	{"catchments-lev12-full", "catchments_lev12", 9},
 }
 
@@ -744,14 +768,34 @@ func (s *Server) tileURLVariants(r *http.Request, name string) []string {
 	case strings.Contains(r.Host, "127.0.0.1"):
 		altBase = strings.Replace(base, "127.0.0.1", "localhost", 1)
 	}
-	urls := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf"}
+	versionSuffix := s.tileVersionSuffix(name)
+	urls := []string{base + "/tiles/" + name + "/{z}/{x}/{y}.pbf" + versionSuffix}
 	if altBase != base {
-		urls = append(urls, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf")
+		urls = append(urls, altBase+"/tiles/"+name+"/{z}/{x}/{y}.pbf"+versionSuffix)
 	}
 	for _, p := range s.auxPorts {
-		urls = append(urls, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf", p, name))
+		urls = append(urls, fmt.Sprintf("http://localhost:%d/tiles/%s/{z}/{x}/{y}.pbf%s", p, name, versionSuffix))
 	}
 	return urls
+}
+
+// tileVersionSuffix returns a "?v=<mtime>" query string for a tileset's tile
+// URLs, or "" if its mtime isn't known. A client (notably the desktop app's
+// webview, which persists its HTTP cache across restarts — see the versions
+// field doc comment on MBTilesStore) that already cached a z/x/y tile keeps
+// serving those exact bytes for Cache-Control's full 24h max-age otherwise,
+// no matter how many times the underlying .mbtiles is rebuilt on disk: the
+// URL is the client's only cache key, and it was identical before and after.
+func (s *Server) tileVersionSuffix(name string) string {
+	tileStore := s.data().tiles
+	if tileStore == nil {
+		return ""
+	}
+	v, ok := tileStore.Version(name)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("?v=%d", v)
 }
 
 // writeSplitCatchmentsTileJSON describes the per-level catchment tilesets in

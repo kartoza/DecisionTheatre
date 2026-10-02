@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -97,18 +98,60 @@ func TestCatchmentsTileJSONSplitTilesets(t *testing.T) {
 	}
 }
 
-// `dt serve-legacy`: with both of --legacy's own tilesets present, the
-// endpoint serves them as a two-band split document - a hexagon per
-// catchment below z9 (where real lev12 boundaries are too dense to render
-// legibly), real lev12 detail from z9. Same split-tileset document shape
-// the default multi-resolution mode uses, a different table.
+// Every tile URL carries a "?v=<mtime>" suffix so a client that already
+// cached a z/x/y tile (notably the desktop app's webview, which persists its
+// HTTP cache across restarts) re-fetches once the underlying .mbtiles is
+// rebuilt, instead of serving stale bytes for Cache-Control's full 24h
+// max-age — see tileVersionSuffix and MBTilesStore.Version.
+func TestCatchmentsTileJSONTileURLsCarryVersionSuffix(t *testing.T) {
+	dataDir := t.TempDir()
+	mbtilesDir := filepath.Join(dataDir, "mbtiles")
+	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12"} {
+		minimalMBTiles(t, mbtilesDir, name)
+	}
+
+	srv, err := New(config.Config{Port: 0, DataDir: dataDir, Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	doc := catchmentsTileJSON(t, srv)
+
+	var levels []struct {
+		SourceLayer string   `json:"sourceLayer"`
+		Tiles       []string `json:"tiles"`
+	}
+	if err := json.Unmarshal(doc["tilesets"], &levels); err != nil {
+		t.Fatalf("no usable tilesets array: %v (doc keys: %v)", err, doc)
+	}
+	for _, l := range levels {
+		for _, tileURL := range l.Tiles {
+			if !strings.Contains(tileURL, "?v=") {
+				t.Errorf("%s: tile URL %q carries no cache-busting ?v= suffix", l.SourceLayer, tileURL)
+			}
+		}
+	}
+}
+
+// `dt serve-legacy`: with all three of --legacy's own tilesets present, the
+// endpoint serves them as a three-band split document - a coarse hex grid
+// for z2-z4, a finer one from z5 (real lev12 boundaries are too dense to
+// render legibly below z9, and a single hex resolution across the whole
+// z2-z8 band went sub-pixel and sparse below about z5), real lev12 detail
+// from z9. Same split-tileset document shape the default multi-resolution
+// mode uses, a different table. Both hex tiers share one sourceLayer
+// (catchments_lev12_hex_coarse's own vector layer is renamed to it via the
+// output_layer treatment-table column) - bands are told apart by tilezoom,
+// not sourceLayer, so a shared name across tiers is fine.
 func TestCatchmentsTileJSONLegacyFlagServesHexAndDetailSplit(t *testing.T) {
 	dataDir := t.TempDir()
 	mbtilesDir := filepath.Join(dataDir, "mbtiles")
 	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12", "catchments-lev12-hex", "catchments-lev12-full"} {
+	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12", "catchments-lev12-hex-coarse", "catchments-lev12-hex", "catchments-lev12-full"} {
 		minimalMBTiles(t, mbtilesDir, name)
 	}
 
@@ -127,21 +170,25 @@ func TestCatchmentsTileJSONLegacyFlagServesHexAndDetailSplit(t *testing.T) {
 	if err := json.Unmarshal(doc["tilesets"], &levels); err != nil {
 		t.Fatalf("no usable tilesets array: %v (doc keys: %v)", err, doc)
 	}
-	if len(levels) != 2 {
-		t.Fatalf("expected 2 legacy bands (hex, detail), got %d", len(levels))
+	if len(levels) != 3 {
+		t.Fatalf("expected 3 legacy bands (coarse hex, fine hex, detail), got %d", len(levels))
 	}
-	wantZooms := map[string]int{"catchments_lev12_hex": 2, "catchments_lev12": 9}
+	wantZooms := map[string]int{"catchments-lev12-hex-coarse": 2, "catchments-lev12-hex": 5, "catchments-lev12-full": 9}
+	wantSourceLayers := map[string]string{"catchments-lev12-hex-coarse": "catchments_lev12_hex", "catchments-lev12-hex": "catchments_lev12_hex", "catchments-lev12-full": "catchments_lev12"}
 	for _, l := range levels {
-		if wantZooms[l.SourceLayer] != l.Tilezoom {
-			t.Errorf("%s: tilezoom %d, want %d", l.SourceLayer, l.Tilezoom, wantZooms[l.SourceLayer])
+		if wantZooms[l.Name] != l.Tilezoom {
+			t.Errorf("%s: tilezoom %d, want %d", l.Name, l.Tilezoom, wantZooms[l.Name])
+		}
+		if wantSourceLayers[l.Name] != l.SourceLayer {
+			t.Errorf("%s: sourceLayer %q, want %q", l.Name, l.SourceLayer, wantSourceLayers[l.Name])
 		}
 		if len(l.Tiles) == 0 {
-			t.Errorf("%s: no tile URLs", l.SourceLayer)
+			t.Errorf("%s: no tile URLs", l.Name)
 		}
 	}
 }
 
-// A partially built --legacy store (only one of the two tilesets exists)
+// A partially built --legacy store (only some of the three tilesets exist)
 // still serves what it has rather than falling all the way back - the same
 // resilience the default mode's own split document already has for a
 // missing level.
@@ -151,7 +198,7 @@ func TestCatchmentsTileJSONLegacyFlagServesWhicheverLegacyTilesetExists(t *testi
 	if err := os.MkdirAll(mbtilesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Only the detail tileset built yet, not the hex one.
+	// Only the detail tileset built yet, not either hex tier.
 	for _, name := range []string{"context", "catchments-lev04", "catchments-lev06", "catchments-lev08", "catchments-lev12", "catchments-lev12-full"} {
 		minimalMBTiles(t, mbtilesDir, name)
 	}
@@ -173,10 +220,10 @@ func TestCatchmentsTileJSONLegacyFlagServesWhicheverLegacyTilesetExists(t *testi
 	}
 }
 
-// The flag must not take the map down with it when neither legacy tileset
-// has actually been built for this datapack - fall back to whatever the
-// normal (non-legacy) resolution would have served, same as any other
-// optional tileset's absence.
+// The flag must not take the map down with it when none of the three legacy
+// tilesets has actually been built for this datapack - fall back to
+// whatever the normal (non-legacy) resolution would have served, same as
+// any other optional tileset's absence.
 func TestCatchmentsTileJSONLegacyFlagWithoutEitherLegacyTilesetFallsBack(t *testing.T) {
 	dataDir := t.TempDir()
 	mbtilesDir := filepath.Join(dataDir, "mbtiles")

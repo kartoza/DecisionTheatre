@@ -14,30 +14,55 @@ each other with no shared structure, reported back as "not what H3
 means"). It uses actual H3 (nixpkgs ships the upstream Python bindings as
 python3Packages.h3, wired into dataToolsEnv in flake.nix — a hand-rolled
 axial-grid reimplementation was tried first and discarded once nixpkgs
-turned out to already carry the real thing). Every catchment's centroid
-snaps to whichever H3 cell contains it at a fixed resolution, so
-neighbouring cells tile edge to edge with no overlap and no gap. A cell
-keeps only its largest catchment by SUB_AREA when more than one lands in
-it (dense catchment clusters mean a one-catchment-per-cell grid can't
-show literally every catchment at this resolution — picking the biggest
-keeps the result a real, unblended catchment value rather than an
-average across the ones that collided). The catchments a cell does not
-keep are simply not drawn here; they still render at full detail from
-z9, this band exists only below that.
+turned out to already carry the real thing). Every catchment's own
+centroid snaps to whichever H3 cell contains it at a fixed resolution,
+which decides which cells are occupied at all — one fixed grid for the
+whole dataset, so neighbouring cells tile edge to edge with no overlap
+and no gap.
 
-Reads directly from catchments_lev12 (lat/long/SUB_AREA/HYBAS_ID only --
-no geometry read, this never touches the real boundaries) and writes a
-GeoJSON file of H3 cell boundary polygons; the caller imports it into the
-GeoPackage as catchments_lev12_hex with ogr2ogr, the same tool every
-other step of this pipeline already uses for GeoPackage I/O rather than
-hand-encoding GPKG's binary geometry format here.
+A cell's REPRESENTATIVE catchment — whose HYBAS_ID the cell's feature
+carries, and so whose value colours it — is not simply whichever
+centroid-matched catchment happens to be largest. It is whichever
+catchment's own polygon has the largest AREA OF OVERLAP with the cell's
+hexagon, found via a spatial index over every catchment's real geometry
+(not just the centroid that decided the cell's occupancy). Area-of-
+overlap is a strictly better representative than "largest SUB_AREA among
+centroid matches": a catchment whose centroid lands in a cell by chance
+can still cover almost none of that cell's actual area, while a larger
+neighbour that straddles the cell boundary covers most of it without its
+own centroid ever landing inside. The gap this closes was visible, not
+theoretical: cells whose centroid-matched "winner" had no value for the
+indicator on screen rendered solid black (reported from a real
+screenshot) even though a real, data-complete catchment dominated that
+cell's actual area the whole time.
+
+Reads catchments_lev12's real geometry now (not just lat/long/SUB_AREA
+points, as an earlier version of this script did) specifically to
+compute that overlap; writes a GeoJSON file of H3 cell boundary
+polygons. The caller imports it into the GeoPackage as
+catchments_lev12_hex with ogr2ogr, the same tool every other step of
+this pipeline already uses for GeoPackage I/O rather than hand-encoding
+GPKG's binary geometry format here.
 """
 import argparse
 import json
-import sqlite3
 import sys
+import warnings
 
+import geopandas as gpd
 import h3
+from shapely.geometry import Polygon
+
+# geopandas warns that .area is "likely incorrect" in a geographic (degree)
+# CRS - true for absolute area, irrelevant here: every comparison is between
+# candidates overlapping the SAME cell, a ~16km patch where the latitude
+# (and so the degree-to-area distortion) is effectively constant across all
+# of them, so the relative ordering idxmax() picks from is unaffected. The
+# rest of this pipeline already treats lat/long degrees as equal-area for
+# the same reason (see this file's own module docstring history) -
+# reprojecting 147,837 geometries just to re-derive an ordering
+# that degree-area already gives for free would be pure overhead.
+warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS.*")
 
 # H3 resolution 5 cells average ~253 km^2 (~10km circumradius), close to
 # the grid this replaces (independently tuned to collide about half of
@@ -45,6 +70,10 @@ import h3
 # - keeps the same visual density already validated against a screenshot
 # of this band, now built on the real library instead of reinventing it.
 H3_RESOLUTION = 5
+
+
+def hex_cell_polygon(cell: str) -> Polygon:
+    return Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(cell)])
 
 
 def main() -> int:
@@ -55,41 +84,66 @@ def main() -> int:
                          help=f"H3 grid resolution, 0 (coarsest) - 15 (finest) (default {H3_RESOLUTION})")
     args = parser.parse_args()
 
-    con = sqlite3.connect(f"file:{args.gpkg}?mode=ro", uri=True)
-    rows = con.execute(
-        'SELECT fid, HYBAS_ID, lat, long, SUB_AREA FROM catchments_lev12 '
-        'WHERE lat IS NOT NULL AND long IS NOT NULL AND HYBAS_ID IS NOT NULL'
-    ).fetchall()
-    con.close()
-
-    if not rows:
+    # fid_as_index=True makes the GeoDataFrame's own index the GeoPackage fid,
+    # so a selected row's fid is just its .name - no separate SQL round trip
+    # to recover it (as the lat/long/SUB_AREA-only version of this script did).
+    catchments = gpd.read_file(args.gpkg, layer="catchments_lev12", fid_as_index=True)
+    catchments = catchments[
+        catchments["lat"].notna() & catchments["long"].notna() & catchments["HYBAS_ID"].notna()
+    ]
+    if catchments.empty:
         print("no catchments_lev12 rows with lat/long/HYBAS_ID found", file=sys.stderr)
         return 1
 
-    # One winner per occupied cell: the catchment with the largest SUB_AREA.
-    cells: dict[str, tuple] = {}
-    for fid, hybas_id, lat, lon, sub_area in rows:
-        cell = h3.latlng_to_cell(lat, lon, args.h3_resolution)
-        area = sub_area or 0.0
-        current = cells.get(cell)
-        if current is None or area > current[4]:
-            cells[cell] = (fid, hybas_id, lat, lon, area)
+    # Which H3 cells are occupied at all: snap every catchment's own centroid,
+    # same grid footprint/tuning as before - H3_RESOLUTION controls density
+    # and collision rate, unchanged by the representative-selection fix below.
+    cells = {
+        h3.latlng_to_cell(lat, lon, args.h3_resolution)
+        for lat, lon in zip(catchments["lat"], catchments["long"])
+    }
 
+    sindex = catchments.sindex
     features = []
-    for cell, (fid, hybas_id, _lat, _lon, _area) in cells.items():
-        ring = [[lng, lat] for lat, lng in h3.cell_to_boundary(cell)]
-        ring.append(ring[0])
+    no_overlap = 0
+    for cell in cells:
+        hex_poly = hex_cell_polygon(cell)
+        candidate_pos = sindex.query(hex_poly, predicate="intersects")
+        if len(candidate_pos) == 0:
+            # A fully-covered dataset shouldn't produce this - every point of
+            # area belongs to some catchment - but an edge-of-coverage cell
+            # genuinely might have nothing to represent it. Same as before:
+            # simply don't draw a cell with nothing to show.
+            no_overlap += 1
+            continue
+        candidates = catchments.iloc[candidate_pos]
+        overlap_area = candidates.geometry.intersection(hex_poly).area
+        winner_fid = overlap_area.idxmax()
+        winner = catchments.loc[winner_fid]
+
+        ring = list(hex_poly.exterior.coords)
         features.append({
             "type": "Feature",
-            "properties": {"fid": fid, "HYBAS_ID": hybas_id, "h3": cell},
+            # Not "fid": ogr2ogr's GPKG driver treats a property literally
+            # named fid as the table's own primary key, which collided and
+            # aborted the import the moment two cells (now a real
+            # possibility - a catchment big enough to dominate several
+            # cells' overlap wins all of them, unlike the old one-centroid-
+            # one-cell selection) shared a winner. HYBAS_ID is the only
+            # property anything downstream actually joins on (promoteId in
+            # choroplethTiles.ts); source_fid is debugging-only.
+            "properties": {"source_fid": int(winner_fid), "HYBAS_ID": winner["HYBAS_ID"], "h3": cell},
             "geometry": {"type": "Polygon", "coordinates": [ring]},
         })
 
     with open(args.out, "w") as f:
         json.dump({"type": "FeatureCollection", "features": features}, f)
 
-    print(f"wrote {len(features)} H3 res-{args.h3_resolution} cells from {len(rows)} catchments "
-          f"({len(rows) - len(features)} collided into a neighbour's cell) to {args.out}")
+    print(f"wrote {len(features)} H3 res-{args.h3_resolution} cells "
+          f"(representative = largest areal overlap with the cell, not largest "
+          f"SUB_AREA among centroid matches) from {len(catchments)} catchments "
+          f"to {args.out}; {no_overlap} occupied cell(s) had no overlapping "
+          "catchment geometry and were skipped")
     return 0
 
 

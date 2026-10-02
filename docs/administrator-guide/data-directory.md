@@ -34,7 +34,8 @@ is stated — those files cannot be renamed.
 | `mbtiles/context.mbtiles` | `internal/tiles/mbtiles.go` | **Must be named `context`** — see the warning below. |
 | `mbtiles/catchments-lev04/06/08/12.mbtiles` | `internal/tiles/mbtiles.go` | Optional. The per-level catchment tilesets, each tiled at a single zoom — see the note below. A legacy pack may instead carry one combined `catchments.mbtiles`; either spelling works, names are load-bearing. |
 | `mbtiles/catchments-lev12-full.mbtiles` | `internal/tiles/mbtiles.go` | Optional. Real lev12 detail tiled at z9 and overzoomed, used (with the hex tileset below) only when the server is launched with `--legacy` — see the note below. Absence is not an error: `--legacy` without it falls back to the normal per-level bands. |
-| `mbtiles/catchments-lev12-hex.mbtiles` | `internal/tiles/mbtiles.go` | Optional. `--legacy`'s own low-zoom (z2-z8) band: one hexagon per catchment, standing in for real boundaries too dense to render legibly below z9 — see the note below. |
+| `mbtiles/catchments-lev12-hex.mbtiles` | `internal/tiles/mbtiles.go` | Optional. `--legacy`'s own z5-z8 band: an H3 hex grid standing in for real boundaries too dense to render legibly below z9 — see the note below. |
+| `mbtiles/catchments-lev12-hex-coarse.mbtiles` | `internal/tiles/mbtiles.go` | Optional. `--legacy`'s own z2-z4 band — a coarser H3 grid than the one above; the fine grid's own cells are too small to rasterise reliably that far out — see the note below. |
 | `mbtiles/style.json` | `internal/server/server.go` | Required — see the note below. |
 | `metadata.csv` | `internal/api/metadata_cache.go` | Indicator display metadata. |
 | `NPP_by_treecover.csv` | `internal/api/lookups.go` | Needs a `catchID` column. |
@@ -92,14 +93,16 @@ Also shipped, but **never opened by the running server** — see [Shipped but no
 
     Tile files are searched for in both `data/` and `data/mbtiles/`.
 
-    Two further optional tilesets back `--legacy` (`dt serve-legacy`), which
+    Three further optional tilesets back `--legacy` (`dt serve-legacy`), which
     then serves lev12 *values* at every zoom instead of handing off to the
     coarser lev04/06/08 aggregates: `catchments-lev12-full.mbtiles` (real lev12
-    detail, z9 and overzoomed) and `catchments-lev12-hex.mbtiles` (a hexagon
-    per catchment, standing in for real boundaries below z9 where they render
-    as an unreadable mesh, not a map). Both change nothing by default; either
-    alone still lets `--legacy` serve what it has rather than falling back
-    entirely, and neither built falls back to the normal four-level split
+    detail, z9 and overzoomed), `catchments-lev12-hex.mbtiles` (an H3 hex
+    grid, z5-z8) and `catchments-lev12-hex-coarse.mbtiles` (a coarser H3 grid,
+    z2-z4 — the finer grid's cells are too small to rasterise reliably that
+    far out). All three standing in for real boundaries below z9, where they
+    render as an unreadable mesh, not a map. None change anything by default;
+    any subset still lets `--legacy` serve what it has rather than falling
+    back entirely, and none built falls back to the normal four-level split
     document. Don't confuse `--legacy` with "a legacy pack" above: that phrase
     means a pack built before the per-level split existed; `--legacy` is a
     rendering choice available on a fully current, multi-resolution pack. See
@@ -291,7 +294,9 @@ data/                               # the data pack — exactly what pack-data z
 │   ├── catchments-lev12-full.mbtiles  # optional — real lev12 detail (z9+),
 │   │                               #   used only by `dt serve-legacy`
 │   ├── catchments-lev12-hex.mbtiles   # optional — `dt serve-legacy`'s own
-│   │                               #   hexagon-per-catchment z2-z8 band
+│   │                               #   H3 hex grid, z5-z8 band
+│   ├── catchments-lev12-hex-coarse.mbtiles  # optional — coarser H3 grid,
+│   │                               #   `dt serve-legacy`'s own z2-z4 band
 │   └── style.json                 # map style, served via /data/style.json
 ├── sites/                         # runtime: site JSON (desktop runtime)
 ├── images/                        # runtime: site thumbnails

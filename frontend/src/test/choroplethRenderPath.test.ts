@@ -111,4 +111,53 @@ describe('choropleth vector-tile render path', () => {
     // rate on the request memo and the HTTP cache.
     expect(mapView).toMatch(/valueBounds = isDetailBand \? bounds : FULL_DOMAIN_VALUE_BOUNDS/);
   });
+
+  it('tells two bands apart by tilezoom, not sourceLayer alone', () => {
+    // Reported: --legacy's two hex tiers (coarse z2-z4, fine z5-z8)
+    // deliberately share one sourceLayer (catchments_lev12_hex, via the
+    // coarse tileset's own output_layer override) so CATCHMENT_LAYER_PATTERN/
+    // isDetailBand only ever need to recognise the one name. This function's
+    // own band-change check used to compare sourceLayer alone, so crossing
+    // from coarse to fine read as "nothing changed": addSource never reran,
+    // and the coarse tier's tile URLs kept being reused all the way to z9 -
+    // the fine tier never visibly existed. tilezoom is unique per band by
+    // construction (one real tiled zoom each), so keying on sourceLayer +
+    // tilezoom together tells any two bands apart, shared sourceLayer or not.
+    expect(mapView).toContain("const bandKey = `${source.band.sourceLayer}@${source.band.tilezoom ?? ''}`;");
+    expect(mapView).toMatch(/installedBands\?\.\[sourceId\] !== bandKey/);
+    expect(mapView).not.toMatch(/installedBands\?\.\[sourceId\] !== source\.band\.sourceLayer/);
+  });
+
+  it('repaints the choropleth after resize corrects the map container, not only once a compare map is also ready', () => {
+    // Reported: a long pause on load, usually fixed by panning. style.load's
+    // own repaint (asserted above) runs before resizeAndRefresh's
+    // updateMapSizes/resize/jumpTo have corrected the container's real
+    // layout, so its bounds-dependent fetch could be wrong until something
+    // else repainted it - previously only a manual pan's own moveend, or a
+    // compare map also finishing load, ever did. A single-map view (the
+    // default) satisfies neither until the user moves the map themselves.
+    // Both load handlers now repaint unconditionally right after their own
+    // resizeAndRefresh, not gated on the other side's readiness.
+    const leftLoadStart = mapView.indexOf("leftMap.on('load', () => {");
+    const leftLoad = mapView.slice(leftLoadStart, leftLoadStart + 1800);
+    const leftResizeAt = leftLoad.indexOf('resizeAndRefresh(leftMap);');
+    const leftIfAt = leftLoad.indexOf('if (mapsReady.current.right)');
+    const leftApplyAt = leftLoad.indexOf('applyColorsRef.current();');
+    expect(leftResizeAt).toBeGreaterThan(-1);
+    expect(leftIfAt).toBeGreaterThan(leftResizeAt);
+    // An applyColorsRef.current() call between the resize and the
+    // compare-map gate - unconditional, not inside the if block.
+    expect(leftApplyAt).toBeGreaterThan(leftResizeAt);
+    expect(leftApplyAt).toBeLessThan(leftIfAt);
+
+    const rightLoadStart = mapView.indexOf("rightMap.on('load', () => {");
+    const rightLoad = mapView.slice(rightLoadStart, rightLoadStart + 1400);
+    const rightResizeAt = rightLoad.indexOf('resizeAndRefresh(rightMap);');
+    const rightIfAt = rightLoad.indexOf('if (mapsReady.current.left)');
+    const rightApplyAt = rightLoad.indexOf('applyColorsRef.current();');
+    expect(rightResizeAt).toBeGreaterThan(-1);
+    expect(rightIfAt).toBeGreaterThan(rightResizeAt);
+    expect(rightApplyAt).toBeGreaterThan(rightResizeAt);
+    expect(rightApplyAt).toBeLessThan(rightIfAt);
+  });
 });

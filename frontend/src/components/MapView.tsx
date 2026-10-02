@@ -35,6 +35,7 @@ import {
 import {
   applyCatchmentValues,
   bandForZoom,
+  CATCHMENT_TILE_ID_PROPERTY,
   CATCHMENT_TILE_SOURCE_LAYER,
   catchmentBandSourceSpec,
   catchmentTileSourceSpec,
@@ -2085,14 +2086,30 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     // source, not just the layers; on the legacy combined tileset
     // (bandSpec null) the one shared source persists across bands exactly
     // as before.
+    //
+    // Keyed by sourceLayer + tilezoom, not sourceLayer alone: --legacy's two
+    // hex bands deliberately share one sourceLayer (catchments_lev12_hex —
+    // see generate_catchment_hexagons.py and the output_layer treatment-
+    // table column) so everything that only checks "is this a hex band"
+    // keeps working across both tiers. sourceLayer alone was this function's
+    // own band-identity check too, which broke exactly for that reason: the
+    // coarse→fine crossing read as "nothing changed," so addSource below
+    // never ran and the coarse tier's own tile URLs kept being reused data
+    // all the way to z9, where it finally saw a real change (the detail
+    // band's different sourceLayer) and handed off straight to full detail —
+    // reported as the fine tier appearing not to exist at all. tilezoom is
+    // unique per band by construction (one real tiled zoom each), so adding
+    // it to the key distinguishes any two bands this function is ever asked
+    // to tell apart, shared sourceLayer or not.
     const bandSpec = catchmentBandSourceSpec(source.band);
+    const bandKey = `${source.band.sourceLayer}@${source.band.tilezoom ?? ''}`;
     const installedBands = _tileSourceBandByMap.get(map);
-    if (bandSpec && map.getSource(sourceId) && installedBands?.[sourceId] !== source.band.sourceLayer) {
+    if (bandSpec && map.getSource(sourceId) && installedBands?.[sourceId] !== bandKey) {
       removeChoroplethLayers(map, side);
     }
     if (!map.getSource(sourceId)) {
       map.addSource(sourceId, bandSpec ?? catchmentTileSourceSpec(source.tileset));
-      _tileSourceBandByMap.set(map, { ...(installedBands ?? {}), [sourceId]: source.band.sourceLayer });
+      _tileSourceBandByMap.set(map, { ...(installedBands ?? {}), [sourceId]: bandKey });
     }
 
     // Feature state, not a source update: the geometry in the tiles is already
@@ -2701,18 +2718,41 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
     // of which multi-resolution band (lev04/06/08/12) happens to be
     // rendered at the current zoom — matching site creation's own
     // catchment selection (see data-preparation.md's "Multi-Resolution
-    // Catchments" section). The queryRenderedFeatures hit above only
-    // confirms a catchment exists under the cursor; the id itself comes
-    // from a server-side point lookup against real lev12 geometry, since
-    // lev12 tiles aren't even loaded client-side below their own zoom band
-    // — there is nothing here to read an id or a source-layer off.
-    const { lng, lat } = e.lngLat;
-    const lookupUrl = `/api/catchments/at-point?lng=${lng}&lat=${lat}`;
+    // Catchments" section). For those bands, the queryRenderedFeatures hit
+    // above only confirms a catchment exists under the cursor; the id
+    // itself comes from a server-side point lookup against real lev12
+    // geometry, since lev12 tiles aren't even loaded client-side below
+    // their own zoom band — there is nothing here to read an id or a
+    // source-layer off.
+    //
+    // --legacy's hex band is the one exception: its cells already carry
+    // their own representative catchment's real lev12 HYBAS_ID (see
+    // generate_catchment_hexagons.py) as a tile property, read the exact
+    // same way the choropleth's own feature-state join does
+    // (CATCHMENT_TILE_ID_PROPERTY). A hex cell's shape is a stylised
+    // stand-in, not the real catchment boundary — the point-in-polygon
+    // lookup below can miss real geometry that doesn't reach every corner
+    // of the hex cell drawn over it, which read as "clicking does
+    // nothing" (reported). Reading the id directly off the clicked
+    // feature is also simply correct: identifying a hex cell should
+    // always resolve to the catchment it represents, not to whatever real
+    // catchment (if any) the exact pixel happens to land inside.
+    const hexFeature = features.find(
+      (f) => f.sourceLayer === `${CATCHMENT_TILE_SOURCE_LAYER}_hex`
+    );
+    const hexCatchId = hexFeature?.properties?.[CATCHMENT_TILE_ID_PROPERTY];
 
-    fetch(lookupUrl)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((lookup: { id?: string | number } | null) => {
-        const catchIdStr = lookup?.id != null ? String(lookup.id) : null;
+    const idLookup: Promise<string | null> = hexCatchId != null
+      ? Promise.resolve(String(hexCatchId))
+      : (() => {
+          const { lng, lat } = e.lngLat;
+          return fetch(`/api/catchments/at-point?lng=${lng}&lat=${lat}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((lookup: { id?: string | number } | null) => (lookup?.id != null ? String(lookup.id) : null));
+        })();
+
+    idLookup
+      .then((catchIdStr) => {
         if (!catchIdStr) return null;
         return fetch(`/api/catchment/${catchIdStr}`)
           .then((r) => (r.ok ? r.json() : null))
@@ -3155,6 +3195,19 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
       mapsReady.current.left = true;
       signalReady();
       resizeAndRefresh(leftMap);
+      // Reported: a long pause on load, usually fixed by panning. The
+      // style.load repaint above runs before resizeAndRefresh's own
+      // updateMapSizes/resize/jumpTo have finished correcting the
+      // container's layout, so it can paint against a viewport that isn't
+      // the real one yet — a plain pan's own moveend-triggered repaint
+      // (line ~3129) was the only thing that ever corrected it. That
+      // repaint used to be reachable here too, but only once a compare map
+      // also existed and became ready (mapsReady.current.right), which
+      // single-map view never satisfies. Repainting unconditionally right
+      // after resizeAndRefresh — not gated on a compare map existing —
+      // means a freshly one-map view gets a second, correctly-bounded
+      // paint without the user ever having to move the map themselves.
+      applyColorsRef.current();
       if (mapsReady.current.right) {
         const rightMap = rightMapRef.current;
         if (rightMap) resizeAndRefresh(rightMap);
@@ -3234,6 +3287,10 @@ function MapView({ comparison, onOpenSettings, onIdentify, identifyResult, onSit
         mapsReady.current.right = true;
         signalReady();
         resizeAndRefresh(rightMap);
+        // See the matching comment on leftMap's own 'load' handler: repaint
+        // unconditionally once this map's own resize has corrected its
+        // layout, not only once the other side also happens to be ready.
+        applyColorsRef.current();
         if (mapsReady.current.left) {
           resizeAndRefresh(leftMap);
           applyColorsRef.current();

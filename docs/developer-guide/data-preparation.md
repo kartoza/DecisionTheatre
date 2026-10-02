@@ -71,7 +71,7 @@ The script stages output in `.cache/` during processing, then moves the final `c
 3. **Geometry validation** -- checks for NULL geometries; optionally repairs with `ogr2ogr -makevalid` (only the source file(s) that need it)
 4. **GeoJSONSeq export** -- converts each layer to newline-delimited GeoJSON using `ogr2ogr`
 5. **Per-layer tile generation** -- runs `tippecanoe` for each layer according to its treatment, tiling the generalised and unsimplified bands separately and `tile-join`-ing them back together where a layer has both
-6. **Merge** -- combines all per-layer MBTiles into a single file using `tile-join`
+6. **Merge** -- combines a tileset's per-layer MBTiles into the file actually served. A tileset built from more than one layer (the combined `context.mbtiles`) uses `tile-join`; a tileset built from exactly one layer -- every catchment level, each its own standalone tileset -- skips `tile-join` and uses that layer's own `.mbtiles` directly, since there is nothing to join. See "The hex band" below for why that distinction exists, not just tidiness
 
 ### Per-Layer Treatment
 
@@ -99,8 +99,9 @@ Columns:
 | `tileset` | blank merges the layer into the combined `context.mbtiles` (the default); a name (e.g. `catchments-lev12`) ships it as its own standalone `data/mbtiles/<name>.mbtiles` instead -- see "Standalone Tilesets and Overzoom" below |
 | `detail` | tile coordinate grid in bits (tippecanoe `--full-detail`); blank means tippecanoe's default (12). Raise it (the catchment levels use 14) for a single-zoom standalone tileset: overzoom magnifies the tile's coordinate grid along with its geometry, so a layer tiled once and displayed several zooms deeper needs the finer grid to stay sub-pixel at its deepest display zoom |
 | `output_layer` | the vector tile's own internal layer name (tippecanoe `--layer`); blank means "same as this row's own `layer` name", true for every layer except `catchments_lev12_full` -- see "The `--legacy` flag" below for why that one differs |
+| `max_tile_bytes` | overrides tippecanoe's default ~500KB-per-tile budget (`--maximum-tile-bytes`); blank means tippecanoe's default. Only `catchments_lev12_hex` sets this -- see "The hex band" below for why |
 
-**A layer found in the source GeoPackages but missing from the table is appended with defaults** (`6,14,15,true,true,10,true,false,,` -- merged into the combined tileset) the moment the build runs, so the table stays a complete, accurate list of what's actually being tiled -- you never have to remember to add a row for a new layer by hand.
+**A layer found in the source GeoPackages but missing from the table is appended with defaults** (`6,14,15,true,true,10,true,false,,,` -- merged into the combined tileset) the moment the build runs, so the table stays a complete, accurate list of what's actually being tiled -- you never have to remember to add a row for a new layer by hand.
 
 Before every interactive build, the table opens as a real spreadsheet in LibreOffice Calc and the build waits for you to save and close the window -- proper columns and a familiar UI beat hand-aligning commas in a text editor. It round-trips through `.ods` only for the edit session; the tracked file stays plain CSV (`soffice --headless --convert-to ods/csv`, done under a private `-env:UserInstallation` profile so it can't collide with an already-running LibreOffice session on your desktop). Falls back to `$VISUAL`/`$EDITOR`/`nano` if LibreOffice isn't on `PATH`. Pass `--no-edit`, or run non-interactively (no tty -- e.g. CI, or `dt mbtiles-server`'s own auto-build path), to skip straight to building with whatever the table already says.
 
@@ -131,22 +132,29 @@ fully multi-resolution datapack, not a statement about how old the data is.
 Below about z9, 147,837 real lev12 boundaries in one viewport render as a dense
 white mesh, not a map -- reported from a screen recording at z5.7-z6.12. Real
 boundaries alone were the first version of this mode; what ships now is a
-two-band split, the same `tilesets`-array document shape
+three-band split, the same `tilesets`-array document shape
 `writeSplitCatchmentsTileJSON` already builds for the default multi-resolution
 mode (`catchmentLevelTilesets`), just with a different table
 (`legacyCatchmentTilesets` in `internal/server/server.go`):
 
 | Band | Tileset | Source-layer | Tiled at | Covers |
 |---|---|---|---|---|
-| Hex | `catchments-lev12-hex` | `catchments_lev12_hex` | z2 | z2-z8 |
+| Coarse hex | `catchments-lev12-hex-coarse` | `catchments_lev12_hex` | z2 | z2-z4 |
+| Fine hex | `catchments-lev12-hex` | `catchments_lev12_hex` | z5 | z5-z8 |
 | Detail | `catchments-lev12-full` | `catchments_lev12` | z9 | z9+ |
 
-Both are tiled once and overzoomed through their band exactly like the default
-mode's own levels -- `--legacy` reuses that mechanism rather than inventing a
-new one. `handleCatchmentsTileJSON` serves whichever of the two tilesets exist
-(one missing degrades to the other; neither built falls all the way back to
-the normal multi-resolution document); `/api/info` reports the active choice
-as `legacy_catchments`.
+All three are tiled once and overzoomed through their band exactly like the
+default mode's own levels -- `--legacy` reuses that mechanism rather than
+inventing a new one. `handleCatchmentsTileJSON` serves whichever of the three
+tilesets exist (any missing just degrade the document by one band; none built
+falls all the way back to the normal multi-resolution document); `/api/info`
+reports the active choice as `legacy_catchments`. The two hex bands
+deliberately share one source-layer name (`catchments_lev12_hex` -- the
+coarse tileset's own table is renamed to it via `output_layer`, see the Per-
+Layer Treatment table below): bands are told apart by `tilezoom`, not
+source-layer, and everything downstream that recognises "a hex band" --
+`CATCHMENT_LAYER_PATTERN`/`isDetailBand` in the frontend, the debug overlay's
+label -- only ever needed to recognise the one name.
 
 #### The hex band
 
@@ -162,52 +170,130 @@ confirmed. Before either of those, a hexagon drawn independently around each
 catchment's own centroid was tried and looked exactly as bad as the mesh it
 replaced -- reported back: "not what H3 means", wildly different sized
 hexagons overlapping with no shared structure is not a grid.) One fixed H3
-resolution for the whole grid means neighbouring cells tile edge to edge, no
-overlap and no gap. Reads only `lat`/`long`/`SUB_AREA`/`HYBAS_ID` from
-`catchments_lev12` (no geometry) and writes the grid cells to a GeoJSON file;
-`ogr2ogr` imports that into `datasources/catchments/catchments.gpkg` as a new
-layer, `catchments_lev12_hex` -- the same GeoPackage-write tool every other
-step of this pipeline uses, rather than hand-encoding GPKG's binary geometry
-format:
+resolution per band means neighbouring cells within that band tile edge to
+edge, no overlap and no gap. `ogr2ogr` imports the grid cells it writes into
+`datasources/catchments/catchments.gpkg` as a new layer -- the same
+GeoPackage-write tool every other step of this pipeline uses, rather than
+hand-encoding GPKG's binary geometry format:
 
 ```bash
-python3 scripts/generate_catchment_hexagons.py \
-  datasources/catchments/catchments.gpkg /tmp/hexagons.geojson
+python3 scripts/generate_catchment_hexagons.py --h3-resolution 5 \
+  datasources/catchments/catchments.gpkg /tmp/hexagons-fine.geojson
 ogr2ogr -f GPKG -nln catchments_lev12_hex -append \
-  datasources/catchments/catchments.gpkg /tmp/hexagons.geojson
+  datasources/catchments/catchments.gpkg /tmp/hexagons-fine.geojson
+
+python3 scripts/generate_catchment_hexagons.py --h3-resolution 4 \
+  datasources/catchments/catchments.gpkg /tmp/hexagons-coarse.geojson
+ogr2ogr -f GPKG -nln catchments_lev12_hex_coarse -append \
+  datasources/catchments/catchments.gpkg /tmp/hexagons-coarse.geojson
 ```
 
 A one-catchment-per-cell grid can't show every one of 147,837 catchments at a
 resolution still coarse enough to be legible — on the production datapack
-about half of them share a cell with at least one neighbour. When that
-happens the cell keeps only its **largest** catchment by `SUB_AREA` and drops
-the rest *for this band only*; they still render at full detail from z9, this
-band exists only below that. Dropping is deliberate, not a shortcut around
-the no-aggregation rule: averaging the colliding catchments' values together
-would be exactly the aggregation `--legacy` exists to avoid, just hidden
-inside a grid cell instead of a basin boundary. The grid still keeps a
-catchment's own identity and rough position at every cell it does draw —
-neighbouring catchments stay neighbouring cells ("topologically correct") —
-without claiming detail nothing could render legibly at that density.
-`--h3-resolution` (default 5, ~253 km² per cell -- close to the average lev12
-catchment's own footprint) tunes the collision rate against legibility if the
+about half of the fine grid's cells share a catchment with at least one
+neighbour (the coarse grid, far fewer and far bigger cells, collides nearly
+all of them). When that happens the cell needs a single **representative**
+catchment and drops the rest *for this band only*; the next finer band (or
+real detail, for the finest hex band) still shows them. Dropping is
+deliberate, not a shortcut around the no-aggregation rule: averaging the
+colliding catchments' values together would be exactly the aggregation
+`--legacy` exists to avoid, just hidden inside a grid cell instead of a
+basin boundary.
+
+!!! danger "One hex resolution across the whole z2-z8 band looked like more holes, below about z5"
+    Reported from a real screenshot, after the overlap-selection fix above
+    already shipped: the SAME green background colour, scattered with
+    visible gaps, was called out again -- "everywhere you see green is a
+    hole". A direct tile decode ruled out missing data immediately: the z2
+    tile for that exact region held *more* features than the source
+    GeoJSON for that extent (tile buffering, not loss). The real cause is
+    screen-space, not data-space: H3 resolution 5's cells average ~16km
+    across, and at z2-z4 one screen pixel covers anywhere from roughly
+    150km down to 40km -- the whole cell is a fraction of a single pixel.
+    WebGL fills a polygon by testing whether each pixel's *centre* falls
+    inside it; a polygon too small to ever contain any pixel centre in its
+    tile renders nothing, no matter how completely the geometry is
+    actually there, and only the occasional lucky cell that does catch a
+    sample point shows up as an isolated dot. This is the same geometry-
+    rendering problem the real lev12 mesh had at z5.7-z6.12 (too much
+    detail for too few pixels), one resolution tier lower, and the fix is
+    the same idea the default multi-resolution mode already uses: hand off
+    to a coarser representation before individual cells go sub-pixel,
+    rather than trying to force one resolution to cover a zoom range wide
+    enough that it eventually has to. `catchments_lev12_hex_coarse` (H3
+    resolution 4, ~52km cells) now covers z2-z4; the original resolution-5
+    grid starts at z5, where its own ~16km cells are themselves comfortably
+    multi-pixel. Resolution 3 (~138km cells) was tried first and reported
+    back as needlessly chunky -- the map's own configured `minZoom` never
+    actually lets a viewport reach true z2 (it floors around z3.2), so the
+    worst real case is closer to 17km/pixel than the ~40km/pixel z2 would
+    be; resolution 4's cells stay multi-pixel there with room to spare,
+    confirmed with screenshots at the real floor over the equatorial region
+    this problem was originally reported from.
+
+!!! info "White is a real, measured zero, not a missing value"
+    The colour scale every choropleth in this app uses interpolates white
+    (low) to a metadata base colour (high) -- `buildFillColorExpression` in
+    `choroplethPaint.ts`. A catchment whose value genuinely is 0 -- common
+    for ecological metrics like herbivore biomass, where plenty of real
+    catchments simply have none -- renders solid white, same as any other
+    value near the low end of the domain. That's not a gap or a rendering
+    bug: confirmed directly against the source data for a reported "holes in
+    the grid" screenshot, over half the catchments in that specific area had
+    an exact, explicit 0 for the indicator on screen. Below about z9's own
+    detail, where literal lev12 boundaries would be an unreadable mesh, the
+    hex band is what first makes this real small-scale variance visible at
+    all -- the default multi-resolution mode would have smoothed it into one
+    basin-level average.
+
+!!! danger "A cell's representative is whichever catchment covers most of its area, not whichever centroid lands in it"
+    The first version of this script picked a cell's representative by
+    centroid: among catchments whose own centroid happened to fall inside
+    the cell, keep the one with the largest `SUB_AREA`. Reported from a real
+    screenshot: scattered cells rendered solid black -- not white-for-zero
+    (see above, a real measured value), a `null` feature-state with nothing
+    for the paint expression to interpolate. The script reads
+    real catchment geometry now (not just `lat`/`long`/`SUB_AREA`/`HYBAS_ID`
+    points, as the centroid version did) and, for every occupied cell, finds
+    whichever catchment's polygon has the largest **area of overlap** with
+    the cell's own hexagon via a spatial index (`geopandas`/`shapely`,
+    already in `dataToolsEnv` for the rest of this pipeline) -- a strictly
+    better representative regardless of the black-cell symptom: a catchment
+    whose centroid lands in a cell by chance can still cover almost none of
+    that cell's actual area, while a larger neighbour straddling the
+    boundary covers most of it without its own centroid ever landing inside.
+    One consequence worth knowing: a catchment large enough to dominate
+    several adjacent cells' overlap now legitimately wins all of them, so
+    `HYBAS_ID` (and the geometry-table `fid`) are no longer guaranteed
+    unique across hex cells the way they were under one-centroid-one-cell
+    selection -- harmless for colouring (every cell still gets its
+    dominant catchment's real value) but why the GeoJSON's own per-feature
+    id property is called `source_fid`, not `fid`: a property literally
+    named `fid` is special-cased as the primary key by ogr2ogr's GPKG
+    driver, and two cells sharing one now-non-unique "fid" aborted the
+    import outright.
+
+`--h3-resolution` (5 for the fine band, 4 for the coarse one -- see the table
+above) tunes each band's own collision rate against legibility if the
 production datapack's own catchment density ever needs a different balance.
 
-#### Both tilesets, built from the same duplicated layer
+#### Three tilesets, two of them from the same duplicated layer
 
 `catchments_lev12_full` (`catchments_lev12` duplicated as its own GeoPackage
 table, same geometry and `HYBAS_ID`) now tiles only z9, unsimplified -- it used
 to span the full z2-z12 range with a generalised low-zoom band, which the hex
-band has made unnecessary and which was most of this tileset's build time and
+bands have made unnecessary and which was most of this tileset's build time and
 disk (147,837 polygons, thinned tile-by-tile with `--drop-densest-as-needed`
 wherever a tile still exceeded tippecanoe's 500KB budget after simplification --
 a feature-*count* problem simplification alone cannot fix). Shrinking it to one
 real zoom cut the built file from ~600 MB to ~60 MB and the build from minutes
-to seconds. Build both tilesets with:
+to seconds. `--tileset` only takes one name per invocation -- build all three
+tilesets with:
 
 ```bash
 ./scripts/gpkg_to_mbtiles.sh datasources/catchments/catchments.gpkg --no-edit --tileset catchments-lev12-full
 ./scripts/gpkg_to_mbtiles.sh datasources/catchments/catchments.gpkg --no-edit --tileset catchments-lev12-hex
+./scripts/gpkg_to_mbtiles.sh datasources/catchments/catchments.gpkg --no-edit --tileset catchments-lev12-hex-coarse
 ```
 
 !!! danger "The detail tileset's vector layer must still be named `catchments_lev12`"
@@ -220,25 +306,58 @@ to seconds. Build both tilesets with:
     falls back to the normal multi-resolution document instead. This row's
     `output_layer` column (see the Per-Layer Treatment table above) overrides
     tippecanoe's `--layer` to `catchments_lev12` for exactly this reason;
-    don't remove it. The hex tileset needs no such override -- its layer
-    genuinely is named `catchments_lev12_hex`, and `CATCHMENT_LAYER_PATTERN`
-    (`choroplethTiles.ts`) and `go test ./internal/datacheck/...`'s
-    `TestSpecCoversGeoPackageTablesInSQL` both know to expect that suffix.
+    don't remove it. The fine hex tileset needs no such override -- its
+    layer genuinely is named `catchments_lev12_hex`, and
+    `CATCHMENT_LAYER_PATTERN` (`choroplethTiles.ts`) and
+    `go test ./internal/datacheck/...`'s `TestSpecCoversGeoPackageTablesInSQL`
+    both know to expect that suffix. The coarse hex tileset's own table
+    *does* need the override, the same way the detail tileset does --
+    `catchments_lev12_hex_coarse`'s `output_layer` column renames its layer
+    to the same `catchments_lev12_hex`, so the two hex bands are
+    indistinguishable to anything that only looks at source-layer name
+    (they're told apart by `tilezoom` instead -- see the table above).
 
 !!! warning "Values stay lev12 too -- a second bug this mode had, fixed alongside the first"
     Getting the geometry right is only half of it. The client still sends
-    whichever band is on screen its own canonical zoom (the hex band's is 2)
-    to `/api/catchment-values`, which is indistinguishable, on that endpoint
-    alone, from an ordinary multi-resolution request -- `basinLevelForZoom`
-    would read zoom 2 as "aggregate to lev04", smearing one basin's average
-    across every lev12 catchment (or hexagon) inside it. `handleCatchmentValues`
-    (`internal/api/handler.go`) skips zoom-based aggregation outright whenever
-    `LegacyCatchments` is set, regardless of which band's zoom was sent.
-    GOLDEN RULE: `--legacy` values are lev12, always, matching its geometry.
+    whichever band is on screen its own canonical zoom (2 or 5 for the two
+    hex bands) to `/api/catchment-values`, which is indistinguishable, on
+    that endpoint alone, from an ordinary multi-resolution request --
+    `basinLevelForZoom` would read either as "aggregate to lev04", smearing
+    one basin's average across every lev12 catchment (or hexagon) inside
+    it. `handleCatchmentValues` (`internal/api/handler.go`) skips zoom-based
+    aggregation outright whenever `LegacyCatchments` is set, regardless of
+    which band's zoom was sent. GOLDEN RULE: `--legacy` values are lev12,
+    always, matching its geometry.
 
-Both tilesets are optional and independent: a datapack that has built neither
-simply can't be put into `--legacy` mode and falls back to the normal
-multi-resolution document; one without the other serves whichever band it has,
+!!! danger "Edge-to-edge coverage depends on two separate tile-size ceilings, not one"
+    Reported: the hex band rendered with large gaps instead of covering the
+    viewport edge to edge. Two independent limits had to both be raised, not
+    one:
+
+    1. **Tippecanoe's own ~500KB-per-tile budget.** 147,837 catchments
+       collapse to one single z2 tile per hemisphere-ish region; a dense
+       enough region can exceed that budget even with the grid math
+       correct, triggering `--drop-densest-as-needed` to thin real,
+       individually-meaningful hexagons rather than the visually-redundant
+       clutter it's designed for. The `max_tile_bytes` treatment-table
+       column (see Per-Layer Treatment above) passes `--maximum-tile-bytes`
+       through per layer, raised for `catchments_lev12_hex` alone.
+    2. **`tile-join`'s own, separate ~500KB-per-tile ceiling**, enforced
+       again when per-layer `.mbtiles` files are merged into the tileset
+       actually served -- with no CLI flag to raise it, and no relation to
+       whatever `--maximum-tile-bytes` the layer was tiled with. Worse than
+       tippecanoe's dropping: it doesn't thin an oversized tile, it
+       silently discards the *whole* tile -- confirmed: raising only the
+       first ceiling still lost the fine hex band's two densest z2 tiles
+       entirely, right back to large gaps. `gpkg_to_mbtiles.sh`'s merge
+       step now skips `tile-join` for any tileset built from exactly one
+       layer (every catchment level, every band in this document included)
+       and uses that layer's own `.mbtiles` directly -- there's nothing to
+       join.
+
+All three tilesets are optional and independent: a datapack that has built
+none of them simply can't be put into `--legacy` mode and falls back to the
+normal multi-resolution document; any subset serves whichever bands it has,
 same resilience the default mode's own split document already has for a
 missing level.
 
