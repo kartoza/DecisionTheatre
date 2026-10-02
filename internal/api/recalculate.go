@@ -653,8 +653,8 @@ func workflow4FireCascade(ideal map[string]float64) {
 	litter := ideal["LitterBiomass_gm2"]
 	lowTCProp := ideal[colLowTCProp]
 
-	propEarly := ideal["propEarly"]
-	if propEarly == 0 {
+	propEarly, ok := ideal[colPropEarly]
+	if !ok {
 		propEarly = 0.45
 	}
 
@@ -714,6 +714,21 @@ func workflow4FireCascade(ideal map[string]float64) {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+// floatChangeEpsilon is the tolerance for floatChanged. Target input columns
+// are slider-driven percentages/fractions a user edits in increments many
+// orders of magnitude coarser than this, so it only absorbs float64
+// round-trip noise (JSON (de)serialisation, repeated derivations like
+// highTC_prop <-> lowTC_prop) without masking a real edit.
+const floatChangeEpsilon = 1e-9
+
+// floatChanged reports whether a and b differ by more than floating-point
+// round-trip noise. Used in place of != when comparing a freshly submitted
+// target value against its previously stored counterpart — see the callers
+// in handleUpdateIndicators for why an exact != is unsafe here.
+func floatChanged(a, b float64) bool {
+	return math.Abs(a-b) > floatChangeEpsilon
+}
 
 // scaleIdealKey multiplies ideal[key] by factor if the key is present.
 func scaleIdealKey(ideal map[string]float64, key string, factor float64) {
