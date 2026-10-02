@@ -648,3 +648,67 @@ func TestCatchmentIDsParseInEverySpellingTheDatapackUses(t *testing.T) {
 		t.Error("a list containing a non-id was accepted")
 	}
 }
+
+// The full-domain grid rows are static for the life of the datapack, and
+// every low-zoom request used to pay a fresh full-table scan to rebuild
+// them (~4 s at production scale). The cache exists to make the second
+// request free; identity of the returned slice is the observable proof the
+// scan did not run again.
+func TestFullDomainGridRowsAreCached(t *testing.T) {
+	dir := gpkgtest.Build(t, t.TempDir(), []gpkgtest.Catchment{
+		{ID: 1, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+		{ID: 2, Lat: 0, Long: 1, SizeDeg: 0.5, Current: gpkgtest.Float(20), Reference: gpkgtest.Float(2)},
+	}, 0, 100)
+	store, err := NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	defer store.Close()
+
+	first, err := store.getFullDomainGridRows(context.Background(), "scenario_current", gpkgtest.Attribute)
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if len(first) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(first))
+	}
+
+	second, err := store.getFullDomainGridRows(context.Background(), "scenario_current", gpkgtest.Attribute)
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	if len(first) > 0 && len(second) > 0 && &first[0] != &second[0] {
+		t.Errorf("second call rebuilt the rows instead of serving the cache")
+	}
+}
+
+// A failed build (here: a column that does not exist) must surface as an
+// error AND leave no poisoned cache entry behind — the next request gets a
+// fresh attempt rather than the stored failure.
+func TestFullDomainGridRowsFailedBuildIsNotCached(t *testing.T) {
+	dir := gpkgtest.Build(t, t.TempDir(), []gpkgtest.Catchment{
+		{ID: 1, Lat: 0, Long: 0, SizeDeg: 0.5, Current: gpkgtest.Float(10), Reference: gpkgtest.Float(1)},
+	}, 0, 100)
+	store, err := NewGpkgStore(dir)
+	if err != nil {
+		t.Fatalf("NewGpkgStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.getFullDomainGridRows(context.Background(), "scenario_current", "no_such_column"); err == nil {
+		t.Fatal("expected an error for a missing column")
+	}
+
+	store.mu.RLock()
+	_, poisoned := store.gridRowsCache["scenario_current|no_such_column"]
+	store.mu.RUnlock()
+	if poisoned {
+		t.Error("failed build left a cache entry behind")
+	}
+
+	// And a valid attribute afterwards still works.
+	rows, err := store.getFullDomainGridRows(context.Background(), "scenario_current", gpkgtest.Attribute)
+	if err != nil || len(rows) != 1 {
+		t.Errorf("valid fetch after failure: rows=%d err=%v", len(rows), err)
+	}
+}

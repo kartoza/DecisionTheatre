@@ -128,6 +128,10 @@ SCENARIOS: list[Scenario] = [
              query={**FULL_DOMAIN, "scenario": "current", "attribute": "NPP_gm2",
                     "zoom": "0", "valuesOnly": "1"},
              why="Every catchment, no aggregation. The most expensive request the API serves."),
+    Scenario("stats-full", "/api/stats/full", "Statistics", min_bytes=40,
+             query={"scenario": "current", "attribute": "NPP_gm2"},
+             why="The four numbers the Full range mode needs, computed where the data lives "
+                 "instead of shipping every raw value to the client."),
     Scenario("precalculate-full", "/api/precalculate/full", "Statistics",
              min_bytes=1000, heavy=True,
              why="Full-domain averages for every column. Cached, but the first caller pays for it."),
