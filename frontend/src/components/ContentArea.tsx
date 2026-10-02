@@ -86,6 +86,18 @@ interface ContentAreaProps {
   fullDomainData?: FullDomainData | null;
 }
 
+// Backend fallbacks for target inputs the server treats as unset (see
+// workflow4FireCascade in recalculate.go). computeTargetDrafts must seed a
+// slider's starting position with the same value the backend will actually
+// compute against once the field is missing from both ideal and current —
+// otherwise the slider silently displays 0 while the server treats the
+// field as this default, and a user's first, small-looking nudge off that
+// display triggers a large hidden jump (0.45 -> their new value, not
+// 0 -> their new value) in every metric the field feeds into.
+const BACKEND_TARGET_DEFAULTS: Record<string, number> = {
+  propEarly: 0.45,
+};
+
 const paneVariants = {
   hidden: { opacity: 0, scale: 0.92 },
   visible: (i: number) => ({
@@ -345,7 +357,9 @@ function ContentArea({
         nextDrafts[key] = String(idealVal);
       } else {
         const fallback = siteIndicators?.idealLower?.[key];
-        nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback) ? String(fallback) : '0';
+        nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback)
+          ? String(fallback)
+          : String(BACKEND_TARGET_DEFAULTS[key] ?? 0);
       }
     }
     return nextDrafts;
