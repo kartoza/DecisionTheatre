@@ -543,7 +543,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
     <Box position="relative" w="100%" h="100%" overflow="hidden">
       {/* Animated gradient background */}
       <Box
-        position="fixed"
+        position="absolute"
         inset={0}
         bg="linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 25%, #0f0f23 50%, #1a1a2e 75%, #0a0a1a 100%)"
         backgroundSize="400% 400%"
@@ -558,7 +558,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
       />
 
       {/* Floating particles */}
-      <Box position="fixed" inset={0} overflow="hidden" pointerEvents="none">
+      <Box position="absolute" inset={0} overflow="hidden" pointerEvents="none">
         {[...Array(8)].map((_, i) => (
           <Box
             key={i}

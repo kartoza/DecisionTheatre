@@ -56,7 +56,7 @@ function FeedbackLink() {
       }}
     >
       <Icon as={FiHeart} boxSize="14px" color={colors.orange} flexShrink={0} sx={heartbeatSx} />
-      <Text fontSize="xs" color="whiteAlpha.800" textAlign="center">
+      <Text fontSize="xs" color="white" textAlign="center">
         We would love to know more about you and what you think of our tool
         <Text as="span" className="feedback-cta" ml={1} fontWeight="semibold" color={colors.orange} transition="color 0.2s ease">
           - click here...
