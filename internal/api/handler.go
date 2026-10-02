@@ -2085,15 +2085,26 @@ func (h *Handler) handleUpdateIndicators(w http.ResponseWriter, r *http.Request)
 
 	// Section 1.2: if highTC_prop was edited directly, derive lowTC_prop from it
 	// so that workflow1TreeCover handles the cascade via the lowTC_prop path.
-	if newHighTC, ok := req.Ideal[colHighTCProp]; ok && newHighTC != oldIdeal[colHighTCProp] {
+	if newHighTC, ok := req.Ideal[colHighTCProp]; ok && floatChanged(newHighTC, oldIdeal[colHighTCProp]) {
 		req.Ideal[colLowTCProp] = 1 - newHighTC
 	}
 
 	// Determine which primary target inputs changed.
+	//
+	// floatChanged (not !=) on purpose: req.Ideal round-trips through the
+	// client on every request — JSON (de)serialisation, the highTC_prop <->
+	// lowTC_prop derivation above, re-spreading the previous response's
+	// values into the next edit's payload — and each hop can perturb a
+	// float64 by an ULP or two even though nothing the user did touched it.
+	// An exact != treated that noise as a genuine edit: a propEarly-only
+	// drag could see lowTC_prop "change" by 1e-16 and re-trigger
+	// workflow1TreeCover, which unconditionally flattens every biomass class
+	// to a uniform split (see workflow1TreeCover) — silently destroying the
+	// site's real tree-cover distribution on an edit that never touched it.
 	targetInputCols := []string{colLowTCProp, colHerbsTot, colNPP, colPropEarly, colMeanTC}
 	changedTargets := make(map[string]bool)
 	for _, col := range targetInputCols {
-		if newVal, ok := req.Ideal[col]; ok && newVal != oldIdeal[col] {
+		if newVal, ok := req.Ideal[col]; ok && floatChanged(newVal, oldIdeal[col]) {
 			changedTargets[col] = true
 		}
 	}
