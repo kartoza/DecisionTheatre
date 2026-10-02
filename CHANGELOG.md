@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   satellite rendered at 0.80, not 1. `choroplethFillOpacity()` is now the
   slider's own fraction and nothing else, for every basemap. The slider's
   starting position is 90 rather than a flat 100, by request.
+- **Grouped chart x-axis labels rotated at -50°, squeezing the plot area.**
+  Reported directly, with a screenshot. The bottom margin was sized off
+  the diagonal bounding box of the longest label (`maxLabelLen * 5.5`),
+  which grows the chart's own vertical space need with every character —
+  for something like "Variable grazer biomass" that ate well over 100px
+  before the plot itself got anything. Labels now word-wrap onto
+  horizontal lines (`wrapTickLabel`, via Plotly's `tickvals`/`ticktext`)
+  instead of rotating, with the bottom margin sized off line count
+  instead of character count, and a bigger tick font now that it isn't
+  fighting the rotation for space.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before

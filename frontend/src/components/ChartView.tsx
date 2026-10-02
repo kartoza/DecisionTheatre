@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, Button, Center, HStack, Spinner, Text } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
@@ -77,6 +80,33 @@ function formatVal(val: number): string {
   if (abs >= 1) return STANDARD_NUMBER_FORMATTER.format(val);
   if (abs === 0) return '0';
   return SMALL_NUMBER_FORMATTER.format(val);
+}
+
+// Grouped boxplot/line x-axis category labels ("Variable grazer biomass")
+// used to be rendered at tickangle: -50 to fit without overlapping, which
+// ate a large, label-length-proportional chunk of the chart's own height
+// for the rotated bounding box (reported: it "pushes the chart up and makes
+// it small"). Word-wrapping onto multiple horizontal lines instead needs
+// only line-count * line-height of vertical space, not the much larger
+// diagonal projection of the whole string -- and reads more easily besides.
+const TICK_LABEL_WRAP_WIDTH = 14;
+
+export function wrapTickLabel(label: string, maxWidth: number = TICK_LABEL_WRAP_WIDTH): string {
+  const words = label.split(' ').filter(Boolean);
+  if (words.length === 0) return label;
+
+  const lines: string[] = [];
+  let line = words[0];
+  for (const word of words.slice(1)) {
+    if ((line + ' ' + word).length <= maxWidth) {
+      line += ' ' + word;
+    } else {
+      lines.push(line);
+      line = word;
+    }
+  }
+  lines.push(line);
+  return lines.join('<br>');
 }
 
 const LOG_SCALE_RANGE_THRESHOLD = 500;
@@ -1096,9 +1126,13 @@ function ChartView({
     if (!groupedChartData || !chartGroup) return null;
     const chartData = pagedGroupedChartData ?? groupedChartData;
 
-    const maxLabelLen = chartData.reduce((max, item) => Math.max(max, item.label.length), 0);
-    // At -50° rotation, each char projects ~5.5px vertically; add tick area padding.
-    const plotlyBottomMargin = Math.max(110, Math.round(maxLabelLen * 5.5) + 35);
+    const wrappedTickText = chartData.map((item) => wrapTickLabel(item.label));
+    const maxWrappedLines = wrappedTickText.reduce(
+      (max, text) => Math.max(max, text.split('<br>').length), 1,
+    );
+    // Horizontal, word-wrapped lines only need line-count * line-height,
+    // plus a fixed allowance for tick gap and the axis title/footer below.
+    const plotlyBottomMargin = maxWrappedLines * 18 + 45;
     // Place the footer annotation proportionally inside the bottom margin.
 
     if (groupedChartType === 'boxplot') {
@@ -1173,8 +1207,11 @@ function ChartView({
               boxmode: 'group',
               legend: { orientation: 'h', x: 0, y: 1.08 },
               xaxis: {
-                tickangle: -50,
-                tickfont: { color: '#718096', size: 10 },
+                tickangle: 0,
+                tickmode: 'array',
+                tickvals: chartData.map((item) => item.label),
+                ticktext: wrappedTickText,
+                tickfont: { color: '#718096', size: 12 },
                 showgrid: false,
                 zeroline: false,
               },
@@ -1257,8 +1294,11 @@ function ChartView({
               margin: { l: 70, r: 30, t: 30, b: plotlyBottomMargin },
               legend: { orientation: 'h', x: 0, y: 1.08 },
               xaxis: {
-                tickangle: -50,
-                tickfont: { color: '#718096', size: 10 },
+                tickangle: 0,
+                tickmode: 'array',
+                tickvals: x,
+                ticktext: wrappedTickText,
+                tickfont: { color: '#718096', size: 12 },
                 showgrid: false,
                 zeroline: false,
               },
