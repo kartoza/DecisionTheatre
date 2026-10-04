@@ -26,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of rotating, with the bottom margin sized off line count
   instead of character count, and a bigger tick font now that it isn't
   fighting the rotation for space.
+- **The site indicators table's sticky header let scrolled rows show
+  through it, then paint on top of it.** Reported directly, with a
+  screenshot, then again with a recording after the first fix (an invalid
+  `gray.850` background token, resolving to no background at all) turned
+  out to be necessary but not sufficient. Confirmed live, down to the DOM:
+  `position: sticky` on a header row inside a scrolling `<table>` is
+  unreliable across this app's rendering engines (reproduced in both this
+  project's dev-server Chromium and the desktop app's own WebKit),
+  regardless of whether sticky sat on the `Thead`, the `Tr`, or (the
+  usually-reliable pattern) each `Th` cell, and regardless of forcing a
+  compositing layer. The header's own CSS was never actually wrong in any
+  of these attempts. Fixed by sidestepping the bug instead of fighting it:
+  the header is now its own small, genuinely non-scrolling table above the
+  scroll area, and the body is a second table below holding only rows —
+  no sticky positioning anywhere. The two tables share one column layout
+  (`TABLE_COLUMN_WIDTHS`, via a `<colgroup>` repeated on each), and the
+  header is given right padding equal to the body table's own measured
+  scrollbar width so the columns still line up.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before
