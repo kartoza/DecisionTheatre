@@ -639,20 +639,31 @@ const _tileSourceBandByMap = new WeakMap<maplibregl.Map, Record<string, string>>
  * This used to wait for `map.loaded()` / the 'idle' event, which only fires
  * once every basemap tile has streamed in — so the choropleth, whose own data
  * was long since ready, appeared seconds after the basemap instead of before
- * it. Style-ready is the real precondition for addSource/addLayer; the
- * basemap tiles then fill in underneath the already-painted overlay.
+ * it. Style-ready is the real precondition for addSource/addLayer.
+ *
+ * It used to gate on `map.isStyleLoaded()`, but that also requires every
+ * source on the map — including the basemap's own tiles — to have finished
+ * loading, which is a much stronger condition than addSource/addLayer/
+ * setPaintProperty/setFeatureState actually need (MapLibre's internal
+ * `_checkLoaded()` only cares whether the style document itself has parsed).
+ * On an otherwise idle map that stronger condition can stay false with no
+ * further 'styledata' events to retry on, so a plain attribute change could
+ * sit queued forever — only a pan or zoom, which generates fresh tile
+ * activity, happened to trip it loose. Just attempt fn() and fall back to
+ * waiting on 'styledata' only if the style genuinely isn't parsed yet.
  */
 function whenStyleReady(map: maplibregl.Map, fn: () => void): void {
-  if (map.isStyleLoaded()) {
+  try {
     fn();
-    return;
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.includes('Style is not done loading')) throw err;
+    const onStyleData = () => {
+      if (!map.isStyleLoaded()) return;
+      map.off('styledata', onStyleData);
+      fn();
+    };
+    map.on('styledata', onStyleData);
   }
-  const onStyleData = () => {
-    if (!map.isStyleLoaded()) return;
-    map.off('styledata', onStyleData);
-    fn();
-  };
-  map.on('styledata', onStyleData);
 }
 
 // Module-level caches for the two expensive synchronous intersection routines.
