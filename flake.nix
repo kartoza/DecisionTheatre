@@ -137,7 +137,7 @@
           # frontend/package-lock.json, so ANY change to that file — including
           # the version field — changes this hash. Recompute with:
           #   nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json
-          npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
+          npmDepsHash = "sha256-jOXEGrSZdyY3XU+QtR0ZmlbODNHu9REjmeavJ3TUnHc=";
 
           # The build script (tsc && vite build) outputs to dist/
           buildPhase = ''
@@ -614,7 +614,7 @@
             inherit version;
             src = ./frontend;
             # Same source as the frontend package, so the same hash.
-            npmDepsHash = "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=";
+            npmDepsHash = "sha256-jOXEGrSZdyY3XU+QtR0ZmlbODNHu9REjmeavJ3TUnHc=";
             buildPhase = ''
               npm test
             '';
