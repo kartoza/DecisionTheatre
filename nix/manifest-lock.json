@@ -8,9 +8,9 @@
     }
   },
   "npmDepsHash": {
-    "value": "sha256-UjGkmOXqjEwkSluatKThLi9KcbXS3ixV5TjBcJc/2T8=",
+    "value": "sha256-jOXEGrSZdyY3XU+QtR0ZmlbODNHu9REjmeavJ3TUnHc=",
     "inputs": {
-      "frontend/package-lock.json": "9b361da4c17bd882f3dd6d5d6ba07664272c9c788f198d4ca5c84a58edb91aaa"
+      "frontend/package-lock.json": "b054a01893aa61f1506448f342e88c725ef3cd814d988b7bec76d7b3948790dd"
     }
   }
 }
