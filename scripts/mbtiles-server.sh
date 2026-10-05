@@ -84,7 +84,7 @@ done
 if [[ ! -f "$TILES_FILE" ]]; then
   if [[ -n "$LAYER" ]]; then
     warn "$TILES_FILE does not exist yet."
-    AVAILABLE=$(ls "$MBTILES_DIR"/*.mbtiles 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+    AVAILABLE=$(find "$MBTILES_DIR" -maxdepth 1 -name '*.mbtiles' -exec basename {} \; 2>/dev/null || true)
     if [[ -n "$AVAILABLE" ]]; then
       info "Currently available layers:"
       echo "$AVAILABLE" | sed 's/^/  - /'
