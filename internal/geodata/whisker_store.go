@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package geodata
 
 // WhiskerBounds holds area-weighted upper/lower bounds for all attribute columns.

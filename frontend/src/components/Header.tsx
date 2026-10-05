@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   Box,
   Flex,
@@ -70,8 +73,8 @@ interface HeaderProps {
     isExtracting?: boolean;
     is3DMode?: boolean;
     onIs3DModeChange?: (enabled: boolean) => void;
-    isChoroplethEnabled?: boolean;
-    onChoroplethEnabledChange?: (enabled: boolean) => void;
+    choroplethOpacity?: number;
+    onChoroplethOpacityChange?: (opacity: number) => void;
     isIdentifyMode?: boolean;
     onIdentifyModeChange?: (enabled: boolean) => void;
     isGoogleBasemap?: boolean;

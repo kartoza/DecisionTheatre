@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * One "identify" result -- a catchment click or a site-boundary click --
  * rendered in the right-hand dock instead of a map-anchored popup.

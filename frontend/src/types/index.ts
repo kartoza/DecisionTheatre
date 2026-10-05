@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { getAppRuntime } from './runtime';
 import { safeRemoveItem, safeSetItem } from '../lib/storage';
 import { SCENARIO_COLORS, pastelTint } from '../lib/dialScale';
@@ -15,6 +18,10 @@ export interface ServerInfo {
   version: string;
   tiles_loaded: boolean;
   geo_loaded: boolean;
+  /** True when the server was started with --debug-overlay (dt serve-debug):
+   *  every map pane draws its developer overlay (live zoom, active catchment
+   *  band, rendered layers). */
+  debug_overlay?: boolean;
   /** Satellite basemap style document. Always this server's own proxy — see
    *  lib/satelliteBasemap.ts for why the browser does not fetch tiles (or the
    *  style itself) from the provider directly. */

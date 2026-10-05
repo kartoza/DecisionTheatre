@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import '@testing-library/jest-dom';
 
 // maplibre-gl calls window.URL.createObjectURL at module load time

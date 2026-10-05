@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
@@ -46,7 +49,7 @@ interface ContentAreaProps {
   is3DMode?: boolean;
   // Global map toggles: one control in the header, every pane reflects it.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   // Slider synchronization
@@ -208,7 +211,7 @@ function ContentArea({
   colorScaleType,
   is3DMode,
   isIdentifyMode,
-  isChoroplethEnabled,
+  choroplethOpacity,
   isGoogleBasemap,
   onGoogleBasemapChange,
   swiperPosition,
@@ -666,7 +669,7 @@ function ContentArea({
                   colorScaleType={colorScaleType}
                   is3DMode={is3DMode}
                   isIdentifyMode={isIdentifyMode}
-                  isChoroplethEnabled={isChoroplethEnabled}
+                  choroplethOpacity={choroplethOpacity}
                   isGoogleBasemap={isGoogleBasemap}
                   onGoogleBasemapChange={onGoogleBasemapChange}
                   showNavigation={i === navigationPane}
@@ -722,7 +725,7 @@ function ContentArea({
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             isIdentifyMode={isIdentifyMode}
-            isChoroplethEnabled={isChoroplethEnabled}
+            choroplethOpacity={choroplethOpacity}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={onGoogleBasemapChange}
             showNavigation={visibleIndices[0] === navigationPane}

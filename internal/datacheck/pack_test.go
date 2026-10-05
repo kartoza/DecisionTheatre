@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package datacheck
 
 import (
@@ -107,7 +110,7 @@ func TestPackContainsRuntimeFilesUnderOneRoot(t *testing.T) {
 		root + "/" + ManifestFile,
 		root + "/data/datapack.gpkg",
 		root + "/data/metadata.csv",
-		root + "/data/mbtiles/africa.mbtiles",
+		root + "/data/mbtiles/context.mbtiles",
 	} {
 		if files[want] == nil {
 			t.Errorf("archive is missing %q", want)

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   Box,
   VStack,
@@ -17,6 +20,7 @@ import {
 } from '@chakra-ui/react';
 import { FiInfo, FiMapPin } from 'react-icons/fi';
 import PanelCollapseButton from './PanelCollapseButton';
+import { useHeaderOffset } from '../hooks/useHeaderOffset';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAttributeCanMap, useAttributeCanGraph, useAttributeChartTypes, useAttributeColors, useColumns, useAttributeDetails, useAttributeGroupingVariables, useAttributeVariableTypes, useAttributeAxisLabels, useAttributeIgnoreXGrouping, useScenarioColors } from '../hooks/useApi';
 import { PRISM_CSS_GRADIENT, formatNumber } from './MapView';
@@ -782,20 +786,10 @@ function ControlPanel({
     : null;
   const { width: panelWidth, startResize } = usePanelWidth();
 
-  // The application header is content-sized, not a fixed height, so the
-  // docked panel measures it instead of repeating a magic number that goes
-  // stale the moment the header's contents change — same approach as the
-  // chart-details and target-editor panels that share this slot.
-  const [headerOffset, setHeaderOffset] = useState(0);
-  useEffect(() => {
-    const header = document.querySelector('header');
-    if (!header) return;
-    const apply = () => setHeaderOffset(header.getBoundingClientRect().height);
-    apply();
-    const observer = new ResizeObserver(apply);
-    observer.observe(header);
-    return () => observer.disconnect();
-  }, []);
+  // Measured, not a magic number — and shared with App's expand chevron so
+  // that chevron lands exactly where this panel's collapse button sits
+  // (see useHeaderOffset).
+  const headerOffset = useHeaderOffset();
 
   // The pane number identifies the card the factor belongs to, so it sits on
   // that card rather than on the panel heading. Defined once: the chart view

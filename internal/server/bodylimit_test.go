@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package server
 
 import (
@@ -198,7 +201,7 @@ func TestNoBodyIsNotRejected(t *testing.T) {
 func TestEveryPathHasALimit(t *testing.T) {
 	for _, p := range []string{
 		"/", "/api", "/api/anything", "/api/sites", "/data/images/x.png",
-		"/docs/index.html", "/tiles/africa/1/2/3.pbf",
+		"/docs/index.html", "/tiles/context/1/2/3.pbf",
 		fmt.Sprintf("/api/%s", strings.Repeat("deep/", 20)),
 	} {
 		if got := maxBytesForPath(p); got <= 0 {

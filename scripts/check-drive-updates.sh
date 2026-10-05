@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # check-drive-updates.sh — Check whether a Google Drive folder has any
 # files that are new or differ from a local data directory.

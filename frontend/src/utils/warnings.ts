@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 type ToastFn = (options: Record<string, unknown>) => void;
 
 const WARNING_NPP_GM2 = 'NPP_gm2';

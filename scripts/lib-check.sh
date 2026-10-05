@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # =============================================================================
 # lib-check.sh — shared machinery for the QA check scripts. Sourced, not run.
 #

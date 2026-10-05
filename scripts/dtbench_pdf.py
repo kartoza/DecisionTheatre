@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """A small PDF writer, and the charts the benchmark report draws with it.
 
 Standard library only, like the rest of dtbench. That is the whole reason this

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   AlertDialog,
   AlertDialogBody,
@@ -252,6 +255,22 @@ function ReferenceTrendLines({ reference, current, target }: { reference: number
   );
 }
 
+// Column widths, declared once and reused by both the header table and the
+// body table (see the comment above the header <Table> for why there are
+// two) -- a <colgroup> is the one thing that has to actually match between
+// them for the columns to line up, so it only gets written down here.
+const TABLE_COLUMN_WIDTHS = ['30%', '17.5%', '17.5%', '17.5%', '17.5%'];
+
+function IndicatorTableColgroup() {
+  return (
+    <colgroup>
+      {TABLE_COLUMN_WIDTHS.map((width, i) => (
+        <col key={i} style={{ width }} />
+      ))}
+    </colgroup>
+  );
+}
+
 export default function IndicatorEditorPage({
   site,
   onNavigate,
@@ -274,13 +293,35 @@ export default function IndicatorEditorPage({
   const [selectedIndicatorKey, setSelectedIndicatorKey] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const lastCatchmentCountRef = useRef<number | null>(null);
+  // The header row lives in its own, non-scrolling table now (see the
+  // comment above tableScrollRef below for why) -- its right edge has
+  // nothing to make room for the body table's scrollbar, so columns drift
+  // out of alignment by however wide the platform's native scrollbar is.
+  // Measured once the body is mounted and applied as right padding on the
+  // header table, rather than assumed, because that width varies by
+  // platform/theme (desktop webview vs this dev server's own browser).
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    const measure = () => setScrollbarWidth(el.offsetWidth - el.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const toast = useToast();
   const { details: attributeDetails } = useAttributeDetails();
   const { userInputs } = useAttributeUserInputs();
   const { variableTypes } = useAttributeVariableTypes();
 
   const headerBg = useColorModeValue('gray.900', 'gray.900');
-  const tableBg = useColorModeValue('gray.850', 'gray.850');
+  // The previous token here (gray at the 850 step) isn't real -- the gray
+  // scale stops at 900 -- so it resolved to an undefined CSS var, i.e. no
+  // background at all: the reported "text showing through the back of" the
+  // sticky header.
+  const tableBg = useColorModeValue('gray.900', 'gray.900');
   const hoverBg = useColorModeValue('whiteAlpha.100', 'whiteAlpha.100');
 
   const extractionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1063,18 +1104,52 @@ export default function IndicatorEditorPage({
         )}
       </Box>
 
-      {/* Scrollable Table */}
-      <Box id="demo-indicators-container" h="calc(100% - 140px)" overflow="auto" px={6} py={4}>
-        <Table variant="simple" size="sm">
-          <Thead position="sticky" top={0} bg={tableBg} zIndex={5} style={{ background: "#171923", paddingBottom: "10px" }}>
+      {/* Two separate tables, not one table with a sticky <thead>.
+          position: sticky on a header row inside a scrolling <table> turned
+          out to be a real, cross-browser rendering bug, not a styling gap:
+          reported directly, then again after fixing the header's own
+          background and the row-entrance animation's transform (both real,
+          both insufficient), reproduced with a recording, and confirmed
+          live down to the DOM -- scrolled rows kept painting over the
+          sticky header's own cells despite their correct opaque
+          background, correct z-index, and correct computed "stuck"
+          position, regardless of whether sticky was set on the Thead, the
+          Tr, or (the standard, usually-reliable pattern) each Th cell, and
+          regardless of forcing a compositing layer via will-change. None
+          of it changed the outcome, which means the header cells' CSS was
+          never the problem -- the browser's table-layout engine just
+          doesn't paint a sticky header reliably over sibling rows inside a
+          <table>, in this app's rendering engines (tested against this
+          dev server's Chromium and the desktop app's own WebKit).
+          The fix that actually works, because it sidesteps the bug instead
+          of fighting it: two ordinary tables sharing one column layout (a
+          <colgroup> repeated on each) -- a small, genuinely non-scrolling
+          header table above the scroll area needs no sticky positioning
+          at all, and a second table below holds only the body. The two
+          only need their columns to literally line up, which is the one
+          piece a sticky-based single table got for free: the body table's
+          own vertical scrollbar eats into its width that the header table
+          doesn't have to make room for, so the header is given matching
+          right padding equal to the real, measured scrollbar width
+          (scrollbarWidth) rather than an assumed constant -- it differs by
+          platform and theme. */}
+      <Box px={6} pt={4} pr={`calc(1.5rem + ${scrollbarWidth}px)`}>
+        <Table variant="simple" size="sm" sx={{ tableLayout: 'fixed' }}>
+          <IndicatorTableColgroup />
+          <Thead>
             <Tr>
-              <Th color="gray.400" borderColor="whiteAlpha.200" minW="250px">Indicator</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Ecological Reference</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200">Departure from reference</Th>
-              <Th color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
+              <Th bg={tableBg} color="gray.400" borderColor="whiteAlpha.200">Indicator</Th>
+              <Th bg={tableBg} color="gray.400" borderColor="whiteAlpha.200" isNumeric>Ecological Reference</Th>
+              <Th bg={tableBg} color="gray.400" borderColor="whiteAlpha.200" isNumeric>Current State</Th>
+              <Th bg={tableBg} color="gray.400" borderColor="whiteAlpha.200">Departure from reference</Th>
+              <Th bg={tableBg} color="gray.400" borderColor="whiteAlpha.200" isNumeric>Target State</Th>
             </Tr>
           </Thead>
+        </Table>
+      </Box>
+      <Box id="demo-indicators-container" ref={tableScrollRef} h="calc(100% - 172px)" overflow="auto" px={6} pb={4}>
+        <Table variant="simple" size="sm" sx={{ tableLayout: 'fixed' }}>
+          <IndicatorTableColgroup />
           <Tbody>
             <AnimatePresence>
               {groupedIndicatorRows.map(group => {
@@ -1127,8 +1202,20 @@ export default function IndicatorEditorPage({
                       <MotionTr
                         key={row.key}
                         id={row.key === firstEditableHerbivoreKey ? 'demo-herbivore-editable-row' : (row.key === 'herbs_tot_kgkm2' ? 'demo-herbivore-biomass-row' : undefined)}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
+                        // No y-offset: framer-motion implements that via a
+                        // CSS transform, and any element with a transform
+                        // other than 'none' establishes its own stacking
+                        // context -- which it keeps even once the animation
+                        // settles at y: 0, not just while mid-animation.
+                        // That let an animated row's stacking context paint
+                        // over the sticky <Thead> despite its lower z-index,
+                        // reported as scrolled rows reappearing on top of
+                        // the header rather than staying hidden behind it.
+                        // Opacity alone doesn't have this problem: a
+                        // settled opacity: 1 isn't "less than 1", so it
+                        // doesn't trigger the same stacking-context rule.
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
                         transition={{ delay: index * 0.01 }}
                         _hover={{ bg: hoverBg }}
                       >
