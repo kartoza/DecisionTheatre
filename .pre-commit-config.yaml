@@ -20,15 +20,26 @@
 # Anything needing the network, or more than a second or two, belongs in CI
 # rather than here — with one deliberate exception, noted at the secrets hook.
 #
-# NOT GATED, ON PURPOSE: REUSE / SPDX
+# NOT GATED, ON PURPOSE (STILL): REUSE / SPDX
 #
-# The project standards call for SPDX headers and a `reuse lint` gate, and
-# `reuse` is already in devShells.tooling. It is deliberately not wired up: the
-# licence itself is unsettled (#91, confirm the licence with Wits; #47, no
-# LICENSE file and no SPDX headers though GPL-3.0 is asserted in three
-# manifests). A gate added before #91 lands could only fail the whole tree or
-# be silenced immediately. This note exists so the next person auditing the
-# check list finds the reason rather than concluding it was forgotten.
+# The licence itself is settled now (AGPL-3.0-only: LICENSE at the repo root,
+# flake.nix, packaging/nfpm.yaml, docs/about/license.md) and #47's main gap is
+# closed -- every original Kartoza source file carries an inline SPDX header,
+# and REUSE.toml covers vendored third-party code (internal/webview_go,
+# the self-hosted fonts, two Unsplash background photos), lockfiles, and the
+# rest of the project's own non-code files (config, docs, in-app screenshots).
+#
+# Still not wired up, because `reuse lint` still fails on roughly 60 files
+# this pass deliberately left alone rather than guess at: partner/funder
+# organisations' own logos (frontend/src/assets/partners/**,
+# docs/assets/partners/** and the handful alongside them), a few undocumented
+# photographs with no provenance trail the way the Unsplash ones have in
+# frontend/src/assets/backgrounds/README.md, and geodata/derivatives under
+# data/** and datasources/** that may carry their own upstream attribution
+# terms. A gate added before those are resolved would fail on files nobody
+# has actually gotten wrong yet, just not labelled. This note exists so the
+# next person auditing the check list finds the reason rather than concluding
+# it was forgotten.
 
 default_install_hook_types: [pre-commit]
 fail_fast: false

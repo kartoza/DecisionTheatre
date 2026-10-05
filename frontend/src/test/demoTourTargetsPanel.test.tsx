@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Reported: "When you edit the targets, the walkthrough text disappears,
  * and I don't know how to get it back." The tour used to hide itself

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # build-catchment-hierarchy.sh — build the multi-resolution catchment tables
 # used for the low/mid-zoom choropleth: a lev12 -> lev04/06/08 parent

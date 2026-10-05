@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   DEFAULT_SATELLITE_STYLE_URL,

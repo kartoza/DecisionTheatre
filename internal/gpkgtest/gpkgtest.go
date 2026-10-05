@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package gpkgtest builds a minimal, in-memory-sized datapack geopackage on
 // disk so that the geodata and api packages can be tested against the real
 // SQLite queries rather than a hand-rolled fake.

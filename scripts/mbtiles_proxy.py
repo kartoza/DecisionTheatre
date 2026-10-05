@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Static file server + reverse proxy for the mbtiles testbed.
 
 Serves the generated preview page and style.json from STATIC_DIR, and

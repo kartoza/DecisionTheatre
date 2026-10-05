@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The pane header names the factor a pane is showing, and is shared by every
  * view mode except the map (which draws its own, see paneChrome.test.tsx).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text } from '@chakra-ui/react';
 import type * as maplibregl from 'maplibre-gl';

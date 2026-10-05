@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Regression guard: the identify results used to be built as raw DOM
  * (document.createElement, position:absolute popups reprojected on every

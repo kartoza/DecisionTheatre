@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """MkDocs build hook: generate SVG diagrams from live project state.
 
 Diagrams that describe code or configuration are generated here rather than

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export type AppRuntime = 'browser' | 'webview';
 
 export function isGoWebViewRuntime(): boolean {

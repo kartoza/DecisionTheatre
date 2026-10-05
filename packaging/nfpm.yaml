@@ -8,7 +8,7 @@ maintainer: Kartoza <info@kartoza.com>
 description: Offline exploration of African catchment data with scenario comparison
 vendor: Kartoza
 homepage: https://github.com/kartoza/DecisionTheatre
-license: GPL-3.0
+license: AGPL-3.0-only
 
 contents:
   - src: dist/decision-theatre

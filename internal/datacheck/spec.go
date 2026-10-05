@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package datacheck validates a Decision Theatre data directory against what
 // the application actually reads, and renders the result as a report.
 //

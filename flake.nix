@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 {
   description = "Decision Theatre - Offline catchment data exploration";
 
@@ -265,7 +268,7 @@
           meta = with pkgs.lib; {
             description = "Offline catchment data exploration";
             homepage = "https://github.com/kartoza/decision-theatre";
-            license = licenses.gpl3;
+            license = licenses.agpl3Only;
             maintainers = [ ];
           };
         };
@@ -406,7 +409,7 @@
                   "Run Decision Theatre as a web server"
                 else
                   "Launch the Decision Theatre desktop application";
-              license = licenses.gpl3;
+              license = licenses.agpl3Only;
               mainProgram = "decision-theatre-${mode}";
             };
           };

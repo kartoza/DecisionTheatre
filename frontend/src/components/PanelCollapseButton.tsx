@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The collapse/close affordance shared by every docked right-hand panel
  * (control panel, target editor, chart details, identify results). A plain

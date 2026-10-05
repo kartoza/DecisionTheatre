@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 #!/usr/bin/env node
 // Measure the map's load sequence in a real browser via the Chrome DevTools
 // Protocol. Zero dependencies: Node 22's global WebSocket + system chromium.

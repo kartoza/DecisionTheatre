@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Print each layer name and feature count found in one MVT tile.
 
 Usage: mvt_layers.py MBTILES_FILE ZOOM COLUMN ROW

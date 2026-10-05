@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Conceptual documentation diagrams.
 
 These illustrate workflows, layouts and mental models rather than parsed source

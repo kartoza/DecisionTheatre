@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { getAppRuntime } from './runtime';
 import { safeRemoveItem, safeSetItem } from '../lib/storage';
 import { SCENARIO_COLORS, pastelTint } from '../lib/dialScale';

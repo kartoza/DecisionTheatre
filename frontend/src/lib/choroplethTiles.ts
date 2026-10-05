@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type * as maplibregl from 'maplibre-gl';
 import type { VectorSourceSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { CHOROPLETH_VALUE_STATE_KEY } from './choroplethPaint';

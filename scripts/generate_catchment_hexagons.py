@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Snap every lev12 catchment onto a shared H3 hex grid.
 
 --legacy mode renders real lev12 boundaries at every zoom (see "The
