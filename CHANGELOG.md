@@ -53,6 +53,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ("flat") pane's choices on. A new dial/belt pane now only considers
   indicators marked `graphthisYN` true with `typeofgraph` containing
   `dial`, same as the picker; map/chart/table panes are unaffected.
+- **Clicking a catchment on the "Define Boundary" map did nothing below
+  the real detail band's minzoom (11 on a default datapack, 9 under
+  `--legacy`).** Reported directly: catchments needed to already be
+  rendered on screen before one could be selected. The click handler only
+  ever queried the transparent `catchments-selectable-fill` layer via
+  `queryRenderedFeatures`, which is empty below that layer's own minzoom —
+  itself previously hardcoded to `8`, below the real tiled range of a
+  split-tileset band (whose source has minzoom = maxzoom = tilezoom), so
+  the layer rendered nothing between z8 and the true minzoom without
+  erroring. The layer's minzoom is now read off the resolved detail band
+  itself rather than guessed. When a click still finds nothing rendered
+  there (because the layer's own minzoom isn't reached yet), it now falls
+  back to the same server-side `/api/catchments/at-point` lookup the
+  identify-by-click feature already uses to resolve the lev12 catchment
+  under the clicked point directly — so a click works at any zoom, not
+  just once the tiles have caught up.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before

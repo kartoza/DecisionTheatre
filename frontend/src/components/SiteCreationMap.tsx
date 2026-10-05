@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   Box,
   Button,
@@ -524,6 +527,14 @@ function SiteCreationMap({
         : null;
       const sourceId = sourceSpec ? 'site-catchments' : 'UoW Tiles';
       const sourceLayer = detailBand?.sourceLayer ?? 'catchments_lev12';
+      // The source itself only ever carries tiles from its own tilezoom up
+      // (minzoom=maxzoom=tilezoom on a split-tileset band, overzoomed from
+      // there — see catchmentBandSourceSpec). A layer minzoom lower than
+      // that asks MapLibre to render a band with nothing to show yet: not
+      // an error, just silently blank, which is why catchments stopped
+      // appearing between the old hardcoded 8 and wherever the real detail
+      // band actually starts (11 on a default datapack, 9 under --legacy).
+      const layerMinzoom = detailBand?.minzoom ?? 8;
 
       if (sourceSpec && !map.getSource('site-catchments')) {
         map.addSource('site-catchments', sourceSpec);
@@ -535,7 +546,7 @@ function SiteCreationMap({
           type: 'fill',
           source: sourceId,
           'source-layer': sourceLayer,
-          minzoom: 8,
+          minzoom: layerMinzoom,
           paint: {
             'fill-color': 'rgba(60, 140, 180, 0.1)',
             'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
@@ -554,10 +565,14 @@ function SiteCreationMap({
           type: 'line',
           source: sourceId,
           'source-layer': sourceLayer,
-          minzoom: 8,
+          minzoom: layerMinzoom,
+          // Same white, same weight as the debug overlay's own catchment
+          // outlines (CHOROPLETH_DEBUG_OUTLINE_COLOR/_WIDTH in MapView.tsx)
+          // — one visual language for "here is a real catchment boundary",
+          // not a second, dimmer one invented for this page alone.
           paint: {
-            'line-color': 'rgba(60, 140, 180, 0.6)',
-            'line-width': 2.5,
+            'line-color': 'rgba(255, 255, 255, 0.9)',
+            'line-width': 1,
           },
         });
       }
@@ -571,7 +586,7 @@ function SiteCreationMap({
           type: 'fill',
           source: sourceId,
           'source-layer': sourceLayer,
-          minzoom: 8,
+          minzoom: layerMinzoom,
           paint: {
             'fill-color': 'transparent',
             'fill-opacity': 0,
@@ -621,13 +636,72 @@ function SiteCreationMap({
       // Catchment selection mode
       map.getCanvas().style.cursor = isBoxSelectionMode ? 'grab' : 'pointer';
 
-      const handleClick = (e: maplibregl.MapMouseEvent) => {
-        // Query features at click point from the transparent fill layer
+      const handleClick = async (e: maplibregl.MapMouseEvent) => {
+        // Query features at click point from the transparent fill layer.
+        // This only finds something if 'catchments-selectable-fill' is
+        // actually rendering at the current zoom, which it isn't below the
+        // resolved tileset band's own minzoom (11 on a default datapack, 9
+        // under --legacy) -- reported: catchments needed to be visibly on
+        // screen before one could be added. The server-side fallback below
+        // resolves the lev12 catchment under the clicked point directly
+        // (same endpoint identify-by-click already uses, see
+        // handleCatchmentAtPoint's "always reads lev12" golden rule),
+        // independent of what's rendered, so a click works at any zoom.
         const features = map.queryRenderedFeatures(e.point, {
           layers: ['catchments-selectable-fill'],
         });
 
-        if (features.length > 0) {
+        if (features.length === 0) {
+          let catchmentId: string | null = null;
+          try {
+            const atPointResponse = await fetch(
+              `/api/catchments/at-point?lng=${e.lngLat.lng}&lat=${e.lngLat.lat}`,
+            );
+            if (atPointResponse.ok) {
+              const atPoint = await atPointResponse.json() as { id?: string };
+              catchmentId = atPoint.id || null;
+            }
+          } catch {
+            // No catchment at that point (ocean, gap, out of domain) or a
+            // network hiccup -- same as a click that hits nothing today.
+          }
+          if (!catchmentId) return;
+
+          let wasRemoved = false;
+          setSelectedCatchments(prev => {
+            if (!prev.has(catchmentId as string)) return prev;
+            const next = new Map(prev);
+            next.delete(catchmentId as string);
+            wasRemoved = true;
+            updateSelectedCatchmentsLayer(map, next);
+            return next;
+          });
+          if (wasRemoved) return;
+
+          const cachedFeature = catchmentGeometryCacheRef.current.get(catchmentId);
+          const resolvedFeature = cachedFeature ?? await (async () => {
+            try {
+              const geomResponse = await fetch(`/api/catchments/geometry/${catchmentId}`);
+              if (geomResponse.ok) return await geomResponse.json() as GeoJSON.Feature;
+            } catch {
+              // Fall through to null below -- nothing to select without geometry.
+            }
+            return null;
+          })();
+          if (!resolvedFeature) return;
+
+          catchmentGeometryCacheRef.current.set(catchmentId, resolvedFeature);
+          setSelectedCatchments(prev => {
+            if (prev.has(catchmentId as string)) return prev;
+            const next = new Map(prev);
+            next.set(catchmentId as string, resolvedFeature);
+            updateSelectedCatchmentsLayer(map, next);
+            return next;
+          });
+          return;
+        }
+
+        {
           const feature = features[0];
           const catchmentId = String(feature.properties?.HYBAS_ID || feature.id);
           const fallbackFeature = feature as unknown as GeoJSON.Feature;
