@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`TABLE_COLUMN_WIDTHS`, via a `<colgroup>` repeated on each), and the
   header is given right padding equal to the body table's own measured
   scrollbar width so the columns still line up.
+- **"Add pane" could land a new dial or belt chart on an indicator the
+  metadata doesn't allow there.** Reported directly. A new pane claims the
+  first indicator not already shown anywhere in the grid, so the user
+  always sees something new rather than a duplicate — but that selection
+  ignored `graphthisYN`/`typeofgraph`, the same two metadata fields
+  ControlPanel's own indicator picker already gates a dial or belt
+  ("flat") pane's choices on. A new dial/belt pane now only considers
+  indicators marked `graphthisYN` true with `typeofgraph` containing
+  `dial`, same as the picker; map/chart/table panes are unaffected.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before

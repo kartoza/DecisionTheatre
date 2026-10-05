@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kartoza
 // SPDX-License-Identifier: AGPL-3.0-only
 
+
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
@@ -23,7 +24,7 @@ import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
 import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
-import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs, useColumns } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs, useColumns, useAttributeCanGraph, useAttributeChartTypes } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -66,6 +67,12 @@ function App() {
   // Every indicator the app knows about, for handleAddPane's "claim an
   // unused one" logic below.
   const { columns } = useColumns();
+  // Same two fields ControlPanel's factorOptions gates a dial/belt pane's
+  // indicator picker on -- handleAddPane needs them too, so it can't land a
+  // new dial/belt pane on an indicator the metadata says isn't plottable
+  // there (graphthisYN false, or typeofgraph missing "dial").
+  const { canGraph } = useAttributeCanGraph();
+  const { chartTypes } = useAttributeChartTypes();
   const catalogLoadingRef = useRef(true);
   catalogLoadingRef.current = attributeDetailsLoading || variableTypesLoading || userInputsLoading;
   const catalogRef = useRef({ attributeDetails, variableTypes, userInputs });
@@ -904,12 +911,24 @@ function App() {
       // back to mirroring the focused pane, same as before, once every
       // indicator is already in use -- there is nothing left to avoid
       // duplicating at that point.
+      //
+      // A new pane inherits the focused pane's view mode (see viewModes
+      // usage below), so a new dial or belt ('flat') pane must only
+      // consider indicators the metadata actually marks as plottable
+      // there -- same gate as ControlPanel's factorOptions: graphthisYN
+      // true and typeofgraph containing "dial". Landing on one that
+      // doesn't would silently show a blank/broken dial.
+      const newPaneViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
+      const isDialView = newPaneViewMode === 'dial' || newPaneViewMode === 'flat';
       const used = new Set(prev.map((p) => p.attribute).filter(Boolean));
-      const nextUnused = columns.find((c) => !used.has(c));
+      const candidates = isDialView
+        ? columns.filter((c) => canGraph[c] && (chartTypes[c] || '').toLowerCase().includes('dial'))
+        : columns;
+      const nextUnused = candidates.find((c) => !used.has(c));
       const attribute = nextUnused ?? source.attribute;
       return [...prev, { ...source, attribute }];
     });
-  }, [focusedPane, columns]);
+  }, [focusedPane, columns, viewModes, canGraph, chartTypes]);
 
   const handleRemovePane = useCallback((paneIndex: number) => {
     setPaneStates((prev) => {
