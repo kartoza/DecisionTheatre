@@ -34,9 +34,11 @@ describe('SiteCreationMap catchment selection at any zoom', () => {
     // below its own tiled range -- not an error, just silently blank,
     // since a split-tileset band's source has minzoom = maxzoom = tilezoom
     // (11 on a default datapack, 9 under --legacy; see choroplethTiles.ts).
+    // The three layers themselves are added via addCatchmentLayerTriple
+    // (see catchmentWideZoomBand.test.ts for that helper's own coverage),
+    // which takes minzoom as a parameter rather than a literal.
     expect(SRC).toContain('const layerMinzoom = detailBand?.minzoom ?? 8;');
     expect(SRC).not.toMatch(/minzoom:\s*8,/);
-    const minzoomUses = (SRC.match(/minzoom:\s*layerMinzoom,/g) ?? []).length;
-    expect(minzoomUses).toBe(3);
+    expect(SRC).toMatch(/addCatchmentLayerTriple\(\s*map,\s*\{[^}]*selectable: 'catchments-selectable-fill'[^}]*\},\s*sourceId,\s*sourceLayer,\s*layerMinzoom,/);
   });
 });

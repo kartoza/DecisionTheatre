@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Define Boundary page: a bigger header title, clean instructions
+  text instead of a floating pill, the map as the actual content area,
+  and real catchment boundaries styled like the debug overlay's.**
+  Reported directly, with annotated screenshots, across two rounds:
+  - The page title ("Define Boundary") moved into the header row next to
+    the back button and step badges, replacing a second, much larger
+    heading that used to sit below it doing the same job — shrunk too
+    far on the first pass; it's now the largest size that still fits one
+    header row cleanly (`2xl`/`4xl`, not `xl`/`2xl`).
+  - The live instructions ("Click catchments...", "3 catchments
+    selected"...) moved off the map itself — previously a floating dark
+    pill overlaid on top of it — into the slot the big title used to
+    occupy, as plain text. `SiteCreationMap` reports the current text up
+    via `onInstructionsChange` rather than rendering it, since it's the
+    only place that knows selection/drawing state. The static instruction
+    banner above the map and the static subtitle under the old title,
+    both of which repeated a fixed version of the same text, are gone
+    too.
+  - The map now fills the step's full content area edge to edge instead
+    of sitting in a padded, bordered, rounded card — the "Create
+    Boundary" button already floated over the map as its own overlay, so
+    this is a wrapper change, not a new button. That wrapper is sized
+    with `flex="1"` off the page's own 100%-height ancestor rather than
+    `calc(100vh - Npx)`: the viewport includes chrome (the app's header,
+    its footer) that isn't this component's to subtract, so a fixed guess
+    either falls short or overshoots depending on viewport size — the
+    first version of this fix overshot, pushing the floating button below
+    the fold, reachable only by scrolling.
+  - Catchment outlines now use the same white, 1px style the debug
+    overlay's own catchment outlines use (`CHOROPLETH_DEBUG_OUTLINE_COLOR`/
+    `_WIDTH` in `MapView.tsx`) instead of a separate, dimmer blue invented
+    for this page alone.
+  - The decorative floating-particle animation ("sparkles") behind the
+    page is gone.
+
 ### Fixed
 
 - **The map transparency slider didn't reach true opacity at 100%.**
@@ -69,6 +106,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identify-by-click feature already uses to resolve the lev12 catchment
   under the clicked point directly — so a click works at any zoom, not
   just once the tiles have caught up.
+- **Real lev12 catchments on the Define Boundary page still needed
+  zooming in uncomfortably far (to z11, the detail tileset's own
+  tilezoom) before any candidate was visible to click.** A vector tile
+  source can be overzoomed past its own tilezoom (MapLibre reuses the
+  deepest tile it has) but never *underzoomed* below it — there's no tile
+  data to show, so nothing renders, full stop. `catchments-lev12-full`
+  already existed on disk — the same lev12 geometry, tiled a second time
+  at a lower single zoom (z9) for exactly this (see
+  `datasources/mbtiles-config/layer-treatment.csv`'s
+  `catchments_lev12_full` row) — but was wired into `--legacy`'s own
+  hex→detail handoff only. It's now also served on this page as a second,
+  independent source/layer set, active from z9 up to the detail band's
+  own minzoom, where it hands off — via the existing generic
+  `/tiles/{name}/{z}/{x}/{y}.pbf` route (no new TileJSON endpoint, no
+  mbtiles rebuild). Deliberately not wired into the shared
+  `/data/catchments-tiles.json` endpoint the main map's choropleth also
+  reads: that endpoint's own z9–z10 window intentionally shows coarser
+  `lev08` basin aggregates there for legibility/performance, unrelated to
+  this page, and stays untouched.
 - **A long pause on page load, usually only fixed by panning — not specific
   to `--legacy` or the hex band, this affected the choropleth in general.**
   Reported directly. `style.load` paints the choropleth immediately, before
