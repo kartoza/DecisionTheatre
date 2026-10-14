@@ -428,7 +428,7 @@ release: build-frontend build-docs
 # Data conversion & packing
 # ============================
 
-# Download CSV source files from a Google Drive folder into data/
+# Download source files from a Google Drive folder into data/ and datasources/
 # Usage: make fetch-data FOLDER=<folder-id-or-url>
 fetch-data:
 	@if [ -z "$(FOLDER)" ]; then \

@@ -503,7 +503,7 @@ dt mbtiles-server --style datasources/mbtiles-config/style-catchments-outline.js
 
 ## Fetching Data from Google Drive
 
-The script `scripts/fetch-data.sh` downloads all files from a shared Google Drive folder (including subfolders) directly into the `data/` directory, preserving the folder structure. Run this before `dt geopackage` to pull the latest source files in one step.
+The script `scripts/fetch-data.sh` downloads files from a shared Google Drive folder into this repository. The Drive folder has two top-level subfolders, `data` and `datasources`, mirroring the repo's own `data/` vs `datasources/` split — each is downloaded straight into its matching local directory, preserving its own subfolder structure. Run this before `dt geopackage` to pull the latest source files in one step.
 
 ### Installation: rclone
 
@@ -593,11 +593,10 @@ dt fetch-data FOLDER="https://drive.google.com/drive/folders/1ABCdef_ghiJKLmnopQ
 
 1. Extracts the folder ID from the argument (whether a bare ID or URL).
 2. Checks that rclone is installed and the `gdrive` remote exists.
-3. Copies all files from the Drive folder and any subfolders into `data/` using `rclone copy`, preserving the subfolder structure -- the Drive folder mirrors the old flat layout, mixing shipped content with build inputs.
-4. Skips files that are already up-to-date (same size and modification time).
+3. Copies the Drive folder's `data` subfolder into `data/`, then its `datasources` subfolder into `datasources/`, using `rclone copy`, preserving each one's own subfolder structure.
+4. Re-downloads and overwrites every file unconditionally, without checking whether the remote copy has changed.
 5. Retries automatically on transient network errors.
-6. Moves the build inputs it's likely to contain (`catchments.gpkg`, the scenario CSVs, `R scripts/`) out of `data/` into `datasources/`, so a re-run of this script can't undo the `data/` vs `datasources/` separation. Anything not matched here is shipped content and stays put.
-7. Prints a summary of all files in `data/` with their sizes when complete.
+6. Prints a summary of all files in `data/` and `datasources/` with their sizes when complete.
 
 ### Using a different remote name
 
