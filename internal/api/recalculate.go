@@ -19,6 +19,17 @@ const (
 	colHerbsSpCountsPrefix = "herbs_sp_counts_"
 	colHerbsSpKgkm2Prefix  = "herbs_sp_kgkm2_"
 
+	// defaultPropEarly is the R Fire Modelling workflow's assumed early/late
+	// fire-season split (0_6_FireModelling.R:60: "he shows that 45% of the
+	// burned area is in the EDS on average ... for now stick with 45%").
+	// computeAreaWeightedIndicators forces every scenario to this value
+	// unconditionally rather than using the GeoPackage's real per-catchment
+	// propEarly: that column is a 0/1 flag, and area-weighting it into an
+	// odd-precision fraction (e.g. 0.28571428...) was producing a non-linear,
+	// jumpy percBurned as the target slider moved — a fixed, exactly
+	// round-tripping value does not.
+	defaultPropEarly = 0.45
+
 	// colGrassBiomass is NPP_gm2.1 (§1 step 3, Aug2026 workflow): grass NPP
 	// net of what grazers consume.
 	colGrassBiomass = "NPP_gm2.1"
@@ -655,7 +666,7 @@ func workflow4FireCascade(ideal map[string]float64) {
 
 	propEarly, ok := ideal[colPropEarly]
 	if !ok {
-		propEarly = 0.45
+		propEarly = defaultPropEarly
 	}
 
 	grazingDMI := ideal[colHerbsTotGrazingDMI]
@@ -711,6 +722,24 @@ func workflow4FireCascade(ideal map[string]float64) {
 
 	// Step 8 — Total CH4 = fire + herbivore enteric.
 	ideal["CH4_both_kg_km2"] = fireCH4 + ideal["herbs_tot_CH4_kgkm2"]
+}
+
+// fillMissingCascadeOutputs runs workflow4FireCascade against a scratch copy
+// of indicators and copies back only the keys indicators did not already
+// have. Used at site-creation time, where each cascade-output key normally
+// already carries a real aggregated value from the GeoPackage and must not
+// be clobbered by a recompute from aggregated inputs (see call site).
+func fillMissingCascadeOutputs(indicators map[string]float64) {
+	scratch := make(map[string]float64, len(indicators))
+	for k, v := range indicators {
+		scratch[k] = v
+	}
+	workflow4FireCascade(scratch)
+	for k, v := range scratch {
+		if _, ok := indicators[k]; !ok {
+			indicators[k] = v
+		}
+	}
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

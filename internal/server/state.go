@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/kartoza/decision-theatre/internal/api"
 	"github.com/kartoza/decision-theatre/internal/geodata"
 	"github.com/kartoza/decision-theatre/internal/sites"
 	"github.com/kartoza/decision-theatre/internal/tiles"
@@ -222,6 +223,7 @@ func openDataStores(dataDir, resourcesDir string) *dataStores {
 		log.Printf("Warning: Sites store not available: %v", err)
 	} else {
 		next.sites = siteStore
+		api.MigratePropEarlyDefault(siteStore)
 	}
 
 	return next
