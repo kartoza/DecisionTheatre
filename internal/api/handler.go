@@ -1907,15 +1907,29 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
-	// Recompute fire-cascade derived values (fuelload, intensity, percBurned, …)
-	// from the aggregated inputs so all three scenarios are internally consistent.
-	// These are derived quantities; the raw inputs (NPP, litter, DMI, lowTC_prop)
-	// are the ground truth and must remain as aggregated from the GeoPackage.
-	workflow4FireCascade(indicators.Reference)
-	workflow4FireCascade(indicators.Ideal)
-	if len(indicators.Current) > 0 {
-		workflow4FireCascade(indicators.Current)
-	}
+	// propEarly (proportion of early-season fires) always overrides whatever
+	// the aggregation above computed, rather than only filling it in when
+	// absent — see defaultPropEarly's comment for why.
+	indicators.Reference[colPropEarly] = defaultPropEarly
+	indicators.Current[colPropEarly] = defaultPropEarly
+	indicators.Ideal[colPropEarly] = defaultPropEarly
+
+	// Fire-cascade outputs (fuelload, intensity, percBurned, …) only get
+	// rederived here for keys the aggregation above left entirely unfilled —
+	// i.e. a datapack that carries the raw fire inputs but not the derived
+	// columns. When a catchment's own precomputed output already exists it is
+	// left untouched: the cascade is nonlinear, so applying it to the
+	// aggregated inputs does not reproduce the average of each catchment's
+	// own output, and overwriting unconditionally made Current disagree with
+	// the dial's current-value display (which averages catchment outputs
+	// directly) and broke "Reset to Current" for these keys. Ideal starts as
+	// an exact copy of Current, so the same unconditional overwrite would
+	// just as easily pull Ideal away from Current right at creation, before
+	// any edit — which is why this only fills gaps rather than recomputing
+	// everything.
+	fillMissingCascadeOutputs(indicators.Reference)
+	fillMissingCascadeOutputs(indicators.Ideal)
+	fillMissingCascadeOutputs(indicators.Current)
 
 	return indicators
 }
