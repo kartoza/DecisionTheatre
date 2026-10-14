@@ -1189,20 +1189,47 @@ function App() {
     // rollback in catch below, restoring exactly what was current before
     // this call so a dropped request degrades to "nothing happened" rather
     // than "the edited factor changed but nothing it feeds into did".
-    const previousSite = currentSite;
+    const previousSite = currentSiteRef.current;
 
-    setCurrentSite((prev) => {
-      if (!prev || prev.id !== currentSiteId) return prev;
-      return { ...prev, indicators };
-    });
+    const optimisticSite = previousSite && previousSite.id === currentSiteId
+      ? { ...previousSite, indicators }
+      : previousSite;
+    currentSiteRef.current = optimisticSite;
+    setCurrentSite(optimisticSite);
 
     try {
-      const updatedSite = await patchSiteIndicators(currentSiteId, indicators, currentSite ?? undefined);
+      // previousSite — captured above, before the optimistic mutation —
+      // not currentSiteRef.current: the backend diffs the submitted `ideal`
+      // against this `site`'s own indicators.ideal to work out what actually
+      // changed (handleUpdateIndicators's req.Runtime == "browser" branch,
+      // the only baseline it has for a walkthrough/browser-runtime site,
+      // which has no server-side copy to fall back on). That baseline must
+      // be the state from *before* this edit. currentSiteRef.current was
+      // just reassigned to the optimistic post-edit site two lines up —
+      // sending that instead would hand the backend indicators.ideal already
+      // equal to the submitted `ideal`, so nothing looks changed and no
+      // cascade runs at all, however real the edit is.
+      //
+      // previousSite itself still has to be fresh, which is what
+      // currentSiteRef is for: a live-update drag chains requests
+      // back-to-back the instant each one resolves (see the scheduler in
+      // liveTargetUpdate.ts) — faster than React commits the setCurrentSite
+      // from the *previous* call and hands this callback a fresh closure —
+      // so reading a `currentSite` closure instead of the ref here would
+      // make previousSite itself stale by one response, and every field
+      // that earlier edit had already cascaded (prop_X*Mgha, NPP, …) would
+      // then look like a brand-new direct edit relative to it, which flips
+      // a plain meanTC drag into a bogus prop-class edit server-side and
+      // snaps the result back toward the original value instead of where
+      // the slider was released.
+      const updatedSite = await patchSiteIndicators(currentSiteId, indicators, previousSite ?? undefined);
       // The backend has no concept of `source` — it's a frontend-only marker
       // for read-only demo/walkthrough sites — so it never comes back in the
       // response. Carry it forward or a walkthrough site would look like a
       // normal (persistable) one after its first successful edit.
-      setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
+      const nextSite = { ...updatedSite, source: currentSiteRef.current?.source ?? updatedSite.source };
+      currentSiteRef.current = nextSite;
+      setCurrentSite(nextSite);
       setMapRefreshSeq(s => s + 1);
 
       const warnings = updatedSite.indicators?.warnings ?? [];
@@ -1210,13 +1237,13 @@ function App() {
       return updatedSite.indicators;
     } catch (err) {
       console.error('Failed to update site indicators:', err);
-      setCurrentSite((prev) => {
-        if (!prev || prev.id !== currentSiteId || !previousSite) return prev;
-        return { ...prev, indicators: previousSite.indicators };
-      });
+      if (previousSite && previousSite.id === currentSiteId) {
+        currentSiteRef.current = previousSite;
+        setCurrentSite(previousSite);
+      }
       throw err;
     }
-  }, [currentSiteId, currentSite, toast]);
+  }, [currentSiteId, toast]);
 
   /**
    * Point every target at an observed scenario.
@@ -1228,10 +1255,14 @@ function App() {
    */
   const handleResetTargets = useCallback(async (scenario: 'reference' | 'current') => {
     if (!currentSiteId) return;
-    const updatedSite = await resetSiteIdeal(currentSiteId, scenario, currentSite ?? undefined);
-    setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
+    // currentSiteRef.current, not a `currentSite` closure — see
+    // handleSiteIndicatorsChange's comment on the same substitution.
+    const updatedSite = await resetSiteIdeal(currentSiteId, scenario, currentSiteRef.current ?? undefined);
+    const nextSite = { ...updatedSite, source: currentSiteRef.current?.source ?? updatedSite.source };
+    currentSiteRef.current = nextSite;
+    setCurrentSite(nextSite);
     setMapRefreshSeq((seq) => seq + 1);
-  }, [currentSiteId, currentSite]);
+  }, [currentSiteId]);
 
   // The control panel is the same slide-out in every layout now, so there is no
   // longer a grid-only modal variant to exclude.
