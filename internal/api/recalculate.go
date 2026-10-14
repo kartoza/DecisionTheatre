@@ -20,15 +20,29 @@ const (
 	colHerbsSpKgkm2Prefix  = "herbs_sp_kgkm2_"
 
 	// defaultPropEarly is the R Fire Modelling workflow's assumed early/late
-	// fire-season split (0_6_FireModelling.R:60: "he shows that 45% of the
-	// burned area is in the EDS on average ... for now stick with 45%").
-	// computeAreaWeightedIndicators forces every scenario to this value
-	// unconditionally rather than using the GeoPackage's real per-catchment
-	// propEarly: that column is a 0/1 flag, and area-weighting it into an
-	// odd-precision fraction (e.g. 0.28571428...) was producing a non-linear,
-	// jumpy percBurned as the target slider moved — a fixed, exactly
-	// round-tripping value does not.
+	// fire-season split for the Current scenario (0_6_FireModelling.R:60:
+	// "he shows that 45% of the burned area is in the EDS on average ... for
+	// now stick with 45%"). computeAreaWeightedIndicators forces Current (and
+	// Ideal, via its copy of Current) to this value unconditionally rather
+	// than using the GeoPackage's real per-catchment propEarly: that column
+	// is a 0/1 flag, and area-weighting it into an odd-precision fraction
+	// (e.g. 0.28571428...) was producing a non-linear, jumpy percBurned as
+	// the target slider moved — a fixed, exactly round-tripping value does
+	// not.
 	defaultPropEarly = 0.45
+
+	// referencePropEarly is the Reference scenario's own fixed assumption
+	// (0_6_FireModelling.R:61: "assume there were hardly any early season
+	// fires if people aren't lighting them" — a natural/pristine landscape
+	// has none of the human-caused early-season ignitions Current's 0.45
+	// bakes in). The GeoPackage's scenario_reference.propEarly is already
+	// uniformly 0 for every catchment, so this just makes
+	// computeAreaWeightedIndicators's override agree with that instead of
+	// overwriting it with Current's 0.45 — which otherwise made a target
+	// reset to reference land on 0.45 at the site level while every
+	// catchment's own reset-to-reference landed on 0, the exact same kind
+	// of non-linear percBurned jump defaultPropEarly exists to avoid.
+	referencePropEarly = 0.0
 
 	// colGrassBiomass is NPP_gm2.1 (§1 step 3, Aug2026 workflow): grass NPP
 	// net of what grazers consume.
