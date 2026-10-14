@@ -1963,27 +1963,53 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		// Store the weighted values; only write Current when at least one catchment
 		// had current data for this key — otherwise curSum stays 0 which is misleading
 		// (e.g. a column that only exists in reference would appear as current=0).
-		// Ideal starts as a copy of Current (falling back to Reference for keys with
-		// no current data) since the target state is user-editable from that baseline.
+		// Ideal is built below, once Current is finalised — see the comment there
+		// for why it can't just be derived in lock-step with Current right here.
 		if refArea > 0 {
 			indicators.Reference[key] = refSum / refArea
 		}
 		if hadCur && curArea > 0 {
 			indicators.Current[key] = curSum / curArea
-			indicators.Ideal[key] = curSum / curArea
-		} else {
-			indicators.Ideal[key] = indicators.Reference[key]
 		}
 	}
 
-	// Recompute fire-cascade derived values (fuelload, intensity, percBurned, …)
-	// from the aggregated inputs so all three scenarios are internally consistent.
-	// These are derived quantities; the raw inputs (NPP, litter, DMI, lowTC_prop)
-	// are the ground truth and must remain as aggregated from the GeoPackage.
-	workflow4FireCascade(indicators.Reference)
-	workflow4FireCascade(indicators.Ideal)
-	if len(indicators.Current) > 0 {
-		workflow4FireCascade(indicators.Current)
+	// propEarly (proportion of early-season fires) always overrides whatever
+	// the aggregation above computed, rather than only filling it in when
+	// absent — see defaultPropEarly's and referencePropEarly's comments for
+	// why, and why the two scenarios get different fixed values.
+	indicators.Reference[colPropEarly] = referencePropEarly
+	indicators.Current[colPropEarly] = defaultPropEarly
+
+	// Fire-cascade outputs (fuelload, intensity, percBurned, …) only get
+	// rederived here for keys the aggregation above left entirely unfilled —
+	// i.e. a datapack that carries the raw fire inputs but not the derived
+	// columns. When a catchment's own precomputed output already exists it is
+	// left untouched: the cascade is nonlinear, so applying it to the
+	// aggregated inputs does not reproduce the average of each catchment's
+	// own output, and overwriting unconditionally made Current disagree with
+	// the dial's current-value display (which averages catchment outputs
+	// directly) and broke "Reset to Current" for these keys.
+	fillMissingCascadeOutputs(indicators.Reference)
+	fillMissingCascadeOutputs(indicators.Current)
+
+	// Ideal starts as an exact copy of Current, built only now that Current's
+	// own gaps have just been backfilled above — building it earlier, inside
+	// the aggregation loop, let a cascade-output key that no catchment had
+	// under "current" (e.g. percBurned or CH4_both_kg_km2 is NULL for the
+	// scenario_current row of a catchment in this site, though present under
+	// "reference") fall back to Reference's value for Ideal, while Current
+	// went on to backfill its own, differently-derived value for that same
+	// key a few lines down — so on a brand new site, before any edit, Current
+	// and Ideal disagreed on exactly these fire-cascade outputs. Falls back
+	// to Reference only for keys Current has no value for even after
+	// backfill (e.g. a genuinely reference-only raw field).
+	for k, v := range indicators.Current {
+		indicators.Ideal[k] = v
+	}
+	for k, v := range indicators.Reference {
+		if _, ok := indicators.Ideal[k]; !ok {
+			indicators.Ideal[k] = v
+		}
 	}
 
 	return indicators

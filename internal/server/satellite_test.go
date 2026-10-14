@@ -211,6 +211,38 @@ func TestSatelliteTileUnknownSourceIs404(t *testing.T) {
 	}
 }
 
+// tileUpstream and tileJSONUpstream are in-memory, process-lifetime maps.
+// A server restart wipes them, but a MapLibre source that already resolved
+// its tile template before the restart never re-fetches
+// /api/satellite-style.json or /api/satellite-tilejson/{source} — it already
+// has the template cached client-side — so it would otherwise go straight
+// for a tile with neither map ever having heard of the source in this
+// (fresh) process. This hits the tile route directly, with no preceding
+// style or TileJSON request at all, for both an inline-tiles source
+// (satellite) and a TileJSON-indirected one (roads), and must still succeed
+// by re-deriving the upstream on demand rather than 404ing.
+func TestSatelliteTileSelfHealsWithNoPriorStyleOrTileJSONRequest(t *testing.T) {
+	upstream := newFakeMapTilerUpstream(t)
+	srv := newSatelliteServer(t, upstream.URL+"/style.json", 1_000_000)
+
+	rasterRec := getSatellite(t, srv, "/api/satellite-tile/satellite/5/2/3")
+	if rasterRec.Code != http.StatusOK || rasterRec.Body.String() != "raster tile bytes" {
+		t.Fatalf("raster tile: status %d, body %q", rasterRec.Code, rasterRec.Body.String())
+	}
+
+	vectorRec := getSatellite(t, srv, "/api/satellite-tile/roads/5/2/3")
+	if vectorRec.Code != http.StatusOK || vectorRec.Body.String() != "vector tile bytes" {
+		t.Fatalf("vector tile: status %d, body %q", vectorRec.Code, vectorRec.Body.String())
+	}
+
+	// A genuinely unknown source must still 404 even after the self-heal
+	// path has run (and therefore fetched the style) for the requests above.
+	rec := getSatellite(t, srv, "/api/satellite-tile/nonexistent/1/2/3")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for a source the style never named", rec.Code)
+	}
+}
+
 // Resolving both sources — the raster one via the style, the vector one via
 // its TileJSON — then fetching tiles from each must count against one shared
 // quota, cache independently, and pass through each source's own content type

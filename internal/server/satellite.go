@@ -89,10 +89,17 @@ type satelliteTileProxy struct {
 	style styleCache
 
 	// Populated as the style, and each source's TileJSON, are resolved — see
-	// buildStyle and handleSatelliteTileJSON. A tile request for a source not
-	// yet resolved this way 404s; in practice MapLibre always fetches a
-	// source's style entry (and its TileJSON, if it has one) before ever
-	// requesting a tile from it.
+	// buildStyle and handleSatelliteTileJSON. In practice MapLibre always
+	// fetches a source's style entry (and its TileJSON, if it has one)
+	// before ever requesting a tile from it — except that these two maps are
+	// in-memory and process-lifetime: a server restart wipes them, but a
+	// MapLibre source that already resolved its tile template before the
+	// restart never re-fetches the style or TileJSON to re-learn it, so
+	// every one of its tile requests would otherwise 404 with "Unknown
+	// satellite source" until the page or window is reloaded. serve()'s
+	// resolveTileUpstream fallback re-derives a missing entry on demand
+	// instead of 404ing outright, so a cache miss here self-heals rather
+	// than wedging every map that resolved the source before the restart.
 	tileUpstream     sync.Map // source id -> upstream {z}/{x}/{y} template
 	tileJSONUpstream sync.Map // source id -> upstream TileJSON URL
 	tileJSONCache    sync.Map // source id -> rewritten TileJSON bytes
@@ -262,22 +269,11 @@ func (s *Server) handleSatelliteTileJSON(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	data, _, err := fetchUpstream(r.Context(), p.client, upstreamRaw.(string), satelliteMaxStyleBytes)
+	tileJSON, err := p.fetchSourceTileJSON(r.Context(), source, upstreamRaw.(string))
 	if err != nil {
 		log.Printf("Satellite tilejson proxy: upstream fetch failed for %s: %v", source, err)
 		http.Error(w, "Satellite tilejson unavailable", http.StatusBadGateway)
 		return
-	}
-
-	var tileJSON map[string]interface{}
-	if err := json.Unmarshal(data, &tileJSON); err != nil {
-		http.Error(w, "Satellite tilejson unavailable", http.StatusBadGateway)
-		return
-	}
-	if tiles, ok := tileJSON["tiles"].([]interface{}); ok && len(tiles) > 0 {
-		if tmpl, ok := tiles[0].(string); ok {
-			p.tileUpstream.Store(source, tmpl)
-		}
 	}
 	// Absolute, not relative — see buildStyle's doc comment: MapLibre fetches
 	// vector tiles from a Worker, where a relative URL cannot be resolved.
@@ -290,6 +286,77 @@ func (s *Server) handleSatelliteTileJSON(w http.ResponseWriter, r *http.Request)
 	}
 	p.tileJSONCache.Store(source, out)
 	writeSatelliteJSON(w, out)
+}
+
+// fetchSourceTileJSON fetches and parses source's upstream TileJSON,
+// recording its tile template in tileUpstream as a side effect — every
+// caller needs that store done, so doing it here means a new call site can
+// never forget it. Returns the parsed document too, since
+// handleSatelliteTileJSON needs it to build the rewritten response.
+func (p *satelliteTileProxy) fetchSourceTileJSON(ctx context.Context, source, upstreamURL string) (map[string]interface{}, error) {
+	data, _, err := fetchUpstream(ctx, p.client, upstreamURL, satelliteMaxStyleBytes)
+	if err != nil {
+		return nil, err
+	}
+	var tileJSON map[string]interface{}
+	if err := json.Unmarshal(data, &tileJSON); err != nil {
+		return nil, err
+	}
+	tiles, ok := tileJSON["tiles"].([]interface{})
+	if !ok || len(tiles) == 0 {
+		return nil, fmt.Errorf("satellite tilejson for %q has no tiles", source)
+	}
+	tmpl, ok := tiles[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("satellite tilejson for %q has a non-string tile template", source)
+	}
+	p.tileUpstream.Store(source, tmpl)
+	return tileJSON, nil
+}
+
+// resolveTileUpstream re-learns source's tile URL template when tileUpstream
+// has no entry for it — see that field's comment for why this happens
+// (a server restart) and why MapLibre's normal fetch order cannot prevent
+// it once it has. Tries the cheap path first — tileJSONUpstream already
+// known from some other request this process — before falling all the way
+// back to re-fetching the upstream style itself.
+func (p *satelliteTileProxy) resolveTileUpstream(ctx context.Context, base, source string) (string, error) {
+	tryTileJSON := func() (tmpl string, tried bool, err error) {
+		upstreamRaw, ok := p.tileJSONUpstream.Load(source)
+		if !ok {
+			return "", false, nil
+		}
+		if _, err := p.fetchSourceTileJSON(ctx, source, upstreamRaw.(string)); err != nil {
+			return "", true, err
+		}
+		tmplRaw, ok := p.tileUpstream.Load(source)
+		if !ok {
+			return "", true, fmt.Errorf("satellite tilejson for %q has no tiles", source)
+		}
+		return tmplRaw.(string), true, nil
+	}
+
+	if tmpl, tried, err := tryTileJSON(); tried {
+		return tmpl, err
+	}
+
+	// tileJSONUpstream has never heard of this source either: the style
+	// itself needs (re-)fetching. style.get() is a no-op if some other
+	// request already did this — its build() only runs on a cache miss.
+	if _, err := p.style.get(func() ([]byte, error) { return p.buildStyle(base) }); err != nil {
+		return "", err
+	}
+	// An inline-tiles source (e.g. the raster "satellite" source itself) is
+	// fully resolved by buildStyle alone — it stores straight into
+	// tileUpstream and never touches tileJSONUpstream, so tryTileJSON alone
+	// would never find it even now.
+	if tmplRaw, ok := p.tileUpstream.Load(source); ok {
+		return tmplRaw.(string), nil
+	}
+	if tmpl, tried, err := tryTileJSON(); tried {
+		return tmpl, err
+	}
+	return "", fmt.Errorf("unknown satellite source %q", source)
 }
 
 // writeSatelliteJSON writes a JSON response (the style or a TileJSON
@@ -322,19 +389,24 @@ func (s *Server) handleSatelliteTile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.satellite.serve(r.Context(), w, source, z, x, y)
+	s.satellite.serve(r.Context(), w, baseURL(r), source, z, x, y)
 }
 
-func (p *satelliteTileProxy) serve(ctx context.Context, w http.ResponseWriter, source string, z, x, y int) {
+func (p *satelliteTileProxy) serve(ctx context.Context, w http.ResponseWriter, base, source string, z, x, y int) {
 	upstreamRaw, ok := p.tileUpstream.Load(source)
-	if !ok {
-		// The style or TileJSON that names this source has not been resolved
-		// yet — or never will be, if the id is bogus. Either way there is no
-		// upstream to fetch from.
-		http.Error(w, "Unknown satellite source", http.StatusNotFound)
-		return
+	var template string
+	if ok {
+		template = upstreamRaw.(string)
+	} else {
+		var err error
+		template, err = p.resolveTileUpstream(ctx, base, source)
+		if err != nil {
+			// Either the id is genuinely bogus, or re-resolving it failed —
+			// either way there is no upstream to fetch from.
+			http.Error(w, "Unknown satellite source", http.StatusNotFound)
+			return
+		}
 	}
-	template := upstreamRaw.(string)
 
 	key := source + "/" + strconv.Itoa(z) + "/" + strconv.Itoa(x) + "/" + strconv.Itoa(y)
 
