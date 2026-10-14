@@ -34,7 +34,8 @@
     "shpjs": "^6.2.0"
   },
   "overrides": {
-    "maplibre-gl": "^6.4.1"
+    "maplibre-gl": "^6.4.1",
+    "probe-image-size": "^7.4.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
