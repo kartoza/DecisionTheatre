@@ -60,33 +60,44 @@ func MigratePropEarlyDefault(store *sites.Store) {
 	}
 
 	if migrated > 0 {
-		log.Printf("propEarly migration: patched %d of %d site(s) to the %.2f default", migrated, len(siteList), defaultPropEarly)
+		log.Printf("propEarly migration: patched %d of %d site(s) (current/ideal to %.2f, reference to %.2f)", migrated, len(siteList), defaultPropEarly, referencePropEarly)
 	}
 }
 
-// patchPropEarlyDefault overrides propEarly to defaultPropEarly in each of a
+// patchPropEarlyDefault overrides propEarly to its fixed value in each of a
 // site's Reference/Current/Ideal maps and recomputes the fire-cascade outputs
 // that depend on it, leaving every other field (including the user's own
 // target edits) untouched. Reports whether anything changed.
+//
+// Reference gets referencePropEarly (0), not defaultPropEarly (0.45):
+// Reference's own fire assumptions have no early-season component (see
+// referencePropEarly's comment), and setting it to Current's 0.45 here is
+// exactly the site-vs-catchment-level propEarly mismatch this whole fix
+// exists to avoid — a target reset to reference would land on 0.45 at the
+// site level while every catchment's own (untouched by this migration)
+// Reference propEarly is already 0.
 func patchPropEarlyDefault(site *sites.Site) bool {
 	if site.Indicators == nil {
 		return false
 	}
 
 	changed := false
-	for _, scenario := range []map[string]float64{
-		site.Indicators.Reference,
-		site.Indicators.Current,
-		site.Indicators.Ideal,
+	for _, scenario := range []struct {
+		m    map[string]float64
+		want float64
+	}{
+		{site.Indicators.Reference, referencePropEarly},
+		{site.Indicators.Current, defaultPropEarly},
+		{site.Indicators.Ideal, defaultPropEarly},
 	} {
-		if scenario == nil {
+		if scenario.m == nil {
 			continue
 		}
-		if v, ok := scenario[colPropEarly]; ok && v == defaultPropEarly {
+		if v, ok := scenario.m[colPropEarly]; ok && v == scenario.want {
 			continue
 		}
-		scenario[colPropEarly] = defaultPropEarly
-		workflow4FireCascade(scenario)
+		scenario.m[colPropEarly] = scenario.want
+		workflow4FireCascade(scenario.m)
 		changed = true
 	}
 	return changed
