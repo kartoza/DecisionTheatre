@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export const colors = {
   orange: '#f29630',
   orangeHover: '#f6b07c',

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Box, Button, Flex, Heading, Text, VStack, Icon } from '@chakra-ui/react';
 import { FiClock, FiHome } from 'react-icons/fi';
 import type { AppPage } from '../types';

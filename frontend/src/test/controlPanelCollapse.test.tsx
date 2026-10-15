@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Reported: the indicator panel should have a collapse chevron too.
  * It used to be hidden specifically in single-pane layout ("no per-pane

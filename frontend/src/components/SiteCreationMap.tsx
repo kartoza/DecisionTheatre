@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   Box,
   Button,
@@ -32,6 +35,13 @@ import {
   satelliteUnavailable,
   subscribeSatelliteUnavailable,
 } from '../lib/satelliteBasemap';
+import {
+  CATCHMENT_TILE_ID_PROPERTY,
+  CATCHMENT_TILE_SOURCE_LAYER,
+  catchmentBandSourceSpec,
+  catchmentTileSourceSpec,
+  fetchCatchmentTileset,
+} from '../lib/choroplethTiles';
 
 const MAX_SEARCH_RESULTS = 8;
 const SEARCH_FLY_ZOOM = 10;
@@ -74,6 +84,8 @@ interface SiteCreationMapProps {
   boundingBox?: BoundingBox | null;
   onGeometryComplete: (geometry: GeoJSON.Geometry, catchmentIds?: string[], thumbnail?: string) => void;
   onCancel: () => void;
+  /** Reports the current live instructions text up, for the page header to render as plain text. */
+  onInstructionsChange?: (text: string) => void;
 }
 
 // The satellite basemap here is merged into the existing map's style rather
@@ -199,6 +211,100 @@ const SELECTED_CATCHMENT_LINE_PAINT = {
   'line-opacity': 0.8,
 };
 
+// catchments-lev12-full carries the same lev12 catchment geometry as the
+// detail tileset, tiled a second time at one lower single zoom (see
+// datasources/mbtiles-config/layer-treatment.csv's catchments_lev12_full
+// row — identical simplification settings to catchments_lev12, just a
+// different tilezoom). Reported: catchments needed to already be visibly on
+// screen, much more zoomed out than the detail band's own tilezoom (11 on a
+// default datapack), before one could be picked by clicking. This tileset
+// is already built and already served today via the generic
+// /tiles/{name}/{z}/{x}/{y}.pbf route (see server.go's handleTileRequest) —
+// no new endpoint, no rebuild. A datapack built before this row existed
+// simply lacks the tileset; every tile request then 404s, which MapLibre
+// treats exactly like "nothing there yet", the same blank result as today.
+const CATCHMENTS_WIDE_TILESET_NAME = 'catchments-lev12-full';
+const CATCHMENTS_WIDE_TILEZOOM = 9;
+
+interface CatchmentLayerIds {
+  fill: string;
+  outline: string;
+  selectable: string;
+}
+
+// Adds (if not already present) one catchment fill/outline/click-layer
+// triple bound to a given source. Used for both the detail band and, only
+// when there's an actual zoom gap below it, the wide (z9) band above.
+// `maxzoom` is the *style* property (not the source's): the wide band stops
+// rendering exactly where the detail band's own minzoom begins, so the two
+// never draw the same catchment at once.
+function addCatchmentLayerTriple(
+  map: maplibregl.Map,
+  ids: CatchmentLayerIds,
+  sourceId: string,
+  sourceLayer: string,
+  minzoom: number,
+  maxzoom: number | undefined,
+  isGoogleBasemap: boolean,
+  hiddenLayersRef: { current: string[] },
+) {
+  const zoomProps = maxzoom !== undefined ? { minzoom, maxzoom } : { minzoom };
+
+  if (!map.getLayer(ids.fill)) {
+    map.addLayer({
+      id: ids.fill,
+      type: 'fill',
+      source: sourceId,
+      'source-layer': sourceLayer,
+      ...zoomProps,
+      paint: {
+        'fill-color': 'rgba(60, 140, 180, 0.1)',
+        'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
+      },
+    });
+    // Match the one-shot satellite-basemap hide pass in the map-init
+    // effect, which already ran by the time this (async) layer exists.
+    if (isGoogleBasemap) {
+      map.setLayoutProperty(ids.fill, 'visibility', 'none');
+      hiddenLayersRef.current = [...hiddenLayersRef.current, ids.fill];
+    }
+  }
+  if (!map.getLayer(ids.outline)) {
+    map.addLayer({
+      id: ids.outline,
+      type: 'line',
+      source: sourceId,
+      'source-layer': sourceLayer,
+      ...zoomProps,
+      // Same white, same weight as the debug overlay's own catchment
+      // outlines (CHOROPLETH_DEBUG_OUTLINE_COLOR/_WIDTH in MapView.tsx) —
+      // one visual language for "here is a real catchment boundary", not a
+      // second, dimmer one invented for this page alone.
+      paint: {
+        'line-color': 'rgba(255, 255, 255, 0.9)',
+        'line-width': 1,
+      },
+    });
+  }
+  // Transparent fill purely for click detection (queryRenderedFeatures
+  // needs a layer to query against; a line layer alone has no hit area
+  // across a polygon's interior).
+  if (!map.getLayer(ids.selectable)) {
+    const beforeLayer = map.getLayer(ids.outline) ? ids.outline : undefined;
+    map.addLayer({
+      id: ids.selectable,
+      type: 'fill',
+      source: sourceId,
+      'source-layer': sourceLayer,
+      ...zoomProps,
+      paint: {
+        'fill-color': 'transparent',
+        'fill-opacity': 0,
+      },
+    }, beforeLayer);
+  }
+}
+
 // The site boundary must always render above catchment/basemap layers, no
 // matter what gets added to the map afterwards (e.g. toggling satellite view).
 function moveSiteGeometryToTop(map: maplibregl.Map) {
@@ -213,6 +319,7 @@ function SiteCreationMap({
   initialExtent,
   boundingBox,
   onGeometryComplete,
+  onInstructionsChange,
 }: SiteCreationMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -424,66 +531,29 @@ function SiteCreationMap({
       mapRef.current = map;
       setIsMapReady(true);
 
-      // The shared basemap style doesn't include catchment boundary layers,
-      // so add them here — otherwise catchments are invisible under the
-      // ecoregion/country fills with nothing to select against.
-      if (!map.getLayer('Catchments Fill')) {
-        map.addLayer({
-          id: 'Catchments Fill',
-          type: 'fill',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'fill-color': 'rgba(60, 140, 180, 0.1)',
-            'fill-outline-color': 'rgba(60, 140, 180, 0.3)',
-          },
-        });
-      }
-      if (!map.getLayer('Catchments Outlines')) {
-        map.addLayer({
-          id: 'Catchments Outlines',
-          type: 'line',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'line-color': 'rgba(60, 140, 180, 0.6)',
-            'line-width': 2.5,
-          },
-        });
-      }
-
-      // Add a transparent fill layer for catchment selection (clickable area)
-      // This must be added after the base style loads
-      if (!map.getLayer('catchments-selectable-fill')) {
-        // Check if the Catchments Outlines layer exists in the style
-        const beforeLayer = map.getLayer('Catchments Outlines') ? 'Catchments Outlines' : undefined;
-        map.addLayer({
-          id: 'catchments-selectable-fill',
-          type: 'fill',
-          source: 'UoW Tiles',
-          'source-layer': 'catchments_lev12',
-          minzoom: 8,
-          paint: {
-            'fill-color': 'transparent',
-            'fill-opacity': 0,
-          },
-        }, beforeLayer); // Insert below the outlines if layer exists
-      }
+      // Catchment boundary/selection layers are added separately (see the
+      // addCatchmentSelectionLayers effect below) — they need the real
+      // catchment tileset resolved first, which 'UoW Tiles' (the shared
+      // basemap source) does not carry: catchments ship as their own
+      // tileset, split out so MapLibre can overzoom them independently
+      // (see choroplethTiles.ts). A layer bound to 'UoW Tiles' with
+      // source-layer catchments_lev12 would reference a source-layer the
+      // combined tileset's tiles simply do not have, and render nothing —
+      // which is what made catchment selection here silently unclickable.
 
       // Default to satellite in browser runtime — inject it beneath all vector layers
       if (getAppRuntime() === 'browser') {
         const firstLayerId = map.getStyle()?.layers?.[0]?.id;
 
         // Hide fill/background layers so satellite shows through at all zoom levels.
-        // Skip catchments-selectable-fill: it's already invisible (opacity 0) and
-        // exists purely so click handlers can query it — hiding it would make
-        // maplibre exclude it from queryRenderedFeatures, silently breaking
-        // catchment selection while the (line-type) outlines stay visible.
+        // Skip the catchments-selectable-fill layers: both are already invisible
+        // (opacity 0) and exist purely so click handlers can query them — hiding
+        // either would make maplibre exclude it from queryRenderedFeatures,
+        // silently breaking catchment selection while the (line-type) outlines
+        // stay visible.
         const hidden: string[] = [];
         for (const layer of map.getStyle()?.layers ?? []) {
-          if (layer.id === 'catchments-selectable-fill') continue;
+          if (layer.id === 'catchments-selectable-fill' || layer.id === 'catchments-selectable-fill-wide') continue;
           if (layer.type === 'fill' || layer.type === 'background') {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
             hidden.push(layer.id);
@@ -529,6 +599,93 @@ function SiteCreationMap({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; see the tracking issue
   }, [initialGeometry, boundingBox, initialExtent]);
 
+  // Add the catchment boundary/selection layers once the map is ready and
+  // the real catchment tileset has resolved. Split out from the big map-init
+  // effect above because tileset resolution is async (fetchCatchmentTileset
+  // hits the network, or — the common case once anything else on the page
+  // has already asked — resolves from its module-level cache on the next
+  // microtask) and the rest of that effect's sequencing (satellite basemap,
+  // initial geometry fit) does not need to wait on it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady) return;
+    if (map.getLayer('catchments-selectable-fill')) return; // already added
+
+    let cancelled = false;
+    void fetchCatchmentTileset().then((tileset) => {
+      if (cancelled || !mapRef.current || mapRef.current !== map) return;
+
+      // The detail (finest) band is always last once bands are sorted by
+      // minzoom — see bandForZoom in choroplethTiles.ts. Falls back to the
+      // legacy combined-tileset source when no separate catchments tileset
+      // exists at all (a datapack from before catchments were split out),
+      // in which case source-layer catchments_lev12 on 'UoW Tiles' really
+      // is correct, exactly as this code originally assumed.
+      const detailBand = tileset?.bands[tileset.bands.length - 1] ?? null;
+      const sourceSpec = detailBand && tileset
+        ? (catchmentBandSourceSpec(detailBand) ?? catchmentTileSourceSpec(tileset))
+        : null;
+      const sourceId = sourceSpec ? 'site-catchments' : 'UoW Tiles';
+      const sourceLayer = detailBand?.sourceLayer ?? 'catchments_lev12';
+      // The source itself only ever carries tiles from its own tilezoom up
+      // (minzoom=maxzoom=tilezoom on a split-tileset band, overzoomed from
+      // there — see catchmentBandSourceSpec). A layer minzoom lower than
+      // that asks MapLibre to render a band with nothing to show yet: not
+      // an error, just silently blank, which is why catchments stopped
+      // appearing between the old hardcoded 8 and wherever the real detail
+      // band actually starts (11 on a default datapack, 9 under --legacy).
+      const layerMinzoom = detailBand?.minzoom ?? 8;
+
+      if (sourceSpec && !map.getSource('site-catchments')) {
+        map.addSource('site-catchments', sourceSpec);
+      }
+
+      addCatchmentLayerTriple(
+        map,
+        { fill: 'Catchments Fill', outline: 'Catchments Outlines', selectable: 'catchments-selectable-fill' },
+        sourceId,
+        sourceLayer,
+        layerMinzoom,
+        undefined,
+        isGoogleBasemapRef.current,
+        hiddenLayersRef,
+      );
+
+      // Bridge the gap below the detail band with the wide (z9) band — only
+      // when there is one: under --legacy the resolved detail band already
+      // *is* catchments-lev12-full (see the comment on layerMinzoom above),
+      // so this would just add a second, redundant copy of the same tiles.
+      if (layerMinzoom > CATCHMENTS_WIDE_TILEZOOM) {
+        const wideSourceId = 'site-catchments-wide';
+        if (!map.getSource(wideSourceId)) {
+          map.addSource(wideSourceId, {
+            type: 'vector',
+            tiles: [`${window.location.origin}/tiles/${CATCHMENTS_WIDE_TILESET_NAME}/{z}/{x}/{y}.pbf`],
+            minzoom: CATCHMENTS_WIDE_TILEZOOM,
+            maxzoom: CATCHMENTS_WIDE_TILEZOOM,
+            promoteId: { [CATCHMENT_TILE_SOURCE_LAYER]: CATCHMENT_TILE_ID_PROPERTY },
+          });
+        }
+        addCatchmentLayerTriple(
+          map,
+          {
+            fill: 'Catchments Fill Wide',
+            outline: 'Catchments Outlines Wide',
+            selectable: 'catchments-selectable-fill-wide',
+          },
+          wideSourceId,
+          CATCHMENT_TILE_SOURCE_LAYER,
+          CATCHMENTS_WIDE_TILEZOOM,
+          layerMinzoom,
+          isGoogleBasemapRef.current,
+          hiddenLayersRef,
+        );
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [isMapReady]);
+
   useEffect(() => {
     if (mode !== 'catchments') {
       setIsBoxSelectionMode(false);
@@ -567,13 +724,77 @@ function SiteCreationMap({
       // Catchment selection mode
       map.getCanvas().style.cursor = isBoxSelectionMode ? 'grab' : 'pointer';
 
-      const handleClick = (e: maplibregl.MapMouseEvent) => {
-        // Query features at click point from the transparent fill layer
-        const features = map.queryRenderedFeatures(e.point, {
-          layers: ['catchments-selectable-fill'],
-        });
+      const handleClick = async (e: maplibregl.MapMouseEvent) => {
+        // Query features at click point from whichever transparent
+        // click-detection layer is actually in the style right now --
+        // 'catchments-selectable-fill-wide' only exists when there was a
+        // zoom gap to bridge (see the wide-band block above), and
+        // queryRenderedFeatures throws for a layer id the style doesn't
+        // have, so this can't just list both unconditionally. Below both
+        // layers' own minzoom (z9 on a default datapack, same as the
+        // detail band's own z11/z9 before this fix) nothing is rendered
+        // yet either way. The server-side fallback below resolves the
+        // lev12 catchment under the clicked point directly (same endpoint
+        // identify-by-click already uses, see handleCatchmentAtPoint's
+        // "always reads lev12" golden rule), independent of what's
+        // rendered, so a click still works even in that remaining gap.
+        const queryLayers = ['catchments-selectable-fill', 'catchments-selectable-fill-wide']
+          .filter((id) => map.getLayer(id));
+        const features = queryLayers.length > 0
+          ? map.queryRenderedFeatures(e.point, { layers: queryLayers })
+          : [];
 
-        if (features.length > 0) {
+        if (features.length === 0) {
+          let catchmentId: string | null = null;
+          try {
+            const atPointResponse = await fetch(
+              `/api/catchments/at-point?lng=${e.lngLat.lng}&lat=${e.lngLat.lat}`,
+            );
+            if (atPointResponse.ok) {
+              const atPoint = await atPointResponse.json() as { id?: string };
+              catchmentId = atPoint.id || null;
+            }
+          } catch {
+            // No catchment at that point (ocean, gap, out of domain) or a
+            // network hiccup -- same as a click that hits nothing today.
+          }
+          if (!catchmentId) return;
+
+          let wasRemoved = false;
+          setSelectedCatchments(prev => {
+            if (!prev.has(catchmentId as string)) return prev;
+            const next = new Map(prev);
+            next.delete(catchmentId as string);
+            wasRemoved = true;
+            updateSelectedCatchmentsLayer(map, next);
+            return next;
+          });
+          if (wasRemoved) return;
+
+          const cachedFeature = catchmentGeometryCacheRef.current.get(catchmentId);
+          const resolvedFeature = cachedFeature ?? await (async () => {
+            try {
+              const geomResponse = await fetch(`/api/catchments/geometry/${catchmentId}`);
+              if (geomResponse.ok) return await geomResponse.json() as GeoJSON.Feature;
+            } catch {
+              // Fall through to null below -- nothing to select without geometry.
+            }
+            return null;
+          })();
+          if (!resolvedFeature) return;
+
+          catchmentGeometryCacheRef.current.set(catchmentId, resolvedFeature);
+          setSelectedCatchments(prev => {
+            if (prev.has(catchmentId as string)) return prev;
+            const next = new Map(prev);
+            next.set(catchmentId as string, resolvedFeature);
+            updateSelectedCatchmentsLayer(map, next);
+            return next;
+          });
+          return;
+        }
+
+        {
           const feature = features[0];
           const catchmentId = String(feature.properties?.HYBAS_ID || feature.id);
           const fallbackFeature = feature as unknown as GeoJSON.Feature;
@@ -1090,12 +1311,12 @@ function SiteCreationMap({
     if (next) {
       const firstLayerId = map.getStyle()?.layers?.[0]?.id;
 
-      // Skip catchments-selectable-fill (needed for click detection despite being
-      // invisible) and the site boundary's own fill, which must stay visible.
-      // The layers addHybridBasemapLayers is about to add are never fill or
-      // background type (see isHybridLayerWorthShowing), so there is nothing
-      // of theirs for this pass to need to skip.
-      const skipHiding = new Set(['catchments-selectable-fill', 'site-fill']);
+      // Skip both catchments-selectable-fill layers (needed for click detection
+      // despite being invisible) and the site boundary's own fill, which must
+      // stay visible. The layers addHybridBasemapLayers is about to add are
+      // never fill or background type (see isHybridLayerWorthShowing), so
+      // there is nothing of theirs for this pass to need to skip.
+      const skipHiding = new Set(['catchments-selectable-fill', 'catchments-selectable-fill-wide', 'site-fill']);
       const hidden: string[] = [];
       for (const layer of map.getStyle()?.layers ?? []) {
         if (skipHiding.has(layer.id)) continue;
@@ -1155,7 +1376,13 @@ function SiteCreationMap({
     });
   }, [applyGoogleBasemap]);
 
-  const getInstructions = () => {
+  // Reported: move this out of its own floating dark pill on the map and
+  // into the page header area, as plain text, where the big step title used
+  // to sit (see SiteCreationPage.tsx) -- so it's reported up rather than
+  // rendered here. instructions still has to live in this component: it's
+  // the only place that knows mode/drawnPoints/selectedCatchments/
+  // isBoxSelectionMode.
+  const instructions = useMemo(() => {
     switch (mode) {
       case 'drawn':
         return drawnPoints.length === 0
@@ -1172,7 +1399,11 @@ function SiteCreationMap({
       default:
         return 'Review your site boundary';
     }
-  };
+  }, [mode, drawnPoints.length, selectedCatchments.size, isBoxSelectionMode]);
+
+  useEffect(() => {
+    onInstructionsChange?.(instructions);
+  }, [instructions, onInstructionsChange]);
 
   return (
     <Box
@@ -1289,32 +1520,6 @@ function SiteCreationMap({
                 borderRadius="lg"
               />
             </Tooltip>
-          </MotionBox>
-        )}
-      </AnimatePresence>
-
-      {/* Instructions overlay */}
-      <AnimatePresence>
-        {isMapReady && (
-          <MotionBox
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            position="absolute"
-            top={4}
-            left="50%"
-            transform="translateX(-50%)"
-            bg="blackAlpha.800"
-            backdropFilter="blur(10px)"
-            px={6}
-            py={3}
-            borderRadius="full"
-            border="1px solid"
-            borderColor="whiteAlpha.200"
-          >
-            <Text color="white" fontWeight="medium" textAlign="center">
-              {getInstructions()}
-            </Text>
           </MotionBox>
         )}
       </AnimatePresence>

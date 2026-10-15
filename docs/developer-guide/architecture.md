@@ -112,18 +112,28 @@ diagnosing context loss.
   the map by one of two transports, chosen by zoom:
 
     - **Vector tiles**, from the tiled zoom range up (`catchments_lev12` in
-      `africa.mbtiles`, zoom 8-15 as generated). MapLibre fetches and tessellates each
+      `context.mbtiles`, zoom 8-15 as generated). MapLibre fetches and tessellates each
       tile once and reuses it for every later pan, zoom and attribute change. The
       attribute values are fetched separately from `/api/catchment-values` — geometry-free
       — and joined onto the tiles as **feature state**, so switching indicator moves
       values only and never geometry.
-    - **GeoJSON**, below the tiled zoom range, from `/api/choropleth`. There the server
-      returns grid-aggregated cells rather than catchments (see
-      `queryCatchmentsGridAggregated`), which have no tiled equivalent.
+    - **GeoJSON**, below the tiled zoom range, from `/api/choropleth`
+      (`QueryCatchments` in `internal/geodata/gpkg_store.go`). Below z11, if the
+      datapack has the multi-resolution catchment tables (`catchments_lev04/06/08` and
+      their `scenario_*_levNN` aggregates — see [Data Preparation → Multi-Resolution
+      Catchments](data-preparation.md#multi-resolution-catchments)), the server returns
+      the corresponding real HydroBASINS level's precomputed aggregates
+      (`basinLevelForZoom`: z2-5 → lev04, z6-8 → lev06, z9-10 → lev08). A datapack
+      without those tables — or, at z11+, a bbox whose matched catchment count exceeds
+      `maxDetailedFeatures` — falls back to grid-aggregated cells instead (see
+      `queryCatchmentsGridAggregated`): catchments dissolved into whichever
+      `gridTiersDegrees` cell size the render budget affords, an arbitrary square grid
+      rather than real basin boundaries.
 
-    The choice is made from the served TileJSON: if the tileset does not declare a
-    `catchments_lev12` layer *with* its zoom range, the GeoJSON path is used at every
-    zoom, exactly as before. A datapack built before catchments were tiled keeps working.
+    The tiled-vs-GeoJSON choice is made from the served TileJSON: if the tileset does not
+    declare a `catchments_lev12` layer *with* its zoom range, the GeoJSON path is used at
+    every zoom, exactly as before. A datapack built before catchments were tiled keeps
+    working.
 
 - **3D extrusion** (optional) — catchments extruded by indicator value.
 - **Site boundary and edit handles** — small GeoJSON sources holding the user's own polygon.

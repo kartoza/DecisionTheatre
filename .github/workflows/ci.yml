@@ -90,10 +90,15 @@ jobs:
 
       - name: Check for large files (>5MB)
         run: |
+          # data/walkthroughs/*.json are tracked, legitimate demo-tour
+          # recordings, not something to gitignore - they vary in size with
+          # how much the recorded walkthrough covers, and can reasonably
+          # cross 5MB.
           large_files=$(find . -type f -size +5M \
             -not -path './.git/*' \
             -not -path './node_modules/*' \
-            -not -path './.go/*' 2>/dev/null || true)
+            -not -path './.go/*' \
+            -not -path './data/walkthroughs/*' 2>/dev/null || true)
           if [ -n "$large_files" ]; then
             echo "::error::Large files found that should be gitignored:"
             echo "$large_files"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package tiles
 
 import (
@@ -5,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -60,6 +64,62 @@ func TestNewMBTilesStore(t *testing.T) {
 	}
 	if tilesets[0] != "test" {
 		t.Errorf("Expected tileset name 'test', got '%s'", tilesets[0])
+	}
+}
+
+// TestVersionChangesOnRebuild guards the cache-busting mechanism
+// tileVersionSuffix (internal/server) relies on: a tileset's Version must
+// change whenever its .mbtiles file is rebuilt, since that's the only
+// signal that invalidates a client's (notably the desktop app's webview,
+// which persists its HTTP cache across restarts) already-cached tiles for
+// unchanged z/x/y coordinates under Cache-Control's 24h max-age.
+func TestVersionChangesOnRebuild(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createTestMBTiles(t, dir, "test")
+
+	store, err := NewMBTilesStore(dir)
+	if err != nil {
+		t.Fatalf("NewMBTilesStore failed: %v", err)
+	}
+	defer store.Close()
+
+	before, ok := store.Version("test")
+	if !ok {
+		t.Fatal("Version(\"test\") reported unknown; expected the mtime captured at load time")
+	}
+
+	rebuilt := before + 1 // a real rebuild always advances mtime; simulate without a sleep
+	if err := os.Chtimes(dbPath, time.Unix(rebuilt, 0), time.Unix(rebuilt, 0)); err != nil {
+		t.Fatalf("Chtimes failed: %v", err)
+	}
+
+	store2, err := NewMBTilesStore(dir)
+	if err != nil {
+		t.Fatalf("second NewMBTilesStore failed: %v", err)
+	}
+	defer store2.Close()
+
+	after, ok := store2.Version("test")
+	if !ok {
+		t.Fatal("Version(\"test\") reported unknown on the reloaded store")
+	}
+	if after == before {
+		t.Errorf("Version did not change after the file's mtime advanced: still %d", after)
+	}
+}
+
+func TestVersionUnknownTileset(t *testing.T) {
+	dir := t.TempDir()
+	createTestMBTiles(t, dir, "test")
+
+	store, err := NewMBTilesStore(dir)
+	if err != nil {
+		t.Fatalf("NewMBTilesStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, ok := store.Version("does-not-exist"); ok {
+		t.Error("Version reported ok=true for a tileset that was never loaded")
 	}
 }
 

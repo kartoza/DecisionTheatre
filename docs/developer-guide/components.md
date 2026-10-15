@@ -107,11 +107,5 @@ resolved versions, consult `go.sum` and `frontend/package-lock.json`.
 
 ## Project License
 
-Decision Theatre is distributed under GPL-3.0.
-
-!!! bug "No LICENSE file in the repository"
-    GPL-3.0 is asserted in `flake.nix`, `packaging/nfpm.yaml` and the
-    [License](../about/license.md) page, but no `LICENSE` file exists at the repository
-    root, and no source file carries an SPDX header.
-    Ticket: *No LICENSE file and no SPDX headers, though GPL-3.0 is asserted in three
-    manifests*.
+Decision Theatre is distributed under AGPL-3.0-only. See the [License](../about/license.md)
+page for what that means and where the full text lives.

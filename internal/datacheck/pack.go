@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package datacheck
 
 import (
@@ -140,7 +143,7 @@ func BuildPack(opts PackOptions) (*Report, *Manifest, error) {
 	}
 
 	for _, p := range report.Inventory {
-		if p.Role == RoleRuntime {
+		if p.Role == RoleRuntime || p.Role == RoleDataPackExtra {
 			continue
 		}
 		manifest.Excluded = append(manifest.Excluded, ExclusionNote{

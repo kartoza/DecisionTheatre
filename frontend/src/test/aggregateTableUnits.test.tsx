@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The table panel names its factor twice inside its own body — the Site
  * Average caption and the column header — independent of the shared pane

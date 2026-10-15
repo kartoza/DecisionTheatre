@@ -31,7 +31,7 @@ travels with them and the fonts are not sold on their own.
 - Source Sans 3 — <https://github.com/adobe-fonts/source-sans>, Copyright (c) 2010–2023
   Adobe Systems Incorporated
 
-!!! note
-    The nixpkgs packages do not ship the licence text, so the full OFL-1.1 text is not
-    vendored here yet. For REUSE compliance it should be added at `LICENSES/OFL-1.1.txt`
-    and referenced from these files' headers.
+The full OFL-1.1 text is vendored at `/LICENSES/OFL-1.1.txt`, and each `.woff2` here is
+mapped to it (and to its real copyright holder, not Kartoza's) in the repository root's
+`REUSE.toml` — binary font files can't carry an inline comment header the way source
+files do.

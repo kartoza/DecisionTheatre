@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Flex, Icon, Text } from '@chakra-ui/react';
 import { FiHeart, FiArrowRight } from 'react-icons/fi';
 import { colors } from '../styles/colors';

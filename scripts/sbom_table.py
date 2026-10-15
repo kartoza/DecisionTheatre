@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Render a syft SBOM as a markdown table for a pull request or release note.
 
 The SBOM itself is the machine-readable artefact; this is the human-readable

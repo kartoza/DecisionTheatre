@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The identify results panel's own docking shell -- a Slide/Box wrapper
  * identical in structure to the target editor's and ControlPanel's (see

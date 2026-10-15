@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package tiles
 
 import (
@@ -34,7 +37,17 @@ const tileCacheLimit = 512 * 1024 * 1024
 
 // MBTilesStore manages access to MBTiles databases
 type MBTilesStore struct {
-	databases  map[string]*sql.DB
+	databases map[string]*sql.DB
+	// versions holds each tileset's source .mbtiles mtime (unix seconds) at
+	// load time, so a tile URL can carry a cache-busting ?v= query param —
+	// see Version() and its caller, tileURLVariants() in internal/server.
+	// Without it, a rebuilt .mbtiles is invisible to any client (notably a
+	// desktop webview, which persists its HTTP cache across app restarts)
+	// that already cached a z/x/y tile under the old content: tile URLs
+	// encode only coordinates, Cache-Control is a blind 24h max-age with no
+	// ETag/Last-Modified, and the server process restarting does nothing to
+	// invalidate a cache that lives in the client, not the server.
+	versions   map[string]int64
 	mu         sync.RWMutex
 	tileCache  sync.Map // key: "name/z/x/y" → []byte
 	cacheSizeB atomic.Int64
@@ -57,6 +70,7 @@ type TileMetadata struct {
 func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 	store := &MBTilesStore{
 		databases: make(map[string]*sql.DB),
+		versions:  make(map[string]int64),
 	}
 
 	for _, dir := range dirs {
@@ -107,6 +121,9 @@ func NewMBTilesStore(dirs ...string) (*MBTilesStore, error) {
 			}
 
 			store.databases[name] = db
+			if info, statErr := os.Stat(dbPath); statErr == nil {
+				store.versions[name] = info.ModTime().Unix()
+			}
 			log.Printf("Loaded MBTiles: %s (%s)", name, dbPath)
 		}
 	}
@@ -213,6 +230,18 @@ func (s *MBTilesStore) GetMetadata(name string) (*TileMetadata, error) {
 	}
 
 	return meta, nil
+}
+
+// Version returns the named tileset's source .mbtiles mtime (unix seconds),
+// for a tile URL's cache-busting ?v= query param — see the versions field
+// doc comment. 0, false if the tileset is unknown or its mtime couldn't be
+// read at load time; callers should omit the query param in that case
+// rather than serve every tile URL with a misleading "?v=0".
+func (s *MBTilesStore) Version(name string) (int64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.versions[name]
+	return v, ok
 }
 
 // ListTilesets returns the names of all loaded tilesets

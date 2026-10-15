@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * One in-flight request per key, shared by every caller, cancelled once the last
  * caller has walked away.

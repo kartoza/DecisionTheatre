@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package datacheck
 
 import (
@@ -146,6 +149,21 @@ func TestSpecCoversTilesetName(t *testing.T) {
 	if !strings.Contains(string(b), `"`+RequiredTilesetName+`"`) {
 		t.Errorf("server.go no longer mentions the tileset name %q that spec.go requires;\n"+
 			"if the server now requests a different name, update RequiredTilesetName", RequiredTilesetName)
+	}
+}
+
+// TestSpecCoversOptionalTilesetName mirrors TestSpecCoversTilesetName for the
+// catchments tileset, which handleCatchmentsTileJSON serves but does not
+// require.
+func TestSpecCoversOptionalTilesetName(t *testing.T) {
+	root := repoRoot(t)
+	b, err := os.ReadFile(filepath.Join(root, "internal/server/server.go"))
+	if err != nil {
+		t.Fatalf("cannot read server.go: %v", err)
+	}
+	if !strings.Contains(string(b), `"`+OptionalTilesetName+`"`) {
+		t.Errorf("server.go no longer mentions the tileset name %q that spec.go allows;\n"+
+			"if the server now requests a different name, update OptionalTilesetName", OptionalTilesetName)
 	}
 }
 

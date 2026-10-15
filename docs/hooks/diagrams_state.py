@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Further diagrams parsed from live project state.
 
 Companion to the generators in ``generate_diagrams.py``. Everything here reads

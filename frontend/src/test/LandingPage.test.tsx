@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useMemo, useEffect, useRef, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';

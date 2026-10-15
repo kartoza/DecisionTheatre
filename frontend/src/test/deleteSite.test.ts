@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { deleteSite, saveLocalSite } from '../hooks/useApi';
 import { clearSiteStore } from '../lib/siteStore';
