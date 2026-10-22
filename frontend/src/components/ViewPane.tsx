@@ -164,6 +164,17 @@ function ViewPane({
   const { dialColorLinear: attributeDialColorLinear } = useAttributeDialColorLinear();
   const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
 
+  // At 500px and below there is no room left in the per-pane toolbar for the
+  // grid-view button beside the view-mode icons, so it hides rather than
+  // crowding them.
+  const [isNarrowForGridViewButton, setIsNarrowForGridViewButton] = useState(() => window.innerWidth <= 500);
+  useEffect(() => {
+    const update = () => setIsNarrowForGridViewButton(window.innerWidth <= 500);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
   // Mount MapView only while the pane is showing a map, plus a grace period.
   // A pane that has never been in map mode never pays for map initialization
   // (tile loading, WebGL context) — the main cause of slow quad-view
@@ -1083,7 +1094,7 @@ function ViewPane({
               </Tooltip>
             )}
           </>
-        ) : (
+        ) : !isNarrowForGridViewButton ? (
           <Tooltip label="Grid view" placement="top">
             <IconButton
               aria-label="Switch to grid view"
@@ -1096,7 +1107,7 @@ function ViewPane({
               borderRadius="md"
             />
           </Tooltip>
-        )}
+        ) : null}
       </HStack>
 
       {/* Calculation details modal */}

@@ -72,4 +72,62 @@ describe('Header overflow menu at 500px and below', () => {
     expect(within(menu).queryByText('Home')).toBeNull();
     expect(within(menu).getByText('My Sites')).toBeInTheDocument();
   });
+
+  it('hides Edit site boundary and moves it into "More options" at 500px', async () => {
+    setWindowWidth(500);
+    render(
+      <ChakraProvider theme={theme}>
+        <Header
+          onToggleDocs={() => {}}
+          isDocsOpen={false}
+          onNavigate={() => {}}
+          currentPage="map"
+          siteTitle="Test Site"
+          onEditBoundary={() => {}}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.queryByLabelText('Edit site boundary')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('More options'));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Edit site boundary')).toBeInTheDocument();
+  });
+
+  it('shows Edit site boundary inline again above 500px', () => {
+    setWindowWidth(501);
+    render(
+      <ChakraProvider theme={theme}>
+        <Header
+          onToggleDocs={() => {}}
+          isDocsOpen={false}
+          onNavigate={() => {}}
+          currentPage="map"
+          siteTitle="Test Site"
+          onEditBoundary={() => {}}
+        />
+      </ChakraProvider>,
+    );
+    expect(screen.getByLabelText('Edit site boundary')).toBeInTheDocument();
+  });
+
+  it('reads "Exit edit mode" in the menu while boundary editing is active', async () => {
+    setWindowWidth(500);
+    render(
+      <ChakraProvider theme={theme}>
+        <Header
+          onToggleDocs={() => {}}
+          isDocsOpen={false}
+          onNavigate={() => {}}
+          currentPage="map"
+          siteTitle="Test Site"
+          onEditBoundary={() => {}}
+          isBoundaryEditMode
+        />
+      </ChakraProvider>,
+    );
+    fireEvent.click(screen.getByLabelText('More options'));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Exit edit mode')).toBeInTheDocument();
+  });
 });

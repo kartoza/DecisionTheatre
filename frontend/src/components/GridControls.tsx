@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Button, HStack, Icon, IconButton, Menu, MenuButton, MenuDivider,
-  MenuItem, MenuList, Popover, PopoverArrow, PopoverBody, PopoverCloseButton,
+  MenuGroup, MenuItem, MenuList, Popover, PopoverArrow, PopoverBody, PopoverCloseButton,
   PopoverContent, PopoverTrigger, Slider, SliderFilledTrack, SliderThumb,
   SliderTrack, Spinner, Text, Tooltip, useColorModeValue,
 } from '@chakra-ui/react';
@@ -682,45 +682,55 @@ function GridControls({
             variant="ghost"
           />
           <MenuList>
-            {isNarrowViewSwitch && VIEW_MODES.map((mode) => (
-              <MenuItem
-                key={mode.id}
-                icon={mode.icon}
-                isDisabled={noSiteTable(mode.id)}
-                onClick={() => onViewModeChange(mode.id)}
-                fontWeight={viewMode === mode.id ? 600 : 400}
-              >
-                {noSiteTable(mode.id) ? STRINGS.noSiteTable : mode.label}
-              </MenuItem>
-            ))}
+            {isNarrowViewSwitch && (
+              <MenuGroup title="Navigation">
+                {VIEW_MODES.map((mode) => (
+                  <MenuItem
+                    key={mode.id}
+                    icon={mode.icon}
+                    isDisabled={noSiteTable(mode.id)}
+                    onClick={() => onViewModeChange(mode.id)}
+                    fontWeight={viewMode === mode.id ? 600 : 400}
+                  >
+                    {noSiteTable(mode.id) ? STRINGS.noSiteTable : mode.label}
+                  </MenuItem>
+                ))}
+              </MenuGroup>
+            )}
             {isNarrowViewSwitch && <MenuDivider />}
-            {onRangeModeChange && RANGE_MODES.map((mode) => (
-              <MenuItem
-                key={mode.id}
-                icon={mode.icon}
-                isDisabled={noSite(mode.id)}
-                onClick={() => onRangeModeChange(mode.id)}
-                fontWeight={rangeMode === mode.id ? 600 : 400}
-              >
-                {`${mode.label} ${STRINGS.rangeSuffix}`}
-              </MenuItem>
-            ))}
-            {showMapToggles && mapToggles.length > 0 && <MenuDivider />}
-            {showMapToggles && mapToggles.map((t) => (
-              <MenuItem
-                key={t.key}
-                icon={t.icon}
-                isDisabled={t.isDisabled}
-                onClick={t.onToggle}
-                fontWeight={t.isOn ? 600 : 400}
-              >
-                {t.isDisabled ? t.disabledLabel ?? t.label : t.label}
-              </MenuItem>
-            ))}
+            {onRangeModeChange && (
+              <MenuGroup title="Zone range controls">
+                {RANGE_MODES.map((mode) => (
+                  <MenuItem
+                    key={mode.id}
+                    icon={mode.icon}
+                    isDisabled={noSite(mode.id)}
+                    onClick={() => onRangeModeChange(mode.id)}
+                    fontWeight={rangeMode === mode.id ? 600 : 400}
+                  >
+                    {`${mode.label} ${STRINGS.rangeSuffix}`}
+                  </MenuItem>
+                ))}
+              </MenuGroup>
+            )}
+            {showMapToggles && (onRangeModeChange || isNarrowViewSwitch) && <MenuDivider />}
             {showMapToggles && (
-              <MenuItem icon={<FiTarget />} isDisabled={!siteId} onClick={zoomToSite}>
-                {STRINGS.zoomToSite}
-              </MenuItem>
+              <MenuGroup title="Map controls">
+                {mapToggles.map((t) => (
+                  <MenuItem
+                    key={t.key}
+                    icon={t.icon}
+                    isDisabled={t.isDisabled}
+                    onClick={t.onToggle}
+                    fontWeight={t.isOn ? 600 : 400}
+                  >
+                    {t.isDisabled ? t.disabledLabel ?? t.label : t.label}
+                  </MenuItem>
+                ))}
+                <MenuItem icon={<FiTarget />} isDisabled={!siteId} onClick={zoomToSite}>
+                  {STRINGS.zoomToSite}
+                </MenuItem>
+              </MenuGroup>
             )}
             {onAddPane && <MenuDivider />}
             {onAddPane && (

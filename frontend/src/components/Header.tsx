@@ -147,7 +147,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
             >
               {siteTitle}
             </Text>
-            {onEditBoundary && currentPage === 'map' && (
+            {!isNarrowHeaderActions && onEditBoundary && currentPage === 'map' && (
               <Tooltip label={isBoundaryEditMode ? "Exit edit mode" : "Edit site boundary"}>
                 <IconButton
                   aria-label="Edit site boundary"
@@ -350,6 +350,11 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
               size="sm"
             />
             <MenuList>
+              {siteTitle && onEditBoundary && currentPage === 'map' && (
+                <MenuItem icon={<FiEdit2 />} onClick={onEditBoundary} fontWeight={isBoundaryEditMode ? 600 : 400}>
+                  {isBoundaryEditMode ? 'Exit edit mode' : 'Edit site boundary'}
+                </MenuItem>
+              )}
               {onNavigate && currentPage && currentPage !== 'landing' && (
                 <MenuItem icon={<FiHome />} onClick={() => onNavigate('landing')}>
                   Home

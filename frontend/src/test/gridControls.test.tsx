@@ -281,3 +281,35 @@ describe('view switch at 1000px and below', () => {
     expect(within(menu).queryByText('Map')).toBeNull();
   });
 });
+
+describe('overflow menu section headings', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('groups the view switch, range mode and map toggles under their own headings', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls({ onRangeModeChange: vi.fn() });
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+
+    expect(within(menu).getByText('Navigation')).toBeInTheDocument();
+    expect(within(menu).getByText('Zone range controls')).toBeInTheDocument();
+    expect(within(menu).getByText('Map controls')).toBeInTheDocument();
+  });
+
+  it('omits the Zone range controls heading when no range mode handler is supplied', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls();
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+
+    expect(within(menu).queryByText('Zone range controls')).toBeNull();
+    expect(within(menu).getByText('Map controls')).toBeInTheDocument();
+  });
+});
