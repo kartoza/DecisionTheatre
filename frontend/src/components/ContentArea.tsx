@@ -272,6 +272,18 @@ function ContentArea({
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
 
+  // Below 600px the 3-column grid packs panes too small to read or tap
+  // accurately, so grid view collapses to just the focused pane rather than
+  // the usual six -- still "grid view" as far as layoutMode is concerned,
+  // just not rendering the other panes until the screen is wide enough.
+  const [isSmallScreen, setIsSmallScreen] = useState(() => window.innerWidth < 600);
+  useEffect(() => {
+    const update = () => setIsSmallScreen(window.innerWidth < 600);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
   const editableTargetKeys = useMemo(() => {
     const availableKeys = new Set<string>();
     Object.keys(siteIndicators?.ideal ?? {}).forEach((k) => availableKeys.add(k));
@@ -575,10 +587,11 @@ function ContentArea({
   // (e.g. switching to belt charts, which keep growing a row every 3 panes).
   const gridViewMode = viewModes[0] ?? 'map';
   const quadPaneCap = maxPanesForViewMode(gridViewMode);
+  const focusedIndex = Math.min(focusedPane, Math.max(0, paneStates.length - 1));
   const visibleIndices = isQuad
-    ? paneStates.slice(0, quadPaneCap).map((_, index) => index)
-    : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
-  const quadRows = quadRowsForPaneCount(visibleIndices.length, gridViewMode);
+    ? (isSmallScreen ? [focusedIndex] : paneStates.slice(0, quadPaneCap).map((_, index) => index))
+    : [focusedIndex];
+  const quadRows = isSmallScreen ? 1 : quadRowsForPaneCount(visibleIndices.length, gridViewMode);
 
   // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
   // rather than fixed, because which pane is bottom-left changes: panes are
@@ -618,12 +631,12 @@ function ContentArea({
         // only 2, no matter how many the pane count actually needed, so a
         // 6-pane grid already needed 3 rows and pushed the extra one
         // off-screen with no visible scroll affordance pointing at it.
-        gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
-        gridTemplateRows={isQuad ? undefined : '1fr'}
-        gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
-        alignContent={isQuad ? 'start' : undefined}
-        gap={isQuad ? '2px' : 0}
-        bg={isQuad ? 'gray.700' : 'transparent'}
+        gridTemplateColumns={isQuad && !isSmallScreen ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
+        gridTemplateRows={isQuad && !isSmallScreen ? undefined : '1fr'}
+        gridAutoRows={isQuad && !isSmallScreen ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
+        alignContent={isQuad && !isSmallScreen ? 'start' : undefined}
+        gap={isQuad && !isSmallScreen ? '2px' : 0}
+        bg={isQuad && !isSmallScreen ? 'gray.700' : 'transparent'}
         overflowY={isQuad ? 'auto' : 'hidden'}
         overflowX="hidden"
         sx={{
@@ -644,7 +657,7 @@ function ContentArea({
               >
                 <ViewPane
                   comparison={paneStates[i]}
-                  compact
+                  compact={!isSmallScreen}
                   paneCount={paneStates.length}
                   paneIndex={i}
                   layoutMode={mode}

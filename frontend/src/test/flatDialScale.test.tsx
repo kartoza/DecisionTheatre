@@ -85,9 +85,66 @@ describe('the belt', () => {
   });
 });
 
+describe('the belt legend', () => {
+  /**
+   * Same failure as the arc gauge, different arithmetic: each entry sat in
+   * an equal third of the band's width (barW / 3), which shrank with the
+   * container but the label text's font size had a floor (fontLegend never
+   * dropped below 10px), so a narrow pane's third column still ran its text
+   * past the right edge, where the clipping Box hid it. Now a wrapping HTML
+   * flexbox, same as the arc gauge.
+   */
+  it('hosts the legend in a wrapping flexbox rather than three equal-width SVG columns', () => {
+    renderBelt(1200);
+    const referenceLabel = screen.getByText(/Reference: 365\.4/);
+    const foreignObject = referenceLabel.closest('foreignObject');
+    expect(foreignObject).not.toBeNull();
+
+    const flexRow = foreignObject!.querySelector('div');
+    expect(flexRow).not.toBeNull();
+    expect(flexRow).toHaveStyle({ display: 'flex', flexWrap: 'wrap' });
+
+    expect(flexRow!.textContent).toContain('Reference: 365.4');
+    expect(flexRow!.textContent).toContain('Current: 836.3');
+    expect(flexRow!.textContent).toContain('Target: 1.2K');
+  });
+});
+
 describe('the arc', () => {
   it('does not let a growing target drag its scale either', () => {
     expect(renderArc(2500)).toBe(renderArc(1200));
+  });
+});
+
+describe('the arc legend', () => {
+  /**
+   * Reported: on a narrow single pane the Reference/Current/Target legend
+   * was not visible at all. Root cause was three SVG <text> columns pinned
+   * at fixed offsets from the dial's horizontal centre (centerX - 330, etc.)
+   * — offsets sized for a wide dial, which ran negative (or past the right
+   * edge) once the container was narrow, and the parent Box clips anything
+   * outside its bounds. The legend is now a real HTML flexbox in a
+   * <foreignObject>, which wraps onto more rows instead of running off
+   * either edge, at any width jsdom can't itself lay out.
+   */
+  it('hosts the legend in a wrapping flexbox rather than fixed-offset SVG columns', () => {
+    renderArc(1200);
+    const referenceLabel = screen.getByText(/Reference: 365\.4/);
+    const foreignObject = referenceLabel.closest('foreignObject');
+    expect(foreignObject).not.toBeNull();
+
+    const flexRow = foreignObject!.querySelector('div');
+    expect(flexRow).not.toBeNull();
+    expect(flexRow).toHaveStyle({ display: 'flex', flexWrap: 'wrap' });
+
+    // All three legend entries live inside that one wrapping row.
+    expect(flexRow!.textContent).toContain('Reference: 365.4');
+    expect(flexRow!.textContent).toContain('Current: 836.3');
+    expect(flexRow!.textContent).toContain('Target: 1.2K');
+
+    // No remaining fixed-offset <g transform="translate(...)"> column for
+    // the legend -- the width-dependent positioning that clipped it.
+    expect(referenceLabel.closest('g[transform]')).toBeNull();
   });
 });
 
@@ -156,6 +213,38 @@ describe('the target marker', () => {
 
   it('draws no target when the site has no ideal for the factor', () => {
     expect(renderWith(undefined)).toBe(0);
+  });
+});
+
+describe('marker sizing on a small container', () => {
+  /**
+   * Reported: the reference line, current line and target buckle overflowed
+   * onto the tick value labels drawn beneath the band, on smaller screens.
+   * Root cause: `compact` only ever reflects whether this is one of several
+   * panes in a grid -- a single pane is always `compact={false}`, so these
+   * markers stayed full-size no matter how small the container FlatDial
+   * itself measured, and the fixed pixel math for the buckle's height left
+   * no margin above the tick labels below it once the container shrank past
+   * what that sizing was tuned for. FlatDial's default pre-measurement size
+   * (800x300) is itself short enough to trigger the same responsive
+   * compactness, with no `compact` prop passed at all -- this pins that it
+   * actually does, by checking the buckle shrinks to the same width the
+   * `compact` prop would have produced explicitly.
+   */
+  it('renders the buckle at its compact width even with no compact prop, because the measured container is short', () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <FlatDial visible min={0} max={1} referenceValue={0.3} currentValue={0.5} targetValue={0.7} />
+      </ChakraProvider>,
+    );
+    const buckleRect = Array.from(document.querySelectorAll('rect'))
+      .find((r) => (r.getAttribute('stroke') || '').toLowerCase() === SCENARIO_COLORS.future
+        && Number(r.getAttribute('width')) > 20);
+    expect(buckleRect).toBeDefined();
+    // barH compact (22) * 1.7 = 37.4 -- the compact buckle width. The
+    // non-compact figure (barH 34 * 1.8 = 61.2) would mean this container's
+    // short default height was not picked up at all.
+    expect(Number(buckleRect!.getAttribute('width'))).toBeCloseTo(37.4, 1);
   });
 });
 

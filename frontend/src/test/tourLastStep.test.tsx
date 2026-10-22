@@ -146,10 +146,13 @@ describe('TourGuide last step', () => {
         <TourGuide />
       </ChakraProvider>,
     );
-    // Auto-visible for a first-time visitor (empty localStorage, see beforeEach).
+    // The tour only becomes visible once the landing page's "Guided Tour"
+    // button fires this event (see LandingPage.tsx) -- it no longer
+    // auto-shows on first visit.
     // Jump straight to the last step via its progress dot -- clicking through
     // with Next would pass through the "Define Your Boundary" step, which
     // kicks off real site-creation API calls this test isn't exercising.
+    fireEvent(window, new Event('dt:restart-tour'));
     fireEvent.click(await screen.findByRole('button', { name: /Go to step 8 of 8/ }));
 
     expect(await screen.findByText('Back to main page')).toBeInTheDocument();
@@ -162,6 +165,7 @@ describe('TourGuide last step', () => {
         <TourGuide />
       </ChakraProvider>,
     );
+    fireEvent(window, new Event('dt:restart-tour'));
     fireEvent.click(await screen.findByRole('button', { name: /Go to step 8 of 8/ }));
     await screen.findByText('Back to main page');
 

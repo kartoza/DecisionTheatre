@@ -16,7 +16,7 @@
  */
 import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, within, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, within, cleanup, fireEvent, act } from '@testing-library/react';
 import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import GridControls from '../components/GridControls';
@@ -222,5 +222,62 @@ describe('Header placement', () => {
       </ChakraProvider>,
     );
     expect(screen.queryByRole('radiogroup', { name: 'View for all panes' })).toBeNull();
+  });
+});
+
+describe('narrow layout at 1272px and below', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('hides the inline map toggles and leaves only the "More" menu at 1272px', () => {
+    setWindowWidth(1272);
+    const { narrow } = renderControls();
+    expect(narrow.queryByLabelText('Show 3D extrusion')).toBeNull();
+    expect(narrow.getByLabelText('More controls')).toBeInTheDocument();
+  });
+
+  it('shows the inline map toggles again above 1272px', () => {
+    setWindowWidth(1273);
+    const { narrow } = renderControls();
+    expect(narrow.getByLabelText('Show 3D extrusion')).toBeInTheDocument();
+  });
+});
+
+describe('view switch at 1000px and below', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('hides the inline view switch and moves it into the "More" menu at 1000px', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls();
+    expect(narrow.queryByRole('radiogroup', { name: 'View for all panes' })).toBeNull();
+
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+    for (const label of ['Map', 'Chart', 'Flat', 'Dial', 'Table']) {
+      expect(within(menu).getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it('shows the inline view switch again above 1000px, without duplicating it into the menu', async () => {
+    setWindowWidth(1001);
+    const { narrow } = renderControls();
+    expect(narrow.getByRole('radiogroup', { name: 'View for all panes' })).toBeInTheDocument();
+
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).queryByText('Map')).toBeNull();
   });
 });

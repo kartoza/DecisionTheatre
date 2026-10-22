@@ -205,10 +205,6 @@ export default function TourGuide() {
   const dragControls = useDragControls();
   const siteCountAtBoundaryStepRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (!localStorage.getItem(TOUR_SEEN_KEY)) setVisible(true);
-  }, []);
-
   // Snapshot how many sites exist as the user arrives at the "Define Your
   // Boundary" step, so we can tell on Next whether they actually created one.
   useEffect(() => {

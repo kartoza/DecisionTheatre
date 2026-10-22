@@ -56,3 +56,16 @@ describe('the table panel label', () => {
     expect(screen.queryAllByText(/\(.*\)\s*\(.*\)/).length).toBe(0);
   });
 });
+
+describe('the table panel on a narrow pane', () => {
+  it('scrolls the table horizontally instead of clipping or wrapping columns', async () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AggregateTable visible attribute="grass_cover" siteId="test-site" />
+      </ChakraProvider>,
+    );
+    const table = await screen.findByRole('table');
+    const scrollContainer = table.parentElement as HTMLElement;
+    expect(scrollContainer).toHaveStyle({ overflowX: 'auto' });
+  });
+});

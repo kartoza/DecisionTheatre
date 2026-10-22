@@ -864,6 +864,7 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             <Flex
             position="relative"
             direction="row"
+            wrap="wrap"
             align="center"
             justify="center"
             minH="300px"
@@ -872,25 +873,22 @@ function LandingPage({ onNavigate }: LandingPageProps) {
             textAlign="center"
             zIndex={1}
           >
-            <Box
-              flexShrink={0}
-              p={3}
-            >
-              <a href='https://futureecosystemsafrica.org/' target="_blank" rel="noopener noreferrer"><Image src={fefaLogog} w={150}  objectFit="contain" /></a>
+            <Box p={3}>
+              <a href='https://futureecosystemsafrica.org/' target="_blank" rel="noopener noreferrer">
+                <Image src={fefaLogog} w={{ base: '110px', sm: '150px' }} objectFit="contain" />
+              </a>
             </Box>
 
-            <Box
-              flexShrink={0}
-              p={3}
-            >
-              <a href='https://rewild.org/' target="_blank" rel="noopener noreferrer"><Image src={rewildLogo} w={150}  objectFit="contain" /></a>
+            <Box p={3}>
+              <a href='https://rewild.org/' target="_blank" rel="noopener noreferrer">
+                <Image src={rewildLogo} w={{ base: '110px', sm: '150px' }} objectFit="contain" />
+              </a>
             </Box>
 
-            <Box
-              flexShrink={0}
-              p={3}
-            >
-              <a href='https://kartoza.com/' target="_blank" rel="noopener noreferrer"><Image src={kartozaLogo} w={280}  objectFit="contain" /></a>
+            <Box p={3}>
+              <a href='https://kartoza.com/' target="_blank" rel="noopener noreferrer">
+                <Image src={kartozaLogo} w={{ base: '180px', sm: '280px' }} objectFit="contain" />
+              </a>
             </Box>
           </Flex>
       </Box>

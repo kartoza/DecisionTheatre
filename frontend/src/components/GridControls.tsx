@@ -524,6 +524,30 @@ function GridControls({
   const [noSatellite, setNoSatellite] = useState(satelliteUnavailable);
   useEffect(() => subscribeSatelliteUnavailable(setNoSatellite), []);
 
+  // Below 1272px the inline map-toggle icons crowd the title out of the row
+  // even in the narrow layout's reduced form -- the "More" menu already
+  // carries every one of these toggles, so below this width it is the only
+  // copy shown.
+  const [isNarrowMapControls, setIsNarrowMapControls] = useState(() => window.innerWidth <= 1272);
+  useEffect(() => {
+    const update = () => setIsNarrowMapControls(window.innerWidth <= 1272);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
+  // Below 1000px the view switch itself no longer fits beside the menu
+  // button without crowding the title, so it moves into the menu too --
+  // the one case where the narrow layout's "always keep the view switch
+  // inline" rule gives way, because the row is simply out of room.
+  const [isNarrowViewSwitch, setIsNarrowViewSwitch] = useState(() => window.innerWidth <= 1000);
+  useEffect(() => {
+    const update = () => setIsNarrowViewSwitch(window.innerWidth <= 1000);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
   // Only meaningful over a map. In chart, dial or table view they would be
   // controls for something not on screen.
   const showMapToggles = viewMode === 'map';
@@ -624,28 +648,31 @@ function GridControls({
       </HStack>
 
       {/*
-        Narrow: the view switch stays visible, because it is the primary control
-        on this screen and hiding it would make the interface unusable on a
-        phone. Everything else moves into a menu rather than disappearing — the
-        existing navigation group's display:none pattern is not acceptable here.
+        Narrow: the view switch stays visible down to 1000px, because it is the
+        primary control on this screen and hiding it would make the interface
+        unusable on a phone -- below that it no longer fits either, so it joins
+        everything else in the menu rather than disappearing. The existing
+        navigation group's display:none pattern is not acceptable here.
       */}
       <HStack spacing={1} display={{ base: 'flex', xl: 'none' }} data-testid="grid-controls-narrow">
-        <SegmentedGroup
-          label={STRINGS.viewGroupLabel}
-          options={VIEW_MODES}
-          value={viewMode}
-          onChange={onViewModeChange}
-          isOptionDisabled={noSiteTable}
-          disabledLabel={STRINGS.noSiteTable}
-        />
+        {!isNarrowViewSwitch && (
+          <SegmentedGroup
+            label={STRINGS.viewGroupLabel}
+            options={VIEW_MODES}
+            value={viewMode}
+            onChange={onViewModeChange}
+            isOptionDisabled={noSiteTable}
+            disabledLabel={STRINGS.noSiteTable}
+          />
+        )}
         {/*
           The toggles are icons already, so they still fit beside the view
-          switch on a laptop; below md they would push the title off the row,
-          and the menu carries them from there down.
+          switch on a laptop; at 1272px and below they would push the title off
+          the row, and the menu carries them from there down.
         */}
-        <Box display={{ base: 'none', md: 'flex' }}>
+        {!isNarrowMapControls && (
           <MapToggleCluster toggles={mapToggles} siteId={siteId} dividerColor={dividerColor} choroplethOpacity={choroplethOpacity} onChoroplethOpacityChange={onChoroplethOpacityChange} />
-        </Box>
+        )}
         <Menu>
           <MenuButton
             as={IconButton}
@@ -655,6 +682,18 @@ function GridControls({
             variant="ghost"
           />
           <MenuList>
+            {isNarrowViewSwitch && VIEW_MODES.map((mode) => (
+              <MenuItem
+                key={mode.id}
+                icon={mode.icon}
+                isDisabled={noSiteTable(mode.id)}
+                onClick={() => onViewModeChange(mode.id)}
+                fontWeight={viewMode === mode.id ? 600 : 400}
+              >
+                {noSiteTable(mode.id) ? STRINGS.noSiteTable : mode.label}
+              </MenuItem>
+            ))}
+            {isNarrowViewSwitch && <MenuDivider />}
             {onRangeModeChange && RANGE_MODES.map((mode) => (
               <MenuItem
                 key={mode.id}

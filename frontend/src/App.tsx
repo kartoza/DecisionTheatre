@@ -23,6 +23,7 @@ import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
+import { shouldAutoCollapsePanel } from './lib/panelAutoCollapse';
 import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
 import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs, useColumns, useAttributeCanGraph, useAttributeChartTypes } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
@@ -89,6 +90,16 @@ function App() {
     const mode = loadLayoutMode();
     return mode === 'single' ? loadFocusedPane() : null;
   });
+  // Below 763px the control panel covers most of the pane it's explaining, so
+  // switching to a visual view (map/chart/dial/flat) auto-collapses it rather
+  // than leaving it open over whatever the user just asked to look at.
+  const [isNarrowForPanelCollapse, setIsNarrowForPanelCollapse] = useState(() => window.innerWidth < 763);
+  useEffect(() => {
+    const update = () => setIsNarrowForPanelCollapse(window.innerWidth < 763);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
   // If this is a brand-new tab (not a same-tab refresh) and there's saved
@@ -622,15 +633,23 @@ function App() {
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
     // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
+    // Below 763px it stays closed even then -- same rule as switching view
+    // modes, since opening a site lands on a visual view (map, by default)
+    // that the panel would cover just as much as switching to one does.
     const effectiveLayout = site.layoutMode || layoutMode;
-    setIndicatorPaneIndex(effectiveLayout === 'single' ? paneIdx : null);
+    const opensInSingleMode = effectiveLayout === 'single';
+    setIndicatorPaneIndex(
+      opensInSingleMode && !shouldAutoCollapsePanel(viewModes[paneIdx] ?? 'map', isNarrowForPanelCollapse)
+        ? paneIdx
+        : null,
+    );
     setCurrentPage('map');
 
     // Re-enable auto-save after a short delay to allow state to settle
     setTimeout(() => {
       isLoadingSiteRef.current = false;
     }, 500);
-  }, [layoutMode]);
+  }, [layoutMode, viewModes, isNarrowForPanelCollapse]);
 
   // Listen for tour demo site open event
   useEffect(() => {
@@ -764,7 +783,7 @@ function App() {
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel('chart', isNarrowForPanelCollapse) ? null : 0);
       setViewModes((prev) => {
         const next = [...prev];
         next[0] = 'chart';
@@ -793,7 +812,7 @@ function App() {
     };
     window.addEventListener('dt:demo-tree-biomass-chart', handler);
     return () => window.removeEventListener('dt:demo-tree-biomass-chart', handler);
-  }, []);
+  }, [isNarrowForPanelCollapse]);
 
   // Listen for demo event to switch to single-pane chart view with Herbivore
   // biomass as the individual factor, grouped by functional group, for the
@@ -801,7 +820,7 @@ function App() {
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel('chart', isNarrowForPanelCollapse) ? null : 0);
       setViewModes((prev) => {
         const next = [...prev];
         next[0] = 'chart';
@@ -830,7 +849,7 @@ function App() {
     };
     window.addEventListener('dt:demo-herbivore-functional-group-chart', handler);
     return () => window.removeEventListener('dt:demo-herbivore-functional-group-chart', handler);
-  }, []);
+  }, [isNarrowForPanelCollapse]);
 
   // Listen for demo event to switch to a 6-dial, 2-row grid covering the
   // ecosystem-scale consequences of the current herbivore regime, for the
@@ -997,11 +1016,11 @@ function App() {
       handlePaneStateChange(0, partial);
       setLayoutMode('single');
       setFocusedPane(0);
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel(viewModes[0] ?? 'map', isNarrowForPanelCollapse) ? null : 0);
     };
     window.addEventListener('dt:demo-pane-state', handler);
     return () => window.removeEventListener('dt:demo-pane-state', handler);
-  }, [handlePaneStateChange]);
+  }, [handlePaneStateChange, viewModes, isNarrowForPanelCollapse]);
 
   const { targetInputs } = useAttributeTargetInputs();
   const hasEditableTargets = useMemo(
@@ -1009,12 +1028,19 @@ function App() {
     [currentSite?.indicators, targetInputs, variableTypes, attributeDetails],
   );
 
+  const collapsePanelIfNarrow = useCallback((mode: ViewMode) => {
+    if (shouldAutoCollapsePanel(mode, isNarrowForPanelCollapse)) {
+      setIndicatorPaneIndex(null);
+    }
+  }, [isNarrowForPanelCollapse]);
+
   // The grid-wide controls act on every pane, so they take no pane index. The
   // old signature took one and ignored it in quad layout, which read as a
   // per-pane control and was not.
   const handleGridViewModeChange = useCallback((mode: ViewMode) => {
     setViewModes((prev) => prev.map(() => mode));
-  }, []);
+    collapsePanelIfNarrow(mode);
+  }, [collapsePanelIfNarrow]);
 
   const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
     setViewModes((prev) => {
@@ -1026,7 +1052,8 @@ function App() {
       next[paneIndex] = mode;
       return next;
     });
-  }, [layoutMode]);
+    collapsePanelIfNarrow(mode);
+  }, [layoutMode, collapsePanelIfNarrow]);
 
   // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
   // not a per-pane preference -- reported: change one pane's Right dropdown

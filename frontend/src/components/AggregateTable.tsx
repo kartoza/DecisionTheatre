@@ -348,7 +348,8 @@ function AggregateTable({
                     borderRadius="xl"
                     border="1px solid"
                     borderColor="whiteAlpha.200"
-                    overflow="hidden"
+                    overflowX="auto"
+                    overflowY="hidden"
                     mb={6}
                   >
                     <Table variant="simple" size="sm">
