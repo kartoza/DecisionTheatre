@@ -390,7 +390,9 @@ Downloads `hybas_af_lev01-12_v1c.zip` from [HydroSHEDS](https://www.hydrosheds.o
 
 ### The crosswalk
 
-HydroBASINS' Pfafstetter codes (`PFAF_ID`) are hierarchical by construction: a lev12 catchment's parent at lev08 has a `PFAF_ID` that is exactly the first 8 digits of the lev12 catchment's own `PFAF_ID` (lev06: first 6; lev04: first 4). This was verified against all 147,837 catchments in the current study area with zero unmatched rows — exact string-prefix matching, no spatial join needed. `catchments.gpkg` itself doesn't carry `PFAF_ID` (it was dropped when the study-area subset was clipped from the continental HydroBASINS set), so `PFAF_ID` is read fresh from the lev12 shapefile and joined back in by `HYBAS_ID`.
+HydroBASINS' Pfafstetter codes (`PFAF_ID`) are hierarchical by construction: a lev12 catchment's parent at lev08 has a `PFAF_ID` that is exactly the first 8 digits of the lev12 catchment's own `PFAF_ID` (lev06: first 6). This was verified against all 147,837 catchments in the current study area with zero unmatched rows — exact string-prefix matching, no spatial join needed. `catchments.gpkg` itself doesn't carry `PFAF_ID` (it was dropped when the study-area subset was clipped from the continental HydroBASINS set), so `PFAF_ID` is read fresh from the lev12 shapefile and joined back in by `HYBAS_ID`.
+
+The output table name "lev04" and the number of `PFAF_ID` digits used to build it are two independent knobs — see [Changing Which Level Feeds a Tier](#changing-which-level-feeds-a-tier) below. In the current data pack, `lev04`'s output is built from a 6-digit prefix (the same granularity as `lev06`), not its own 4-digit prefix.
 
 ### Building it
 
@@ -416,12 +418,39 @@ All of this is additive — analysis and site selection keep reading `scenario_c
 
 | Level | Zoom band | Basins (current study area) |
 |-------|-----------|------|
-| lev04 | z0–z5 | 189 |
+| lev04 | z0–z5 | 2,442 (built from a 6-digit prefix — see below) |
 | lev06 | z6–z8 | 2,442 |
 | lev08 | z9–z10 | 27,448 |
 | lev12 | z11+ | 147,837 |
 
 The same display bands drive `internal/geodata/gpkg_store.go`'s `basinLevelForZoom`, the server's `catchmentLevelTilesets` table (`internal/server/server.go`), and the treatment rows in `datasources/mbtiles-config/layer-treatment.csv` — where each level's row now tiles only the band's *first* zoom (`minzoom = maxzoom` = 0/6/9/11) and MapLibre overzooms the rest of the band (see "Standalone Tilesets and Overzoom" above). `TestBasinLevelForZoomMatchesTilesetZoomBands` (`internal/geodata/basin_levels_test.go`) is the reminder to keep them aligned if any of the cutovers change.
+
+This table is about *when* a tier is shown. It is a completely separate setting from *how many polygons* that tier has — see the next section. Changing one does not change the other: shifting a zoom band changes which tier appears at a given zoom; changing a tier's digit count changes how coarse or fine that tier's own polygons are, at whatever zoom it already appears.
+
+### Changing Which Level Feeds a Tier
+
+`scripts/build-catchment-hierarchy.sh` has a `LEVELS` list near the top of its embedded Python block:
+
+```python
+LEVELS = [("04", 6), ("06", 6), ("08", 8)]
+```
+
+Each tuple is `(output label, PFAF_ID prefix length)`:
+
+- **Output label** (`"04"`, `"06"`, `"08"`) is fixed across the whole stack — it names `catchments_lev04`, `scenario_current_lev04`/`scenario_reference_lev04`, the `HYBAS_ID_int_lev04` column in `catchment_hierarchy`, the `catchments-lev04` tileset in `layer-treatment.csv`, and the `catchmentLevelTilesets` entry in `internal/server/server.go`. Changing a label means renaming it everywhere it appears; there's no reason to unless you're adding or removing a tier entirely.
+- **Prefix length** (the second element) is the actual dial: it is how many leading digits of a lev12 catchment's `PFAF_ID` are matched against the real HydroBASINS level's shapefile to find that catchment's parent. Fewer digits groups more lev12 catchments under each parent — fewer, bigger polygons (coarser). More digits groups fewer catchments per parent — more, smaller polygons (finer). The prefix length must equal a real HydroBASINS level that has a shapefile under `datasources/catchments/hybas_af_lev01-12_v1c/` (any of 01 through 12 — `fetch-hydrobasins.sh` downloads one shapefile per level in that range).
+
+The label and the prefix length do not have to match. The current config above builds `lev04`'s output from a 6-digit prefix — the same HydroBASINS level `lev06` itself uses — so `catchments_lev04` has 2,442 polygons rather than the 189 a genuine 4-digit prefix would produce. The table/column names still say "04" because renaming them would ripple through `gpkg_store.go`, `layer-treatment.csv`, and every `scenario_*_lev04` table for no benefit; the prefix length in this `LEVELS` list is the only authoritative source for a tier's actual granularity.
+
+To change a tier's granularity:
+
+1. **Edit `LEVELS`** in `scripts/build-catchment-hierarchy.sh` — change the digit count for the tuple you want to affect, e.g. `("04", 6)` → `("04", 8)` to make `lev04` as fine as `lev08`.
+2. **Confirm the source shapefile is fetched.** The script's own existence check near the top (`for lev in 06 08 12; do ...`) must list every digit count any tuple in `LEVELS` now uses, zero-padded to two digits (e.g. add `08` to that list if you just introduced an 8-digit prefix that wasn't already required). If you reference a level nothing else needed yet, run `dt fetch-hydrobasins` first — it fetches all of 01–12 in one go, so this is only ever a missing-check-entry problem, not a missing-data one.
+3. **Rebuild:** `dt catchment-hierarchy` (or `make catchment-hierarchy`). It's additive and idempotent — it drops and rebuilds `catchment_hierarchy`, `catchments_lev04/06/08`, and `scenario_{current,reference}_lev04/06/08` from scratch, and rewrites `datasources/catchments/catchments-levels.gpkg`. It never touches `catchments_lev12`, `scenario_current`, or `scenario_reference`.
+4. **Retile:** `./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg` (omit `--tileset` — there is no single `catchments` tileset to filter on since the per-level split; the per-layer resume hash already skips every `.mbtiles` whose source didn't change, so this only re-tiles the tier you touched).
+5. **Verify:** `sqlite3 data/datapack.gpkg "SELECT count(*) FROM catchments_lev04;"` to confirm the new polygon count, and `sqlite3 data/datapack.gpkg "PRAGMA integrity_check;"` for sanity.
+
+Changing a tier's zoom band (when it appears, not how many polygons it has) is a different, unrelated edit: the `minzoom`/`maxzoom` columns for that tier's row in `datasources/mbtiles-config/layer-treatment.csv`, kept in sync with the matching `case` in `internal/geodata/gpkg_store.go`'s `basinLevelForZoom` (see "Zoom tiers" above) — not the `LEVELS` list in this script.
 
 ### Required Tools
 

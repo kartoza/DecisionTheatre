@@ -1973,13 +1973,6 @@ func computeAreaWeightedIndicators(catchments []geodata.CatchmentIndicators) *si
 		}
 	}
 
-	// propEarly (proportion of early-season fires) always overrides whatever
-	// the aggregation above computed, rather than only filling it in when
-	// absent — see defaultPropEarly's and referencePropEarly's comments for
-	// why, and why the two scenarios get different fixed values.
-	indicators.Reference[colPropEarly] = referencePropEarly
-	indicators.Current[colPropEarly] = defaultPropEarly
-
 	// Fire-cascade outputs (fuelload, intensity, percBurned, …) only get
 	// rederived here for keys the aggregation above left entirely unfilled —
 	// i.e. a datapack that carries the raw fire inputs but not the derived

@@ -17,18 +17,26 @@
 # Inputs:
 #   - DATA_DIR/datapack.gpkg (built by build-geopackage.sh -- run that first)
 #   - SOURCE_DIR/catchments/hybas_af_lev01-12_v1c/ (fetched by
-#     scripts/fetch-hydrobasins.sh) -- levels 04, 06, 08 and 12 shapefiles
+#     scripts/fetch-hydrobasins.sh) -- levels 06, 08 and 12 shapefiles
 #
 # How the crosswalk works:
 #   HydroBASINS' Pfafstetter codes (PFAF_ID) are hierarchical by
 #   construction: a lev12 catchment's parent at lev08 has a PFAF_ID that is
-#   exactly the first 8 digits of the lev12 catchment's own PFAF_ID (lev06:
-#   first 6; lev04: first 4). This was verified against all 147,837
-#   catchments in the current data pack with zero unmatched rows -- exact
-#   string-prefix matching, no spatial join needed. catchments.gpkg itself
-#   doesn't carry PFAF_ID (it was dropped when the study-area subset was
-#   clipped from the continental HydroBASINS set), so PFAF_ID is read fresh
-#   from the lev12 shapefile here and joined back in by HYBAS_ID.
+#   exactly the first 8 digits of the lev12 catchment's own PFAF_ID. This was
+#   verified against all 147,837 catchments in the current data pack with
+#   zero unmatched rows -- exact string-prefix matching, no spatial join
+#   needed. catchments.gpkg itself doesn't carry PFAF_ID (it was dropped
+#   when the study-area subset was clipped from the continental HydroBASINS
+#   set), so PFAF_ID is read fresh from the lev12 shapefile here and joined
+#   back in by HYBAS_ID.
+#
+#   The output table/column name "lev04" is kept even though it is now built
+#   from the real HydroBASINS lev06 shapefile (first 6 PFAF_ID digits, same
+#   granularity as lev06 itself) instead of lev04's own 4-digit prefix --
+#   renaming it would ripple through gpkg_store.go's basinLevelForZoom,
+#   layer-treatment.csv's tileset name, and every scenario_*_lev04 table for
+#   no benefit; only the source level feeding it changed, to put more (and
+#   smaller) polygons at the zoom band lev04 covers.
 #
 # Output tables added to DATA_DIR/datapack.gpkg:
 #   - catchment_hierarchy      lev12 HYBAS_ID_int -> lev04/06/08 parent HYBAS_ID_int
@@ -52,7 +60,7 @@ if [ ! -f "$OUTPUT" ]; then
     echo "Error: $OUTPUT not found — run 'make geopackage' first"
     exit 1
 fi
-for lev in 04 06 08 12; do
+for lev in 06 08 12; do
     f="$HYBAS_DIR/hybas_af_lev${lev}_v1c.shp"
     if [ ! -f "$f" ]; then
         echo "Error: missing $f — run 'make fetch-hydrobasins' first"
@@ -76,7 +84,16 @@ ogr.UseExceptions()
 
 output_path, hybas_dir, workdir, levels_gpkg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
-LEVELS = [("04", 4), ("06", 6), ("08", 8)]
+# (output label, PFAF_ID prefix length). The label drives table/column/layer
+# names (catchments_lev04, scenario_current_lev04, ...) and is independent of
+# the prefix length: lev04's label stuck even after its source shapefile
+# moved from HydroBASINS level 4 to level 6 (see header comment), so the
+# source shapefile is always looked up by src_lev(digits), never by label.
+LEVELS = [("04", 6), ("06", 6), ("08", 8)]
+
+
+def src_lev(digits):
+    return f"{digits:02d}"
 
 
 def read_pfaf(path):
@@ -101,8 +118,8 @@ pfaf12 = read_pfaf(f"{hybas_dir}/hybas_af_lev12_v1c.shp")
 
 level_prefix_index = {}
 for lev, digits in LEVELS:
-    print(f"  Reading PFAF_ID from lev{lev} source shapefile...")
-    pfaf_lev = read_pfaf(f"{hybas_dir}/hybas_af_lev{lev}_v1c.shp")
+    print(f"  Reading PFAF_ID from lev{src_lev(digits)} source shapefile (-> lev{lev})...")
+    pfaf_lev = read_pfaf(f"{hybas_dir}/hybas_af_lev{src_lev(digits)}_v1c.shp")
     by_prefix = {p: hid for hid, p in pfaf_lev.items()}
     level_prefix_index[lev] = (digits, by_prefix)
 
@@ -155,9 +172,9 @@ conn.commit()
 
 referenced = {lev: set(row[i + 1] for row in rows) for i, (lev, _) in enumerate(LEVELS)}
 
-for lev, _ in LEVELS:
+for lev, digits in LEVELS:
     print(f"  Building catchments_lev{lev} geometry table...")
-    geoms = read_geoms(f"{hybas_dir}/hybas_af_lev{lev}_v1c.shp")
+    geoms = read_geoms(f"{hybas_dir}/hybas_af_lev{src_lev(digits)}_v1c.shp")
     cur.execute(f"DROP TABLE IF EXISTS catchments_lev{lev}")
     cur.execute(
         f"""CREATE TABLE catchments_lev{lev} (
@@ -189,9 +206,9 @@ if os.path.exists(levels_gpkg):
     driver.DeleteDataSource(levels_gpkg)
 out_ds = driver.CreateDataSource(levels_gpkg)
 
-for lev, _ in LEVELS:
+for lev, digits in LEVELS:
     print(f"  Writing catchments_lev{lev} to catchments-levels.gpkg...")
-    src_ds = ogr.Open(f"{hybas_dir}/hybas_af_lev{lev}_v1c.shp")
+    src_ds = ogr.Open(f"{hybas_dir}/hybas_af_lev{src_lev(digits)}_v1c.shp")
     src_lyr = src_ds.GetLayer()
     out_lyr = out_ds.CreateLayer(f"catchments_lev{lev}", src_lyr.GetSpatialRef(), ogr.wkbMultiPolygon)
     out_lyr.CreateField(ogr.FieldDefn("HYBAS_ID", ogr.OFTInteger64))
@@ -218,35 +235,61 @@ echo "  $SOURCE_DIR/catchments/catchments-levels.gpkg ready — pass it to gpkg_
 
 echo "Aggregating scenario data to each level (SUB_AREA-weighted mean)..."
 
-# Column list: every scenario_current column except the ID columns, same
-# exclusion set build-geopackage.sh's own type-conversion step uses.
-COLUMNS=$(sqlite3 "$OUTPUT" "PRAGMA table_info(scenario_current)" | \
-    awk -F'|' '{print $2}' | \
-    grep -v -E '^(fid|catchID|catchment_id_int)$')
+# Built in Python rather than piping PRAGMA table_info through awk/printf:
+# column names here come straight from metadata.csv (species common names --
+# "Thomson's Gazelle", "Red-fronted Gazelle", etc.) and a text pipeline
+# splitting on a fixed separator is one stray delimiter away from quietly
+# mis-aligning a row. sqlite3's own column-name values never need that kind
+# of parsing — quote_ident below is the only escaping SQL identifiers
+# actually require (doubling an embedded double quote).
+python3 - "$OUTPUT" <<'PY'
+import sqlite3
+import sys
 
-for scenario in current reference; do
-    for lev in 04 06 08; do
-        echo "  scenario_${scenario}_lev${lev}..."
+output_path = sys.argv[1]
 
-        SELECT_EXPR=$(echo "$COLUMNS" | while IFS= read -r col; do
-            [ -n "$col" ] || continue
-            printf 'SUM(CASE WHEN s."%s" IS NOT NULL THEN s."%s" * c.SUB_AREA END) / NULLIF(SUM(CASE WHEN s."%s" IS NOT NULL THEN c.SUB_AREA END), 0) AS "%s"\n' \
-                "$col" "$col" "$col" "$col"
-        done | paste -sd',')
+EXCLUDED_COLUMNS = {"fid", "catchID", "catchment_id_int"}
+LEVELS = ["04", "06", "08"]
 
-        sqlite3 "$OUTPUT" <<SQL
-DROP TABLE IF EXISTS scenario_${scenario}_lev${lev};
-CREATE TABLE scenario_${scenario}_lev${lev} AS
-SELECT h.HYBAS_ID_int_lev${lev} AS catchment_id_int,
-       $SELECT_EXPR
-FROM scenario_${scenario} s
-JOIN catchments_lev12 c ON c.HYBAS_ID_int = s.catchment_id_int
-JOIN catchment_hierarchy h ON h.HYBAS_ID_int_lev12 = c.HYBAS_ID_int
-GROUP BY h.HYBAS_ID_int_lev${lev};
-CREATE INDEX idx_${scenario}_lev${lev}_catchment_id_int ON scenario_${scenario}_lev${lev}(catchment_id_int);
-SQL
-    done
-done
+
+def quote_ident(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+conn = sqlite3.connect(output_path)
+cur = conn.cursor()
+
+cur.execute("PRAGMA table_info(scenario_current)")
+columns = [row[1] for row in cur.fetchall() if row[1] not in EXCLUDED_COLUMNS]
+
+for scenario in ("current", "reference"):
+    for lev in LEVELS:
+        print(f"  scenario_{scenario}_lev{lev}...")
+
+        select_expr = ",\n       ".join(
+            f'SUM(CASE WHEN s.{quote_ident(col)} IS NOT NULL THEN s.{quote_ident(col)} * c.SUB_AREA END) '
+            f'/ NULLIF(SUM(CASE WHEN s.{quote_ident(col)} IS NOT NULL THEN c.SUB_AREA END), 0) AS {quote_ident(col)}'
+            for col in columns
+        )
+
+        cur.execute(f"DROP TABLE IF EXISTS scenario_{scenario}_lev{lev}")
+        cur.execute(f"""
+            CREATE TABLE scenario_{scenario}_lev{lev} AS
+            SELECT h.HYBAS_ID_int_lev{lev} AS catchment_id_int,
+                   {select_expr}
+            FROM scenario_{scenario} s
+            JOIN catchments_lev12 c ON c.HYBAS_ID_int = s.catchment_id_int
+            JOIN catchment_hierarchy h ON h.HYBAS_ID_int_lev12 = c.HYBAS_ID_int
+            GROUP BY h.HYBAS_ID_int_lev{lev}
+        """)
+        cur.execute(
+            f"CREATE INDEX idx_{scenario}_lev{lev}_catchment_id_int "
+            f"ON scenario_{scenario}_lev{lev}(catchment_id_int)"
+        )
+        conn.commit()
+
+conn.close()
+PY
 
 echo "Reclaiming space (VACUUM)..."
 sqlite3 "$OUTPUT" "VACUUM;"

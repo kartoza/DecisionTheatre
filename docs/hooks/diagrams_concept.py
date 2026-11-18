@@ -412,7 +412,7 @@ def multires_catchments(p: dict) -> str:
     d.arrow(698, 160, 698, 210)
     d.box(Box(598, 212, 200, 62, "QueryCatchments", ["picks the level", "for the request zoom"],
               fill=p["status"]["successTint"], stroke=p["status"]["success"], mono=True))
-    d.label(30, 320, "z2-z5 -> lev04 (189 basins)   z6-z8 -> lev06 (2,442)   z9-z10 -> lev08 (27,448)   "
+    d.label(30, 320, "z0-z5 -> lev04 (2,442 basins)   z6-z8 -> lev06 (2,442)   z9-z10 -> lev08 (27,448)   "
                      "z11+ -> lev12 detail, unchanged", size=11.5, color=p["ink"]["muted"])
     d.label(30, 344, "GOLDEN RULE: site analysis and catchment selection always read lev12 — "
                      "these tables exist only for this rendering path.",
