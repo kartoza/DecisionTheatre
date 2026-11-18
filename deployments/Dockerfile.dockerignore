@@ -23,6 +23,7 @@ internal/server/static
 requirements/site
 
 data
+datasources
 docs_site
 resources
 
