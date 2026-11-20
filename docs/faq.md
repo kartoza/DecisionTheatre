@@ -24,7 +24,7 @@ Linux (amd64/arm64), macOS (Intel/Apple Silicon), and Windows (x86_64), each as 
 
 ### What license is it released under?
 
-GPL-3.0. See the [License](about/license.md) page for details and third-party licenses.
+AGPL-3.0. See the [License](about/license.md) page for details and third-party licenses.
 
 ## Installation and Data
 

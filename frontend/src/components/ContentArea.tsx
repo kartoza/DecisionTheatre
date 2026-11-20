@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPanel, Box, Button, Checkbox, FormControl, FormLabel, HStack, Slide, Slider, SliderFilledTrack, SliderThumb, SliderTrack, Spinner, Tooltip, VStack, useToast } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ViewPane from './ViewPane';
@@ -46,7 +49,7 @@ interface ContentAreaProps {
   is3DMode?: boolean;
   // Global map toggles: one control in the header, every pane reflects it.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   // Slider synchronization
@@ -85,18 +88,6 @@ interface ContentAreaProps {
   refreshKey?: number;
   fullDomainData?: FullDomainData | null;
 }
-
-// Backend fallbacks for target inputs the server treats as unset (see
-// workflow4FireCascade in recalculate.go). computeTargetDrafts must seed a
-// slider's starting position with the same value the backend will actually
-// compute against once the field is missing from both ideal and current —
-// otherwise the slider silently displays 0 while the server treats the
-// field as this default, and a user's first, small-looking nudge off that
-// display triggers a large hidden jump (0.45 -> their new value, not
-// 0 -> their new value) in every metric the field feeds into.
-const BACKEND_TARGET_DEFAULTS: Record<string, number> = {
-  propEarly: 0.45,
-};
 
 const paneVariants = {
   hidden: { opacity: 0, scale: 0.92 },
@@ -208,7 +199,7 @@ function ContentArea({
   colorScaleType,
   is3DMode,
   isIdentifyMode,
-  isChoroplethEnabled,
+  choroplethOpacity,
   isGoogleBasemap,
   onGoogleBasemapChange,
   swiperPosition,
@@ -268,6 +259,18 @@ function ContentArea({
 
   const isQuad = mode === 'quad';
   const minimumQuadPaneCount = DEFAULT_PANE_STATES.length;
+
+  // Below 600px the 3-column grid packs panes too small to read or tap
+  // accurately, so grid view collapses to just the focused pane rather than
+  // the usual six -- still "grid view" as far as layoutMode is concerned,
+  // just not rendering the other panes until the screen is wide enough.
+  const [isSmallScreen, setIsSmallScreen] = useState(() => window.innerWidth < 600);
+  useEffect(() => {
+    const update = () => setIsSmallScreen(window.innerWidth < 600);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   const editableTargetKeys = useMemo(() => {
     const availableKeys = new Set<string>();
@@ -356,10 +359,15 @@ function ContentArea({
       } else if (typeof idealVal === 'number' && Number.isFinite(idealVal)) {
         nextDrafts[key] = String(idealVal);
       } else {
-        const fallback = siteIndicators?.idealLower?.[key];
-        nextDrafts[key] = typeof fallback === 'number' && Number.isFinite(fallback)
-          ? String(fallback)
-          : String(BACKEND_TARGET_DEFAULTS[key] ?? 0);
+        const idealLowerVal = siteIndicators?.idealLower?.[key];
+        const referenceVal = siteIndicators?.reference?.[key];
+        if (typeof idealLowerVal === 'number' && Number.isFinite(idealLowerVal)) {
+          nextDrafts[key] = String(idealLowerVal);
+        } else if (typeof referenceVal === 'number' && Number.isFinite(referenceVal)) {
+          nextDrafts[key] = String(referenceVal);
+        } else {
+          nextDrafts[key] = '0';
+        }
       }
     }
     return nextDrafts;
@@ -572,10 +580,11 @@ function ContentArea({
   // (e.g. switching to belt charts, which keep growing a row every 3 panes).
   const gridViewMode = viewModes[0] ?? 'map';
   const quadPaneCap = maxPanesForViewMode(gridViewMode);
+  const focusedIndex = Math.min(focusedPane, Math.max(0, paneStates.length - 1));
   const visibleIndices = isQuad
-    ? paneStates.slice(0, quadPaneCap).map((_, index) => index)
-    : [Math.min(focusedPane, Math.max(0, paneStates.length - 1))];
-  const quadRows = quadRowsForPaneCount(visibleIndices.length, gridViewMode);
+    ? (isSmallScreen ? [focusedIndex] : paneStates.slice(0, quadPaneCap).map((_, index) => index))
+    : [focusedIndex];
+  const quadRows = isSmallScreen ? 1 : quadRowsForPaneCount(visibleIndices.length, gridViewMode);
 
   // One zoom cluster for the whole grid, on the bottom-left map. Recomputed
   // rather than fixed, because which pane is bottom-left changes: panes are
@@ -615,12 +624,12 @@ function ContentArea({
         // only 2, no matter how many the pane count actually needed, so a
         // 6-pane grid already needed 3 rows and pushed the extra one
         // off-screen with no visible scroll affordance pointing at it.
-        gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
-        gridTemplateRows={isQuad ? undefined : '1fr'}
-        gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
-        alignContent={isQuad ? 'start' : undefined}
-        gap={isQuad ? '2px' : 0}
-        bg={isQuad ? 'gray.700' : 'transparent'}
+        gridTemplateColumns={isQuad && !isSmallScreen ? 'repeat(3, minmax(0, 1fr))' : '1fr'}
+        gridTemplateRows={isQuad && !isSmallScreen ? undefined : '1fr'}
+        gridAutoRows={isQuad && !isSmallScreen ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}
+        alignContent={isQuad && !isSmallScreen ? 'start' : undefined}
+        gap={isQuad && !isSmallScreen ? '2px' : 0}
+        bg={isQuad && !isSmallScreen ? 'gray.700' : 'transparent'}
         overflowY={isQuad ? 'auto' : 'hidden'}
         overflowX="hidden"
         sx={{
@@ -641,7 +650,7 @@ function ContentArea({
               >
                 <ViewPane
                   comparison={paneStates[i]}
-                  compact
+                  compact={!isSmallScreen}
                   paneCount={paneStates.length}
                   paneIndex={i}
                   layoutMode={mode}
@@ -666,7 +675,7 @@ function ContentArea({
                   colorScaleType={colorScaleType}
                   is3DMode={is3DMode}
                   isIdentifyMode={isIdentifyMode}
-                  isChoroplethEnabled={isChoroplethEnabled}
+                  choroplethOpacity={choroplethOpacity}
                   isGoogleBasemap={isGoogleBasemap}
                   onGoogleBasemapChange={onGoogleBasemapChange}
                   showNavigation={i === navigationPane}
@@ -722,7 +731,7 @@ function ContentArea({
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             isIdentifyMode={isIdentifyMode}
-            isChoroplethEnabled={isChoroplethEnabled}
+            choroplethOpacity={choroplethOpacity}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={onGoogleBasemapChange}
             showNavigation={visibleIndices[0] === navigationPane}

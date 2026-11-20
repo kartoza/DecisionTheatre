@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Human-readable descriptions of the ecological recalculation workflows and
  * per-column formulas that the backend (recalculate.go) applies whenever the

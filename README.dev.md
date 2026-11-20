@@ -257,22 +257,22 @@ The application requires two data files: map tiles (MBTiles) and scenario data (
 Convert a GeoPackage with vector layers to MBTiles:
 
 ```bash
-cd resources/mbtiles
-./gpkg_to_mbtiles.sh UoW_layers.gpkg
+./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg
 ```
 
-The output is automatically placed in `data/mbtiles/africa.mbtiles`.
+The output is automatically placed in `data/mbtiles/context.mbtiles`.
 
 ### Scenario Datapack
 
 Build the scenario datapack from catchment geometries and CSV data:
 
 ```bash
-# Place input files in data/
-# - catchments.gpkg (catchment geometries)
-# - current.csv (current scenario metrics)
-# - reference.csv (reference scenario metrics)
-# - metadata.csv (optional column descriptions)
+# Place input files in datasources/
+# - catchments/catchments.gpkg (catchment geometries)
+# - scenarios/current.csv (current scenario metrics)
+# - scenarios/reference.csv (reference scenario metrics)
+# metadata.csv (optional column descriptions) goes in data/ -- it's shipped
+# at runtime, not just a build input.
 
 make geopackage
 ```

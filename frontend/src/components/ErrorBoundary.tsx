@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Component, ErrorInfo, ReactNode } from 'react';
 import { Box, Heading, Text, Button, VStack, Code } from '@chakra-ui/react';
 

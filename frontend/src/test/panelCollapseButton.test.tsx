@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The collapse/close affordance shared by every docked right-hand panel.
  * Reported: it should be "more than just a simple > character" -- a circle
@@ -39,9 +42,12 @@ describe('PanelCollapseButton', () => {
     expect(screen.getByRole('button', { name: 'Collapse panel' }).textContent).not.toContain('>');
   });
 
-  it('still points right, like the plain ">" it replaces -- only the colours are inverted', () => {
+  it('collapse points right and its expand twin points left', () => {
+    // The pair reads as open/close of one thing precisely because the two
+    // chevrons are the same styled control facing opposite ways.
     expect(SOURCE).toContain('FiChevronRight');
-    expect(SOURCE).not.toContain('FiChevronLeft');
+    expect(SOURCE).toContain('FiChevronLeft');
+    expect(SOURCE).toContain('PanelExpandButton');
   });
 
   it('is a filled circle (borderRadius="full"), not the plain ghost variant', () => {

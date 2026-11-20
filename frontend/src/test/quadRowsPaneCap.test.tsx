@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The grid's pane-count cap (#204).
  *
@@ -21,7 +24,7 @@
 import type { ComponentProps } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
 import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import ContentArea from '../components/ContentArea';
@@ -159,7 +162,33 @@ describe('quad grid pane cap', () => {
     // styles, so they aren't queryable from jsdom's rendered DOM -- pinned
     // at the source level instead.
     const source = readFileSync('src/components/ContentArea.tsx', 'utf8');
-    expect(source).toContain("gridTemplateColumns={isQuad ? 'repeat(3, minmax(0, 1fr))' : '1fr'}");
-    expect(source).toContain('gridAutoRows={isQuad ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}');
+    expect(source).toContain("gridTemplateColumns={isQuad && !isSmallScreen ? 'repeat(3, minmax(0, 1fr))' : '1fr'}");
+    expect(source).toContain('gridAutoRows={isQuad && !isSmallScreen ? `calc((100% - ${(quadRows - 1) * 2}px) / ${quadRows})` : undefined}');
+  });
+});
+
+describe('quad grid on small screens', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('collapses to a single pane below 600px', () => {
+    setWindowWidth(480);
+    renderGrid(6, 'map', { focusedPane: 2 });
+    expect(visiblePaneIndices()).toEqual([2]);
+  });
+
+  it('shows all six panes again once the window widens past 600px', () => {
+    setWindowWidth(480);
+    renderGrid(6, 'map', { focusedPane: 2 });
+    expect(visiblePaneIndices()).toEqual([2]);
+
+    setWindowWidth(1024);
+    expect(visiblePaneIndices()).toHaveLength(6);
   });
 });

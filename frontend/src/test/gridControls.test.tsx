@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The consolidated grid controls.
  *
@@ -13,7 +16,7 @@
  */
 import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, within, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, within, cleanup, fireEvent, act } from '@testing-library/react';
 import { ChakraProvider } from '@chakra-ui/react';
 import { theme } from '../styles/theme';
 import GridControls from '../components/GridControls';
@@ -26,7 +29,7 @@ function renderControls(overrides: Partial<Props> = {}) {
   const handlers = {
     onViewModeChange: vi.fn(),
     onIs3DModeChange: vi.fn(),
-    onChoroplethEnabledChange: vi.fn(),
+    onChoroplethOpacityChange: vi.fn(),
     onIdentifyModeChange: vi.fn(),
     onGoogleBasemapChange: vi.fn(),
     onSwiperEnabledChange: vi.fn(),
@@ -35,7 +38,7 @@ function renderControls(overrides: Partial<Props> = {}) {
     viewMode: 'map',
     siteId: 'site-1',
     is3DMode: false,
-    isChoroplethEnabled: true,
+    choroplethOpacity: 100,
     isIdentifyMode: false,
     isGoogleBasemap: false,
     isSwiperEnabled: true,
@@ -66,7 +69,7 @@ describe('GridControls map toggles', () => {
   it('draws one control per setting, not one per pane', () => {
     const { wide } = renderControls();
     for (const label of [
-      'Show 3D extrusion', 'Hide choropleth', 'Identify catchment',
+      'Show 3D extrusion', 'Choropleth transparency', 'Identify catchment',
       'Switch to satellite', 'Disable map swiper', 'Zoom to site',
     ]) {
       expect(wide.getAllByLabelText(label)).toHaveLength(1);
@@ -79,10 +82,36 @@ describe('GridControls map toggles', () => {
     expect(wide.getByLabelText('Identify catchment')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('asks for the opposite of the current value', () => {
-    const handlers = renderControls({ isChoroplethEnabled: true });
-    fireEvent.click(handlers.wide.getByLabelText('Hide choropleth'));
-    expect(handlers.onChoroplethEnabledChange).toHaveBeenCalledWith(false);
+  it('opens a transparency popover instead of toggling instantly, with Hide/Show at the ends', () => {
+    const handlers = renderControls({ choroplethOpacity: 100 });
+    const button = handlers.wide.getByLabelText('Choropleth transparency');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+
+    // Chakra's Popover content never leaves the DOM, it is just animated
+    // in/out (Framer Motion, which does not resolve in jsdom) -- aria-expanded
+    // on the trigger above is the reliable open/closed signal; {hidden: true}
+    // here opts out of Testing Library's visibility check for the same
+    // reason, not because the slider is actually meant to be hidden.
+    const slider = handlers.wide.getByRole('slider', { hidden: true });
+    expect(slider).toHaveAttribute('aria-valuenow', '100');
+    expect(handlers.wide.getByText('Hide')).toBeInTheDocument();
+    expect(handlers.wide.getByText('Show')).toBeInTheDocument();
+
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    expect(handlers.onChoroplethOpacityChange).toHaveBeenCalledWith(99);
+  });
+
+  it('dismisses the popover from its own close button without changing the value', () => {
+    const handlers = renderControls({ choroplethOpacity: 60 });
+    const button = handlers.wide.getByLabelText('Choropleth transparency');
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(handlers.wide.getByLabelText('Close'));
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(handlers.onChoroplethOpacityChange).not.toHaveBeenCalled();
   });
 
   it('hides the map toggles when the panes are not showing maps', () => {
@@ -193,5 +222,94 @@ describe('Header placement', () => {
       </ChakraProvider>,
     );
     expect(screen.queryByRole('radiogroup', { name: 'View for all panes' })).toBeNull();
+  });
+});
+
+describe('narrow layout at 1272px and below', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('hides the inline map toggles and leaves only the "More" menu at 1272px', () => {
+    setWindowWidth(1272);
+    const { narrow } = renderControls();
+    expect(narrow.queryByLabelText('Show 3D extrusion')).toBeNull();
+    expect(narrow.getByLabelText('More controls')).toBeInTheDocument();
+  });
+
+  it('shows the inline map toggles again above 1272px', () => {
+    setWindowWidth(1273);
+    const { narrow } = renderControls();
+    expect(narrow.getByLabelText('Show 3D extrusion')).toBeInTheDocument();
+  });
+});
+
+describe('view switch at 1000px and below', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('hides the inline view switch and moves it into the "More" menu at 1000px', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls();
+    expect(narrow.queryByRole('radiogroup', { name: 'View for all panes' })).toBeNull();
+
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+    for (const label of ['Map', 'Chart', 'Flat', 'Dial', 'Table']) {
+      expect(within(menu).getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it('shows the inline view switch again above 1000px, without duplicating it into the menu', async () => {
+    setWindowWidth(1001);
+    const { narrow } = renderControls();
+    expect(narrow.getByRole('radiogroup', { name: 'View for all panes' })).toBeInTheDocument();
+
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).queryByText('Map')).toBeNull();
+  });
+});
+
+describe('overflow menu section headings', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    act(() => { window.dispatchEvent(new Event('resize')); });
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it('groups the view switch, range mode and map toggles under their own headings', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls({ onRangeModeChange: vi.fn() });
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+
+    expect(within(menu).getByText('Navigation')).toBeInTheDocument();
+    expect(within(menu).getByText('Zone range controls')).toBeInTheDocument();
+    expect(within(menu).getByText('Map controls')).toBeInTheDocument();
+  });
+
+  it('omits the Zone range controls heading when no range mode handler is supplied', async () => {
+    setWindowWidth(1000);
+    const { narrow } = renderControls();
+    fireEvent.click(narrow.getByLabelText('More controls'));
+    const menu = await screen.findByRole('menu');
+
+    expect(within(menu).queryByText('Zone range controls')).toBeNull();
+    expect(within(menu).getByText('Map controls')).toBeInTheDocument();
   });
 });

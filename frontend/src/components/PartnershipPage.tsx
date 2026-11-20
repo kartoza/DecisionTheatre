@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Box, Button, Container, Heading, Text, VStack } from '@chakra-ui/react';
 import { motion } from 'framer-motion';
 import { FiArrowLeft } from 'react-icons/fi';

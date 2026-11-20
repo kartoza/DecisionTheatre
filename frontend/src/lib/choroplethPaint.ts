@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec';
 import type { ColorScaleType, ZoneStats } from '../types';
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """MkDocs macros: generate documentation from the scripts, on demand.
 
 ``scripts/shell-help.sh`` is the single place the project's commands are listed.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package main
 
 // diagnosticScript runs inside the desktop window when DT_WEBVIEW_DIAG=1 and

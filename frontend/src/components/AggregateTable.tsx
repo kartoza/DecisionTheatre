@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useMemo, useEffect, useRef, useState } from 'react';
 import { Box, Table, Thead, Tbody, Tr, Th, Td, Text, HStack, VStack, Spinner } from '@chakra-ui/react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -345,7 +348,8 @@ function AggregateTable({
                     borderRadius="xl"
                     border="1px solid"
                     borderColor="whiteAlpha.200"
-                    overflow="hidden"
+                    overflowX="auto"
+                    overflowY="hidden"
                     mb={6}
                   >
                     <Table variant="simple" size="sm">

@@ -26,7 +26,7 @@ Africa Map with Catchments:
 
 ## Implementation Details
 
-- Catchment geometries stored in a dedicated MBTiles file (`africa.mbtiles`)
+- Catchment geometries stored in a dedicated MBTiles file (`context.mbtiles`)
 - Each catchment has a unique identifier (catchment_id) used to join with attribute data
 - Vector tiles contain a `catchments` source layer with polygon geometries
 - Catchments are rendered as filled polygons with semi-transparent outlines
@@ -37,5 +37,5 @@ Africa Map with Catchments:
 
 ### Key Files
 
-- `data/mbtiles/africa.mbtiles` - Catchment vector tile data (user-provided)
+- `data/mbtiles/context.mbtiles` - Catchment vector tile data (user-provided)
 - `frontend/src/components/MapView.tsx` - Catchment layer styling

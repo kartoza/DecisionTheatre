@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Deletes entries older than `ttlMs` from a TTL-tagged cache Map, mutating it in place.
  *

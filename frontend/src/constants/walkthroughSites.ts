@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Site IDs for the guided demo tours under data/walkthroughs/{id}.json. Each ID
  * must match both the JSON file's own "id" field and the filename, since

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * Timing for fetch() calls to the Go server, so a slow response surfaces as a
  * toast instead of the app just looking frozen — in both the browser and

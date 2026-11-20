@@ -56,6 +56,17 @@ startup.
   - GeoPackage (SQLite with spatial extensions) for catchment data
   - MBTiles for vector tiles
   - JSON files for sites
+- **Data architecture**: two directories with a strict contract.
+  `data/` holds only processed artefacts the deployed server reads at
+  runtime (datapack GeoPackage, tilesets, `metadata.csv`, runtime lookup
+  CSVs, walkthroughs) and is untracked, distributed as a data pack.
+  `datasources/` holds every input the generation pipeline consumes
+  (scenario CSVs, source GeoPackages, R analysis scripts, tiling
+  configuration), is version-controlled, and never ships. A file read only
+  by `scripts/build-*` belongs in `datasources/`; a file the running
+  server opens belongs in `data/`. See
+  `docs/administrator-guide/data-directory.md` and
+  `docs/developer-guide/data-preparation.md`.
 
 ### Frontend (React + TypeScript)
 
@@ -313,13 +324,43 @@ a strobe.
   `groupingvariables`, `groupingvalues`, `dial0middle`
 - `GET /api/choropleth` - GeoJSON for viewport (`valuesOnly=1` returns every catchment's raw value)
 - `GET /api/catchment-values` - catchment ids and values for a viewport, no geometry; the
-  join payload for the vector-tile choropleth, which sources geometry from
-  `catchments_lev12` in the tile pipeline and applies values as MapLibre feature state
+  join payload for the vector-tile choropleth, which sources geometry from the
+  multi-resolution catchment tiles (`catchments_lev04/06/08/12`, one level per
+  zoom band) and applies values as MapLibre feature state. An optional `zoom`
+  parameter selects the level whose ids match the tiles in that band
+  (z2–5 → lev04, z6–8 → lev06, z9–10 → lev08, z11+ → lev12 detail); coarse
+  levels return the precomputed basin aggregates, bbox-independent, so the
+  response is cacheable per scenario+attribute+level. Without `zoom` the
+  endpoint serves lev12 values for the bbox, unchanged. With `--legacy`
+  (`LegacyCatchments`), `zoom` is ignored outright and lev12 values are
+  always served — GOLDEN RULE: `--legacy` geometry is lev12 at every zoom,
+  so its values must stay lev12 too, never aggregated up to a basin just
+  because the request's zoom number happens to fall in a coarse band's
+  range. On current datapacks
+  each level ships as its own standalone tileset tiled at exactly one zoom
+  (z0/6/9/11) and overzoomed across its display band —
+  `/data/catchments-tiles.json` then serves a `tilesets` array (per-level
+  tile URLs + `tilezoom`) and the client builds one MapLibre source per band
+  with `minzoom = maxzoom = tilezoom`; legacy combined tilesets keep the old
+  TileJSON document and shared-source behaviour. Launching the server with
+  `--legacy` serves lev12 geometry across the whole range instead (a separate
+  `catchments-lev12-full` tileset, z2-z12), when that tileset has been built;
+  the document shape is the same single-band form a pre-multires datapack has
+  always produced, so no other endpoint or client behaviour changes.
 - `GET /api/stats/full` - full-dataset min/max/mean/count for one scenario and
   attribute, computed server-side in a single aggregate scan; what the "Full"
   range mode reads instead of downloading every raw value
 - `GET /api/scenario/{scenario}/{attribute}` - Attribute values for all catchments
-- `GET /api/catchment/{id}` - Catchment details
+- `GET /api/catchment/{id}` - Catchment details, always read from the lev12
+  detail tables.
+- `GET /api/catchments/at-point?lng={lng}&lat={lat}` - resolves the lev12
+  catchment containing a point to its id (`{"id": "..."}`), 404 if none
+  does. GOLDEN RULE: catchment identification always reads lev12, regardless
+  of which multi-resolution band (lev04/06/08/12) happens to be rendered at
+  the caller's current zoom — the identify tool calls this first to get an
+  id, then `/api/catchment/{id}` above for that id's attributes, so a click
+  always reports the real lev12 catchment under the cursor rather than
+  whichever coarser basin happens to be on screen.
 - `GET /api/aggregate` - Area-weighted aggregates for an extent
 - `GET /api/precalculate/full` - Precomputed full-domain means (cached server-side)
 - `GET /api/compare` - Scenario comparison data

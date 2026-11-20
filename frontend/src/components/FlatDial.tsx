@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The flat dial: a horizontal condition band read like a belt.
  *
@@ -55,7 +58,7 @@ function FlatDial({
   max: inputMax,
   attribute = '',
   unit = '',
-  compact = false,
+  compact: compactProp = false,
   // Accepted for interface parity with DialChart, which uses it to trade label
   // room against arc radius. A flat band has no radius to trade, and its labels
   // already scale off `compact` and `paneCount`, so it has nothing to apply.
@@ -99,8 +102,18 @@ function FlatDial({
   const min = typeof inputMin === 'number' && !isNaN(inputMin) ? inputMin : 0;
   const max = inputMax;
 
-  const veryDense = compact && paneCount > 5;
   const { width, height } = size;
+  // `compactProp` only says whether this is one of several panes in a grid --
+  // a single pane is always `compact={false}` no matter how small the screen
+  // actually is. The buckle and bisector markers below are sized off barH
+  // with no further scaling when compact is false, so on a narrow or short
+  // single pane they ran past the band and collided with the tick value
+  // labels drawn beneath it (reported: not responsive on smaller screens).
+  // Deriving compactness from what this component itself measures, in
+  // addition to the prop, closes that gap without needing the caller to
+  // know anything about it.
+  const compact = compactProp || width < 520 || height < 320;
+  const veryDense = compact && paneCount > 5;
 
   // --- Geometry -----------------------------------------------------------
   //
@@ -404,35 +417,60 @@ function FlatDial({
               {bisector(currentValue, SCENARIO_COLORS.current, 'NOW', false)}
               {buckle(targetDrawValue)}
 
-              {/* Legend: each entry drawn as the mark it explains. */}
-              {legend.map((item, i) => {
-                const colW = barW / 3;
-                const cx = barX + colW * i + 14;
-                return (
-                  <g key={item.label}>
-                    {item.kind === 'buckle' ? (
-                      <>
-                        <rect x={cx - 6} y={legendY - 8} width={12} height={16} rx={3} fill="none" stroke={item.color} strokeWidth={2} />
-                        <line x1={cx} y1={legendY - 5} x2={cx} y2={legendY + 5} stroke={item.color} strokeWidth={1.5} />
-                      </>
-                    ) : (
-                      <line
-                        x1={cx}
-                        y1={legendY - 8}
-                        x2={cx}
-                        y2={legendY + 8}
-                        stroke={item.color}
-                        strokeWidth={2.5}
-                        strokeDasharray={item.dashed ? '4 3' : undefined}
-                        strokeLinecap="round"
-                      />
-                    )}
-                    <text x={cx + 12} y={legendY + fontLegend / 3} fill="#cbd5e0" fontSize={fontLegend}>
-                      {item.label}
-                    </text>
-                  </g>
-                );
-              })}
+              {/* Legend: each entry drawn as the mark it explains, in a real
+                  HTML flexbox rather than three equal SVG columns (barW / 3).
+                  Dividing the width evenly scaled with the container, but the
+                  label text itself did not shrink below fontLegend's 10px
+                  floor -- on a narrow pane the third column's text still ran
+                  past the right edge, where the clipping Box hid it (same
+                  failure as the arc gauge's fixed-offset legend). flex-wrap
+                  drops entries onto another row instead of past the edge. */}
+              <foreignObject
+                x={barX}
+                y={legendY - fontLegend}
+                width={Math.max(0, barW)}
+                height={Math.max(0, height - (legendY - fontLegend))}
+              >
+                <div
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    columnGap: compact ? 14 : 24,
+                    rowGap: 4,
+                    fontFamily: 'inherit',
+                    fontSize: fontLegend,
+                    color: '#cbd5e0',
+                  }}
+                >
+                  {legend.map((item) => (
+                    <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                      <svg width={16} height={16} style={{ flexShrink: 0 }}>
+                        {item.kind === 'buckle' ? (
+                          <>
+                            <rect x={2} y={0} width={12} height={16} rx={3} fill="none" stroke={item.color} strokeWidth={2} />
+                            <line x1={8} y1={3} x2={8} y2={13} stroke={item.color} strokeWidth={1.5} />
+                          </>
+                        ) : (
+                          <line
+                            x1={8}
+                            y1={0}
+                            x2={8}
+                            y2={16}
+                            stroke={item.color}
+                            strokeWidth={2.5}
+                            strokeDasharray={item.dashed ? '4 3' : undefined}
+                            strokeLinecap="round"
+                          />
+                        )}
+                      </svg>
+                      <span>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </foreignObject>
             </svg>
           </motion.div>
         )}

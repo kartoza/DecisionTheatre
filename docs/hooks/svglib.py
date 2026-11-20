@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Minimal dependency-free SVG builder for Kartoza-branded documentation diagrams.
 
 Deliberately not a general graphics library. It provides just enough — rounded

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The identify results table, moved from a map-anchored popup into the
  * docked side panel (issue #203). Covers: content renders correctly for

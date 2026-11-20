@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 // Warning message keys returned to the frontend. Keep these stable so the UI

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useState } from 'react';
 import {
   Box,
@@ -201,10 +204,6 @@ export default function TourGuide() {
   const [demoStatus, setDemoStatus] = useState<{ message: string; pct: number } | null>(null);
   const dragControls = useDragControls();
   const siteCountAtBoundaryStepRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!localStorage.getItem(TOUR_SEEN_KEY)) setVisible(true);
-  }, []);
 
   // Snapshot how many sites exist as the user arrives at the "Define Your
   // Boundary" step, so we can tell on Next whether they actually created one.

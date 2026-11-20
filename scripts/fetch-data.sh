@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # fetch-data.sh — Download all data files from a Google Drive folder.
 #
@@ -13,10 +16,13 @@
 #                       to the repository root.
 #
 # What it does:
-#   Downloads all files from the given Drive folder (and any subfolders)
-#   into <data-dir>, preserving the folder structure. Every file is
-#   re-downloaded and overwritten unconditionally, without checking
-#   whether the remote copy has changed.
+#   The Drive folder has two top-level subfolders, "data" and
+#   "datasources", mirroring the repo's own data/ vs datasources/ split.
+#   Each is downloaded straight into its matching local directory (data/
+#   into <data-dir>, datasources/ into datasources/ next to it), preserving
+#   their own subfolder structure. Every file is re-downloaded and
+#   overwritten unconditionally, without checking whether the remote copy
+#   has changed.
 #
 # Requirements:
 #   rclone — https://rclone.org/install/
@@ -67,6 +73,7 @@ FOLDER_ARG="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="${2:-$REPO_ROOT/data}"
+SOURCE_DIR="$REPO_ROOT/datasources"
 
 # ── Extract folder ID from URL or bare ID ─────────────────────────────────────
 
@@ -129,18 +136,19 @@ check_remote() {
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
-download_csvs() {
-    mkdir -p "$DATA_DIR"
+# download_subfolder copies one named top-level subfolder of the pinned Drive
+# root into a local destination. --drive-root-folder-id pins rclone to the
+# given root folder ID regardless of where it lives in the Drive hierarchy;
+# the "remote:<name>" path segment is then resolved by name *relative to that
+# pinned root*, not as a Drive-wide path. rclone copy is recursive by
+# default, so each subfolder's own subfolders are mirrored too.
+download_subfolder() {
+    local drive_subfolder="$1" dest_dir="$2"
+    mkdir -p "$dest_dir"
 
-    info "Fetching all files from Google Drive folder: ${BOLD}${FOLDER_ID}${RESET}"
-    info "Destination: ${BOLD}${DATA_DIR}${RESET}"
+    info "Fetching Drive folder '${drive_subfolder}' (${BOLD}${FOLDER_ID}${RESET})"
+    info "Destination: ${BOLD}${dest_dir}${RESET}"
     echo
-
-    # Build the rclone source path.
-    # --drive-root-folder-id pins rclone to the specific folder regardless of
-    # where it lives in the Drive hierarchy, so no folder path is needed.
-    # rclone copy is recursive by default, so subfolders are mirrored.
-    local src="${RCLONE_REMOTE}:"
 
     # --bind 0.0.0.0 pins outgoing connections to IPv4. Some hosts (e.g. ones
     # with only a Tailscale IPv6 address and no real IPv6 default route)
@@ -152,7 +160,7 @@ download_csvs() {
     # dir), so rclone's chtimes on them fails with "operation not permitted"
     # when run as a regular user. They are large and not needed by this
     # pipeline, so skip them entirely rather than fetch and then fail.
-    rclone copy "$src" "$DATA_DIR" \
+    rclone copy "${RCLONE_REMOTE}:${drive_subfolder}" "$dest_dir" \
         --drive-root-folder-id "$FOLDER_ID" \
         --progress \
         --stats-one-line \
@@ -169,28 +177,39 @@ download_csvs() {
     echo
 }
 
+download_all() {
+    download_subfolder "data" "$DATA_DIR"
+    download_subfolder "datasources" "$SOURCE_DIR"
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
-print_summary() {
+print_dir_summary() {
+    local dir="$1"
     local all_files
-    all_files=$(find "$DATA_DIR" -type f | sort)
+    all_files=$(find "$dir" -type f | sort)
 
     if [[ -z "$all_files" ]]; then
-        warn "No files found in ${DATA_DIR} after download."
+        warn "No files found in ${dir} after download."
         return
     fi
 
-    info "Files in ${DATA_DIR}:"
+    info "Files in ${dir}:"
     echo
     printf "  %-50s  %s\n" "FILE" "SIZE"
     printf "  %-50s  %s\n" "----" "----"
     while IFS= read -r f; do
         local rel size
-        rel="${f#$DATA_DIR/}"
+        rel="${f#$dir/}"
         size=$(du -h "$f" | cut -f1)
         printf "  %-50s  %s\n" "$rel" "$size"
     done <<< "$all_files"
     echo
+}
+
+print_summary() {
+    print_dir_summary "$DATA_DIR"
+    print_dir_summary "$SOURCE_DIR"
     info "Done. Run ${BOLD}make geopackage${RESET} to build datapack.gpkg."
 }
 
@@ -198,5 +217,5 @@ print_summary() {
 
 check_rclone
 check_remote
-download_csvs
+download_all
 print_summary

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useRef, useState, useCallback } from 'react';
 import { Box, IconButton, useColorModeValue } from '@chakra-ui/react';
 import { FiX } from 'react-icons/fi';

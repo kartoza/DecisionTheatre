@@ -26,6 +26,7 @@ requirements/site
 
 data
 data (Copy)
+datasources
 docs_site
 resources
 certificate

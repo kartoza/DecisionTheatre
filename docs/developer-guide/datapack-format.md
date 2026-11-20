@@ -18,8 +18,13 @@ A datapack is distributed as a compressed archive (`.zip` or `.7z`) with the fol
 decision-theatre-data-v{VERSION}/
 └── data/
     ├── datapack.gpkg           # GeoPackage: catchment geometries + all scenario data
+    ├── catchments.gpkg         # Standalone catchment geometry — shipped, never read by the server
     └── mbtiles/
-        ├── africa.mbtiles      # Vector tile archive for the background map
+        ├── context.mbtiles             # Vector tile archive for the background map
+        ├── catchments-lev04.mbtiles    # Per-level catchment tilesets, each tiled at a
+        ├── catchments-lev06.mbtiles    #   single zoom (z0/6/9/11) and overzoomed by
+        ├── catchments-lev08.mbtiles    #   MapLibre across its display band — see the
+        ├── catchments-lev12.mbtiles    #   Data Preparation guide
         └── style.json          # MapLibre GL style config for map rendering
 ```
 
@@ -29,7 +34,7 @@ The `sites/`, `projects/`, and `images/` directories are **not** distributed —
 
 ## Input Files (Build-Time)
 
-These files are consumed by `scripts/build-geopackage.sh` to produce `datapack.gpkg`. They are not shipped in the final archive.
+These files live in `datasources/` (`datasources/catchments/`, `datasources/scenarios/` — see [Data Preparation](data-preparation.md) for the exact layout) and are consumed by `scripts/build-geopackage.sh` to produce `datapack.gpkg`. They are not shipped in the final archive as-is — except `catchments.gpkg`, which is also copied unmodified to `data/catchments.gpkg` and does ship, for standalone GIS use (see [Map Tiles](#map-tiles-contextmbtiles) above and the Administrator Guide's [Data Directory](../administrator-guide/data-directory.md#shipped-but-not-read) page).
 
 ### Scenario Data
 
@@ -177,7 +182,7 @@ dt datapack        # Produces dist/decision-theatre-data-v{VERSION}.zip
 
 ---
 
-## Map Tiles (`africa.mbtiles`)
+## Map Tiles (`context.mbtiles`)
 
 A [MapLibre-compatible MBTiles](https://docs.mapbox.com/help/glossary/mbtiles/) archive containing pre-rendered vector tiles for the base map. The application serves tiles from this file via a local tile server.
 

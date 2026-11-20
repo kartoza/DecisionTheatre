@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import { useEffect, useState } from 'react';
 import {
   Box,
   Flex,
@@ -16,8 +20,12 @@ import {
   ModalFooter,
   Button,
   useDisclosure,
+  Menu,
+  MenuButton,
+  MenuList,
+  MenuItem,
 } from '@chakra-ui/react';
-import { FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiTable, FiDownload, FiSettings } from 'react-icons/fi';
+import { FiHelpCircle, FiHome, FiMapPin, FiMap, FiEdit2, FiTable, FiDownload, FiSettings, FiMoreVertical } from 'react-icons/fi';
 import { clearBrowserAppCache } from '../types';
 import type { AppPage } from '../types';
 import { getAppRuntime } from '../types/runtime';
@@ -70,8 +78,8 @@ interface HeaderProps {
     isExtracting?: boolean;
     is3DMode?: boolean;
     onIs3DModeChange?: (enabled: boolean) => void;
-    isChoroplethEnabled?: boolean;
-    onChoroplethEnabledChange?: (enabled: boolean) => void;
+    choroplethOpacity?: number;
+    onChoroplethOpacityChange?: (opacity: number) => void;
     isIdentifyMode?: boolean;
     onIdentifyModeChange?: (enabled: boolean) => void;
     isGoogleBasemap?: boolean;
@@ -87,6 +95,17 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const siteTitleColor = useColorModeValue('gray.700', 'gray.200');
   const { isOpen: isClearCacheOpen, onOpen: onOpenClearCache, onClose: onCloseClearCache } = useDisclosure();
+
+  // Below 500px there is no room left for Download, the cache/data-pack
+  // button and Documentation beside the site title and the grid controls --
+  // they move into a single overflow menu rather than disappearing.
+  const [isNarrowHeaderActions, setIsNarrowHeaderActions] = useState(() => window.innerWidth <= 500);
+  useEffect(() => {
+    const update = () => setIsNarrowHeaderActions(window.innerWidth <= 500);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   const handleClearCache = () => {
     clearBrowserAppCache();
@@ -128,7 +147,7 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
             >
               {siteTitle}
             </Text>
-            {onEditBoundary && currentPage === 'map' && (
+            {!isNarrowHeaderActions && onEditBoundary && currentPage === 'map' && (
               <Tooltip label={isBoundaryEditMode ? "Exit edit mode" : "Edit site boundary"}>
                 <IconButton
                   aria-label="Edit site boundary"
@@ -162,9 +181,12 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
       <Spacer />
 
       <HStack spacing={2}>
-        {/* Navigation buttons - always show Sites, show Home on non-landing pages */}
-        {onNavigate && (
-          <HStack spacing={1} display={{ base: 'none', md: 'flex' }}>
+        {/* Home and My Sites: visible inline down to the same 500px breakpoint
+            as Download/Settings/Documentation below, and folded into the same
+            overflow menu past it, rather than vanishing below `md` with no
+            route back to them. */}
+        {!isNarrowHeaderActions && onNavigate && (
+          <HStack spacing={1}>
             {currentPage && currentPage !== 'landing' && (
               <Tooltip label="Home">
                 <IconButton
@@ -189,6 +211,11 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
                 />
               </Tooltip>
             </Box>
+          </HStack>
+        )}
+
+        {onNavigate && (
+          <HStack spacing={1} display={{ base: 'none', md: 'flex' }}>
             {(currentPage === 'map' || currentPage === 'indicators') && (
               <>
                 <Tooltip label="Map view">
@@ -257,56 +284,108 @@ function Header({ onToggleDocs, isDocsOpen, onNavigate, currentPage, siteTitle, 
           </HStack>
         )}
 
-        {isBrowser && onNavigate && (
-          <Tooltip label="Download">
-            <IconButton
-              aria-label="Download"
-              icon={<FiDownload />}
-              onClick={() => onNavigate('download')}
-              variant={currentPage === 'download' ? 'solid' : 'ghost'}
-              colorScheme="brand"
-              size="sm"
-            />
-          </Tooltip>
+        {!isNarrowHeaderActions && (
+          <>
+            {isBrowser && onNavigate && (
+              <Tooltip label="Download">
+                <IconButton
+                  aria-label="Download"
+                  icon={<FiDownload />}
+                  onClick={() => onNavigate('download')}
+                  variant={currentPage === 'download' ? 'solid' : 'ghost'}
+                  colorScheme="brand"
+                  size="sm"
+                />
+              </Tooltip>
+            )}
+
+            {isBrowser && (
+              <Tooltip label="Clear cache">
+                <IconButton
+                  aria-label="Clear cache"
+                  icon={<FiSettings />}
+                  onClick={onOpenClearCache}
+                  variant="ghost"
+                  colorScheme="brand"
+                  size="sm"
+                />
+              </Tooltip>
+            )}
+
+            {!isBrowser && onNavigate && (
+              <Tooltip label="Reinstall data pack">
+                <IconButton
+                  aria-label="Reinstall data pack"
+                  icon={<FiSettings />}
+                  onClick={() => onNavigate('setup')}
+                  variant={currentPage === 'setup' ? 'solid' : 'ghost'}
+                  colorScheme="brand"
+                  size="sm"
+                />
+              </Tooltip>
+            )}
+
+            <Tooltip label="Documentation">
+              <IconButton
+                id="tour-nav-docs"
+                aria-label="Toggle documentation"
+                icon={<FiHelpCircle />}
+                onClick={onToggleDocs}
+                variant={isDocsOpen ? 'solid' : 'ghost'}
+                colorScheme="brand"
+                size="sm"
+              />
+            </Tooltip>
+          </>
         )}
 
-        {isBrowser && (
-          <Tooltip label="Clear cache">
-            <IconButton
-              aria-label="Clear cache"
-              icon={<FiSettings />}
-              onClick={onOpenClearCache}
+        {isNarrowHeaderActions && (
+          <Menu>
+            <MenuButton
+              as={IconButton}
+              aria-label="More options"
+              icon={<FiMoreVertical />}
               variant="ghost"
               colorScheme="brand"
               size="sm"
             />
-          </Tooltip>
+            <MenuList>
+              {siteTitle && onEditBoundary && currentPage === 'map' && (
+                <MenuItem icon={<FiEdit2 />} onClick={onEditBoundary} fontWeight={isBoundaryEditMode ? 600 : 400}>
+                  {isBoundaryEditMode ? 'Exit edit mode' : 'Edit site boundary'}
+                </MenuItem>
+              )}
+              {onNavigate && currentPage && currentPage !== 'landing' && (
+                <MenuItem icon={<FiHome />} onClick={() => onNavigate('landing')}>
+                  Home
+                </MenuItem>
+              )}
+              {onNavigate && (
+                <MenuItem icon={<FiMapPin />} onClick={() => onNavigate('sites')}>
+                  My Sites
+                </MenuItem>
+              )}
+              {isBrowser && onNavigate && (
+                <MenuItem icon={<FiDownload />} onClick={() => onNavigate('download')}>
+                  Download
+                </MenuItem>
+              )}
+              {isBrowser && (
+                <MenuItem icon={<FiSettings />} onClick={onOpenClearCache}>
+                  Clear cache
+                </MenuItem>
+              )}
+              {!isBrowser && onNavigate && (
+                <MenuItem icon={<FiSettings />} onClick={() => onNavigate('setup')}>
+                  Reinstall data pack
+                </MenuItem>
+              )}
+              <MenuItem icon={<FiHelpCircle />} onClick={onToggleDocs}>
+                {isDocsOpen ? 'Hide documentation' : 'Show documentation'}
+              </MenuItem>
+            </MenuList>
+          </Menu>
         )}
-
-        {!isBrowser && onNavigate && (
-          <Tooltip label="Reinstall data pack">
-            <IconButton
-              aria-label="Reinstall data pack"
-              icon={<FiSettings />}
-              onClick={() => onNavigate('setup')}
-              variant={currentPage === 'setup' ? 'solid' : 'ghost'}
-              colorScheme="brand"
-              size="sm"
-            />
-          </Tooltip>
-        )}
-
-        <Tooltip label="Documentation">
-          <IconButton
-            id="tour-nav-docs"
-            aria-label="Toggle documentation"
-            icon={<FiHelpCircle />}
-            onClick={onToggleDocs}
-            variant={isDocsOpen ? 'solid' : 'ghost'}
-            colorScheme="brand"
-            size="sm"
-          />
-        </Tooltip>
       </HStack>
 
       <Modal isOpen={isClearCacheOpen} onClose={onCloseClearCache} size="md" isCentered>

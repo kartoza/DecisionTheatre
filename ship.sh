@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # ship.sh — push the branch, open the PR, cut the release.
 #

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Box, Spinner } from '@chakra-ui/react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
@@ -522,18 +525,6 @@ function DialChart({
   const centerHubInnerRadius = isQuadCompactLayout ? 15 : 20;
   const centerHubCoreRadius = isQuadCompactLayout ? 7 : 10;
   const centerCapRadius = isQuadCompactLayout ? 9 : 12;
-  const compactLegendGroupWidth = denseLayout ? 360 : 400;
-  const compactReferenceColWidth = denseLayout ? 150 : 170;
-  const compactLegendStartX = centerX - (compactLegendGroupWidth + compactReferenceColWidth) / 2;
-  const legendReferenceX = compact
-    ? Math.max(8, compactLegendStartX)
-    : centerX - 330;
-  const legendCurrentX = compact
-    ? legendReferenceX + compactReferenceColWidth
-    : centerX - 160;
-  const legendTargetX = compact
-    ? legendCurrentX + (denseLayout ? 188 : 210)
-    : centerX + 60;
 
   return (
     <Box
@@ -769,36 +760,60 @@ function DialChart({
               {/* The factor title is drawn by the pane now, beside the two
                   scenario labels. */}
 
-              {/* Legend */}
-              <g opacity={needleOpacity}>
-                {/* Reference */}
-                <g transform={`translate(${legendReferenceX}, ${legendY})`}>
-                  <circle cx={8} cy={0} r={8} fill={SCENARIO_COLORS.reference} stroke="#fff" strokeWidth={1.5} />
-                  <text x={24} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
-                    {legendReferenceLabel}
-                  </text>
-                </g>
+              {/* Legend — real HTML flexbox rather than three SVG columns
+                  pinned at fixed offsets from centerX. The fixed offsets
+                  (centerX - 330, etc.) assumed a wide dial and ran the
+                  Reference/Current/Target labels off the left or right edge
+                  of a narrow single pane, where the clipping Box around this
+                  svg hid them entirely. flex-wrap lets the same three items
+                  drop onto additional rows instead, at any width. */}
+              <foreignObject
+                x={padding.left}
+                y={Math.max(0, legendY - 14)}
+                width={Math.max(0, width - padding.left - padding.right)}
+                height={Math.max(0, height - Math.max(0, legendY - 14))}
+                opacity={needleOpacity}
+              >
+                <div
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    columnGap: compact ? 16 : 28,
+                    rowGap: 6,
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    fontSize: compact ? 12 : 14,
+                    color: '#e2e8f0',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                    <svg width={16} height={16} style={{ flexShrink: 0 }}>
+                      <circle cx={8} cy={8} r={8} fill={SCENARIO_COLORS.reference} stroke="#fff" strokeWidth={1.5} />
+                    </svg>
+                    <span style={{ fontWeight: 600 }}>{legendReferenceLabel}</span>
+                  </div>
 
-                {/* Current */}
-                <g transform={`translate(${legendCurrentX}, ${legendY})`}>
-                  <rect x={0} y={-8} width={35} height={16} rx={3} fill={SCENARIO_COLORS.current} />
-                  <polygon points="35,-8 48,0 35,8" fill={SCENARIO_COLORS.current} />
-                  <text x={56} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="700">
-                    {legendCurrentLabel}
-                  </text>
-                </g>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                    <svg width={48} height={16} style={{ flexShrink: 0 }}>
+                      <rect x={0} y={0} width={35} height={16} rx={3} fill={SCENARIO_COLORS.current} />
+                      <polygon points="35,0 48,8 35,16" fill={SCENARIO_COLORS.current} />
+                    </svg>
+                    <span style={{ fontWeight: 700 }}>{legendCurrentLabel}</span>
+                  </div>
 
-                {/* Target — only shown when a target has been set */}
-                {targetValue !== undefined && (
-                  <g transform={`translate(${legendTargetX}, ${legendY})`}>
-                    <line x1={0} y1={0} x2={30} y2={0} stroke={SCENARIO_COLORS.future} strokeWidth={4} strokeDasharray="8,6" />
-                    <polygon points="30,-5 42,0 30,5" fill={SCENARIO_COLORS.future} />
-                    <text x={50} y={5} fill="#e2e8f0" fontSize={compact ? 12 : 14} fontFamily="Inter, system-ui, sans-serif" fontWeight="600">
-                      {legendTargetLabel}
-                    </text>
-                  </g>
-                )}
-              </g>
+                  {targetValue !== undefined && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                      <svg width={42} height={10} style={{ flexShrink: 0 }}>
+                        <line x1={0} y1={5} x2={30} y2={5} stroke={SCENARIO_COLORS.future} strokeWidth={4} strokeDasharray="8,6" />
+                        <polygon points="30,0 42,5 30,10" fill={SCENARIO_COLORS.future} />
+                      </svg>
+                      <span style={{ fontWeight: 600 }}>{legendTargetLabel}</span>
+                    </div>
+                  )}
+                </div>
+              </foreignObject>
             </svg>
           </motion.div>
         )}

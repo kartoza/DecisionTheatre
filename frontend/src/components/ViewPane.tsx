@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Flex, HStack, IconButton, Spinner, Text, Tooltip,
@@ -61,7 +64,7 @@ interface ViewPaneProps {
   is3DMode?: boolean;
   // Global map toggles: one control in the header, every pane reflects it.
   isIdentifyMode?: boolean;
-  isChoroplethEnabled?: boolean;
+  choroplethOpacity?: number;
   isGoogleBasemap?: boolean;
   onGoogleBasemapChange?: (enabled: boolean) => void;
   showNavigation?: boolean;
@@ -135,7 +138,7 @@ function ViewPane({
   colorScaleType,
   is3DMode,
   isIdentifyMode,
-  isChoroplethEnabled,
+  choroplethOpacity,
   isGoogleBasemap,
   onGoogleBasemapChange,
   showNavigation,
@@ -160,6 +163,17 @@ function ViewPane({
   const { dial0Middle: attributeDial0Middle } = useAttributeDial0Middle();
   const { dialColorLinear: attributeDialColorLinear } = useAttributeDialColorLinear();
   const { targetRanges: attributeTargetRanges } = useAttributeTargetRanges();
+
+  // At 500px and below there is no room left in the per-pane toolbar for the
+  // grid-view button beside the view-mode icons, so it hides rather than
+  // crowding them.
+  const [isNarrowForGridViewButton, setIsNarrowForGridViewButton] = useState(() => window.innerWidth <= 500);
+  useEffect(() => {
+    const update = () => setIsNarrowForGridViewButton(window.innerWidth <= 500);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   // Mount MapView only while the pane is showing a map, plus a grace period.
   // A pane that has never been in map mode never pays for map initialization
@@ -841,7 +855,7 @@ function ViewPane({
           rangeMode={rangeMode}
           is3DMode={is3DMode}
           isIdentifyMode={isIdentifyMode}
-          isChoroplethEnabled={isChoroplethEnabled}
+          choroplethOpacity={choroplethOpacity}
           isGoogleBasemap={isGoogleBasemap}
           onGoogleBasemapChange={onGoogleBasemapChange}
           showNavigation={showNavigation}
@@ -1080,7 +1094,7 @@ function ViewPane({
               </Tooltip>
             )}
           </>
-        ) : (
+        ) : !isNarrowForGridViewButton ? (
           <Tooltip label="Grid view" placement="top">
             <IconButton
               aria-label="Switch to grid view"
@@ -1093,7 +1107,7 @@ function ViewPane({
               borderRadius="md"
             />
           </Tooltip>
-        )}
+        ) : null}
       </HStack>
 
       {/* Calculation details modal */}

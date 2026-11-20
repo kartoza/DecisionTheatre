@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import {
   Box,
   Button,
@@ -32,7 +35,6 @@ import {
   FiX,
   FiChevronRight,
   FiZap,
-  FiInfo,
 } from 'react-icons/fi';
 import type { AppPage, Site, SiteCreationMethod, BoundingBox } from '../types';
 import SiteCreationMap from './SiteCreationMap';
@@ -49,11 +51,6 @@ const MotionVStack = motion(VStack);
 const glowPulse = keyframes`
   0%, 100% { box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), 0 0 40px rgba(0, 255, 255, 0.1); }
   50% { box-shadow: 0 0 40px rgba(0, 255, 255, 0.5), 0 0 80px rgba(0, 255, 255, 0.2); }
-`;
-
-const floatAnimation = keyframes`
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
 `;
 
 interface SiteCreationPageProps {
@@ -150,6 +147,7 @@ function SiteCreationPage({ onNavigate, onSiteCreated, initialExtent, editSite }
   const [siteDescription, setSiteDescription] = useState(() => editSite?.description || '');
   const [thumbnail, setThumbnail] = useState<string | null>(() => editSite?.thumbnail || null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [mapInstructions, setMapInstructions] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [hoveredMethod, setHoveredMethod] = useState<SiteCreationMethod | null>(null);
   const [isDraggingThumbnail, setIsDraggingThumbnail] = useState(false);
@@ -557,24 +555,6 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
         }}
       />
 
-      {/* Floating particles */}
-      <Box position="absolute" inset={0} overflow="hidden" pointerEvents="none">
-        {[...Array(8)].map((_, i) => (
-          <Box
-            key={i}
-            position="absolute"
-            w={`${20 + Math.random() * 40}px`}
-            h={`${20 + Math.random() * 40}px`}
-            borderRadius="full"
-            bg={`rgba(0, 255, 255, ${0.05 + Math.random() * 0.1})`}
-            left={`${Math.random() * 100}%`}
-            top={`${Math.random() * 100}%`}
-            animation={`${floatAnimation} ${5 + Math.random() * 5}s ease-in-out infinite`}
-            style={{ animationDelay: `${i * 0.5}s` }}
-          />
-        ))}
-      </Box>
-
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
@@ -637,34 +617,84 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
         )}
       </AnimatePresence>
 
-      {/* Main content */}
-      <Box position="relative" zIndex={2} h="100%" overflow="auto">
-        <Container maxW="container.xl" pt={6} pb={8} h="100%">
+      {/* Main content. The geometry step needs its map to exactly fill
+          whatever space is left after the header, with no scrolling --
+          flex column + flex="1" on the step body does that using this
+          box's own 100% height, which already excludes the app's own
+          header/footer chrome. A fixed calc(100vh - Npx) guess doesn't:
+          100vh is the whole browser viewport, not this component's own
+          allotted slot, so it silently overshoots and pushes the map's
+          floating confirm button below the fold. Other steps keep
+          natural content height and scroll via the outer box instead. */}
+      <Box
+        position="relative"
+        zIndex={2}
+        h="100%"
+        display="flex"
+        flexDirection="column"
+        overflow={step === 'geometry' ? 'hidden' : 'auto'}
+      >
+        <Container
+          maxW={step === 'geometry' ? 'full' : 'container.xl'}
+          px={step === 'geometry' ? 4 : undefined}
+          pt={6}
+          pb={step === 'geometry' ? 4 : 8}
+          display="flex"
+          flexDirection="column"
+          flex="1"
+          minH={0}
+        >
           {/* Header */}
           <MotionFlex
             initial={{ opacity: 0, y: -30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ ...bounceConfig, delay: 0.1 }}
             align="center"
-            justify="space-between"
-            mb={8}
+            flex="0 0 auto"
+            mb={step === 'geometry' ? 4 : 8}
           >
-            <Button
-              variant="ghost"
-              color="white"
-              leftIcon={<FiArrowLeft />}
-              onClick={handleBack}
-              size="lg"
-              fontWeight="bold"
-              _hover={{ bg: 'whiteAlpha.100', transform: 'translateX(-4px)' }}
-              transition="all 0.2s"
-            >
-              {hasPrefilledSite || step === 'method' ? 'Back to Sites' : 'Back'}
-            </Button>
+            <Box flex="0 0 auto">
+              <Button
+                variant="ghost"
+                color="white"
+                leftIcon={<FiArrowLeft />}
+                onClick={handleBack}
+                size="lg"
+                fontWeight="bold"
+                _hover={{ bg: 'whiteAlpha.100', transform: 'translateX(-4px)' }}
+                transition="all 0.2s"
+              >
+                {hasPrefilledSite || step === 'method' ? 'Back to Sites' : 'Back'}
+              </Button>
+            </Box>
+
+            {/* The geometry step's own title lives here, in the header row,
+                rather than as a second big heading below it (reported: move
+                it up into the header bar) -- method/details keep their own
+                big centred title lower down, unaffected. Sized down from
+                that big title's own 4xl/6xl/7xl just enough to actually fit
+                a single header row alongside the Back button and step
+                indicator (reported again: it had shrunk too far doing
+                that -- this is the largest size that still fits cleanly). */}
+            {step === 'geometry' && (
+              <Heading
+                flex="1"
+                textAlign="center"
+                as="h1"
+                fontSize={{ base: '2xl', md: '4xl' }}
+                fontWeight="black"
+                letterSpacing="tight"
+                color="white"
+                px={4}
+              >
+                {isEditMode ? 'Edit ' : 'Define '}Boundary
+              </Heading>
+            )}
+            {step !== 'geometry' && <Box flex="1" />}
 
             {/* Step indicator - physics bouncing badges */}
             {!hasPrefilledSite && (
-              <HStack spacing={3}>
+              <HStack flex="0 0 auto" spacing={3}>
                 {stepIndicators.map((s, i) => {
                   const isActive = step === s.id;
                   const isPast = stepIndicators.findIndex(st => st.id === step) > i;
@@ -710,46 +740,58 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
             )}
           </MotionFlex>
 
-          {/* Title */}
-          <MotionBox
-            textAlign="center"
-            mb={10}
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ ...bounceConfig, delay: 0.3 }}
-          >
-            <Heading
-              as="h1"
-              fontSize={{ base: '4xl', md: '6xl', lg: '7xl' }}
-              fontWeight="black"
-              letterSpacing="tight"
-              mb={4}
-            >
-              <Text as="span" color="white">
-                {isEditMode ? 'Edit ' : step === 'method' ? 'Create ' : step === 'geometry' ? 'Define ' : 'Name '}
+          {/* The geometry step's own live instructions ("3 catchments
+              selected", "Drag to draw a selection box"...) sit here, in the
+              slot the big title occupies for the other two steps, as plain
+              text rather than the floating dark pill the map used to render
+              on top of itself (reported: should read as clean text, not a
+              pill, in the title's old spot). SiteCreationMap reports the
+              current text up via onInstructionsChange since it's the only
+              place that knows selection/drawing state. */}
+          {step === 'geometry' && (
+            <Box flex="0 0 auto" textAlign="center" mb={4}>
+              <Text fontSize={{ base: 'sm', md: 'md' }} color="whiteAlpha.700" fontWeight="medium">
+                {mapInstructions}
               </Text>
-              <Text
-                as="span"
+            </Box>
+          )}
+
+          {/* Title — the geometry step's own version of this now lives in the
+              header row above instead (see the Heading there); this block
+              only ever renders for method/details. */}
+          {step !== 'geometry' && (
+            <MotionBox
+              flex="0 0 auto"
+              textAlign="center"
+              mb={10}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...bounceConfig, delay: 0.3 }}
+            >
+              <Heading
+                as="h1"
+                fontSize={{ base: '4xl', md: '6xl', lg: '7xl' }}
+                fontWeight="black"
+                letterSpacing="tight"
+                mb={4}
               >
-                {step === 'method' ? 'Your Site' : step === 'geometry' ? 'Boundary' : 'Your Site'}
+                <Text as="span" color="white">
+                  {isEditMode ? 'Edit ' : step === 'method' ? 'Create ' : 'Name '}
+                </Text>
+                <Text as="span">Your Site</Text>
+              </Heading>
+              <Text
+                fontSize={{ base: 'lg', md: 'xl' }}
+                color="whiteAlpha.700"
+                maxW="600px"
+                mx="auto"
+                fontWeight="medium"
+              >
+                {step === 'method' && 'Choose how you want to define your site boundary'}
+                {step === 'details' && 'Give your site a memorable name and description'}
               </Text>
-            </Heading>
-            <Text
-              fontSize={{ base: 'lg', md: 'xl' }}
-              color="whiteAlpha.700"
-              maxW="600px"
-              mx="auto"
-              fontWeight="medium"
-            >
-              {step === 'method' && 'Choose how you want to define your site boundary'}
-              {step === 'geometry' && (
-                selectedMethod === 'drawn' ? 'Click on the map to draw your boundary' :
-                selectedMethod === 'catchments' ? 'Zoom in until catchments appear, then click to select them' :
-                'Review and confirm your boundary'
-              )}
-              {step === 'details' && 'Give your site a memorable name and description'}
-            </Text>
-          </MotionBox>
+            </MotionBox>
+          )}
 
           {/* Step content */}
           <AnimatePresence mode="wait">
@@ -873,7 +915,14 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
               </MotionBox>
             )}
 
-            {/* STEP 2: Geometry */}
+            {/* STEP 2: Geometry — full content area, edge to edge (reported:
+                the map should be the whole content area, not a framed card
+                with instructions stacked above it). The one instruction
+                that matters is reported up to the clean-text slot above
+                (see onInstructionsChange / mapInstructions) rather than
+                rendered here or as a floating pill on the map itself; the
+                static banner that used to repeat a version of the same
+                text here is gone too, not just the page-title copy. */}
             {step === 'geometry' && selectedMethod && (
               <MotionBox
                 key="geometry"
@@ -881,37 +930,12 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -100 }}
                 transition={bounceConfig}
-                h="calc(100vh - 320px)"
-                minH="500px"
+                flex="1"
+                minH="300px"
                 display="flex"
                 flexDirection="column"
               >
-                {selectedMethod === 'catchments' && (
-                  <HStack
-                    mb={3}
-                    px={4}
-                    py={3}
-                    borderRadius="xl"
-                    bg="rgba(0, 200, 255, 0.08)"
-                    border="1px solid"
-                    borderColor="cyan.700"
-                    spacing={3}
-                  >
-                    <Icon as={FiInfo} color="cyan.300" boxSize={5} flexShrink={0} />
-                    <Text color="cyan.200" fontSize="sm" fontWeight="medium">
-                      Zoom in on the map until catchment boundaries appear, then click catchments or use Box Select to draw a bounding box and add all catchments inside.
-                    </Text>
-                  </HStack>
-                )}
-                <Box
-                  flex="1"
-                  minH="0"
-                  borderRadius="3xl"
-                  overflow="hidden"
-                  border="3px solid"
-                  borderColor="whiteAlpha.200"
-                  boxShadow={`0 0 60px ${SITE_COLORS.primary}22`}
-                >
+                <Box flex="1" minH="0" borderRadius="lg" overflow="hidden">
                   <SiteCreationMap
                     mode={selectedMethod}
                     initialGeometry={geometry}
@@ -919,6 +943,7 @@ const MIN_CATCHMENT_OVERLAP_FRACTION = 0.01;
                     boundingBox={boundingBox}
                     onGeometryComplete={handleGeometryComplete}
                     onCancel={handleBack}
+                    onInstructionsChange={setMapInstructions}
                   />
                 </Box>
               </MotionBox>

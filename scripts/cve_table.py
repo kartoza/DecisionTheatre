@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Render a Grype scan as a markdown table for a pull request or release note.
 
 Two things this deliberately does not do:

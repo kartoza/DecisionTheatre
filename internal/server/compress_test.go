@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package server
 
 import (
@@ -111,7 +114,7 @@ func TestAlreadyEncodedResponseIsNotRecompressed(t *testing.T) {
 		w.Header().Set("Content-Encoding", "gzip")
 		_, _ = w.Write([]byte(payload))
 	}))
-	rec := get(t, h, "/tiles/africa/1/2/3.pbf", "gzip")
+	rec := get(t, h, "/tiles/context/1/2/3.pbf", "gzip")
 
 	if rec.Body.String() != payload {
 		t.Error("an already-encoded body was altered; it would be double-compressed")

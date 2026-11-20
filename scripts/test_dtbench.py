@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Tests for the parts of dtbench that draw conclusions.
 
 The measuring is straightforward and fails loudly when it breaks. The verdict

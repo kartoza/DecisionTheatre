@@ -1,5 +1,6 @@
 data/
 data (Copy)/
+datasources/
 resources/
 test_data/
 tmp/
@@ -8,6 +9,7 @@ docs_site/
 site/
 node_modules/
 .venv/
+.git/
 result/
 packaging/
 .flatpak-builder/
@@ -17,4 +19,5 @@ certificate/
 *.html
 *.png
 *.7z
+*.zip
 R scripts/

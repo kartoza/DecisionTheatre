@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /**
  * The table panel names its factor twice inside its own body — the Site
  * Average caption and the column header — independent of the shared pane
@@ -51,5 +54,18 @@ describe('the table panel label', () => {
     // raw attribute key -- the point here is only that composeLabelWithUnit
     // is in the path at all, verified directly in dialScale.test.ts.
     expect(screen.queryAllByText(/\(.*\)\s*\(.*\)/).length).toBe(0);
+  });
+});
+
+describe('the table panel on a narrow pane', () => {
+  it('scrolls the table horizontally instead of clipping or wrapping columns', async () => {
+    render(
+      <ChakraProvider theme={theme}>
+        <AggregateTable visible attribute="grass_cover" siteId="test-site" />
+      </ChakraProvider>,
+    );
+    const table = await screen.findByRole('table');
+    const scrollContainer = table.parentElement as HTMLElement;
+    expect(scrollContainer).toHaveStyle({ overflowX: 'auto' });
   });
 });

@@ -1,8 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Kartoza
+// SPDX-License-Identifier: AGPL-3.0-only
+
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Flex, useDisclosure, useToast } from '@chakra-ui/react';
 import ContentArea from './components/ContentArea';
 import ControlPanel from './components/ControlPanel';
+import { PanelExpandButton } from './components/PanelCollapseButton';
+import { useHeaderOffset } from './hooks/useHeaderOffset';
 import ChartDetailsPanel from './components/ChartDetailsPanel';
 import IdentifyDock from './components/IdentifyDock';
 import Header from './components/Header';
@@ -18,8 +23,9 @@ import DownloadPage from './components/DownloadPage';
 import FeedbackLink from './components/FeedbackLink';
 import ResumeSessionModal from './components/ResumeSessionModal';
 import { editableTargetKeys } from './lib/editableTargets';
+import { shouldAutoCollapsePanel } from './lib/panelAutoCollapse';
 import { clearLiveUpdatePreference } from './lib/liveTargetUpdate';
-import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs } from './hooks/useApi';
+import { patchSite, patchSiteIndicators, resetSiteIdeal, useServerInfo, getSite, useFullDomainPrecalculated, primeSiteCatchmentsFromEmbedded, saveLocalSite, useAttributeDetails, useAttributeVariableTypes, useAttributeUserInputs, useAttributeTargetInputs, useColumns, useAttributeCanGraph, useAttributeChartTypes } from './hooks/useApi';
 import { getAppRuntime } from './types/runtime';
 import { showTargetWarningsPopup, showLowDataAvailabilityWarning, computeIndicatorAvailabilityFraction } from './utils/warnings';
 import type { Scenario, LayoutMode, PaneStates, ComparisonState, AppPage, Site, IdentifyResult, SiteIdentifyResult, MapExtent, MapStatistics, ColorScaleMode, ColorScaleType, RangeMode, ViewMode } from './types';
@@ -59,6 +65,15 @@ function App() {
   const { details: attributeDetails, loading: attributeDetailsLoading } = useAttributeDetails();
   const { variableTypes, loading: variableTypesLoading } = useAttributeVariableTypes();
   const { userInputs, loading: userInputsLoading } = useAttributeUserInputs();
+  // Every indicator the app knows about, for handleAddPane's "claim an
+  // unused one" logic below.
+  const { columns } = useColumns();
+  // Same two fields ControlPanel's factorOptions gates a dial/belt pane's
+  // indicator picker on -- handleAddPane needs them too, so it can't land a
+  // new dial/belt pane on an indicator the metadata says isn't plottable
+  // there (graphthisYN false, or typeofgraph missing "dial").
+  const { canGraph } = useAttributeCanGraph();
+  const { chartTypes } = useAttributeChartTypes();
   const catalogLoadingRef = useRef(true);
   catalogLoadingRef.current = attributeDetailsLoading || variableTypesLoading || userInputsLoading;
   const catalogRef = useRef({ attributeDetails, variableTypes, userInputs });
@@ -69,11 +84,22 @@ function App() {
   const [focusedPane, setFocusedPane] = useState<number>(loadFocusedPane);
   const [paneStates, setPaneStates] = useState<PaneStates>(loadPaneStates);
   const [viewModes, setViewModes] = useState<ViewMode[]>(() => loadPaneStates().map(() => 'map'));
+  const headerOffset = useHeaderOffset();
   const [indicatorPaneIndex, setIndicatorPaneIndex] = useState<number | null>(() => {
     // Auto-open filter panel for the focused pane when starting in single mode
     const mode = loadLayoutMode();
     return mode === 'single' ? loadFocusedPane() : null;
   });
+  // Below 763px the control panel covers most of the pane it's explaining, so
+  // switching to a visual view (map/chart/dial/flat) auto-collapses it rather
+  // than leaving it open over whatever the user just asked to look at.
+  const [isNarrowForPanelCollapse, setIsNarrowForPanelCollapse] = useState(() => window.innerWidth < 763);
+  useEffect(() => {
+    const update = () => setIsNarrowForPanelCollapse(window.innerWidth < 763);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
   const [currentPage, setCurrentPage] = useState<AppPage>(loadCurrentPage);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(loadCurrentSite);
   // If this is a brand-new tab (not a same-tab refresh) and there's saved
@@ -107,7 +133,12 @@ function App() {
   // stack repeated on each pane — six copies of one setting. They act on the
   // whole grid, so they live here and the header owns the single control.
   const [isIdentifyMode, setIsIdentifyMode] = useState(false);
-  const [isChoroplethEnabled, setIsChoroplethEnabled] = useState(true);
+  // 0-100: 0 is fully hidden, 100 is fully opaque. Replaces what used to be
+  // a plain on/off toggle so the "hide choropleth" button's popover slider
+  // has a continuous value to drive, not just two states. Starts at 90
+  // rather than fully opaque, by request -- a touch of basemap still
+  // showing through reads better as a starting point than a flat 100.
+  const [choroplethOpacity, setChoroplethOpacity] = useState(90);
   const [isGoogleBasemap, setIsGoogleBasemap] = useState(() => getAppRuntime() === 'browser');
   const colorScaleMode: ColorScaleMode = 'metadata';
   const [colorScaleType, setColorScaleType] = useState<ColorScaleType>('linear');
@@ -602,15 +633,23 @@ function App() {
     const paneIdx = typeof site.focusedPane === 'number' ? site.focusedPane : 0;
     setFocusedPane(paneIdx);
     // Only open the control panel in single-pane mode; multi-pane layouts manage their own panel state.
+    // Below 763px it stays closed even then -- same rule as switching view
+    // modes, since opening a site lands on a visual view (map, by default)
+    // that the panel would cover just as much as switching to one does.
     const effectiveLayout = site.layoutMode || layoutMode;
-    setIndicatorPaneIndex(effectiveLayout === 'single' ? paneIdx : null);
+    const opensInSingleMode = effectiveLayout === 'single';
+    setIndicatorPaneIndex(
+      opensInSingleMode && !shouldAutoCollapsePanel(viewModes[paneIdx] ?? 'map', isNarrowForPanelCollapse)
+        ? paneIdx
+        : null,
+    );
     setCurrentPage('map');
 
     // Re-enable auto-save after a short delay to allow state to settle
     setTimeout(() => {
       isLoadingSiteRef.current = false;
     }, 500);
-  }, [layoutMode]);
+  }, [layoutMode, viewModes, isNarrowForPanelCollapse]);
 
   // Listen for tour demo site open event
   useEffect(() => {
@@ -744,7 +783,7 @@ function App() {
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel('chart', isNarrowForPanelCollapse) ? null : 0);
       setViewModes((prev) => {
         const next = [...prev];
         next[0] = 'chart';
@@ -773,7 +812,7 @@ function App() {
     };
     window.addEventListener('dt:demo-tree-biomass-chart', handler);
     return () => window.removeEventListener('dt:demo-tree-biomass-chart', handler);
-  }, []);
+  }, [isNarrowForPanelCollapse]);
 
   // Listen for demo event to switch to single-pane chart view with Herbivore
   // biomass as the individual factor, grouped by functional group, for the
@@ -781,7 +820,7 @@ function App() {
   useEffect(() => {
     const handler = () => {
       setLayoutMode('single');
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel('chart', isNarrowForPanelCollapse) ? null : 0);
       setViewModes((prev) => {
         const next = [...prev];
         next[0] = 'chart';
@@ -810,7 +849,7 @@ function App() {
     };
     window.addEventListener('dt:demo-herbivore-functional-group-chart', handler);
     return () => window.removeEventListener('dt:demo-herbivore-functional-group-chart', handler);
-  }, []);
+  }, [isNarrowForPanelCollapse]);
 
   // Listen for demo event to switch to a 6-dial, 2-row grid covering the
   // ecosystem-scale consequences of the current herbivore regime, for the
@@ -882,9 +921,33 @@ function App() {
       const nextIndex = prev.length;
       setFocusedPane(nextIndex);
       setIndicatorPaneIndex(null);
-      return [...prev, { ...source }];
+      // A new pane claims the first indicator no pane already on screen is
+      // showing, rather than starting on a duplicate of the focused pane's
+      // -- added specifically so "add pane" surfaces something new to look
+      // at by default. "Used" is grid-wide: every pane counts, regardless
+      // of its view type (map, chart, dial, table, belt), since the point
+      // is not showing the same indicator twice anywhere in the grid. Falls
+      // back to mirroring the focused pane, same as before, once every
+      // indicator is already in use -- there is nothing left to avoid
+      // duplicating at that point.
+      //
+      // A new pane inherits the focused pane's view mode (see viewModes
+      // usage below), so a new dial or belt ('flat') pane must only
+      // consider indicators the metadata actually marks as plottable
+      // there -- same gate as ControlPanel's factorOptions: graphthisYN
+      // true and typeofgraph containing "dial". Landing on one that
+      // doesn't would silently show a blank/broken dial.
+      const newPaneViewMode = viewModes[focusedPane] ?? viewModes[0] ?? 'map';
+      const isDialView = newPaneViewMode === 'dial' || newPaneViewMode === 'flat';
+      const used = new Set(prev.map((p) => p.attribute).filter(Boolean));
+      const candidates = isDialView
+        ? columns.filter((c) => canGraph[c] && (chartTypes[c] || '').toLowerCase().includes('dial'))
+        : columns;
+      const nextUnused = candidates.find((c) => !used.has(c));
+      const attribute = nextUnused ?? source.attribute;
+      return [...prev, { ...source, attribute }];
     });
-  }, [focusedPane]);
+  }, [focusedPane, columns, viewModes, canGraph, chartTypes]);
 
   const handleRemovePane = useCallback((paneIndex: number) => {
     setPaneStates((prev) => {
@@ -953,11 +1016,11 @@ function App() {
       handlePaneStateChange(0, partial);
       setLayoutMode('single');
       setFocusedPane(0);
-      setIndicatorPaneIndex(0);
+      setIndicatorPaneIndex(shouldAutoCollapsePanel(viewModes[0] ?? 'map', isNarrowForPanelCollapse) ? null : 0);
     };
     window.addEventListener('dt:demo-pane-state', handler);
     return () => window.removeEventListener('dt:demo-pane-state', handler);
-  }, [handlePaneStateChange]);
+  }, [handlePaneStateChange, viewModes, isNarrowForPanelCollapse]);
 
   const { targetInputs } = useAttributeTargetInputs();
   const hasEditableTargets = useMemo(
@@ -965,12 +1028,19 @@ function App() {
     [currentSite?.indicators, targetInputs, variableTypes, attributeDetails],
   );
 
+  const collapsePanelIfNarrow = useCallback((mode: ViewMode) => {
+    if (shouldAutoCollapsePanel(mode, isNarrowForPanelCollapse)) {
+      setIndicatorPaneIndex(null);
+    }
+  }, [isNarrowForPanelCollapse]);
+
   // The grid-wide controls act on every pane, so they take no pane index. The
   // old signature took one and ignored it in quad layout, which read as a
   // per-pane control and was not.
   const handleGridViewModeChange = useCallback((mode: ViewMode) => {
     setViewModes((prev) => prev.map(() => mode));
-  }, []);
+    collapsePanelIfNarrow(mode);
+  }, [collapsePanelIfNarrow]);
 
   const handleViewModeChange = useCallback((paneIndex: number, mode: ViewMode) => {
     setViewModes((prev) => {
@@ -982,7 +1052,8 @@ function App() {
       next[paneIndex] = mode;
       return next;
     });
-  }, [layoutMode]);
+    collapsePanelIfNarrow(mode);
+  }, [layoutMode, collapsePanelIfNarrow]);
 
   // Scenario 1 (left) and Scenario 2 (right) are which-scenario-is-which,
   // not a per-pane preference -- reported: change one pane's Right dropdown
@@ -1145,20 +1216,47 @@ function App() {
     // rollback in catch below, restoring exactly what was current before
     // this call so a dropped request degrades to "nothing happened" rather
     // than "the edited factor changed but nothing it feeds into did".
-    const previousSite = currentSite;
+    const previousSite = currentSiteRef.current;
 
-    setCurrentSite((prev) => {
-      if (!prev || prev.id !== currentSiteId) return prev;
-      return { ...prev, indicators };
-    });
+    const optimisticSite = previousSite && previousSite.id === currentSiteId
+      ? { ...previousSite, indicators }
+      : previousSite;
+    currentSiteRef.current = optimisticSite;
+    setCurrentSite(optimisticSite);
 
     try {
-      const updatedSite = await patchSiteIndicators(currentSiteId, indicators, currentSite ?? undefined);
+      // previousSite — captured above, before the optimistic mutation —
+      // not currentSiteRef.current: the backend diffs the submitted `ideal`
+      // against this `site`'s own indicators.ideal to work out what actually
+      // changed (handleUpdateIndicators's req.Runtime == "browser" branch,
+      // the only baseline it has for a walkthrough/browser-runtime site,
+      // which has no server-side copy to fall back on). That baseline must
+      // be the state from *before* this edit. currentSiteRef.current was
+      // just reassigned to the optimistic post-edit site two lines up —
+      // sending that instead would hand the backend indicators.ideal already
+      // equal to the submitted `ideal`, so nothing looks changed and no
+      // cascade runs at all, however real the edit is.
+      //
+      // previousSite itself still has to be fresh, which is what
+      // currentSiteRef is for: a live-update drag chains requests
+      // back-to-back the instant each one resolves (see the scheduler in
+      // liveTargetUpdate.ts) — faster than React commits the setCurrentSite
+      // from the *previous* call and hands this callback a fresh closure —
+      // so reading a `currentSite` closure instead of the ref here would
+      // make previousSite itself stale by one response, and every field
+      // that earlier edit had already cascaded (prop_X*Mgha, NPP, …) would
+      // then look like a brand-new direct edit relative to it, which flips
+      // a plain meanTC drag into a bogus prop-class edit server-side and
+      // snaps the result back toward the original value instead of where
+      // the slider was released.
+      const updatedSite = await patchSiteIndicators(currentSiteId, indicators, previousSite ?? undefined);
       // The backend has no concept of `source` — it's a frontend-only marker
       // for read-only demo/walkthrough sites — so it never comes back in the
       // response. Carry it forward or a walkthrough site would look like a
       // normal (persistable) one after its first successful edit.
-      setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
+      const nextSite = { ...updatedSite, source: currentSiteRef.current?.source ?? updatedSite.source };
+      currentSiteRef.current = nextSite;
+      setCurrentSite(nextSite);
       setMapRefreshSeq(s => s + 1);
 
       const warnings = updatedSite.indicators?.warnings ?? [];
@@ -1166,13 +1264,13 @@ function App() {
       return updatedSite.indicators;
     } catch (err) {
       console.error('Failed to update site indicators:', err);
-      setCurrentSite((prev) => {
-        if (!prev || prev.id !== currentSiteId || !previousSite) return prev;
-        return { ...prev, indicators: previousSite.indicators };
-      });
+      if (previousSite && previousSite.id === currentSiteId) {
+        currentSiteRef.current = previousSite;
+        setCurrentSite(previousSite);
+      }
       throw err;
     }
-  }, [currentSiteId, currentSite, toast]);
+  }, [currentSiteId, toast]);
 
   /**
    * Point every target at an observed scenario.
@@ -1184,10 +1282,14 @@ function App() {
    */
   const handleResetTargets = useCallback(async (scenario: 'reference' | 'current') => {
     if (!currentSiteId) return;
-    const updatedSite = await resetSiteIdeal(currentSiteId, scenario, currentSite ?? undefined);
-    setCurrentSite((prev) => ({ ...updatedSite, source: prev?.source ?? updatedSite.source }));
+    // currentSiteRef.current, not a `currentSite` closure — see
+    // handleSiteIndicatorsChange's comment on the same substitution.
+    const updatedSite = await resetSiteIdeal(currentSiteId, scenario, currentSiteRef.current ?? undefined);
+    const nextSite = { ...updatedSite, source: currentSiteRef.current?.source ?? updatedSite.source };
+    currentSiteRef.current = nextSite;
+    setCurrentSite(nextSite);
     setMapRefreshSeq((seq) => seq + 1);
-  }, [currentSiteId, currentSite]);
+  }, [currentSiteId]);
 
   // The control panel is the same slide-out in every layout now, so there is no
   // longer a grid-only modal variant to exclude.
@@ -1411,8 +1513,8 @@ function App() {
           isExtracting: isExtractingIndicators,
           is3DMode,
           onIs3DModeChange: setIs3DMode,
-          isChoroplethEnabled,
-          onChoroplethEnabledChange: setIsChoroplethEnabled,
+          choroplethOpacity,
+          onChoroplethOpacityChange: setChoroplethOpacity,
           isIdentifyMode,
           onIdentifyModeChange: setIsIdentifyMode,
           isGoogleBasemap,
@@ -1471,7 +1573,7 @@ function App() {
             colorScaleType={colorScaleType}
             is3DMode={is3DMode}
             isIdentifyMode={isIdentifyMode}
-            isChoroplethEnabled={isChoroplethEnabled}
+            choroplethOpacity={choroplethOpacity}
             isGoogleBasemap={isGoogleBasemap}
             onGoogleBasemapChange={setIsGoogleBasemap}
             swiperPosition={swiperPosition}
@@ -1507,14 +1609,42 @@ function App() {
           isSlotBOpen={isSlotBOpen}
         />
 
+        {/* The way back from a collapsed control panel: an expand chevron
+            pinned to the screen edge where the panel was. Rendered only when
+            the whole right-hand slot is empty — the target editor and chart
+            details share those pixels, and a stray chevron over them would
+            read as theirs — and only when the identify dock isn't also
+            flush against that same edge (it sits there whenever slot B is
+            closed; see IdentifyDock's `right: isOpen && isSlotBOpen ?
+            panelWidth : 0`), since the two chevrons would otherwise land on
+            the exact same pixels. The identify dock's own collapse button
+            takes precedence in that case — it closes the panel actually
+            covering the screen, which un-blocks this one again. */}
+        {!isSlotBOpen && !isIdentifyPanelOpen && (
+          <Box
+            position="fixed"
+            // Fitts's law: land exactly where the panel's collapse button
+            // was — headerOffset is the panel's top (shared measurement,
+            // see useHeaderOffset) and 8px is that button's own top={2}.
+            top={`${headerOffset + 8}px`}
+            right={2}
+            zIndex={15}
+          >
+            <PanelExpandButton
+              label="Expand control panel"
+              onClick={() => setIndicatorPaneIndex(focusedPane)}
+            />
+          </Box>
+        )}
+
         {/* Slide-out control panel — scoped to the active pane */}
         <ControlPanel
           isOpen={indicatorPaneIndex !== null}
           onClose={handleCloseGridControlPanel}
-          // Single pane keeps this panel open for the one pane on screen —
-          // there is no grid of other panes to switch attention to, so a
-          // collapse control here would leave the user unable to get it back.
-          canCollapse={layoutMode === 'quad'}
+          // Always collapsible: the expand chevron above is the guaranteed
+          // way back, which is what used to make single-pane collapse a
+          // dead end.
+          canCollapse
           comparison={indicatorPaneIndex !== null ? paneStates[indicatorPaneIndex] : paneStates[0]}
           onLeftChange={handleLeftChange}
           onRightChange={handleRightChange}

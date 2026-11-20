@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"testing"
 
 	"github.com/kartoza/decision-theatre/internal/geodata"
@@ -80,46 +81,43 @@ func TestComputeAreaWeightedIndicators_IdealMatchesCurrentAtCreation(t *testing.
 	}
 }
 
-// Reference and Current each get their own fixed propEarly, not the same
-// one. Forcing both to defaultPropEarly (0.45, Current's own fixed
-// assumption) made a target reset to reference land on 0.45 at the site
-// level while every catchment's own Reference propEarly — untouched by this
-// aggregation, and uniformly 0 in the real GeoPackage — stayed 0, producing
-// the exact non-linear percBurned jump between the site dial and the map
-// that this whole fixed-propEarly approach exists to avoid.
-func TestComputeAreaWeightedIndicators_ReferenceAndCurrentPropEarlyDiffer(t *testing.T) {
+// propEarly is now a real per-catchment fraction (not a 0/1 flag), so it is
+// area-weighted like any other indicator — no fixed override — and Ideal
+// starts as a copy of Current.
+func TestComputeAreaWeightedIndicators_PropEarlyIsAreaWeighted(t *testing.T) {
 	catchments := []geodata.CatchmentIndicators{
 		{
 			ID:      "1",
 			AreaKm2: 10,
 			Reference: map[string]float64{
-				"propEarly": 0,
+				"propEarly": 0.2,
 			},
 			Current: map[string]float64{
-				"propEarly": 0, // real per-catchment 0/1 flag
+				"propEarly": 0.3,
 			},
 		},
 		{
 			ID:      "2",
 			AreaKm2: 10,
 			Reference: map[string]float64{
-				"propEarly": 0,
+				"propEarly": 0.4,
 			},
 			Current: map[string]float64{
-				"propEarly": 1, // real per-catchment 0/1 flag
+				"propEarly": 0.7,
 			},
 		},
 	}
 
 	indicators := computeAreaWeightedIndicators(catchments)
 
-	if got := indicators.Reference[colPropEarly]; got != referencePropEarly {
-		t.Errorf("Reference propEarly = %v, want %v", got, referencePropEarly)
+	const tolerance = 1e-9
+	if got, want := indicators.Reference[colPropEarly], 0.3; math.Abs(got-want) > tolerance {
+		t.Errorf("Reference propEarly = %v, want %v", got, want)
 	}
-	if got := indicators.Current[colPropEarly]; got != defaultPropEarly {
-		t.Errorf("Current propEarly = %v, want %v", got, defaultPropEarly)
+	if got, want := indicators.Current[colPropEarly], 0.5; math.Abs(got-want) > tolerance {
+		t.Errorf("Current propEarly = %v, want %v", got, want)
 	}
-	if got := indicators.Ideal[colPropEarly]; got != defaultPropEarly {
-		t.Errorf("Ideal propEarly = %v, want %v (Ideal starts as a copy of Current)", got, defaultPropEarly)
+	if got, want := indicators.Ideal[colPropEarly], 0.5; math.Abs(got-want) > tolerance {
+		t.Errorf("Ideal propEarly = %v, want %v (Ideal starts as a copy of Current)", got, want)
 	}
 }

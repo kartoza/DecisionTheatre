@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # scheduled-redeploy.sh — Pull latest code, refresh data from Google Drive,
 # rebuild the datapack and cross-platform installers.
@@ -40,7 +43,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPLOYMENTS_DIR="$PROJECT_ROOT/deployments"
 
 # Google Drive folder that holds the source CSV files for the datapack.
-DRIVE_FOLDER="https://drive.google.com/drive/folders/1yVrQ_jQUooAD8wi9oCEA-Go52mrsH36f"
+DRIVE_FOLDER="https://drive.google.com/drive/folders/1weXgushm7O2wU0ZVbv2Kn-o6RfdjreVv"
 
 # App image pulled from GHCR rather than built locally. Exported so every
 # `docker compose` invocation below picks it up: compose only builds the

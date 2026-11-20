@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Kartoza
+# SPDX-License-Identifier: AGPL-3.0-only
+
 #
 # check-drive-updates.sh — Check whether a Google Drive folder has any
 # files that are new or differ from a local data directory.
@@ -10,6 +13,11 @@
 #   0  No changes — every file in the Drive folder matches the local copy.
 #   1  Changes found (or the comparison could not be completed) — treat
 #      as "an update may be needed" so callers err on the side of fetching.
+#
+# The Drive folder has two top-level subfolders, "data" and "datasources",
+# mirroring the repo's own data/ vs datasources/ split — each is compared
+# against its matching local directory. See scripts/fetch-data.sh, which
+# downloads the same two subfolders the same way.
 #
 # Comparison is one-way (source -> destination): local files that do not
 # exist in the Drive folder (e.g. generated datapack.gpkg, mbtiles) are
@@ -52,6 +60,7 @@ FOLDER_ARG="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="${2:-$REPO_ROOT/data}"
+SOURCE_DIR="$REPO_ROOT/datasources"
 
 # ── Extract folder ID from URL or bare ID ─────────────────────────────────────
 
@@ -82,12 +91,15 @@ if ! rclone listremotes 2>/dev/null | grep -q "^${RCLONE_REMOTE}:"; then
     die "No rclone remote named '${RCLONE_REMOTE}' found. See scripts/fetch-data.sh for setup instructions."
 fi
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR" "$SOURCE_DIR"
 
 # ── Compare ────────────────────────────────────────────────────────────────────
 
-info "Comparing Google Drive folder ${BOLD}${FOLDER_ID}${RESET} against ${BOLD}${DATA_DIR}${RESET}..."
-
+# check_subfolder compares one named top-level subfolder of the pinned Drive
+# root against a local directory — see fetch-data.sh's download_subfolder for
+# why "remote:<name>" resolves by name relative to --drive-root-folder-id
+# rather than as a Drive-wide path.
+#
 # --one-way: only flag files that are new or changed on the Drive side.
 # Local-only files (generated outputs like datapack.gpkg, mbtiles) are not
 # part of the source data set and must not be treated as "drift".
@@ -97,12 +109,19 @@ info "Comparing Google Drive folder ${BOLD}${FOLDER_ID}${RESET} against ${BOLD}$
 # when the content matches. They are excluded from fetch-data.sh too, so
 # they are never refreshed by this pipeline — checking them here would only
 # ever produce false positives.
-if rclone check "${RCLONE_REMOTE}:" "$DATA_DIR" \
-    --drive-root-folder-id "$FOLDER_ID" \
-    --one-way \
-    --exclude "sites/**" \
-    --exclude "images/**" \
-    --bind 0.0.0.0; then
+check_subfolder() {
+    local drive_subfolder="$1" dest_dir="$2"
+    rclone check "${RCLONE_REMOTE}:${drive_subfolder}" "$dest_dir" \
+        --drive-root-folder-id "$FOLDER_ID" \
+        --one-way \
+        --exclude "sites/**" \
+        --exclude "images/**" \
+        --bind 0.0.0.0
+}
+
+info "Comparing Google Drive folder ${BOLD}${FOLDER_ID}${RESET} against ${BOLD}${DATA_DIR}${RESET} and ${BOLD}${SOURCE_DIR}${RESET}..."
+
+if check_subfolder "data" "$DATA_DIR" && check_subfolder "datasources" "$SOURCE_DIR"; then
     info "No changes found."
     exit 0
 fi
