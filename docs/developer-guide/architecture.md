@@ -118,14 +118,15 @@ diagnosing context loss.
       — and joined onto the tiles as **feature state**, so switching indicator moves
       values only and never geometry.
     - **GeoJSON**, below the tiled zoom range, from `/api/choropleth`
-      (`QueryCatchments` in `internal/geodata/gpkg_store.go`). Below z11, if the
-      datapack has the multi-resolution catchment tables (`catchments_lev04/06/08` and
+      (`QueryCatchments` in `internal/geodata/gpkg_store.go`). Below z10, if the
+      datapack has the multi-resolution catchment tables (`catchments_lev04/05/06/07/08` and
       their `scenario_*_levNN` aggregates — see [Data Preparation → Multi-Resolution
       Catchments](data-preparation.md#multi-resolution-catchments)), the server returns
       the corresponding real HydroBASINS level's precomputed aggregates
-      (`basinLevelForZoom`: z2-5 → lev04, z6-8 → lev06, z9-10 → lev08). A datapack
-      without those tables — or, at z11+, a bbox whose matched catchment count exceeds
-      `maxDetailedFeatures` — falls back to grid-aggregated cells instead (see
+      (`basinLevelForZoom`: z0-4 → lev04, z5 → lev05, z6 → lev06, z7-8 → lev07,
+      z9 → lev08). A datapack without those tables — or, at z10+, a bbox whose
+      matched catchment count exceeds `maxDetailedFeatures` — falls back to
+      grid-aggregated cells instead (see
       `queryCatchmentsGridAggregated`): catchments dissolved into whichever
       `gridTiersDegrees` cell size the render budget affords, an arbitrary square grid
       rather than real basin boundaries.

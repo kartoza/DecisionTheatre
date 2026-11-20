@@ -41,9 +41,11 @@ The map data comes from **three** GeoPackage files, all passed to the conversion
 
 | Layer | Description |
 |-------|-------------|
-| `catchments_lev04` | Level-4 basin boundaries (189 in the current study area) |
-| `catchments_lev06` | Level-6 basin boundaries (2,442) |
-| `catchments_lev08` | Level-8 basin boundaries (27,448) |
+| `catchments_lev04` | Level-6 basin boundaries, shown as "lev04" (2,442 in the current study area — see [Changing Which Level Feeds a Tier](#changing-which-level-feeds-a-tier)) |
+| `catchments_lev05` | Level-7 basin boundaries, shown as "lev05" (8,320) |
+| `catchments_lev06` | Level-8 basin boundaries, shown as "lev06" (27,448) |
+| `catchments_lev07` | Level-9 basin boundaries, shown as "lev07" (72,497) |
+| `catchments_lev08` | Level-10 basin boundaries, shown as "lev08" (135,469) |
 
 `catchments_lev12` was dropped from `context_source_data.gpkg` at some point during the rename/update (the file gained `WDPA_Feb2026_Public` and `Africa_Roads_Primary-Tertiary` but lost the catchments layer). Rather than re-merging it back into a single file by hand, the script accepts multiple input GeoPackages and pulls each layer from whichever one has it.
 
@@ -99,7 +101,7 @@ Columns:
 | `tileset` | blank merges the layer into the combined `context.mbtiles` (the default); a name (e.g. `catchments-lev12`) ships it as its own standalone `data/mbtiles/<name>.mbtiles` instead -- see "Standalone Tilesets and Overzoom" below |
 | `detail` | tile coordinate grid in bits (tippecanoe `--full-detail`); blank means tippecanoe's default (12). Raise it (the catchment levels use 14) for a single-zoom standalone tileset: overzoom magnifies the tile's coordinate grid along with its geometry, so a layer tiled once and displayed several zooms deeper needs the finer grid to stay sub-pixel at its deepest display zoom |
 | `output_layer` | the vector tile's own internal layer name (tippecanoe `--layer`); blank means "same as this row's own `layer` name", true for every layer except `catchments_lev12_full` -- see "The `--legacy` flag" below for why that one differs |
-| `max_tile_bytes` | overrides tippecanoe's default ~500KB-per-tile budget (`--maximum-tile-bytes`); blank means tippecanoe's default. Only `catchments_lev12_hex` sets this -- see "The hex band" below for why |
+| `max_tile_bytes` | overrides tippecanoe's default ~500KB-per-tile budget (`--maximum-tile-bytes`); blank means tippecanoe's default. `catchments_lev12_hex` and `catchments_lev04`-`lev08` set this -- see "The hex band" and "Multi-Resolution Catchments" below for why |
 
 **A layer found in the source GeoPackages but missing from the table is appended with defaults** (`6,14,15,true,true,10,true,false,,,` -- merged into the combined tileset) the moment the build runs, so the table stays a complete, accurate list of what's actually being tiled -- you never have to remember to add a row for a new layer by hand.
 
@@ -115,14 +117,14 @@ Once a layer's geometry is fully unsimplified at some zoom, tiling it *again* at
 
 The catch: MapLibre's overzoom is a property of a vector *source* (one TileJSON, one declared `maxzoom`), not of an individual layer bundled inside a combined tileset. The `context.mbtiles` tileset bundles all the basemap layers together behind one TileJSON, so its single `maxzoom` (15) applies to every layer in it -- there's no way to tell MapLibre "stop asking for real tiles of *this one layer* at z12 but keep asking for the others up to z15" while they all share that one TileJSON.
 
-That's what the `tileset` column is for -- and the catchment levels take it to its logical conclusion: **each level is its own standalone tileset, tiled at exactly one zoom, and overzoomed across its entire display band**. `catchments_lev04/06/08/12` ship as `data/mbtiles/catchments-lev04/06/08/12.mbtiles`, tiled only at z0, z6, z9 and z11 respectively (`minzoom = simplified_end = maxzoom` in their treatment rows, with `detail` at 16 for lev04 and 14 for the rest, so the coordinate grid stays sub-pixel across each band's overzoom range). `handleCatchmentsTileJSON` (`internal/server/server.go`) serves all four in one split-form document at `/data/catchments-tiles.json` -- a `tilesets` array with each level's own tile URLs and `tilezoom` -- and the frontend (`frontend/src/lib/choroplethTiles.ts`) builds one MapLibre source per band with `minzoom = maxzoom = tilezoom`, which is precisely what makes MapLibre overzoom that level's single tiled zoom across the band (lev04 covers z0-5.9 -- floored at z0 rather than its old z2, because a small grid-view pane fits the whole study area below z2 and a floor above the pane's zoom left the choropleth blank until the user zoomed across it; lev06 covers z6-8.9, lev08 z9-10.9, lev12 z11 and everything deeper). A datapack carrying the older combined `catchments.mbtiles` still gets the legacy single-tileset TileJSON and shared-source rendering, unchanged. Measured on the production datapack, the split cut the catchments tile store from 425 MiB across 11 tiled zooms to 173 MiB across 4, and a full retile takes about four minutes.
+That's what the `tileset` column is for -- and the catchment levels take it to its logical conclusion: **each level is its own standalone tileset, tiled at exactly one zoom, and overzoomed across its entire display band**. `catchments_lev04/05/06/07/08/12` ship as `data/mbtiles/catchments-lev04/05/06/07/08/12.mbtiles`, tiled only at z0, z5, z6, z7, z9 and z10 respectively (`minzoom = simplified_end = maxzoom` in their treatment rows, with `detail` at 16 for lev04 and 14 for the rest, so the coordinate grid stays sub-pixel across each band's overzoom range). `handleCatchmentsTileJSON` (`internal/server/server.go`) serves all six in one split-form document at `/data/catchments-tiles.json` -- a `tilesets` array with each level's own tile URLs and `tilezoom` -- and the frontend (`frontend/src/lib/choroplethTiles.ts`) builds one MapLibre source per band with `minzoom = maxzoom = tilezoom`, which is precisely what makes MapLibre overzoom that level's single tiled zoom across the band (lev04 covers z0-4.9 -- floored at z0 rather than its old z2, because a small grid-view pane fits the whole study area below z2 and a floor above the pane's zoom left the choropleth blank until the user zoomed across it; lev05 covers z5-5.9, lev06 z6-6.9, lev07 z7-8.9, lev08 z9-9.9, lev12 z10 and everything deeper -- lev12 was pulled in a zoom earlier than its old z11 start so every catchment is visible by z10 rather than z11 -- each step up is a genuinely finer HydroBASINS level, so polygon count strictly increases at every single-zoom boundary, not just every few zooms). A datapack carrying the older combined `catchments.mbtiles` still gets the legacy single-tileset TileJSON and shared-source rendering, unchanged. Measured on the production datapack, the split cut the catchments tile store from 425 MiB across 11 tiled zooms to 173 MiB across 4, and a full retile takes about four minutes.
 
 Splitting a layer out this way touches more than the treatment table -- it needs TileJSON handling in `internal/server/server.go` (for a catchment level, just add it to `catchmentLevelTilesets` there), a source or client-side source spec pointing at that handler's URL, and (to avoid `dt check-data` flagging it as dead weight) an entry in `internal/datacheck/spec.go`. Reach for `tileset` only when a layer's own top zoom is meaningfully lower than the rest of the bundle's, the way catchments' is.
 
 ### `dt serve-legacy`: lev12 everywhere, hexagons where real boundaries can't render
 
 `dt serve-legacy` asks the server to render lev12 catchment *values* at every
-zoom instead of handing off through the lev04/06/08 aggregates above -- useful
+zoom instead of handing off through the lev04/05/06/07/08 aggregates above -- useful
 when a reviewer wants to see each catchment's own number continent-wide rather
 than a coarser basin's stand-in. Don't confuse this with a "legacy datapack"
 elsewhere in this document, which means a pack built *before* the
@@ -371,7 +373,7 @@ either bug above is visible at a glance rather than needing to be inferred.
 
 ## Multi-Resolution Catchments
 
-147,837 lev12 catchment polygons don't need to render at z3. `scripts/build-catchment-hierarchy.sh` builds three coarser HydroBASINS levels — real drainage-basin boundaries, not an arbitrary grid — plus scenario data aggregated up to each one, so both the per-level catchment tilesets above and the live choropleth (`internal/geodata/gpkg_store.go`'s `QueryCatchments`) can render something proportionate to the zoom level.
+147,837 lev12 catchment polygons don't need to render at z3. `scripts/build-catchment-hierarchy.sh` builds five coarser HydroBASINS levels — real drainage-basin boundaries, not an arbitrary grid — plus scenario data aggregated up to each one, so both the per-level catchment tilesets above and the live choropleth (`internal/geodata/gpkg_store.go`'s `QueryCatchments`) can render something proportionate to the zoom level. Five rather than three so polygon count increases at every zoom step from z4 to z7, not just every few zooms — each level is a genuinely finer HydroBASINS tier, and HydroBASINS' prefix hierarchy guarantees a coarser basin always subdivides into one or more basins at the next-finer level, never fewer.
 
 <figure markdown>
   ![HydroBASINS levels feed a lev12-to-parent crosswalk, aggregated scenario tables, and the zoom-gated choropleth query](../assets/diagrams/generated/multires-catchments.svg)
@@ -390,9 +392,9 @@ Downloads `hybas_af_lev01-12_v1c.zip` from [HydroSHEDS](https://www.hydrosheds.o
 
 ### The crosswalk
 
-HydroBASINS' Pfafstetter codes (`PFAF_ID`) are hierarchical by construction: a lev12 catchment's parent at lev08 has a `PFAF_ID` that is exactly the first 8 digits of the lev12 catchment's own `PFAF_ID` (lev06: first 6). This was verified against all 147,837 catchments in the current study area with zero unmatched rows — exact string-prefix matching, no spatial join needed. `catchments.gpkg` itself doesn't carry `PFAF_ID` (it was dropped when the study-area subset was clipped from the continental HydroBASINS set), so `PFAF_ID` is read fresh from the lev12 shapefile and joined back in by `HYBAS_ID`.
+HydroBASINS' Pfafstetter codes (`PFAF_ID`) are hierarchical by construction: a lev12 catchment's parent at lev08 has a `PFAF_ID` that is exactly the first 8 digits of the lev12 catchment's own `PFAF_ID` (any other level: the same number of digits as that level's own number). This was verified against all 147,837 catchments in the current study area with zero unmatched rows — exact string-prefix matching, no spatial join needed. `catchments.gpkg` itself doesn't carry `PFAF_ID` (it was dropped when the study-area subset was clipped from the continental HydroBASINS set), so `PFAF_ID` is read fresh from the lev12 shapefile and joined back in by `HYBAS_ID`.
 
-The output table name "lev04" and the number of `PFAF_ID` digits used to build it are two independent knobs — see [Changing Which Level Feeds a Tier](#changing-which-level-feeds-a-tier) below. In the current data pack, `lev04`'s output is built from a 6-digit prefix (the same granularity as `lev06`), not its own 4-digit prefix.
+The output table name (e.g. "lev04") and the number of `PFAF_ID` digits used to build it are two independent knobs — currently every tier is fed by a level two numbers finer than its own label, not its own native number, so "lev08" does not mean "8 digits" — see [Changing Which Level Feeds a Tier](#changing-which-level-feeds-a-tier) below for the current mapping and how to change it.
 
 ### Building it
 
@@ -406,11 +408,13 @@ dt catchment-hierarchy     # or: make catchment-hierarchy
 
 | Table | Contents |
 |-------|----------|
-| `catchment_hierarchy` | lev12 `HYBAS_ID_int` → lev04/06/08 parent `HYBAS_ID_int` |
-| `catchments_lev04` / `_lev06` / `_lev08` | `HYBAS_ID_int`, `HYBAS_ID`, `geojson` — no raw `geom`, no rtree (a few hundred to tens of thousands of rows isn't worth indexing) |
-| `scenario_current_lev04/06/08`, `scenario_reference_lev04/06/08` | Every `scenario_current`/`scenario_reference` column, `SUB_AREA`-weighted mean grouped by parent — the same NULL-safe weighted-average formula `internal/geodata/gpkg_store.go` already uses for site summaries. Point estimates only; whisker bounds are not aggregated. |
+| `catchment_hierarchy` | lev12 `HYBAS_ID_int` → lev04/05/06/07/08 parent `HYBAS_ID_int` |
+| `catchments_lev04` / `_lev05` / `_lev06` / `_lev07` / `_lev08` | `HYBAS_ID_int`, `HYBAS_ID`, `geojson` — no raw `geom`, no rtree (a few hundred to tens of thousands of rows isn't worth indexing) |
+| `scenario_current_lev04/05/06/07/08`, `scenario_reference_lev04/05/06/07/08` | Every `scenario_current`/`scenario_reference` column, `SUB_AREA`-weighted mean grouped by parent — the same NULL-safe weighted-average formula `internal/geodata/gpkg_store.go` already uses for site summaries. Point estimates only; whisker bounds are not aggregated. |
 
 It also (re)writes `datasources/catchments/catchments-levels.gpkg` — proper OGR-readable geometry (not the `geojson`-text tables above), for `gpkg_to_mbtiles.sh` to tile. Filtered in Python rather than an `ogr2ogr -where "HYBAS_ID IN (...)"`, because that list is tens of thousands of ids long and blows past the OS argument-length limit.
+
+A real minority of basins in the source HydroBASINS shapefiles are topologically invalid — 91 of 2,442 at lev04 in the current data pack, one a 152-part MultiPolygon with a ring self-intersection. `read_geoms()` calls OGR's `MakeValid()` on every geometry before it's written anywhere, repairing these before tippecanoe ever sees them.
 
 All of this is additive — analysis and site selection keep reading `scenario_current`/`scenario_reference`/`catchments_lev12` exactly as before. A datapack built before this step, or where it hasn't been run, simply lacks the tables; `QueryCatchments` checks for them once at startup and falls back to its pre-existing grid-aggregated choropleth if they're absent.
 
@@ -418,37 +422,57 @@ All of this is additive — analysis and site selection keep reading `scenario_c
 
 | Level | Zoom band | Basins (current study area) |
 |-------|-----------|------|
-| lev04 | z0–z5 | 2,442 (built from a 6-digit prefix — see below) |
-| lev06 | z6–z8 | 2,442 |
-| lev08 | z9–z10 | 27,448 |
-| lev12 | z11+ | 147,837 |
+| lev04 | z0–z4 | 2,442 |
+| lev05 | z5 | 8,320 |
+| lev06 | z6 | 27,448 |
+| lev07 | z7–z8 | 72,497 |
+| lev08 | z9 | 135,469 |
+| lev12 | z10+ | 147,837 |
 
-The same display bands drive `internal/geodata/gpkg_store.go`'s `basinLevelForZoom`, the server's `catchmentLevelTilesets` table (`internal/server/server.go`), and the treatment rows in `datasources/mbtiles-config/layer-treatment.csv` — where each level's row now tiles only the band's *first* zoom (`minzoom = maxzoom` = 0/6/9/11) and MapLibre overzooms the rest of the band (see "Standalone Tilesets and Overzoom" above). `TestBasinLevelForZoomMatchesTilesetZoomBands` (`internal/geodata/basin_levels_test.go`) is the reminder to keep them aligned if any of the cutovers change.
+Each row's basin count is strictly larger than the one above it — by construction (see the crosswalk above), not by coincidence — so zooming in one level never shows *fewer* polygons than the level before it. lev12's band starts a zoom earlier than its plain `12` suffix might suggest (z10, not z11): the full 147,837-catchment set is deliberately pulled in one zoom sooner than HydroBASINS' own level number would imply, so every catchment is visible by z10.
+
+lev08's 135,469 is ~92% of lev12's full 147,837 — growth between consecutive HydroBASINS levels compounds fast in this geography, so each label here is fed two levels finer than its own number (see [Changing Which Level Feeds a Tier](#changing-which-level-feeds-a-tier)) to keep lev04's z0-4 band usefully dense, at the cost of the top tier being nearly as dense as full detail. `catchments-lev08.mbtiles`' single z9 tile is ~31 MiB as a result — large, but tippecanoe's `--maximum-tile-bytes` override (`max_tile_bytes` in the treatment table) keeps it from being silently thinned.
+
+The same display bands drive `internal/geodata/gpkg_store.go`'s `basinLevelForZoom`, the server's `catchmentLevelTilesets` table (`internal/server/server.go`), and the treatment rows in `datasources/mbtiles-config/layer-treatment.csv` — where each level's row now tiles only the band's *first* zoom (`minzoom = maxzoom` = 0/5/6/7/9/10) and MapLibre overzooms the rest of the band (see "Standalone Tilesets and Overzoom" above). `TestBasinLevelForZoomMatchesTilesetZoomBands` (`internal/geodata/basin_levels_test.go`) is the reminder to keep them aligned if any of the cutovers change.
 
 This table is about *when* a tier is shown. It is a completely separate setting from *how many polygons* that tier has — see the next section. Changing one does not change the other: shifting a zoom band changes which tier appears at a given zoom; changing a tier's digit count changes how coarse or fine that tier's own polygons are, at whatever zoom it already appears.
+
+**`catchments_lev04`-`lev08` must stay `generalise=true`.** They were briefly set to `generalise=false` (full native-resolution boundaries, no line simplification) at these densities, and it broke rendering outright: MapLibre's fill-bucket packs a tile's features into a shared WebGL vertex buffer capped at 65,535 vertices per segment, and a tile's *total* vertex count across all its features can exceed that even when no single feature is especially complex — the browser console shows `Max vertices per segment is 65535: bucket requested N`, and the map renders blank (white) at the affected zoom, with no server-side error at all.
+
+Each tier's `tolerance` is tuned to the *minimum* simplification that keeps its densest known tile safely under the limit — more simplification than necessary visibly distorts basin boundaries (adjacent polygons can appear to pull apart at shared edges) for no benefit, so this is not a single shared constant:
+
+| Level | Tolerance | Worst tile's total vertices | Margin |
+|---|---|---|---|
+| lev04 | 25 → 15 | 57,314 | 12% |
+| lev05 | 10 → 7 | 52,308 | 20% |
+| lev06 | 10 → 7 | 48,797 | 26% |
+| lev07 | 10 → 4 | 37,297 | 43% |
+| lev08 | 10 → 4 | 3,767 | 94% |
+
+`lev04` is the tightest case and stays the most heavily simplified: z0 is always exactly one global tile, so all 2,442 of its basins share one segment budget no matter what. The relationship between `tolerance` and resulting vertex count is **not linear or reliably predictable** — lev05/lev06 actually exceeded the limit again at `tolerance=4` (87,191 and 73,112) after lev07/lev08 proved safe at that same value, so lowering tolerance for one tier is not evidence it is safe for another; each tier needs its own measurement. Use `tippecanoe-decode <mbtiles> <z> <x> <y>` to decode a specific tile and sum vertex counts directly to confirm before/after any tolerance change — file size does not track vertex count reliably once string-pool/attribute data dominates it, and per-feature vertex counts in the source `geojson` column miss the problem entirely, since it is the *tile's total across all features*, not any single feature, that hits the limit.
 
 ### Changing Which Level Feeds a Tier
 
 `scripts/build-catchment-hierarchy.sh` has a `LEVELS` list near the top of its embedded Python block:
 
 ```python
-LEVELS = [("04", 6), ("06", 6), ("08", 8)]
+LEVELS = [("04", 6), ("05", 7), ("06", 8), ("07", 9), ("08", 10)]
 ```
 
 Each tuple is `(output label, PFAF_ID prefix length)`:
 
-- **Output label** (`"04"`, `"06"`, `"08"`) is fixed across the whole stack — it names `catchments_lev04`, `scenario_current_lev04`/`scenario_reference_lev04`, the `HYBAS_ID_int_lev04` column in `catchment_hierarchy`, the `catchments-lev04` tileset in `layer-treatment.csv`, and the `catchmentLevelTilesets` entry in `internal/server/server.go`. Changing a label means renaming it everywhere it appears; there's no reason to unless you're adding or removing a tier entirely.
+- **Output label** (`"04"`, `"05"`, ...) is fixed across the whole stack — it names `catchments_lev04`, `scenario_current_lev04`/`scenario_reference_lev04`, the `HYBAS_ID_int_lev04` column in `catchment_hierarchy`, the `catchments-lev04` tileset in `layer-treatment.csv`, and the `catchmentLevelTilesets` entry in `internal/server/server.go`. Changing a label means renaming it everywhere it appears; there's no reason to unless you're adding or removing a tier entirely.
 - **Prefix length** (the second element) is the actual dial: it is how many leading digits of a lev12 catchment's `PFAF_ID` are matched against the real HydroBASINS level's shapefile to find that catchment's parent. Fewer digits groups more lev12 catchments under each parent — fewer, bigger polygons (coarser). More digits groups fewer catchments per parent — more, smaller polygons (finer). The prefix length must equal a real HydroBASINS level that has a shapefile under `datasources/catchments/hybas_af_lev01-12_v1c/` (any of 01 through 12 — `fetch-hydrobasins.sh` downloads one shapefile per level in that range).
 
-The label and the prefix length do not have to match. The current config above builds `lev04`'s output from a 6-digit prefix — the same HydroBASINS level `lev06` itself uses — so `catchments_lev04` has 2,442 polygons rather than the 189 a genuine 4-digit prefix would produce. The table/column names still say "04" because renaming them would ripple through `gpkg_store.go`, `layer-treatment.csv`, and every `scenario_*_lev04` table for no benefit; the prefix length in this `LEVELS` list is the only authoritative source for a tier's actual granularity.
+The label and the prefix length do not have to match — the config above is the current example: each label is fed by the HydroBASINS level two numbers finer than its own suffix (`lev04` ← level 6, `lev05` ← level 7, and so on), not its own native number (`lev04`'s own level-4 data is only 189 basins; level-6 gives it 2,442). That shift was made specifically so `lev04`'s z0-4 band stayed as dense as it was before a now-removed intermediate scheme, without renaming any label and rippling that rename through `gpkg_store.go`, `layer-treatment.csv`, and every `scenario_*_lev04` table. Before assuming a label's number tells you its granularity, check `LEVELS` itself.
 
 To change a tier's granularity:
 
-1. **Edit `LEVELS`** in `scripts/build-catchment-hierarchy.sh` — change the digit count for the tuple you want to affect, e.g. `("04", 6)` → `("04", 8)` to make `lev04` as fine as `lev08`.
-2. **Confirm the source shapefile is fetched.** The script's own existence check near the top (`for lev in 06 08 12; do ...`) must list every digit count any tuple in `LEVELS` now uses, zero-padded to two digits (e.g. add `08` to that list if you just introduced an 8-digit prefix that wasn't already required). If you reference a level nothing else needed yet, run `dt fetch-hydrobasins` first — it fetches all of 01–12 in one go, so this is only ever a missing-check-entry problem, not a missing-data one.
-3. **Rebuild:** `dt catchment-hierarchy` (or `make catchment-hierarchy`). It's additive and idempotent — it drops and rebuilds `catchment_hierarchy`, `catchments_lev04/06/08`, and `scenario_{current,reference}_lev04/06/08` from scratch, and rewrites `datasources/catchments/catchments-levels.gpkg`. It never touches `catchments_lev12`, `scenario_current`, or `scenario_reference`.
-4. **Retile:** `./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg` (omit `--tileset` — there is no single `catchments` tileset to filter on since the per-level split; the per-layer resume hash already skips every `.mbtiles` whose source didn't change, so this only re-tiles the tier you touched).
-5. **Verify:** `sqlite3 data/datapack.gpkg "SELECT count(*) FROM catchments_lev04;"` to confirm the new polygon count, and `sqlite3 data/datapack.gpkg "PRAGMA integrity_check;"` for sanity.
+1. **Edit `LEVELS`** in `scripts/build-catchment-hierarchy.sh` — change the digit count for the tuple you want to affect, e.g. `("05", 5)` → `("05", 6)` to make `lev05`'s output as fine as `lev06`'s.
+2. **Confirm the source shapefile is fetched.** The script's own existence check near the top (`for lev in 06 07 08 09 10 12; do ...`) must list every digit count any tuple in `LEVELS` now uses, zero-padded to two digits (e.g. add `11` to that list if you just introduced an 11-digit prefix that wasn't already required). If you reference a level nothing else needed yet, run `dt fetch-hydrobasins` first — it fetches all of 01–12 in one go, so this is only ever a missing-check-entry problem, not a missing-data one.
+3. **Rebuild:** `dt catchment-hierarchy` (or `make catchment-hierarchy`). It's additive and idempotent — it drops and rebuilds `catchment_hierarchy`, `catchments_lev04/05/06/07/08`, and `scenario_{current,reference}_lev04/05/06/07/08` from scratch, and rewrites `datasources/catchments/catchments-levels.gpkg`. It never touches `catchments_lev12`, `scenario_current`, or `scenario_reference`.
+4. **Retile:** `./scripts/gpkg_to_mbtiles.sh datasources/basemap/context_source_data.gpkg datasources/catchments/catchments.gpkg datasources/catchments/catchments-levels.gpkg --tileset catchments-levNN` (the tileset you touched — e.g. `catchments-lev05`; there is no single `catchments` tileset to filter on since the per-level split, and the per-layer resume hash already skips every `.mbtiles` whose source didn't change, so omitting `--tileset` entirely also works, just slower).
+5. **Verify:** `sqlite3 data/datapack.gpkg "SELECT count(*) FROM catchments_lev05;"` to confirm the new polygon count, and `sqlite3 data/datapack.gpkg "PRAGMA integrity_check;"` for sanity. Watch the retile output for `Going to try keeping the sparsest ...%` — tippecanoe's default ~500KB-per-tile budget can silently thin a tier that just got a lot denser, showing up as missing polygons on the map rather than a build error; add a `max_tile_bytes` override to that tier's row in `layer-treatment.csv` (see the column reference above) if it does.
 
 Changing a tier's zoom band (when it appears, not how many polygons it has) is a different, unrelated edit: the `minzoom`/`maxzoom` columns for that tier's row in `datasources/mbtiles-config/layer-treatment.csv`, kept in sync with the matching `case` in `internal/geodata/gpkg_store.go`'s `basinLevelForZoom` (see "Zoom tiers" above) — not the `LEVELS` list in this script.
 
@@ -497,7 +521,7 @@ Tile content is decoded by `scripts/mvt_layers.py`, a small hand-rolled MVT/prot
 
 ### Catchment Outlines Style
 
-`datasources/mbtiles-config/style-catchments-outline.json` extends `style.json` with a red outline per catchment level, on top of the fills but below roads/rivers/labels -- for checking catchment boundaries (e.g. edge-matching between neighbours after generalisation) without switching away from the real style. Four layers, not one: `catchments_lev04/06/08/12` each need their own, since they're separate source-layers only present at their own zoom band (see [Multi-Resolution Catchments](#multi-resolution-catchments)) -- a single layer referencing one source-layer would only ever draw at that level's zoom range. Each is zoom-gated to hand off cleanly to the next (style `maxzoom` is exclusive, so it's set to the next level's data `minzoom` + 1): lev04 z0-6, lev06 z6-9, lev08 z9-11, lev12 z11+ (unbounded, since lev12 is overzoomed past its real maxzoom of 12 rather than tiled deeper).
+`datasources/mbtiles-config/style-catchments-outline.json` extends `style.json` with a red outline per catchment level, on top of the fills but below roads/rivers/labels -- for checking catchment boundaries (e.g. edge-matching between neighbours after generalisation) without switching away from the real style. Six layers, not one: `catchments_lev04/05/06/07/08/12` each need their own, since they're separate source-layers only present at their own zoom band (see [Multi-Resolution Catchments](#multi-resolution-catchments)) -- a single layer referencing one source-layer would only ever draw at that level's zoom range. Each is zoom-gated to hand off cleanly to the next (style `maxzoom` is exclusive, so it's set to the next level's data `minzoom`): lev04 z0-4, lev05 z5, lev06 z6, lev07 z7-8, lev08 z9, lev12 z10+ (unbounded, since lev12 is overzoomed past its real maxzoom of 12 rather than tiled deeper).
 
 Regenerate after editing `style.json` rather than hand-maintaining a second copy:
 

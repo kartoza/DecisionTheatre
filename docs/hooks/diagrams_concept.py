@@ -401,10 +401,10 @@ def data_prep_pipeline(p: dict) -> str:
 def multires_catchments(p: dict) -> str:
     d = Diagram(1000, 400, p, title="Multi-resolution catchments",
                 subtitle="Real HydroBASINS levels replace 147,837 polygons at low zoom, not an arbitrary grid")
-    d.box(Box(30, 90, 220, 70, "HydroBASINS", ["lev04, lev06, lev08, lev12", "fetch-hydrobasins.sh"],
+    d.box(Box(30, 90, 220, 70, "HydroBASINS", ["lev04,05,06,07,08,12", "fetch-hydrobasins.sh"],
               fill=p["surface"]["cloud"], stroke=p["brand"]["grey"], mono=True))
     d.arrow(252, 125, 312, 125, label="PFAF_ID prefix")
-    d.box(Box(314, 90, 220, 70, "catchment_hierarchy", ["lev12 -> lev04/06/08", "parent crosswalk"],
+    d.box(Box(314, 90, 220, 70, "catchment_hierarchy", ["lev12 -> lev04/05/06/07/08", "parent crosswalk"],
               fill=p["blue"]["100"], stroke=p["blue"]["700"], mono=True))
     d.arrow(536, 125, 596, 125)
     d.box(Box(598, 90, 200, 70, "scenario_*_levNN", ["SUB_AREA-weighted", "mean, built once"],
@@ -412,8 +412,8 @@ def multires_catchments(p: dict) -> str:
     d.arrow(698, 160, 698, 210)
     d.box(Box(598, 212, 200, 62, "QueryCatchments", ["picks the level", "for the request zoom"],
               fill=p["status"]["successTint"], stroke=p["status"]["success"], mono=True))
-    d.label(30, 320, "z0-z5 -> lev04 (2,442 basins)   z6-z8 -> lev06 (2,442)   z9-z10 -> lev08 (27,448)   "
-                     "z11+ -> lev12 detail, unchanged", size=11.5, color=p["ink"]["muted"])
+    d.label(30, 320, "z0-4 lev04 (2,442)  z5 lev05 (8,320)  z6 lev06 (27,448)  z7-8 lev07 (72,497)  "
+                     "z9 lev08 (135,469)  z10+ lev12 detail", size=11.5, color=p["ink"]["muted"])
     d.label(30, 344, "GOLDEN RULE: site analysis and catchment selection always read lev12 — "
                      "these tables exist only for this rendering path.",
             size=11.5, color=p["ink"]["muted"])

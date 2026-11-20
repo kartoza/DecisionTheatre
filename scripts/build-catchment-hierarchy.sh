@@ -4,9 +4,9 @@
 
 #
 # build-catchment-hierarchy.sh — build the multi-resolution catchment tables
-# used for the low/mid-zoom choropleth: a lev12 -> lev04/06/08 parent
-# crosswalk, coarser catchment boundaries, and scenario data aggregated up
-# to each level.
+# used for the low/mid-zoom choropleth: a lev12 -> parent crosswalk at every
+# tier below, coarser catchment boundaries, and scenario data aggregated up
+# to each one.
 #
 # GOLDEN RULE: this is additive only. It never touches catchments_lev12,
 # scenario_current, scenario_reference or any whisker table -- site analysis
@@ -17,32 +17,33 @@
 # Inputs:
 #   - DATA_DIR/datapack.gpkg (built by build-geopackage.sh -- run that first)
 #   - SOURCE_DIR/catchments/hybas_af_lev01-12_v1c/ (fetched by
-#     scripts/fetch-hydrobasins.sh) -- levels 06, 08 and 12 shapefiles
+#     scripts/fetch-hydrobasins.sh) -- one shapefile per level, every tier
+#     this script is configured to build (see LEVELS below) plus lev12
 #
 # How the crosswalk works:
 #   HydroBASINS' Pfafstetter codes (PFAF_ID) are hierarchical by
 #   construction: a lev12 catchment's parent at lev08 has a PFAF_ID that is
-#   exactly the first 8 digits of the lev12 catchment's own PFAF_ID. This was
-#   verified against all 147,837 catchments in the current data pack with
-#   zero unmatched rows -- exact string-prefix matching, no spatial join
-#   needed. catchments.gpkg itself doesn't carry PFAF_ID (it was dropped
-#   when the study-area subset was clipped from the continental HydroBASINS
-#   set), so PFAF_ID is read fresh from the lev12 shapefile here and joined
-#   back in by HYBAS_ID.
+#   exactly the first 8 digits of the lev12 catchment's own PFAF_ID (any
+#   other level: the same number of digits as that level's own number). This
+#   was verified against all 147,837 catchments in the current data pack
+#   with zero unmatched rows -- exact string-prefix matching, no spatial
+#   join needed. catchments.gpkg itself doesn't carry PFAF_ID (it was
+#   dropped when the study-area subset was clipped from the continental
+#   HydroBASINS set), so PFAF_ID is read fresh from the lev12 shapefile here
+#   and joined back in by HYBAS_ID.
 #
-#   The output table/column name "lev04" is kept even though it is now built
-#   from the real HydroBASINS lev06 shapefile (first 6 PFAF_ID digits, same
-#   granularity as lev06 itself) instead of lev04's own 4-digit prefix --
-#   renaming it would ripple through gpkg_store.go's basinLevelForZoom,
-#   layer-treatment.csv's tileset name, and every scenario_*_lev04 table for
-#   no benefit; only the source level feeding it changed, to put more (and
-#   smaller) polygons at the zoom band lev04 covers.
+#   Each tier's output label and its PFAF_ID prefix length are independent
+#   settings (see LEVELS below) -- a label can be fed by a different
+#   HydroBASINS level than its own number, if a past change repointed it.
+#   Check LEVELS itself for which is currently true; don't assume the label
+#   says.
 #
-# Output tables added to DATA_DIR/datapack.gpkg:
-#   - catchment_hierarchy      lev12 HYBAS_ID_int -> lev04/06/08 parent HYBAS_ID_int
-#   - catchments_lev04/06/08   HYBAS_ID, HYBAS_ID_int, geojson (no rtree --
+# Output tables added to DATA_DIR/datapack.gpkg, one set per LEVELS entry:
+#   - catchment_hierarchy   lev12 HYBAS_ID_int -> every tier's parent
+#     HYBAS_ID_int, one column per tier (HYBAS_ID_int_levNN)
+#   - catchments_levNN      HYBAS_ID, HYBAS_ID_int, geojson (no rtree --
 #     a few hundred to tens of thousands of rows, not worth indexing)
-#   - scenario_current_lev04/06/08, scenario_reference_lev04/06/08
+#   - scenario_current_levNN, scenario_reference_levNN
 #     SUB_AREA-weighted mean of every scenario_current/scenario_reference
 #     column, grouped by parent -- the same NULL-safe weighted-average
 #     formula internal/geodata/gpkg_store.go already uses for site summaries
@@ -60,7 +61,7 @@ if [ ! -f "$OUTPUT" ]; then
     echo "Error: $OUTPUT not found — run 'make geopackage' first"
     exit 1
 fi
-for lev in 06 08 12; do
+for lev in 06 07 08 09 10 12; do
     f="$HYBAS_DIR/hybas_af_lev${lev}_v1c.shp"
     if [ ! -f "$f" ]; then
         echo "Error: missing $f — run 'make fetch-hydrobasins' first"
@@ -86,10 +87,18 @@ output_path, hybas_dir, workdir, levels_gpkg = sys.argv[1], sys.argv[2], sys.arg
 
 # (output label, PFAF_ID prefix length). The label drives table/column/layer
 # names (catchments_lev04, scenario_current_lev04, ...) and is independent of
-# the prefix length: lev04's label stuck even after its source shapefile
-# moved from HydroBASINS level 4 to level 6 (see header comment), so the
-# source shapefile is always looked up by src_lev(digits), never by label.
-LEVELS = [("04", 6), ("06", 6), ("08", 8)]
+# the prefix length -- see the header comment's note on this. Each tier here
+# is fed by the HydroBASINS level two numbers finer than its own label (04 <-
+# level 6, 05 <- level 7, ...): shifted up so lev04's z0-4 band keeps a denser
+# 2,442 polygons rather than level 4's native 189, while every successive
+# tier still has strictly more polygons than the last -- HydroBASINS' prefix
+# hierarchy means a coarser level's basin always subdivides into one or more
+# basins at the next-finer level, never fewer, regardless of which two levels
+# are compared. lev08's z9 tier is the extreme end of this trade-off: at
+# level 10 it carries 135,469 polygons, ~92% of the full 147,837-catchment
+# set, because growth between consecutive HydroBASINS levels compounds fast
+# in this geography.
+LEVELS = [("04", 6), ("05", 7), ("06", 8), ("07", 9), ("08", 10)]
 
 
 def src_lev(digits):
@@ -102,13 +111,28 @@ def read_pfaf(path):
     return {int(f.GetField("HYBAS_ID")): str(int(f.GetField("PFAF_ID"))) for f in lyr}
 
 
+def valid_geom(geom):
+    # A real minority of HydroBASINS basins (91 of 2,442 at lev04, e.g.
+    # HYBAS_ID 1060003780 -- a 152-part MultiPolygon with a ring
+    # self-intersection) are topologically invalid in the source shapefile.
+    # Left unrepaired, tippecanoe's --no-simplification-of-shared-nodes
+    # cannot reliably match a shared edge against an invalid, heavily
+    # fragmented neighbour -- confirmed by isolating exactly this basin pair
+    # into a 2-feature tippecanoe run and finding the shared boundary still
+    # diverged after simplification. MakeValid() repairs self-intersections
+    # (typically via GEOS) before the geometry ever reaches tippecanoe.
+    if not geom.IsValid():
+        geom = geom.MakeValid()
+    return geom
+
+
 def read_geoms(path):
     ds = ogr.Open(path)
     lyr = ds.GetLayer()
     out = {}
     for f in lyr:
         hid = int(f.GetField("HYBAS_ID"))
-        geom = f.GetGeometryRef()
+        geom = valid_geom(f.GetGeometryRef())
         out[hid] = geom.ExportToJson()
     return out
 
@@ -156,18 +180,17 @@ if missing:
 print(f"  Crosswalk: {len(rows)} matched")
 
 cur.execute("DROP TABLE IF EXISTS catchment_hierarchy")
+level_columns = ", ".join(f"HYBAS_ID_int_lev{lev} INTEGER" for lev, _ in LEVELS)
 cur.execute(
-    """CREATE TABLE catchment_hierarchy (
+    f"""CREATE TABLE catchment_hierarchy (
         HYBAS_ID_int_lev12 INTEGER PRIMARY KEY,
-        HYBAS_ID_int_lev04 INTEGER,
-        HYBAS_ID_int_lev06 INTEGER,
-        HYBAS_ID_int_lev08 INTEGER
+        {level_columns}
     )"""
 )
-cur.executemany("INSERT INTO catchment_hierarchy VALUES (?,?,?,?)", rows)
-cur.execute("CREATE INDEX idx_hierarchy_lev04 ON catchment_hierarchy(HYBAS_ID_int_lev04)")
-cur.execute("CREATE INDEX idx_hierarchy_lev06 ON catchment_hierarchy(HYBAS_ID_int_lev06)")
-cur.execute("CREATE INDEX idx_hierarchy_lev08 ON catchment_hierarchy(HYBAS_ID_int_lev08)")
+placeholders = ", ".join(["?"] * (1 + len(LEVELS)))
+cur.executemany(f"INSERT INTO catchment_hierarchy VALUES ({placeholders})", rows)
+for lev, _ in LEVELS:
+    cur.execute(f"CREATE INDEX idx_hierarchy_lev{lev} ON catchment_hierarchy(HYBAS_ID_int_lev{lev})")
 conn.commit()
 
 referenced = {lev: set(row[i + 1] for row in rows) for i, (lev, _) in enumerate(LEVELS)}
@@ -220,8 +243,8 @@ for lev, digits in LEVELS:
             continue
         out_f = ogr.Feature(out_defn)
         out_f.SetField("HYBAS_ID", hid)
-        geom = f.GetGeometryRef()
-        if geom.GetGeometryType() == ogr.wkbPolygon:
+        geom = valid_geom(f.GetGeometryRef())
+        if geom.GetGeometryType() != ogr.wkbMultiPolygon:
             geom = ogr.ForceToMultiPolygon(geom)
         out_f.SetGeometry(geom)
         out_lyr.CreateFeature(out_f)
@@ -249,7 +272,7 @@ import sys
 output_path = sys.argv[1]
 
 EXCLUDED_COLUMNS = {"fid", "catchID", "catchment_id_int"}
-LEVELS = ["04", "06", "08"]
+LEVELS = ["04", "05", "06", "07", "08"]
 
 
 def quote_ident(name):
@@ -296,4 +319,4 @@ sqlite3 "$OUTPUT" "VACUUM;"
 
 echo ""
 echo "Done. New tables in $OUTPUT:"
-sqlite3 "$OUTPUT" "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%_lev04' OR name LIKE '%_lev06' OR name LIKE '%_lev08' OR name = 'catchment_hierarchy') ORDER BY name;"
+sqlite3 "$OUTPUT" "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%_lev04' OR name LIKE '%_lev05' OR name LIKE '%_lev06' OR name LIKE '%_lev07' OR name LIKE '%_lev08' OR name = 'catchment_hierarchy') ORDER BY name;"

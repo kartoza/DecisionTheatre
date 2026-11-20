@@ -32,7 +32,7 @@ is stated — those files cannot be renamed.
 |---|---|---|
 | `datapack.gpkg` | `internal/geodata/gpkg_store.go` | **Filename is hardcoded.** No other name is discovered. |
 | `mbtiles/context.mbtiles` | `internal/tiles/mbtiles.go` | **Must be named `context`** — see the warning below. |
-| `mbtiles/catchments-lev04/06/08/12.mbtiles` | `internal/tiles/mbtiles.go` | Optional. The per-level catchment tilesets, each tiled at a single zoom — see the note below. A legacy pack may instead carry one combined `catchments.mbtiles`; either spelling works, names are load-bearing. |
+| `mbtiles/catchments-lev04/05/06/07/08/12.mbtiles` | `internal/tiles/mbtiles.go` | Optional. The per-level catchment tilesets, each tiled at a single zoom — see the note below. A legacy pack may instead carry one combined `catchments.mbtiles`; either spelling works, names are load-bearing. |
 | `mbtiles/catchments-lev12-full.mbtiles` | `internal/tiles/mbtiles.go` | Optional. Real lev12 detail tiled at z9 and overzoomed, used (with the hex tileset below) only when the server is launched with `--legacy` — see the note below. Absence is not an error: `--legacy` without it falls back to the normal per-level bands. |
 | `mbtiles/catchments-lev12-hex.mbtiles` | `internal/tiles/mbtiles.go` | Optional. `--legacy`'s own z5-z8 band: an H3 hex grid standing in for real boundaries too dense to render legibly below z9 — see the note below. |
 | `mbtiles/catchments-lev12-hex-coarse.mbtiles` | `internal/tiles/mbtiles.go` | Optional. `--legacy`'s own z2-z4 band — a coarser H3 grid than the one above; the fine grid's own cells are too small to rasterise reliably that far out — see the note below. |
@@ -95,7 +95,7 @@ Also shipped, but **never opened by the running server** — see [Shipped but no
 
     Three further optional tilesets back `--legacy` (`dt serve-legacy`), which
     then serves lev12 *values* at every zoom instead of handing off to the
-    coarser lev04/06/08 aggregates: `catchments-lev12-full.mbtiles` (real lev12
+    coarser lev04/05/06/07/08 aggregates: `catchments-lev12-full.mbtiles` (real lev12
     detail, z9 and overzoomed), `catchments-lev12-hex.mbtiles` (an H3 hex
     grid, z5-z8) and `catchments-lev12-hex-coarse.mbtiles` (a coarser H3 grid,
     z2-z4 — the finer grid's cells are too small to rasterise reliably that
