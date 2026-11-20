@@ -738,7 +738,7 @@ func (h *Handler) handleCatchmentIdentify(w http.ResponseWriter, r *http.Request
 
 // handleCatchmentAtPoint resolves the lev12 catchment containing a clicked
 // map point. GOLDEN RULE: catchment identification always reads lev12,
-// regardless of which multi-resolution band (lev04/06/08/12) happens to be
+// regardless of which multi-resolution band (lev04/05/06/07/08/12) happens to be
 // rendered at the caller's current zoom - see FindCatchmentIDAtPoint. The
 // frontend's identify click calls this first to get an id, then
 // handleCatchmentIdentify above for that id's attributes.

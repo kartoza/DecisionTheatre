@@ -281,30 +281,44 @@ var GeoPackageTables = []GeoPackageTable{
 	{
 		Name:     "catchment_hierarchy",
 		Required: false,
-		Columns:  []string{"HYBAS_ID_int_lev12", "HYBAS_ID_int_lev04", "HYBAS_ID_int_lev06", "HYBAS_ID_int_lev08"},
+		Columns:  []string{"HYBAS_ID_int_lev12", "HYBAS_ID_int_lev04", "HYBAS_ID_int_lev05", "HYBAS_ID_int_lev06", "HYBAS_ID_int_lev07", "HYBAS_ID_int_lev08"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
-		Why:      "maps each lev12 catchment to its lev04/06/08 parent, built from HydroBASINS PFAF_ID prefixes",
+		Why:      "maps each lev12 catchment to its lev04/05/06/07/08 parent, built from HydroBASINS PFAF_ID prefixes",
 	},
 	{
 		Name:     "catchments_lev04",
 		Required: false,
 		Columns:  []string{"HYBAS_ID_int", "geojson"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
-		Why:      "lev04 basin boundaries for the lowest zoom tier (z2-z5)",
+		Why:      "lev04 basin boundaries for the lowest zoom tier (z0-z4)",
+	},
+	{
+		Name:     "catchments_lev05",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int", "geojson"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "lev05 basin boundaries for the z5 zoom tier",
 	},
 	{
 		Name:     "catchments_lev06",
 		Required: false,
 		Columns:  []string{"HYBAS_ID_int", "geojson"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
-		Why:      "lev06 basin boundaries for the low-mid zoom tier (z6-z8)",
+		Why:      "lev06 basin boundaries for the z6 zoom tier",
+	},
+	{
+		Name:     "catchments_lev07",
+		Required: false,
+		Columns:  []string{"HYBAS_ID_int", "geojson"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "lev07 basin boundaries for the z7-z8 zoom tier",
 	},
 	{
 		Name:     "catchments_lev08",
 		Required: false,
 		Columns:  []string{"HYBAS_ID_int", "geojson"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
-		Why:      "lev08 basin boundaries for the mid zoom tier (z9-z10)",
+		Why:      "lev08 basin boundaries for the mid zoom tier (z9)",
 	},
 	{
 		Name:     "scenario_current_lev04",
@@ -314,11 +328,25 @@ var GeoPackageTables = []GeoPackageTable{
 		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev04",
 	},
 	{
+		Name:     "scenario_current_lev05",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev05",
+	},
+	{
 		Name:     "scenario_current_lev06",
 		Required: false,
 		Columns:  []string{"catchment_id_int"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
 		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev06",
+	},
+	{
+		Name:     "scenario_current_lev07",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "current scenario, SUB_AREA-weighted mean aggregated to lev07",
 	},
 	{
 		Name:     "scenario_current_lev08",
@@ -335,11 +363,25 @@ var GeoPackageTables = []GeoPackageTable{
 		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev04",
 	},
 	{
+		Name:     "scenario_reference_lev05",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev05",
+	},
+	{
 		Name:     "scenario_reference_lev06",
 		Required: false,
 		Columns:  []string{"catchment_id_int"},
 		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
 		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev06",
+	},
+	{
+		Name:     "scenario_reference_lev07",
+		Required: false,
+		Columns:  []string{"catchment_id_int"},
+		ReadBy:   "internal/geodata/gpkg_store.go (basin-aggregated choropleth)",
+		Why:      "reference scenario, SUB_AREA-weighted mean aggregated to lev07",
 	},
 	{
 		Name:     "scenario_reference_lev08",
@@ -369,7 +411,7 @@ const RequiredTilesetName = "context"
 // path when this tileset is absent.
 //
 // Newer datapacks split further: one standalone tileset per catchment
-// level (catchments-lev04/06/08/12), each tiled at a single zoom and
+// level (catchments-lev04/05/06/07/08/12), each tiled at a single zoom and
 // overzoomed across its whole display band — see catchmentLevelTilesets in
 // internal/server/server.go. The combined "catchments" name remains the
 // legacy spelling this constant documents.

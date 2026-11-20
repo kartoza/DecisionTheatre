@@ -143,8 +143,8 @@ type Basin struct {
 }
 
 // AddBasinLevels adds the multi-resolution catchment tables
-// (catchments_lev04/06/08 plus their scenario aggregate tables) to a datapack
-// already written by Build. All three levels are created — the store's
+// (catchments_lev04/05/06/07/08 plus their scenario aggregate tables) to a datapack
+// already written by Build. All five levels are created — the store's
 // checkBasinLevelTables treats a partial set as absent — with the given rows
 // per level; levels missing from the map get empty (but present) tables.
 //
@@ -159,7 +159,7 @@ func AddBasinLevels(t *testing.T, dir string, basinsByLevel map[string][]Basin) 
 	}
 	defer db.Close()
 
-	for _, level := range []string{"04", "06", "08"} {
+	for _, level := range []string{"04", "05", "06", "07", "08"} {
 		stmts := []string{
 			fmt.Sprintf(`CREATE TABLE catchments_lev%s (
 				fid INTEGER PRIMARY KEY,

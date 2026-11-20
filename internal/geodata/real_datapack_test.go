@@ -193,10 +193,10 @@ func TestRealDatapackDetailResponseSize(t *testing.T) {
 }
 
 // TestRealDatapackBasinAggregatedChoropleth exercises QueryCatchments at a
-// zoom in each of the three basin-level tiers against a real datapack built
+// zoom in each of the five basin-level tiers against a real datapack built
 // by scripts/build-catchment-hierarchy.sh, confirming it takes the
 // basin-aggregated path (not the grid fallback) and returns exactly the
-// number of basins at that level -- catchments_lev04/06/08's own row counts,
+// number of basins at that level -- catchments_levNN's own row counts,
 // not something filtered or truncated.
 func TestRealDatapackBasinAggregatedChoropleth(t *testing.T) {
 	s := realDatapackStore(t)
@@ -213,7 +213,9 @@ func TestRealDatapackBasinAggregatedChoropleth(t *testing.T) {
 		level string
 	}{
 		{3, "04"},
-		{7, "06"},
+		{5.5, "05"},
+		{6.5, "06"},
+		{7.5, "07"},
 		{9.5, "08"},
 	} {
 		var want int

@@ -58,7 +58,7 @@ type Config struct {
 
 	// LegacyCatchments serves lev12 catchment geometry at every zoom
 	// (the wide-range catchments-lev12-full tileset) instead of the
-	// multi-resolution lev04/06/08/12 bands. Set by --legacy, which is
+	// multi-resolution lev04/05/06/07/08/12 bands. Set by --legacy, which is
 	// what `dt serve-legacy` passes. A launch-time choice, not a
 	// runtime toggle: the frontend's existing tileset resolution already
 	// treats a single-band TileJSON as spanning its whole declared range,

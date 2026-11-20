@@ -55,7 +55,7 @@ type GpkgStore struct {
 
 	// hasBasinLevels reports whether this datapack has the multi-resolution
 	// catchment tables (see scripts/build-catchment-hierarchy.sh):
-	// catchments_lev04/06/08 and scenario_{current,reference}_lev04/06/08.
+	// catchments_lev04/05/06/07/08 and scenario_{current,reference}_lev04/05/06/07/08.
 	// Set once at open time. A datapack built before this feature existed,
 	// or one where catchment-hierarchy hasn't been run, simply lacks them —
 	// QueryCatchments falls back to the grid-aggregated choropleth exactly
@@ -193,7 +193,7 @@ func NewGpkgStore(dataDir string) (*GpkgStore, error) {
 
 	store.hasBasinLevels = store.checkBasinLevelTables(ctx)
 	if store.hasBasinLevels {
-		log.Printf("Multi-resolution catchment tables found — low/mid-zoom choropleth will use lev04/06/08 aggregates")
+		log.Printf("Multi-resolution catchment tables found — low/mid-zoom choropleth will use lev04/05/06/07/08 aggregates")
 	}
 
 	// Start building the low-zoom choropleth grid geometry cache in the
@@ -575,17 +575,25 @@ const gridRenderBudget = 8000
 // used by the catchments_levNN/scenario_{scenario}_levNN table names) whose
 // aggregates QueryCatchments should render at the given zoom, mirroring the
 // zoom bands scripts/gpkg_to_mbtiles.sh tiles the same basins at (see
-// datasources/mbtiles-config/layer-treatment.csv): z2-z5 -> lev04, z6-z8 ->
-// lev06, z9-z10 -> lev08. Zoom 11 and above returns ok=false: at that point
+// datasources/mbtiles-config/layer-treatment.csv): z0-z4 -> lev04, z5 ->
+// lev05, z6 -> lev06, z7-z8 -> lev07, z9 -> lev08. Each step up is a
+// genuinely finer HydroBASINS level, so polygon count strictly increases at
+// every one of those boundaries, not just at the z6/z9 jumps a 3-tier
+// scheme would give. Zoom 10 and above returns ok=false: at that point
 // lev12 detail (or, for an unusually dense bbox, the grid-aggregated
-// fallback) takes over, exactly as before this feature existed.
+// fallback) takes over, so every catchment is visible by z10 rather than
+// waiting until z11 for the full 147,837-polygon set.
 func basinLevelForZoom(zoom float64) (level string, ok bool) {
 	switch {
-	case zoom < 6:
+	case zoom < 5:
 		return "04", true
-	case zoom < 9:
+	case zoom < 6:
+		return "05", true
+	case zoom < 7:
 		return "06", true
-	case zoom < 11:
+	case zoom < 9:
+		return "07", true
+	case zoom < 10:
 		return "08", true
 	default:
 		return "", false
@@ -593,7 +601,7 @@ func basinLevelForZoom(zoom float64) (level string, ok bool) {
 }
 
 // checkBasinLevelTables reports whether every multi-resolution catchment
-// table is present. All three levels are built together by
+// table is present. All five levels are built together by
 // scripts/build-catchment-hierarchy.sh in one run, so this checks all of
 // them rather than each level independently — a datapack with only some of
 // them would mean a previous run was interrupted, and falling back to the
@@ -609,7 +617,7 @@ func basinLevelForZoom(zoom float64) (level string, ok bool) {
 // has no matching closing quote right after the prefix, so the check can't
 // mistake it for one.
 func (s *GpkgStore) checkBasinLevelTables(ctx context.Context) bool {
-	for _, lev := range []string{"04", "06", "08"} {
+	for _, lev := range []string{"04", "05", "06", "07", "08"} {
 		for _, table := range []string{
 			fmt.Sprintf("catchments_lev%s", lev),
 			fmt.Sprintf("scenario_current_lev%s", lev),
@@ -1051,7 +1059,7 @@ func (s *GpkgStore) QueryCatchmentValueArrays(ctx context.Context, scenario, att
 
 // QueryCatchmentValueArraysForZoom is the zoom-aware entry point for the
 // vector-tile choropleth's value join. The tiles carry a different catchment
-// level per zoom band (catchments_lev04/06/08/12, see basinLevelForZoom), so
+// level per zoom band (catchments_lev04/05/06/07/08/12, see basinLevelForZoom), so
 // the values joined onto them by feature state must come from the matching
 // level's aggregate table or the HYBAS_IDs would never line up. Above the
 // banded range — or on a datapack without the multi-resolution tables — it is
@@ -2199,7 +2207,7 @@ func (s *GpkgStore) GetCatchmentAttributes(ctx context.Context, catchmentID stri
 // GOLDEN RULE: catchment identification always reads lev12, matching site
 // creation's own catchment selection (see data-preparation.md's "Multi-
 // Resolution Catchments" section) - regardless of which multi-resolution
-// band (lev04/06/08/12) happens to be rendered on the map at the caller's
+// band (lev04/05/06/07/08/12) happens to be rendered on the map at the caller's
 // current zoom. A click resolved against whatever band is on screen used
 // to return a coarse basin's aggregate rather than the actual lev12
 // catchment under the cursor; this resolves the point against the real

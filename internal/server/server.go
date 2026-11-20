@@ -141,6 +141,8 @@ func New(cfg config.Config) (*Server, error) {
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 		go tileStore.WarmCache("catchments-lev04",
 			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
+		go tileStore.WarmCache("catchments-lev05",
+			[4]float64{-17.546539, -34.837477, 63.500977, 37.352693}, 5)
 	}
 
 	return s, nil
@@ -628,7 +630,7 @@ func (s *Server) handleTileJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCatchmentsTileJSON serves the standalone catchments tileset: real
-// tiles for lev04/06/08/12, each at its own zoom band (see
+// tiles for lev04/05/06/07/08/12, each at its own zoom band (see
 // datasources/mbtiles-config/layer-treatment.csv and
 // internal/geodata/gpkg_store.go's basinLevelForZoom for the matching
 // choropleth bands), minzoom 2 up to lev12's real maxzoom (12) —
@@ -653,7 +655,7 @@ func (s *Server) handleCatchmentsTileJSON(w http.ResponseWriter, r *http.Request
 	// from z5 where individual cells of the coarse grid would start looking
 	// chunky, real lev12 detail still taking over from z9 — same cutover the
 	// default mode's own lev08→lev12 handoff uses, just with two hex tiers
-	// standing in for lev04/06/08's real coarser basins. All three bands are
+	// standing in for lev04/05/06/07/08's real coarser basins. All three bands are
 	// single-zoom-tiled and overzoomed exactly like the default mode's own
 	// levels (see writeSplitCatchmentsTileJSON) — this is the same split-
 	// tileset document shape with a different table, not a new mechanism.
@@ -697,9 +699,11 @@ var catchmentLevelTilesets = []levelTileset{
 	// One z0 tile covers the domain; detail=16 keeps its coordinate grid
 	// sub-pixel through the band's deepest display zoom.
 	{"catchments-lev04", "catchments_lev04", 0},
+	{"catchments-lev05", "catchments_lev05", 5},
 	{"catchments-lev06", "catchments_lev06", 6},
+	{"catchments-lev07", "catchments_lev07", 7},
 	{"catchments-lev08", "catchments_lev08", 9},
-	{"catchments-lev12", "catchments_lev12", 11},
+	{"catchments-lev12", "catchments_lev12", 10},
 }
 
 // catchmentsLev12HexSourceLayer is the --legacy hex band's vector-tile

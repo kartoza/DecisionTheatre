@@ -18,11 +18,16 @@ func TestBasinLevelForZoomMatchesTilesetZoomBands(t *testing.T) {
 		wantOK    bool
 	}{
 		{2, "04", true},
-		{5.9, "04", true},
+		{4.9, "04", true},
+		{5, "05", true},
+		{5.9, "05", true},
 		{6, "06", true},
-		{8.9, "06", true},
+		{6.9, "06", true},
+		{7, "07", true},
+		{8.9, "07", true},
 		{9, "08", true},
-		{10.9, "08", true},
+		{9.9, "08", true},
+		{10, "", false},
 		{11, "", false},
 		{15, "", false},
 	}

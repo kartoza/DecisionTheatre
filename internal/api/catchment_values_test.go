@@ -221,7 +221,7 @@ func newLevelledValuesTestHandler(t *testing.T) *mux.Router {
 	return r
 }
 
-// The tiles carry catchments_lev04 in the z2-z5 band and lev06 in z6-z8, so a
+// The tiles carry catchments_lev04 in the z0-z4 band and lev06 at z6, so a
 // zoom in those bands must return that level's basin ids — lev12 ids would
 // never match the tiles' feature ids and the choropleth would paint nothing.
 func TestCatchmentValuesZoomSelectsBasinLevel(t *testing.T) {

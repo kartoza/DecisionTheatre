@@ -89,7 +89,7 @@ func TestCatchmentsTileJSONSplitTilesets(t *testing.T) {
 	}
 	wantZooms := map[string]int{
 		"catchments_lev04": 0, "catchments_lev06": 6,
-		"catchments_lev08": 9, "catchments_lev12": 11,
+		"catchments_lev08": 9, "catchments_lev12": 10,
 	}
 	for _, l := range levels {
 		if wantZooms[l.SourceLayer] != l.Tilezoom {
